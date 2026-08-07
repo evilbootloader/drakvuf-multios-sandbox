@@ -170,7 +170,7 @@ for the fully specified first batch (DRAFT-001 through DRAFT-008).
 
 | # | Risk | Impact | Notes |
 |---|---|---|---|
-| 1 | No git repository existed as of 2026-08-07 | Blocks the entire review/diff/rollback discipline this lifecycle assumes | DRAFT-001 |
+| 1 | ~~No git repository existed as of 2026-08-07~~ — resolved 2026-08-07: baseline commit `bb8ad14` created | None — closed | DRAFT-001 complete; `git log`/`git status`/`git show --stat` evidence recorded in DRAFT-001.md |
 | 2 | Dev-container `Bash` was non-functional (bwrap error) | `bash -n`/`shellcheck`/`perl -c` couldn't run there | Must run on real host/CI; documented in CONTRIBUTING.md's TEST section |
 | 3 | DRAKVUF's GPL-with-exceptions text treats subprocess-orchestration as derivative work; CERT-Polska needed dual consent for proprietary embedding of the closest prior art | Commercial/paywalled web platform (M7+) may not be legally safe as currently envisioned | Real legal consultation needed before M7 business-model decisions; does not block internal lab automation |
 | 4 | `tlsmon` is confirmed Windows-only | No known path to TLS visibility on Ubuntu/Android guests | Original engineering or scope reduction required |

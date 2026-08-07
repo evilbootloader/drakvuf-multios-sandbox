@@ -7,7 +7,7 @@ DRAFT-009 onward (not yet drafted in full, title-index only).
 
 | Draft ID | Title | Area | Milestone | Priority | Depends on | Status |
 |---|---|---|---|---|---|---|
-| DRAFT-001 | Initialize git repository and commit current baseline | governance | M0 | P0 | — | Open |
+| DRAFT-001 | Initialize git repository and commit current baseline | governance | M0 | P0 | — | **Closed** — done 2026-08-07 |
 | DRAFT-002 | Add root README.md | governance | M0 | P1 | DRAFT-001 | **Closed** — done 2026-08-07 |
 | DRAFT-003 | Reorganize docs/ into roadmap/architecture/checklists, preserving Android checklist evidence verbatim | governance | M0 | P0 | DRAFT-001 | **Closed** — done 2026-08-07 |
 | DRAFT-004 | Fix checklist doc-reference and provenance-list defects | governance | M0 | P2 | DRAFT-003 | **Closed** — done 2026-08-07 |

@@ -1,6 +1,6 @@
 # DRAFT-001: Initialize git repository and commit current baseline
 
-**Status:** Open
+**Status:** Closed — done 2026-08-07
 **Area:** governance
 **Milestone:** M0
 **Priority:** P0
@@ -70,14 +70,53 @@ infrastructure impact.
 
 # Acceptance criteria
 
-- [ ] `.git` exists and `git log` shows a baseline commit.
-- [ ] `git status` is clean immediately after.
-- [ ] No files matching `.gitignore` patterns are tracked.
+- [x] `.git` exists and `git log` shows a baseline commit.
+- [x] `git status` is clean immediately after.
+- [x] No files matching `.gitignore` patterns are tracked.
 
 # Evidence required
 
 `git log --oneline`, `git status`, and `git show --stat HEAD` output,
 pasted into this issue or the commit message body.
+
+# Evidence (2026-08-07)
+
+Two deviations from the original PLAN, both confirmed with the user before
+committing: `docs/android-drakvuf-automation-checklist.md` (a stale
+duplicate of `docs/checklists/android.md` left over from the docs reorg,
+despite `CLAUDE.md` claiming it no longer existed) was deleted rather than
+committed; `.claude/` and `.devcontainer/` were left untracked rather than
+included, since the PLAN's file list didn't name them.
+
+```
+$ git log --oneline
+bb8ad14 Initial commit: baseline automation, docs, and roadmap
+
+$ git status
+On branch master
+Untracked files:
+  (use "git add <file>..." to include in what will be committed)
+	.claude/
+	.devcontainer/
+
+nothing added to commit but untracked files present (use "git add" to track)
+
+$ git show --stat HEAD
+commit bb8ad14a34ce9a31860334832716dfdd6bb3f55c
+Author: lluisbessasanz <lluisbessasanz@proton.me>
+Date:   Fri Aug 7 19:04:33 2026 +0000
+
+    Initial commit: baseline automation, docs, and roadmap
+
+ 52 files changed, 5332538 insertions(+)
+ (full per-file stat omitted here for length; automation/, misc/, docs/,
+ CLAUDE.md, README.md, CONTRIBUTING.md, and .github/issue-drafts/ are all
+ present as expected — see repo `git show --stat HEAD` for the complete list)
+```
+
+`git ls-files` was also grepped for `.gitignore` patterns
+(`.pcap`/`.dmp`/`.memdump`/`drakvuf.json`/`.bak`/`.env`/`secrets/`/`.key`/`.pem`)
+— no matches.
 
 # Security considerations
 
