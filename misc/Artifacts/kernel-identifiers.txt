@@ -1,0 +1,14 @@
+Kernel source revision:
+447ff15184f6dd2e0d010f7fba9af1d886bd7443
+447ff15184f6
+
+Kernel release:
+6.6.129-crimson-xanmod1
+
+[0;32m#### build completed successfully  ####[00m
+
+
+Compiler:
+CONFIG_CC_VERSION_TEXT="Android (12251623, +pgo, +bolt, +lto, +mlgo, based on r536225) clang version 19.0.1 (https://android.googlesource.com/toolchain/llvm-project b3a530ec6537146650e42be89f1089e9a3588460)"
+dd4f5be2f56a21720454b4e7327f152d935dc5a36a0aece8fd46ce6c8b7c6b4e  /home/user/BlissOS/out/target/product/x86_64/obj/kernel/vmlinux
+90f992794d0c8710f256b374625bc65cd62a9037d7d196ecd7062cea0903dcfb  /home/user/BlissOS/out/target/product/x86_64/obj/kernel/System.map

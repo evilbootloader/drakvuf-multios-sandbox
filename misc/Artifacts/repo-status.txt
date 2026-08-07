@@ -1,0 +1,6 @@
+project device/generic/common/                  (*** NO BRANCH ***)
+ -m	BoardConfig.mk
+ -m	treble.mk
+project prebuilts/clang/host/linux-x86/         (*** NO BRANCH ***)
+ --	clang-r416183b1/
+ --	clang-r536225/

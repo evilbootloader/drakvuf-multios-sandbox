@@ -1,0 +1,5 @@
+I've set up drakvuf on xen which is nested in proxmox, right now I have support for analyzing ubuntu malware (without network connection) in ubuntu 20.04.
+
+You can see the full set up in automated_drakvuf_on_xen_nested_within.md. This source comes from: https://evilbootloader.gitbook.io/evilbootloader/drakvuf/drakvuf-on-xen-nested-within-proxmox
+
+I've also set up Android VM, you can check in android_setup.md

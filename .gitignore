@@ -1,0 +1,25 @@
+# Malware samples and analysis output — never commit these
+malware_incoming/
+malware_processing/
+malware_finished/
+*.pcap
+*.dmp
+*.memdump
+drakvuf.json
+*.bak
+
+# Secrets / local config
+.env
+secrets/
+*.key
+*.pem
+
+# OS / editor cruft
+.DS_Store
+*.swp
+*~
+
+# Build artifacts (Android/DRAKVUF build trees, if ever checked out alongside this repo)
+*.o
+*.so
+*.iso

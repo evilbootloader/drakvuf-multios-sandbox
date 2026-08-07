@@ -1,0 +1,28 @@
+===== device/generic/common =====
+ M BoardConfig.mk
+ M treble.mk
+diff --git a/BoardConfig.mk b/BoardConfig.mk
+index e5b0283..18bd820 100644
+--- a/BoardConfig.mk
++++ b/BoardConfig.mk
+@@ -196,7 +196,7 @@ SYSTEM_EXT_PUBLIC_SEPOLICY_DIRS += $(LOCAL_COMMON_TREE)/sepolicy/public
+ BOARD_VENDOR_SEPOLICY_DIRS += $(LOCAL_COMMON_TREE)/sepolicy/vendor
+ 
+ TARGET_FLATTEN_APEX := true
+-BOARD_SYSTEMIMAGE_PARTITION_SIZE := 5000000000
++BOARD_SYSTEMIMAGE_PARTITION_SIZE := 9000000000
+ BOARD_RECOVERYIMAGE_PARTITION_SIZE := 100663296
+ TARGET_USERIMAGES_SPARSE_EXT_DISABLED := true
+ BOARD_USES_OEMIMAGE := true
+diff --git a/treble.mk b/treble.mk
+index 9893574..cd2cef3 100644
+--- a/treble.mk
++++ b/treble.mk
+@@ -101,7 +101,6 @@ PRODUCT_PACKAGES += \
+ 
+ # Thermal HAL
+ PRODUCT_PACKAGES += \
+-    com.android.hardware.thermal.intel \
+     com.android.hardware.thermal
+ 
+ # Bootctrl HAL
