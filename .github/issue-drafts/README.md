@@ -11,10 +11,13 @@ full two-stage process this directory implements.
   CREATE/TEST/DEPLOY/Acceptance criteria/Evidence required/Security
   considerations/Documentation changes/Recovery-rollback`).
 
-Nothing here has been published with `gh issue create`. Publication
-requires the Stage 2 gate in `CONTRIBUTING.md`: show the index, show every
-title, summarize dependencies, show the exact commands, and get explicit
-approval first.
+As of 2026-08-08, four drafts have been published with `gh issue create`:
+DRAFT-006 (issue #1, closed), DRAFT-007 (issue #2, open), DRAFT-008 (issue
+#3, open), and DRAFT-025 (issue #4, open) — see `issue-index.md`'s Status
+column for current state. Publishing any further draft still requires the
+Stage 2 gate in `CONTRIBUTING.md`: show the index, show every title,
+summarize dependencies, show the exact commands, and get explicit approval
+first.
 
 Four of the first eight drafts (DRAFT-002, DRAFT-003, DRAFT-004, DRAFT-005)
 were completed directly during the same session that drafted them, since

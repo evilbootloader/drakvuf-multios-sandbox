@@ -136,6 +136,47 @@ Do not run those commands until approved. Before publishing anything,
 inspect `gh --version`, `gh auth status`, and `gh repo view`. Do not create
 repositories, issues, labels, milestones, or projects during a PLAN pass.
 
+### Issue dependency and cleanup
+
+The repository state is the source of truth for what an issue still needs
+to do, not the original issue text. Issue text drifts stale as work lands;
+the code, docs, and checklists don't.
+
+**Before starting or updating any issue** (draft or published): compare
+what it asks for against the current repository state. If work it requests
+has already been implemented by an earlier issue:
+
+- remove the already-completed task from the issue;
+- update or simplify the affected acceptance criteria;
+- remove implementation steps that are now obsolete;
+- keep only the work that is still actually required;
+- update the `Dependencies` field / issue-index dependency column if the
+  relationship has changed;
+- do not reimplement functionality just because it still appears in an
+  older issue's description.
+
+**When an issue is completed**, also review later/open issues that depend
+on it or overlap with its scope. For each affected later issue:
+
+1. Identify which of its tasks the just-completed issue already covered.
+2. Remove those tasks.
+3. Update paths, commands, and assumptions the implementation changed.
+4. Remove acceptance criteria that are already satisfied.
+5. Keep relevant historical/context information, but clearly separate it
+   from what remains outstanding (see the `issue-index.md` "Note on
+   DRAFT-NNN" sections for the existing pattern).
+6. Reference the completed issue so the scope change is traceable.
+
+Do not close a later issue merely because part of its scope landed
+elsewhere. If *all* of its requirements turn out to already be satisfied,
+report that and recommend closing it — do not close it silently.
+
+This cleanup pass is itself a change to a GitHub-facing artifact, so it
+follows the same gate as issue creation: before running `gh issue edit` (or
+editing a merged/published draft file) to apply any of the above, show the
+proposed diff and get explicit approval, unless automatic issue maintenance
+has been explicitly authorized for the session.
+
 ## Repository organization
 
 See `docs/roadmap/project-roadmap.md` for the current milestone plan and

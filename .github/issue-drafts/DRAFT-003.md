@@ -85,9 +85,11 @@ Not applicable — documentation only, no infrastructure impact.
 - [x] `docs/roadmap/`, `docs/architecture/`, `docs/checklists/` all exist
   with the planned content.
 - [x] No checklist evidence, checkbox state, or log entry was altered.
-- [ ] Original `docs/android-drakvuf-automation-checklist.md` removed via
-  `git rm` once git exists (deferred to DRAFT-001 follow-up — not done as
-  of this writing, since no delete tool was available).
+- [x] Original `docs/android-drakvuf-automation-checklist.md` removed.
+  Satisfied by a different mechanism than originally planned: per
+  DRAFT-001's evidence log, the file was deleted before the initial commit
+  rather than tracked-then-`git rm`'d, so it never entered history at all.
+  Confirmed absent from the current working tree.
 
 # Evidence required
 

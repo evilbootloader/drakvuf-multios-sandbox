@@ -1,6 +1,6 @@
 # DRAFT-007: Verify `drakvuf-ubuntu.sh`'s `<USER>` placeholder bug against real behavior
 
-**Status:** Open — requires Xen Dom0
+**Status:** Published — [issue #2](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/2), requires Xen Dom0
 **Area:** ubuntu
 **Milestone:** M1
 **Priority:** P0

@@ -1,6 +1,6 @@
 # DRAFT-008: Define OS-independent analysis job/result state model
 
-**Status:** Open
+**Status:** Published — [issue #3](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/3)
 **Area:** core
 **Milestone:** M0
 **Priority:** P0

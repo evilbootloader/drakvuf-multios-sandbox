@@ -1,6 +1,6 @@
 # DRAFT-006: Reconcile `misc/` Xen guest config naming and cross-references
 
-**Status:** Open (revised 2026-08-07 — see below)
+**Status:** Closed — [issue #1](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/1), done 2026-08-08 (revised 2026-08-07 — see below)
 **Area:** governance
 **Milestone:** M0
 **Priority:** P2
@@ -76,8 +76,17 @@ DRAFT-001 (for commit ordering / diff review).
 
 # CREATE
 
-Not started. Depends on the PLAN step 1 decision (needs the human operator,
-not just repo-side judgment).
+Done — commit `ced4e77` ("Rename misc/linux*.cfg to ubuntu*.cfg and fix
+cross-references (#1)"). Decision made: renamed rather than left as-is.
+`misc/linux.cfg` → `misc/ubuntu.cfg`, `misc/linux_sandbox.cfg` →
+`misc/ubuntu_sandbox.cfg` (content unchanged), and every in-repo reference
+updated: `automation/run_analysis-ubuntu.sh`'s hard-coded config path,
+`docs/checklists/ubuntu.md`, `docs/architecture/networking.md`,
+`docs/architecture/analysis-pipeline.md`,
+`docs/drakvuf-on-xen-nested-within-proxmox.md`, `README.md`, and
+`CLAUDE.md`. The commit message notes the real Dom0 host's copies still
+need a separate manual rename to match — that coordination is tracked in
+the issue thread, not in this repo.
 
 # TEST
 
@@ -95,19 +104,22 @@ without confirming first.
 
 # Acceptance criteria
 
-- [ ] Decision made and recorded: rename `misc/linux*.cfg` or keep as-is
-  with documentation only.
-- [ ] `automation/run_analysis-ubuntu.sh`'s hard-coded config path matches
+- [x] Decision made and recorded: rename `misc/linux*.cfg` or keep as-is
+  with documentation only. (Renamed — see `CREATE`.)
+- [x] `automation/run_analysis-ubuntu.sh`'s hard-coded config path matches
   wherever the config actually lives (this repo's `misc/`, or the real
-  Dom0 deployment path — decide which is authoritative).
-- [ ] No dangling references to a renamed-away filename anywhere in
-  `docs/` or `automation/`.
+  Dom0 deployment path — decide which is authoritative). (Updated to
+  `misc/ubuntu_sandbox.cfg` in commit `ced4e77`.)
+- [x] No dangling references to a renamed-away filename anywhere in
+  `docs/` or `automation/`. (All cross-references updated in the same
+  commit; historical checklist evidence in `docs/checklists/android.md`
+  was unaffected since it never referenced the `linux*` names.)
 
 # Evidence required
 
-The rename decision and rationale; if renamed, a grep showing zero
-remaining references to the old filenames outside historical checklist
-evidence (which must not be altered).
+Commit `ced4e77`'s diff (10 files changed) and the current `misc/`
+directory listing (`ubuntu.cfg`, `ubuntu_sandbox.cfg`, `android.cfg`,
+`android_sandbox.cfg` — no `linux*.cfg` remaining).
 
 # Security considerations
 
