@@ -49,8 +49,9 @@ Distinguish between:
 As of 2026-08-07, `Bash` was non-functional in the Claude Code development
 container used to draft this project's roadmap (`bwrap: No permissions to
 create a new namespace`) — static checks (`bash -n`, `shellcheck`,
-`perl -c`) had to be deferred to the real host or CI. Re-verify this hasn't
-recurred before assuming static checks can run in-container.
+`perl -c`) had to be deferred to the real host or CI. Re-verified working
+as of 2026-08-08 (issue #1) — static checks can run directly in-container
+again. Re-check this note if the failure recurs.
 
 Do not claim a task is complete without evidence.
 

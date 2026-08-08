@@ -73,11 +73,13 @@ subfolders):
   `network-setup.sh`, then launches `dirwatch` with the arguments above.
 
 The Xen guest `.cfg` files these scripts reference are tracked under
-`misc/`, not `automation/`: `misc/linux.cfg` (golden `ubuntu`),
-`misc/linux_sandbox.cfg` (`ubuntu_sandbox`), `misc/android.cfg` (golden
-`android`), `misc/android_sandbox.cfg` (`android_sandbox`). The `linux*`
-filenames are historical and misleading — they define Ubuntu domains, not
-a generic "linux" one. An earlier pass this session initially reported
+`misc/`, not `automation/`: `misc/ubuntu.cfg` (golden `ubuntu`),
+`misc/ubuntu_sandbox.cfg` (`ubuntu_sandbox`), `misc/android.cfg` (golden
+`android`), `misc/android_sandbox.cfg` (`android_sandbox`). These were
+renamed from `linux.cfg`/`linux_sandbox.cfg` in issue #1 — those names were
+historical and misleading, since the files define Ubuntu domains, not a
+generic "linux" one; the real Dom0 host's copies still need separate manual
+coordination to match. An earlier pass this session initially reported
 these files as missing entirely; that was wrong — `misc/` had simply not
 been checked. Always check for a `misc/` directory before concluding a
 referenced file doesn't exist anywhere in this repo.

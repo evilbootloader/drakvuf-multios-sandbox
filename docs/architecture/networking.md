@@ -26,9 +26,9 @@ name `clone-ubuntu.pl` attaches clones to and `tcpdump.sh` captures on.
 
 `xenbr0` is the uplink/production bridge; `xenbr1` is the analysis bridge
 (see `CLAUDE.md`'s naming tables). Golden VMs use `xenbr0` directly (see
-`misc/linux.cfg`, `misc/android.cfg` — both `vif = [ 'type=ioemu,model=e1000,bridge=xenbr0' ]`,
+`misc/ubuntu.cfg`, `misc/android.cfg` — both `vif = [ 'type=ioemu,model=e1000,bridge=xenbr0' ]`,
 no VLAN, no `vif-openvswitch` script); sandbox VMs use `xenbr1` with the OVS
-vif script (see `misc/linux_sandbox.cfg`, `misc/android_sandbox.cfg` —
+vif script (see `misc/ubuntu_sandbox.cfg`, `misc/android_sandbox.cfg` —
 `bridge=xenbr1`).
 
 ## Known gap: Android network isolation is unverified

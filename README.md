@@ -21,10 +21,11 @@ progress; Windows is a planned future target.
   `clone-ubuntu.pl`, `preconfig-ubuntu.sh`, `drakvuf-ubuntu.sh`,
   `cleanup.sh`, `tcpdump.sh`, `network-setup.sh`, `run_analysis-ubuntu.sh`).
   See `docs/architecture/analysis-pipeline.md` for how they fit together.
-- `misc/` — tracked Xen guest configs: `linux.cfg` (golden `ubuntu`),
-  `linux_sandbox.cfg` (`ubuntu_sandbox`), `android.cfg` (golden `android`),
-  `android_sandbox.cfg` (`android_sandbox`). Note the `linux*` filenames are
-  historical and define the Ubuntu domains, not a generic "linux" one.
+- `misc/` — tracked Xen guest configs: `ubuntu.cfg` (golden `ubuntu`),
+  `ubuntu_sandbox.cfg` (`ubuntu_sandbox`), `android.cfg` (golden `android`),
+  `android_sandbox.cfg` (`android_sandbox`). Renamed from `linux.cfg` /
+  `linux_sandbox.cfg` in issue #1 — those names were historical and misleading,
+  since the files define Ubuntu domains, not a generic "linux" one.
 - `docs/roadmap/` — the living project roadmap: milestones, dependency
   graph, risk register, architecture decisions still needing experiments.
 - `docs/architecture/` — the analysis pipeline, networking, result schema,

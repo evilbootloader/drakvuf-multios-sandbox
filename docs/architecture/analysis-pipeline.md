@@ -22,7 +22,7 @@ dirwatch <loop(0)|poll(1)> <origin domain> <domain config> <kernel json> \
 `automation/run_analysis-ubuntu.sh` invokes it with:
 
 ```
-dirwatch 1 ubuntu_sandbox /home/user/drakvuf-tools/linux_sandbox.cfg \
+dirwatch 1 ubuntu_sandbox /home/user/drakvuf-tools/ubuntu_sandbox.cfg \
   /root/linux.json 1415 /malware_incoming /malware_processing \
   /malware_finished 2 <clone-ubuntu.pl> <preconfig-ubuntu.sh> \
   <drakvuf-ubuntu.sh> <cleanup.sh> <tcpdump.sh>
@@ -31,8 +31,8 @@ dirwatch 1 ubuntu_sandbox /home/user/drakvuf-tools/linux_sandbox.cfg \
 Note the deployment paths (`/home/user/drakvuf-tools/...`) don't match this
 repo's `automation/`/`misc/` directory names — see the Ubuntu checklist's
 "known issues" section. The domain config path in that invocation
-(`linux_sandbox.cfg`) corresponds to what's tracked here as
-`misc/linux_sandbox.cfg`.
+(`ubuntu_sandbox.cfg`) corresponds to what's tracked here as
+`misc/ubuntu_sandbox.cfg` (renamed from `linux_sandbox.cfg` in issue #1).
 
 Per-sample flow: on a new file, `dirwatch` moves it out of the watch folder,
 then calls back into the worker scripts in order —

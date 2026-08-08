@@ -10,7 +10,7 @@ ip link set xenbr1 up
 
 dirwatch 1 \
     ubuntu_sandbox \
-    /home/user/drakvuf-tools/linux_sandbox.cfg \
+    /home/user/drakvuf-tools/ubuntu_sandbox.cfg \
     /root/linux.json \
     1415 \
     /malware_incoming \

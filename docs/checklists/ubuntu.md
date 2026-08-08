@@ -25,8 +25,8 @@
 | Volume group | `vg-root` |
 | Analysis bridge | `xenbr1` |
 | Saved state | `/home/user/Documents/ubuntu_sandbox.bak` |
-| Golden Xen config | `misc/linux.cfg` (tracked in this repo; despite the filename it defines the `ubuntu` domain) |
-| Sandbox Xen config | `misc/linux_sandbox.cfg` (tracked in this repo; defines `ubuntu_sandbox`) |
+| Golden Xen config | `misc/ubuntu.cfg` (tracked in this repo; renamed from `linux.cfg` in issue #1) |
+| Sandbox Xen config | `misc/ubuntu_sandbox.cfg` (tracked in this repo; renamed from `linux_sandbox.cfg` in issue #1) |
 | Current phase | M1 — Ubuntu regression baseline (see roadmap) |
 | Current blocker | Unverified `<USER>` bug in `drakvuf-ubuntu.sh` (see below) |
 
@@ -65,7 +65,7 @@ execution. None of the checkboxes below represent execution evidence.
   inter-VLAN DROP).
 - [x] `automation/run_analysis-ubuntu.sh` exists — brings `xenbr1` up, runs
   `network-setup.sh 2`, launches `dirwatch` with the arguments above.
-- [x] `misc/linux_sandbox.cfg` exists — Xen HVM config for `ubuntu_sandbox`
+- [x] `misc/ubuntu_sandbox.cfg` exists — Xen HVM config for `ubuntu_sandbox`
   (2048MB/1vcpu, `bridge=xenbr1`, `altp2m=2`).
 
 ## Known issues (found by source reading, not yet execution-verified)

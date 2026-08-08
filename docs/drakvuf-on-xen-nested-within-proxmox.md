@@ -321,7 +321,7 @@ Create an Ubuntu 20.04 target golden VM. First create the Xen configuration file
 ```bash
 # Run on L1: Virtual machine running Xen, Dom0 and DRAKVUF
 
-user@drakvuf:~/Documents$ cat ~/drakvuf-tools/linux.cfg 
+user@drakvuf:~/Documents$ cat ~/drakvuf-tools/ubuntu.cfg 
 arch = 'x86_64'
 name = "ubuntu"
 maxmem = 3000
@@ -357,7 +357,7 @@ Then we can start our vm.
 
 sudo lvcreate -L64g -n ubuntu vg-root
 sudo apt install virt-viewer
-sudo xl create linux.cfg
+sudo xl create ubuntu.cfg
 
 # If above command fails, check if vm is running
 sudo xl list
@@ -419,7 +419,7 @@ sudo apt install screen apache2 tcpdump vlan openvswitch-switch -y
 sudo ovs-vsctl add-br xenbr1
 sudo ip link set xenbr1 up
 
-sudo xl create ~/drakvuf-tools/linux_sandbox.cfg
+sudo xl create ~/drakvuf-tools/ubuntu_sandbox.cfg
 ```
 
 Inside the sandbox analysis VM, start a long-lived privileged process that can be used as the injection target.
@@ -439,7 +439,7 @@ We can check with the following for knowing if everything is ok. First time of u
 ```bash
 # Run on L1: Virtual machine running Xen, Dom0 and DRAKVUF
 
-sudo xl save ubuntu_sandbox ~/Documents/ubuntu_sandbox.bak linux_sandbox.cfg
+sudo xl save ubuntu_sandbox ~/Documents/ubuntu_sandbox.bak ubuntu_sandbox.cfg
 ```
 
 Ubuntu sandbox will be destroyed. Any time you need to run the command above again run the copy of the lvm and launch the vm.
@@ -456,7 +456,7 @@ sudo dd \
     status=progress
 
 # Relaunch
-sudo xl create ~/drakvuf-tools/linux_sandbox.cfg
+sudo xl create ~/drakvuf-tools/ubuntu_sandbox.cfg
 ```
 
 The nested Xen host and Ubuntu analysis VM are now prepared for basic DRAKVUF/LibVMI testing. A follow-up can cover isolated networking, injector argument handling, logging, and automated clone analysis.
