@@ -154,7 +154,8 @@ static uint32_t threads;
 static uint32_t injection_pid;
 static bool shutting_down;
 
-static GMutex locks[128];
+//static GMutex locks[128];
+static gint slots_busy[128] = { 0 };
 
 xen_interface_t* xen;
 
@@ -187,14 +188,27 @@ gpointer tcpdump(gpointer data)
     return NULL;
 }
 
-static inline int find_thread()
+static inline void release_thread(int threadid)
 {
-    unsigned int i=0;
-    for (; i<threads; i++)
+    if (threadid < 0 || (guint)threadid >= threads)
+        return;
+
+    g_atomic_int_set(&slots_busy[threadid], 0);
+}
+
+static inline int find_thread(void)
+{
+    for (unsigned int i = 0; i < threads; i++)
     {
-        if (g_mutex_trylock(&locks[i]))
-            return i;
+        if (g_atomic_int_compare_and_exchange(
+                &slots_busy[i],
+                0,
+                1))
+        {
+            return (int)i;
+        }
     }
+
     return -1;
 }
 
@@ -233,51 +247,121 @@ gpointer timer_thread(gpointer data)
     return NULL;
 }
 
-static struct start_drakvuf* prepare(struct start_drakvuf* start, int _threadid)
+static gboolean valid_threadid(int threadid)
 {
+    return threadid >= 0 &&
+           (guint)threadid < threads;
+}
+
+static struct start_drakvuf*
+prepare(struct start_drakvuf* start, int requested_threadid)
+{
+    gboolean allocated_here = FALSE;
+
     if (shutting_down)
         return NULL;
 
-    domid_t cloneID = 0;
-    char* clone_name = NULL;
-    int threadid = start ? start->threadid : _threadid;
+    int threadid = start
+        ? start->threadid
+        : requested_threadid;
 
-    if ( shutting_down )
-        return NULL;
-
-    printf("[%i] Making clone\n", threadid);
-    make_clone(xen, &cloneID, threadid+1, &clone_name);
-
-    while ((!clone_name || !cloneID) && !shutting_down)
+    if (!valid_threadid(threadid))
     {
-        printf("[%i] Clone creation failed, trying again\n", threadid);
-        free(clone_name);
-        clone_name = NULL;
-        cloneID = 0;
+        fprintf(stderr,
+                "[!] Refusing to create clone with invalid thread ID %d "
+                "(threads=%u)\n",
+                threadid,
+                threads);
 
-        make_clone(xen, &cloneID, threadid+1, &clone_name);
+        return NULL;
     }
 
-    if ( shutting_down )
-        return NULL;
-
-    //uint64_t shared = xen_memshare(xen, domID, cloneID);
-    //printf("Shared %"PRIu64" pages\n", shared);
-
+    /*
+     * Allocate the worker structure before trying to store clone data in it.
+     */
     if (!start)
     {
-        start = g_try_malloc0(sizeof(struct start_drakvuf));
+        start = g_try_malloc0(sizeof(*start));
+
+        if (!start)
+        {
+            fprintf(stderr,
+                    "[%i] Failed to allocate start_drakvuf\n",
+                    threadid);
+            return NULL;
+        }
+
+        allocated_here = TRUE;
         start->threadid = threadid;
         g_mutex_init(&start->timer_lock);
     }
+    else
+    {
+        /*
+         * Retrying with the same worker structure.
+         * The timed-out clone has already been destroyed by timer_thread().
+         */
+        start->cloneID = 0;
+        g_clear_pointer(&start->clone_name, g_free);
+    }
 
-    start->cloneID = cloneID;
-    start->clone_name = clone_name;
-    start->utime = time(NULL);
+    while (!shutting_down)
+    {
+        domid_t cloneID = 0;
+        char* clone_name = NULL;
 
-    return start;
+        printf("[%i] Making clone\n", threadid);
+
+        make_clone(
+            xen,
+            &cloneID,
+            threadid + 1,
+            &clone_name
+        );
+
+        if (cloneID != 0 && clone_name != NULL)
+        {
+            start->cloneID = cloneID;
+            start->clone_name = clone_name;
+            start->utime = time(NULL);
+
+            printf("[%i] Clone %s created with domid %u\n",
+                   threadid,
+                   start->clone_name,
+                   start->cloneID);
+
+            return start;
+        }
+
+        printf("[%i] Clone creation failed, cleaning partial clone\n",
+               threadid);
+
+        /*
+         * A domain may have been created even if its name was not parsed.
+         */
+        if (cloneID != 0)
+            cleanup(cloneID, threadid + 1);
+
+        g_free(clone_name);
+
+        /*
+         * Avoid continuously hammering Xen/LVM on failure.
+         */
+        g_usleep(G_USEC_PER_SEC);
+    }
+
+    /*
+     * Only free here when this function allocated the structure.
+     * Existing structures are owned by run_drakvuf().
+     */
+    if (allocated_here)
+    {
+        g_mutex_clear(&start->timer_lock);
+        g_free(start);
+    }
+
+    return NULL;
 }
-
 static inline void start(struct start_drakvuf* start, char* sample)
 {
     if ( shutting_down || !start || !sample )
@@ -335,34 +419,46 @@ restart:
 
     printf("[%i] ** DRAKVUF finished with RC %i. Timer: %i\n", start->threadid, rc, start->timer);
 
-    if ( start->timer )
+        if (start->timer)
     {
-        printf("[%i] Finished processing %s\n", start->threadid, start->input);
+        printf("[%i] Finished processing %s\n",
+               start->threadid,
+               start->input);
 
-        g_mutex_unlock(&locks[start->threadid]);
-        g_mutex_clear(&start->timer_lock);
-        g_free(start->input);
-        g_free(start->clone_name);
-        g_free(start);
-        return;
+        goto worker_finished;
     }
-    else
-        cleanup(start->cloneID, start->threadid+1);
 
 end:
-    if ( !shutting_down )
+    if (!shutting_down)
     {
-        printf("[%i] %s failed to execute on %u because of a timeout, creating new clone\n", start->threadid, start->input, start->cloneID);
-        prepare(start, -1);
-        goto restart;
+        printf("[%i] %s timed out on %u; creating new clone\n",
+               start->threadid,
+               start->input,
+               start->cloneID);
+
+        struct start_drakvuf* prepared = prepare(start, -1);
+
+        if (prepared)
+        {
+            start = prepared;
+            goto restart;
+        }
     }
+
+worker_finished:
+    release_thread(start->threadid);
+
+    g_mutex_clear(&start->timer_lock);
+    g_clear_pointer(&start->input, g_free);
+    g_clear_pointer(&start->clone_name, g_free);
+    g_free(start);
 }
 
 int main(int argc, char** argv)
 {
     DIR* dir;
     struct dirent* ent;
-    unsigned int i;
+    //unsigned int i;
     unsigned int processed = 0;
     unsigned int total_processed = 0;
     int ret = 0;
@@ -405,14 +501,12 @@ int main(int argc, char** argv)
     cleanup_script = argv[13];
     tcpdump_script = argv[14];
 
-    if (threads > 128)
+    if (threads == 0 || threads > 128)
     {
-        printf("Too many clones requested (max 128 is specified right now)\n");
+        printf("Invalid clone count %u (valid range: 1-128)\n", threads);
         return 1;
     }
 
-    for (i=0; i<threads; i++)
-        g_mutex_init(&locks[i]);
 
     pool = g_thread_pool_new(run_drakvuf, NULL, threads, TRUE, NULL);
 
@@ -432,12 +526,6 @@ int main(int argc, char** argv)
     {
         processed = 0;
 
-        while (threadid<0 && !shutting_down)
-        {
-            sleep(1);
-            threadid = find_thread();
-        }
-
         if ((dir = opendir (in_folder)) != NULL)
         {
             while ((ent = readdir (dir)) != NULL && !shutting_down)
@@ -445,18 +533,85 @@ int main(int argc, char** argv)
                 if (!strcmp(ent->d_name, ".") || !strcmp(ent->d_name, ".."))
                     continue;
 
+                /*
+                 * Reserve a worker for this sample.  The previous code only
+                 * did this once before scanning the directory, then reset
+                 * threadid to -1 after the first sample and passed -1 to
+                 * prepare() for every remaining file in the same scan.
+                 */
+                threadid = -1;
+                while (threadid < 0 && !shutting_down)
+                {
+                    threadid = find_thread();
+                    if (threadid < 0)
+                        sleep(1);
+                }
+
+                if (shutting_down)
+                {
+                    if (threadid >= 0)
+                        release_thread(threadid);
+                    threadid = -1;
+                    break;
+                }
+
+                /*
+                 * prepare() retries clone creation until it succeeds or a
+                 * shutdown is requested.  Keep the sample in in_folder while
+                 * waiting so it cannot be stranded in run_folder.
+                 */
+                struct start_drakvuf* _start = prepare(NULL, threadid);
+
+                if (!_start)
+                {
+                    fprintf(stderr,
+                            "[%i] Unable to prepare clone for %s; "
+                            "leaving it in the input directory\n",
+                            threadid,
+                            ent->d_name);
+
+                    release_thread(threadid);
+                    threadid = -1;
+
+                    if (!shutting_down)
+                        sleep(1);
+
+                    continue;
+                }
+
                 char* command;
-                command = g_strdup_printf("mv %s/%s %s/%s", in_folder, ent->d_name, run_folder, ent->d_name);
+                gint move_rc = -1;
+                command = g_strdup_printf("mv %s/%s %s/%s",
+                                          in_folder, ent->d_name,
+                                          run_folder, ent->d_name);
                 printf("** MOVING FILE FOR PROCESSING: %s\n", command);
-                g_spawn_command_line_sync(command, NULL, NULL, NULL, NULL);
+                gboolean move_started = g_spawn_command_line_sync(
+                    command, NULL, NULL, &move_rc, NULL);
                 g_free(command);
 
-                struct start_drakvuf* _start = prepare(NULL, threadid);
+                if (!move_started || move_rc != 0)
+                {
+                    fprintf(stderr,
+                            "[%i] Failed to move %s into the processing "
+                            "directory; discarding prepared clone %u\n",
+                            threadid,
+                            ent->d_name,
+                            _start->cloneID);
+
+                    cleanup(_start->cloneID, _start->threadid + 1);
+                    g_mutex_clear(&_start->timer_lock);
+                    g_clear_pointer(&_start->clone_name, g_free);
+                    g_free(_start);
+
+                    release_thread(threadid);
+                    threadid = -1;
+                    continue;
+                }
+
                 start(_start, ent->d_name);
 
                 threadid = -1;
                 processed++;
-
             }
             closedir (dir);
         }
@@ -508,13 +663,12 @@ int main(int argc, char** argv)
     g_thread_pool_free(pool, FALSE, TRUE);
 
     if ( threadid >= 0 )
-        g_mutex_unlock(&locks[threadid]);
-
-    for (i=0; i<threads; i++)
-        g_mutex_clear(&locks[i]);
+        release_thread(threadid);
 
     xen_free_interface(xen);
 
     printf("Finished processing %u samples\n", total_processed);
     return ret;
 }
+
+

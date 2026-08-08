@@ -118,7 +118,7 @@ echo 1 > /proc/sys/net/ipv4/ip_forward
 iptables -t nat -A POSTROUTING -o xenbr0 -j MASQUERADE
 
 # Configure the Open vSwitch bridge and add interfaces for each VLAN
-ifconfig xenbr1 up
+ip link set xenbr1 up
 for i in `seq 1 $1`;
 do
     vconfig add xenbr1 $i

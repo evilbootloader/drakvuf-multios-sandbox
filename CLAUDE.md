@@ -61,7 +61,8 @@ subfolders):
 - `preconfig-ubuntu.sh` — network-configures the booted clone and stages the
   sample into the guest via `injector`.
 - `drakvuf-ubuntu.sh` — runs the DRAKVUF trace (`syscalls`, `filetracer`, `fileextractor`,
-  `memdump` 120s timeout) and kills the per-VLAN `tcpdump` process afterward.
+  `memdump` 120s timeout, `--memdump-dir`) and kills the per-VLAN `tcpdump`
+  process afterward. Executes the staged sample at `/home/carlos/Desktop/test`.
 - `cleanup.sh` — pauses/destroys the clone domain and kills any lingering
   `injector`/`drakvuf` processes for it.
 - `tcpdump.sh` — captures traffic on the clone's VLAN sub-interface to a
@@ -78,8 +79,8 @@ The Xen guest `.cfg` files these scripts reference are tracked under
 `android`), `misc/android_sandbox.cfg` (`android_sandbox`). These were
 renamed from `linux.cfg`/`linux_sandbox.cfg` in issue #1 — those names were
 historical and misleading, since the files define Ubuntu domains, not a
-generic "linux" one; the real Dom0 host's copies still need separate manual
-coordination to match. An earlier pass this session initially reported
+generic "linux" one. The Dom0 host's copies were renamed to match on
+2026-08-08, so repo and host now agree. An earlier pass this session initially reported
 these files as missing entirely; that was wrong — `misc/` had simply not
 been checked. Always check for a `misc/` directory before concluding a
 referenced file doesn't exist anywhere in this repo.
@@ -88,15 +89,32 @@ Android equivalents (`clone-android.pl`, `preconfig-android.sh`,
 `drakvuf-android.sh`, `run_analysis-android.sh`) do not exist yet — this is
 the Phase 2 gap the checklist tracks. Do not assume they are present.
 
+**`automation/` now mirrors the working Dom0 host** as of 2026-08-08: the
+tested production scripts were copied in wholesale, resolving the repo↔host
+drift that issue #2's verification uncovered. `drakvuf-ubuntu.sh` picked up
+`CMD="/home/carlos/Desktop/test"` and `--memdump-dir` (the correct spelling,
+confirmed from `drakvuf --help`); `network-setup.sh` picked up
+`ip link set xenbr1 up` in place of the deprecated `ifconfig`;
+`dirwatch_old.c` was replaced by the host's newer variant (the previous
+520-line copy remains in git history at commit `2514168`). `dirwatch.c`,
+`preconfig-ubuntu.sh`, `cleanup.sh`, `clone-ubuntu.pl` and `tcpdump.sh` were
+already byte-identical to the host and were not touched. Issue #1's rename
+was also completed on the host side (`linux_sandbox.cfg` →
+`ubuntu_sandbox.cfg`), so `run_analysis-ubuntu.sh` now agrees on both sides
+and repo and host no longer diverge anywhere. The earlier
+`<USER>` placeholder was a repo-only defect and was never a production bug —
+Ubuntu analysis runs do execute their samples, which is now
+execution-evidenced (`docs/runbooks/verify-user-placeholder.md`).
+
 Known issues in the current Ubuntu scripts (do not silently fix — flag and
 confirm before changing):
 
-- `drakvuf-ubuntu.sh` hard-codes `CMD="/home/<USER>/Desktop/test"` with a
-  literal, unsubstituted `<USER>` placeholder, while `preconfig-ubuntu.sh`
-  hard-codes the real username `carlos` in the equivalent spot.
 - `run_analysis-ubuntu.sh` hard-codes deployment paths under
   `/home/user/drakvuf-tools/...`, which do not match this repo's
   `automation/` directory name.
+- Both `drakvuf-ubuntu.sh` and `preconfig-ubuntu.sh` hard-code the guest
+  username `carlos`. This is now consistent between them and matches
+  production, but parameterizing it remains open M1 work.
 
 Do not modify the Ubuntu behavior unless required and explicitly requested.
 

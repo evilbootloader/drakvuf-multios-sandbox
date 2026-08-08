@@ -45,12 +45,16 @@ cleanup.sh, tcpdump.sh, network-setup.sh, run_analysis-ubuntu.sh`.
 Architecture: `dirwatch.c` (GThreadPool + inotify, 15-arg CLI contract,
 60s/180s per-phase timeouts) calls
 `clone-ubuntu.pl → preconfig-ubuntu.sh → drakvuf-ubuntu.sh → cleanup.sh`
-plus `tcpdump.sh` on a side thread. **Known bug:** `drakvuf-ubuntu.sh`
-hard-codes `CMD="/home/<USER>/Desktop/test"` with a literal, unsubstituted
-`<USER>` placeholder, while `preconfig-ubuntu.sh` hard-codes the real
-username `carlos` in the equivalent spot — verify this against real
-behavior before treating "Ubuntu works" as a safe regression baseline (see
-Risk register and first-5 issues).
+plus `tcpdump.sh` on a side thread. **"Ubuntu works" is now
+execution-evidenced** (2026-08-08, issue #2): a recorded Dom0 run shows
+`ExecProc Status:Success` on `/home/carlos/Desktop/test` followed by ~359k
+trace records and a clean `exit_group`. The suspected `<USER>` bug was a
+**repository** defect, not a production one — the deployed Dom0 copy was
+correctly substituted all along. What that verification exposed was repo↔host
+drift, **resolved 2026-08-08** by syncing `automation/` wholesale from the
+tested production host and completing issue #1's host-side rename. Repo and
+host now agree on every file. See risks #7 and #11 and
+`docs/runbooks/verify-user-placeholder.md`.
 
 **Android** — `docs/checklists/android.md` Phase 0 (baseline verification)
 and Phase 1 (sandbox VM build) are mostly complete with real evidence
@@ -150,7 +154,7 @@ per-OS quality track, not a gate for anything else.
 | # | Milestone | Contents | Gate |
 |---|---|---|---|
 | M0 | Foundations | git init, README, docs reorg, CONTRIBUTING.md, job/result state model, licensing spike write-up | No Xen changes; pure planning/docs/scaffolding |
-| M1 | Ubuntu regression baseline | Verify the `<USER>` bug, document current behavior precisely, retrofit structured status output without changing behavior, add `bash -n`/`shellcheck`/`perl -c` CI | Proves the job model works on the one pipeline that already runs |
+| M1 | Ubuntu regression baseline | ~~Verify the `<USER>` bug~~ and ~~reconcile the repo↔Dom0 drift it exposed~~ (both done 2026-08-08, issue #2); document current behavior precisely, retrofit structured status output without changing behavior, add `bash -n`/`shellcheck`/`perl -c` CI plus a drift check | Proves the job model works on the one pipeline that already runs |
 | M2 | Containment closure | Finish Android §1.3 network isolation verification; decide shared-vs-per-OS script boundaries | Requires Xen Dom0 for the isolation tests |
 | M3 | Android MVP | Resume checklist Phase 2 → MVP gate using the now-defined job model | Bulk of the existing "Candidate" checklist content gets executed here |
 | M4 | Artifact schema + enrichment | Result schema, capa integration | After M1/M3 produce real logs to validate against |
@@ -176,7 +180,8 @@ for the fully specified first batch (DRAFT-001 through DRAFT-008).
 | 4 | `tlsmon` is confirmed Windows-only | No known path to TLS visibility on Ubuntu/Android guests | Original engineering or scope reduction required |
 | 5 | Android §1.3 network isolation is unverified | Sandbox containment guarantees for Android are currently unproven | Close before any real (non-benign) sample execution with networking enabled |
 | 6 | ~~Missing `.cfg` files~~ — corrected 2026-08-07: all four Xen guest configs are tracked under `misc/` | None — closed | Initial research missed the `misc/` directory; DRAFT-006 repurposed to reconcile `misc/` naming (`linux*.cfg` files define `ubuntu`/`ubuntu_sandbox`, not "linux") rather than recover missing files |
-| 7 | `drakvuf-ubuntu.sh` has an apparent unsubstituted `<USER>` bug vs. working `preconfig-ubuntu.sh` | "Ubuntu works" baseline assumption may be wrong | DRAFT-007 |
+| 7 | ~~`drakvuf-ubuntu.sh` has an apparent unsubstituted `<USER>` bug vs. working `preconfig-ubuntu.sh`~~ — resolved 2026-08-08 (issue #2): the deployed Dom0 copy is correctly substituted and samples execute; only this repo's copy carries the placeholder | None — closed. "Ubuntu works" is now execution-evidenced | DRAFT-007 complete; transcript in `docs/runbooks/verify-user-placeholder.md` |
+| 11 | ~~`automation/*` had drifted from the deployed Dom0 copies~~ — resolved 2026-08-08: `automation/` synced wholesale from the tested production host (`drakvuf-ubuntu.sh`, `network-setup.sh`, `dirwatch_old.c`; five other files were already byte-identical), and issue #1's host-side `linux_sandbox.cfg` → `ubuntu_sandbox.cfg` rename was completed | None — closed. Repo and host now agree everywhere | Recurrence prevention is the open part: nothing detects drift automatically (see DRAFT-026 CI) |
 | 8 | `lfreijo/drakvuf` `memdump` branch has no upstream PR/merge trail (single-maintainer fork) | Bus-factor risk for Linux plugin support | DRAFT-024 |
 | 9 | Upstream `dirwatch.c` had a historical timeout/retry bug (issue #140) with the same retry-on-timeout shape this project's copy uses | Possible latent reliability bug | DRAFT-010 |
 | 10 | No secrets-management design exists yet | Relevant once CI/deployment automation appears (M6+) | Not urgent now |

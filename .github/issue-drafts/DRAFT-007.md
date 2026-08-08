@@ -1,6 +1,7 @@
 # DRAFT-007: Verify `drakvuf-ubuntu.sh`'s `<USER>` placeholder bug against real behavior
 
-**Status:** Published — [issue #2](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/2), requires Xen Dom0
+**Status:** **Closed — done 2026-08-08.** [Issue #2](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/2)
+closed as completed; premise refuted. See Resolution at the end of this file.
 **Area:** ubuntu
 **Milestone:** M1
 **Priority:** P0
@@ -107,3 +108,43 @@ verified result once this completes.
 # Recovery / rollback
 
 Not applicable — read-only verification, no changes to infrastructure.
+
+# Resolution (2026-08-08)
+
+**The premise was wrong: `<USER>` was never a production bug.** Verified on
+the real Dom0 host; full transcript in
+`docs/runbooks/verify-user-placeholder.md`.
+
+All three acceptance criteria met:
+
+- **Does the Dom0 deployment match this repo's copy?** No. The deployed copy
+  (`sha256 76bc801b…`) had `CMD="/home/carlos/Desktop/test"`, correctly
+  substituted; this repo's (`sha256 d0a17e4e…`) was the stale one.
+- **Does a run actually execute the sample?** Yes — and no new run was
+  needed, since historical logs already answered it. Run
+  `cd22b2c623c0cf35ec4fea588fe61bf6` shows
+  `{"Plugin":"inject","Method":"ExecProc","Status":"Success","ProcessName":"/home/carlos/Desktop/test","InjectedPid":1688}`
+  plus ~359k trace records under PID 1688 and a clean `exit_group`
+  `ExitStatus 0`. All six recorded runs staged successfully via `wget`.
+- **Result recorded with evidence?** Yes, in `docs/checklists/ubuntu.md`.
+
+**`-e` semantics, settled as a side effect** (constrains any future change):
+`drakvuf -e` is execve-direct — `execproc` is `vfork` + `execve`
+(`injector.cpp:180-185`), `execlp` (`main.cpp:196`) — so **no guest shell is
+involved** and a `$USER` in the `-e` argument would never dereference
+guest-side. The path can only be resolved on Dom0.
+
+**What it actually uncovered:** `automation/` had silently diverged from the
+deployed Dom0 copies with nothing detecting it. `drakvuf-ubuntu.sh` differed
+on two lines — the repo also had `--memdump_dir` (underscore), which this
+build rejects; `--memdump-dir` is correct per `drakvuf --help`. Resolved the
+same day by syncing `automation/` wholesale from the tested production host
+(`drakvuf-ubuntu.sh`, `network-setup.sh`, `dirwatch_old.c`; the other five
+files were already byte-identical). Issue #1's outstanding host-side
+`linux_sandbox.cfg` → `ubuntu_sandbox.cfg` rename was completed at the same
+time, so repo and host now agree everywhere.
+
+**Still open, tracked elsewhere:** nothing guards against this drift
+recurring — a repo↔host checksum check was added to DRAFT-026's self-hosted
+Dom0 CI tier. Parameterizing the hard-coded guest username `carlos` remains
+open M1 work.

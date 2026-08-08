@@ -985,7 +985,9 @@ The current Ubuntu preconfiguration script:
 - sets the gateway to `172.16.<VLAN>.1`;
 - overwrites `/etc/resolv.conf`;
 - downloads the sample with `wget`;
-- writes it to `/home/<USER>/Desktop/test`;
+- writes it to `/home/carlos/Desktop/test` (the guest username is
+  hard-coded in `preconfig-ubuntu.sh:119`; parameterizing it is open M1
+  work);
 - makes the file executable.
 
 ### Android requirements

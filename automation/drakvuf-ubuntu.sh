@@ -116,10 +116,10 @@ RUNFOLDER=$5
 RUNFILE=$6
 OUTPUTFOLDER=$7
 MD5=$(md5sum $RUNFOLDER/$RUNFILE | awk -F" " '{print $1}')
-CMD="/home/<USER>/Desktop/test"
+CMD="/home/carlos/Desktop/test"
 
 sleep 5 2>&1
-drakvuf -r $REKALL -d $DOMAIN -i $PID -m execproc -e "$CMD" -D $OUTPUTFOLDER/$MD5 -o json -t 120 -a filetracer -a fileextractor -a memdump -a syscalls --memdump_dir $OUTPUTFOLDER/$MD5/ 1>$OUTPUTFOLDER/$MD5/drakvuf.log 2>&1
+drakvuf -r $REKALL -d $DOMAIN -i $PID -m execproc -e "$CMD" -D $OUTPUTFOLDER/$MD5 -o json -t 120 -a syscalls -a filetracer -a fileextractor -a memdump --memdump-dir $OUTPUTFOLDER/$MD5 1>$OUTPUTFOLDER/$MD5/drakvuf.log 2>&1
 
 RET=$?
 
