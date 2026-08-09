@@ -52,6 +52,25 @@ heavy tier runs on `pull_request` (restricted to same-repository PRs
 triggered by the repo owner) rather than only on manual dispatch, since
 the goal is pre-merge validation, not just an on-demand check.
 
+# Recommended split (assessment, 2026-08-08)
+
+`project-assessment.md` → "Existing Issue and Draft Review" → DRAFT-026
+recommends **splitting this issue in two before publication**. Recorded
+here for decision; not yet applied.
+
+- **DRAFT-026a — static tier.** `ci-static.yml` only. Its sole dependency
+  is DRAFT-031 (the `shellcheck` baseline). No Dom0, no Proxmox API, no
+  Tailscale, no base snapshot, no fixtures. Landable in days.
+- **DRAFT-026b — self-hosted integration tier.** Everything else, with the
+  dependency list below.
+
+The reason: as one issue, the half that needs a YAML file waits on the
+half that needs a Proxmox API token, Tailscale ACLs, an L0 supervisor
+loop, a rebuilt base snapshot with three golden VMs, and a benign fixture
+set that `docs/checklists/android.md` §6.4 still records as unpopulated.
+Level 1 exists specifically to gate Level 2 cheaply, and it cannot do that
+while it ships with it.
+
 # Dependencies
 
 - DRAFT-001 (commit ordering / diff review).
@@ -62,6 +81,29 @@ the goal is pre-merge validation, not just an on-demand check.
 - Informed by issue #2 (DRAFT-007, resolved 2026-08-08 out-of-band via
   `docs/runbooks/verify-user-placeholder.md`) and issue #1 (DRAFT-006,
   `misc/` naming, now closed on both repo and host sides).
+
+*Added 2026-08-08 from `project-assessment.md`:*
+
+- **DRAFT-031 (`shellcheck` baseline) — hard dependency of the static
+  tier.** `shellcheck automation/*.sh` exits 1 today at **error** severity
+  on five of six scripts (SC1128: the 103-line DRAKVUF licence header
+  precedes the shebang). As specified, Level 1 is red on its first run
+  against unmodified, working production code. See CI-01.
+- **DRAFT-024 (pin/mirror upstream revisions) — hard dependency of the
+  integration tier.** Level 2 rebuilds DRAKVUF and LibVMI from source in
+  every job and currently has nothing pinned to build against. Note this
+  now spans **two** upstreams with different bus-factor profiles:
+  `tklengyel/drakvuf` (Windows-oriented plugin set, healthy) and the
+  single-maintainer `lfreijo` fork (Linux/Android plugin support, risk
+  #8).
+- **DRAFT-027 (replace HTTP sample delivery) — should precede the base
+  snapshot build.** The documented "Recreating CI" procedure installs and
+  configures `apache2` (`docs/workflow-ci.md:403`). If DRAFT-027 lands
+  afterwards, the snapshot, that checklist and the `ubuntu-pipeline`
+  stage all have to be redone. See CI-05.
+- **DRAFT-034 (Windows track) — informs the base snapshot.** Windows is
+  now a current target, so the snapshot needs a third golden VM and the
+  workflow a `windows-pipeline` stage.
 
 # Out of scope
 
@@ -122,17 +164,56 @@ the goal is pre-merge validation, not just an on-demand check.
   `android` golden VMs installed and their `dwarf2json` profiles
   generated and registered in `/etc/libvmi.conf`, installer ISOs staged
   on disk, GitHub Actions runner agent installed in `--ephemeral` mode.
+  **Now three golden VMs, not two** — Windows is a current target, and its
+  profile is *not* produced by `dwarf2json` (that toolchain is
+  Linux/Android-only; DRAFT-034 PLAN step 2 establishes the Windows
+  mechanism). **Do not install `apache2` into the snapshot** if DRAFT-027
+  has landed — see the Dependencies section.
 - [ ] Build the L0 supervisor loop that reverts the L1 VM to the base
   snapshot via the Proxmox VE API (over Tailscale) after each ephemeral
   runner job completes, and relaunches the runner agent for the next job.
 - [ ] Add `.github/workflows/ci-static.yml` — `bash -n`/`shellcheck`/
   `perl -c` plus the `<USER>`/`ps|grep` anti-pattern greps, GitHub-hosted,
   triggered on `pull_request` (incl. forks) and `push` to `master`.
+  **Two corrections to `docs/workflow-ci.md`'s specified commands must be
+  made before this is written** (assessment CI-02, CI-03):
+
+  ```bash
+  # docs/workflow-ci.md:147 as written — WRONG. grep exits 1 when it finds
+  # nothing, && short-circuits, and the compound exits 1. GitHub Actions
+  # runs `run:` steps as `bash -e {0}`, so this fails the step precisely
+  # when the repository is CLEAN. Verified: the grep exits 1 today.
+  grep -Rns '<USER>' automation/ && exit 1
+
+  # Correct form:
+  if grep -Rns '<USER>' automation/; then exit 1; fi
+
+  # docs/workflow-ci.md:148 — enforces nothing. It matches four live sites
+  # today (drakvuf-ubuntu.sh:130, cleanup.sh:118,124,134) and exits 0
+  # because grep found matches, inverting the intent. Decide whether this
+  # gate is advisory or blocking, and write it accordingly. If blocking, it
+  # cannot be enabled until DRAFT-011 removes those sites.
+  grep -Rns 'ps aux.*grep\|ps .*|.*grep' automation/
+  ```
+
+  Also make the file glob OS-agnostic (`automation/*.sh`,
+  `automation/*.pl`) so the Android and Windows scripts are covered on
+  arrival without a workflow edit.
 - [ ] Add `.github/workflows/ci-build-and-test.yml` — self-hosted,
   ephemeral, gated to same-repository owner-triggered `pull_request` +
   `push` to `master` + `workflow_dispatch`; implements the DRAKVUF/LibVMI
   build, sandbox-VM clone, network provisioning, plugin matrix, and
   `ubuntu-pipeline`/`android-pipeline` sub-stages from `docs/workflow-ci.md`.
+  Add a `windows-pipeline` stage, defined-but-inactive, the same way
+  `android-pipeline` already is.
+- [ ] State which `dirwatch` source the build step uses.
+  `automation/dirwatch.c` (665 lines) and `automation/dirwatch_old.c`
+  (674 lines) differ on 132 lines — almost entirely formatting and
+  function ordering, so `dirwatch_old.c` is a reformatted sibling rather
+  than an older design. The install guide copies only `dirwatch.c`
+  (`docs/drakvuf-on-xen-nested-within-proxmox.md:531`). Resolve via
+  DRAFT-010 or state it here; do not leave a build step ambiguous about
+  which of two near-identical sources it compiles. *(Assessment CI-04.)*
 - [ ] Add failure-artifact collection (build logs, `drakvuf.log`, DRAKVUF
   JSON output, plugin dump folders, `xl dmesg`/`xl list -l`, network
   diagnostics, `cleanup.log`) with explicit exclusions for anything from
@@ -162,8 +243,9 @@ the goal is pre-merge validation, not just an on-demand check.
 - [ ] Deliberately fail a job mid-run (e.g. cancel it) and confirm the
   next job still gets a clean base via the snapshot revert, with no
   manual Dom0 cleanup needed.
-- [ ] Confirm a job cannot write to the golden `ubuntu`/`android` LVs —
-  only to its own cloned `_sandbox` LV.
+- [ ] Confirm a job cannot write to any golden LV (`ubuntu`, `android`,
+  and `windows` once DRAFT-034 lands) — only to its own cloned `_sandbox`
+  LV.
 
 # DEPLOY
 
@@ -199,7 +281,7 @@ the goal is pre-merge validation, not just an on-demand check.
   `/malware_incoming`/`/malware_processing`/`/malware_finished`; it only
   ever uses a CI-scoped fixture directory.
 - [ ] The self-hosted runner resets to the clean base snapshot (Ubuntu
-  22.04 + Xen + both golden VMs, no DRAKVUF/LibVMI, no `_sandbox` state)
+  22.04 + Xen + all golden VMs, no DRAKVUF/LibVMI, no `_sandbox` state)
   before every job, via the Proxmox VE API over Tailscale.
 - [ ] A failed job does not require manual Dom0 cleanup before the next
   job runs cleanly.
@@ -215,6 +297,34 @@ the goal is pre-merge validation, not just an on-demand check.
 - [ ] A repo-vs-Dom0 checksum check for `automation/*` runs in the
   integration tier — the drift issue #2 uncovered went undetected for
   months and nothing currently guards against it recurring.
+
+*Added 2026-08-08 from `project-assessment.md` (CI-01 … CI-05):*
+
+- [ ] **`ci-static.yml` passes on unmodified `master` before it is enabled
+      as a merge gate.** Today `shellcheck automation/*.sh` exits 1 at
+      error severity on five of six scripts (SC1128). DRAFT-031 fixes
+      this; do not paper over it with a severity floor chosen inside the
+      workflow.
+- [ ] The `<USER>` regression guard **passes on a clean repository** and
+      fails only when a placeholder is present — i.e. it is not written as
+      `grep … && exit 1`, which fails a clean repo under `bash -e`.
+- [ ] The `ps|grep` anti-pattern check has a stated verdict — advisory or
+      blocking — and its exit-code behaviour matches that verdict.
+- [ ] The workflow's file globs cover `automation/*.sh` **and**
+      `automation/*.pl`, so Android and Windows scripts are gated on
+      arrival without a workflow edit.
+- [ ] The build step names which `dirwatch` source it compiles, and
+      `dirwatch_old.c` is either removed, documented, or explicitly
+      excluded from the build.
+- [ ] The base snapshot contains **three** golden VMs (`ubuntu`,
+      `android`, `windows`), and `windows-pipeline` is defined in the
+      workflow even if non-functional pending DRAFT-034.
+- [ ] The base snapshot does **not** install `apache2`, assuming DRAFT-027
+      has landed; if it has not, this issue records why the dependency is
+      still present and what removes it.
+- [ ] DRAKVUF and LibVMI are built from **pinned** revisions per
+      DRAFT-024, not from branch tips — a job that rebuilds from a moving
+      tip cannot distinguish a PR regression from an upstream change.
 
 # Evidence required
 

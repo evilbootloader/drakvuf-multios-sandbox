@@ -9,9 +9,15 @@
 # Objective
 
 Design (not yet implement) a single job/result state model that works
-across Ubuntu, Android, and the planned Windows pipeline, replacing the
-per-OS ad hoc status vocabularies currently scattered across the checklists
-and scripts.
+across the Ubuntu, Android and Windows pipelines, replacing the per-OS ad
+hoc status vocabularies currently scattered across the checklists and
+scripts.
+
+> **Assessment update (2026-08-08, `project-assessment.md`):** Windows is
+> now a **current** target, not "planned" — so it is a first-class input to
+> this design rather than something the model is adapted for later. The
+> published issue #3 body still says "the planned Windows pipeline"; that
+> wording should be updated when the issue is next touched.
 
 # Context
 
@@ -35,6 +41,10 @@ once, not reinvented three times.
 DRAFT-001 (for commit ordering / diff review). Conceptually independent of
 any Xen work — this is pure design.
 
+Blocks DRAFT-009, DRAFT-011, DRAFT-018 and DRAFT-034 (the Windows track
+head). Nothing blocks this issue, which is why `project-assessment.md`
+places it **first** in the recommended order.
+
 # Out of scope
 
 - Implementing the model in any script — this issue is design only.
@@ -55,10 +65,23 @@ any Xen work — this is pure design.
 2. Define the field list precisely (candidate fields already sketched in
    `docs/architecture/analysis-pipeline.md`: `analysis_id`,
    `sample_sha256`, `original_filename`, `detected_type`, `target_os`,
-   `target_os_source`, `execution_recipe`, `requested_timeout`,
-   `network_mode`, `sandbox_version`, `profile_version`, `domain`,
-   `clone_id`, `vlan`, `started_at`, `finished_at`, `status`,
-   `failure_stage`).
+   `target_os_source` (target_os_source likely not needed we only need to know
+    target OS of analysis vm), `execution_recipe`, `requested_timeout`, 
+    `network_mode`, `sandbox_version`, `profile_version`, `domain`, `clone_id`, 
+    `vlan`, `started_at`, `finished_at`, `status`, `failure_stage`).
+
+   > **Assessment note on dropping `target_os_source`
+   > (`project-assessment.md` → Issue #3):** the reasoning holds under the
+   > current architecture — `dirwatch` hard-codes a single origin domain
+   > per invocation (`automation/dirwatch.c:475`), so the target OS is a
+   > property of the launcher, not something discovered per sample. Do not
+   > reinstate the field as part of this issue. **Revisit only if**
+   > DRAFT-014's auto-detection contract has to disambiguate cases where
+   > the detected type alone is insufficient — Android ELF vs. Linux ELF
+   > (roadmap "Architecture decisions needing experiments" #2), or PE32
+   > vs. PE32+ once the Windows track lands — and then only with evidence
+   > that a provenance field is what resolves it.
+
 3. Define the state machine precisely, reconciling it with the Android
    checklist's `status.json` state list so the two documents don't diverge.
 4. Define how per-OS status vocabularies (Android's `success`/
@@ -67,6 +90,19 @@ any Xen work — this is pure design.
 5. Consider recovery-after-interruption from the start, per the original
    workstream brainstorm — a job's state must be reconstructable from disk
    after a host reboot, not just held in a running process's memory.
+6. **Validate the state machine against all three OS execution sequences,
+   not two** (assessment: Issue #3, "Problems with current scope"). They
+   are genuinely different shapes: Ubuntu stages one file and executes it;
+   Android's `docs/checklists/android.md` Phase 3 is
+   install → launch → stimulate exported components, with branches per
+   package format; Windows executes a PE with no install step. A model
+   validated only against Ubuntu and Android will need reworking for the
+   third.
+7. **Settle the MD5-vs-SHA-256 keying question here, once.**
+   `docs/architecture/result-schema.md` §3 currently poses the same
+   question independently, so the two documents will answer it separately
+   unless one defers. This issue owns the decision; `result-schema.md`
+   should reference it rather than re-decide (assessment: Issue #3).
 
 # CREATE
 
@@ -96,6 +132,18 @@ Not applicable.
   silently.
 - [ ] Ubuntu's simpler existing model reconciled (documented as
   intentionally superseded, not silently ignored).
+- [ ] The state machine is walked through against **all three** OS
+  execution sequences — Ubuntu (stage + execute), Android (install →
+  launch → stimulate), Windows (PE execution) — and any state that only
+  fits one of them is identified as such. *(Added from
+  `project-assessment.md`; Windows is a current target.)*
+- [ ] Result keying (MD5 vs. SHA-256) is decided here, and
+  `docs/architecture/result-schema.md` §3 is updated to reference this
+  decision instead of restating the open question. *(Added from
+  `project-assessment.md`.)*
+- [ ] `target_os_source` is absent from the finalized field list, with a
+  one-line note recording the condition under which DRAFT-014 would
+  revisit it. *(Reflects the draft's PLAN step 2 annotation.)*
 
 # Evidence required
 

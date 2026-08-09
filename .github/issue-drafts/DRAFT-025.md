@@ -97,15 +97,24 @@ repository itself lives when cloned. Concretely, as found by inspecting
 ├── misc/                         <- existing, unchanged location (Xen .cfg files stay here)
 ├── profiles/                     <- new: LibVMI/DRAKVUF JSON profiles
 │   ├── linux.json                <- moved from misc/linux.json
-│   └── android.json              <- moved from misc/android.json
+│   ├── android.json              <- moved from misc/android.json
+│   └── windows.json              <- future (DRAFT-034); slot reserved here
 ├── state/                        <- new: Xen `xl save` saved-state blobs (gitignored, .bak)
 │   ├── ubuntu_sandbox.bak
-│   └── android_sandbox.bak
+│   ├── android_sandbox.bak
+│   └── windows_sandbox.bak       <- future (DRAFT-034); slot reserved here
 └── docs/                         <- existing, unchanged location
 ```
 
 `/malware_incoming`, `/malware_processing`, `/malware_finished` are
 unaffected and stay exactly where they are.
+
+> **Assessment update (2026-08-08, `project-assessment.md` → Issue #4):**
+> Windows is now a **current** target, so the convention this issue
+> establishes must have room for a third OS from the start — including
+> `misc/windows.cfg` / `misc/windows_sandbox.cfg`. The Windows artifacts
+> themselves are built by DRAFT-034; this issue only guarantees they
+> inherit the layout rather than needing a fourth standardization pass.
 
 ## Repository-owned files vs runtime data
 
@@ -197,14 +206,56 @@ unaffected and stay exactly where they are.
 2. Decide the profile-delivery mechanism: point `libvmi.conf` directly at
    `$REPO_ROOT/profiles/*.json`, or have the launcher copy/symlink them to
    `/root/*.json` at start-of-run? (Needs checking LibVMI's config format
-   and restart tolerance against upstream docs before deciding.)
+   and restart tolerance against upstream docs before deciding.) LibVMI setup
+   shoudln't be needed as the drakvuf program is run with the profile path during
+   automated analysis.
+
+   > **Assessment evidence supporting the above (2026-08-08,
+   > `project-assessment.md` → PATH-04).** Confirmed by source reading, and
+   > the case is stronger than "shouldn't be needed" — it *cannot* be
+   > needed:
+   >
+   > - `drakvuf-ubuntu.sh:122` and `preconfig-ubuntu.sh:125` both pass
+   >   `-r "$REKALL"` explicitly, supplied by `dirwatch` from its
+   >   `json_kernel_path` argument (`dirwatch.c:477`), which
+   >   `run_analysis-ubuntu.sh:14` controls.
+   > - Clones are named `<origin>-<vlan>-clone` (`clone-ubuntu.pl:157`),
+   >   e.g. `ubuntu_sandbox-1-clone`. The documented `/etc/libvmi.conf`
+   >   stanzas cover only `ubuntu` and `ubuntu_sandbox`
+   >   (`docs/drakvuf-on-xen-nested-within-proxmox.md:395-396`). **No clone
+   >   domain has a stanza at all**, so the automated path has never
+   >   resolved a profile through `libvmi.conf`.
+   >
+   > So this PLAN step narrows to two smaller questions, neither of which
+   > involves LibVMI's config format:
+   >
+   > a. Does the launcher pass `$REPO_ROOT/profiles/<os>.json` directly to
+   >    `-r`, or copy it to a runtime path first? (Direct is simpler and
+   >    removes a sync step.)
+   > b. Are `/etc/libvmi.conf` stanzas still wanted for the *manual*
+   >    diagnostic tooling — `vmi-process-list <domain>`, used throughout
+   >    `docs/checklists/android.md:250,475` — given that even that
+   >    accepts a profile path via `-j`
+   >    (`docs/checklists/android.md:567`)? This matters for
+   >    `docs/workflow-ci.md:268,278`, which registers stanzas in the CI
+   >    base snapshot.
 3. Decide whether `profiles/*.json` stays git-tracked (current state) or
    moves to `.gitignore` as host-generated/regeneratable — currently
    inconsistent with `.bak` files being ignored while `.json` profiles are
-   committed.
+   committed. *(Context for the decision: the two tracked profiles are
+   65 MB and 48 MB — `misc/android.json`, `misc/linux.json` — and are by
+   far the largest objects in the repository.)*
 4. Confirm no other hard-coded path was missed via the validation grep in
    TEST, beyond what's listed in Context.
-5. Produce the smallest-diff patch set per script/doc.
+5. Decide whether `misc/*.cfg`'s hard-coded installer-ISO paths are in or
+   out of scope, and say which — they are currently described in Context
+   but covered by no acceptance criterion. *(Added from
+   `project-assessment.md` → PATH-03. The two paths are
+   `misc/ubuntu.cfg:24` → `/home/user/Documents/ubuntu-20.04.6-…iso` and
+   `misc/android.cfg:25` → `/home/user/drakvuf-tools/Bliss-…iso`; a
+   Windows config will add a third. Note `docs/workflow-ci.md` stages ISOs
+   at `/root/isos/`, so a decision here should not contradict it.)*
+6. Produce the smallest-diff patch set per script/doc.
 
 # CREATE
 
@@ -309,6 +360,29 @@ Requires manual Dom0 coordination — present, do not execute automatically:
 - [ ] Android automation scripts, when implemented (DRAFT-015/016), are
       written against this same convention from the start.
 
+*Added 2026-08-08 from `project-assessment.md` → Issue #4:*
+
+- [ ] The `misc/*.cfg` installer-ISO paths (`misc/ubuntu.cfg:24`,
+      `misc/android.cfg:25`) are either standardized under this
+      convention or explicitly recorded as out of scope with a reason —
+      PLAN step 5's decision, either way, is written down. *(PATH-03: they
+      appear in this issue's Context but were covered by no criterion.)*
+- [ ] The layout reserves slots for the Windows track —
+      `profiles/windows.json`, `state/windows_sandbox.bak`,
+      `misc/windows*.cfg` — so DRAFT-034 inherits the convention rather
+      than triggering a fourth standardization pass. *(Windows is now a
+      current target.)*
+- [ ] `docs/workflow-ci.md` is updated alongside the other documentation.
+      It did not exist when this issue was written and is now a major
+      consumer of these paths — it stages ISOs at `/root/isos/`
+      (`:180`), registers profiles in `/etc/libvmi.conf` (`:268,278`), and
+      DRAFT-026b's integration tier needs `$GITHUB_WORKSPACE`-relative
+      paths that this convention determines.
+- [ ] PLAN step 2 is answered as the two narrowed questions (a) and (b),
+      not as the original "point `libvmi.conf` at the repo or copy to
+      `/root`" framing — the automated path never consults `libvmi.conf`
+      (PATH-04).
+
 # Evidence required
 
 - Diff of every file changed under CREATE.
@@ -323,6 +397,11 @@ Requires manual Dom0 coordination — present, do not execute automatically:
 - `/malware_processing` is served by Apache as `www-data`
   (`docs/drakvuf-on-xen-nested-within-proxmox.md:612,628,644`) — this
   issue must not change its ownership, permissions, or location.
+  *(2026-08-08: DRAFT-027 removes the pipeline's dependency on that Apache
+  instance entirely. It does not change the directory's location or
+  ownership either, so this constraint stands unchanged — but if DRAFT-027
+  lands first, the `www-data` ownership may no longer be load-bearing.
+  Check before assuming it still is.)*
 - `state/*.bak` files (saved VM memory images) can be large and may
   contain sensitive in-guest data from prior analysis runs; the existing
   `.bak` gitignore coverage must be preserved, not accidentally dropped,
@@ -341,6 +420,14 @@ path examples updated to the new convention. Historical checklist evidence
 blocks (verbatim command transcripts) should be annotated rather than
 rewritten, consistent with how issue #1's revision note handled a similar
 situation.
+
+*Added 2026-08-08 (`project-assessment.md` → Issue #4):*
+`docs/workflow-ci.md` — omitted above because it did not exist when this
+issue was written, and it is now one of the heaviest consumers of these
+paths (ISO staging at `/root/isos/`, `libvmi.conf` registration, and the
+`$GITHUB_WORKSPACE`-relative invocation DRAFT-026b depends on).
+`docs/checklists/windows.md` — so the Windows track starts on this
+convention rather than being retrofitted.
 
 # Recovery / rollback
 

@@ -18,6 +18,79 @@ DRAFT-009 onward (not yet drafted in full, title-index only).
 | DRAFT-025 | Standardize Xen analysis pipeline paths | platform | M0 | P1 | DRAFT-001; informed by DRAFT-006, DRAFT-007 | Published — [#4](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/4) |
 | DRAFT-026 | Implement GitHub Actions and self-hosted Xen integration runner | ci | M1 | P1 | DRAFT-001; soft dep. on DRAFT-025; supersedes DRAFT-012; informed by DRAFT-006, DRAFT-007 | Drafted, not published — see `.github/issue-drafts/DRAFT-026.md` |
 
+## Second batch — DRAFT-027 through DRAFT-034
+
+Added 2026-08-08 from the backlog review in `project-assessment.md`. Each
+entry names the assessment finding that produced it; none duplicates an
+open issue or an existing draft (see that document's "Existing Issue and
+Draft Review" for the coverage check). All are **drafted, not published**.
+
+The `OS` column reflects the project's three current targets — Ubuntu,
+Android and Windows. `ALL` means one fix serves all three, because the
+code it touches is in the shared half of `automation/` (`dirwatch.c`,
+`network-setup.sh`, `cleanup.sh`, `tcpdump.sh`) or is a decision the
+per-OS scripts inherit.
+
+| Draft ID | Title | Area | OS | Milestone | Priority | Depends on | Origin finding |
+|---|---|---|---|---|---|---|---|
+| DRAFT-027 | Replace HTTP/Apache sample delivery with direct guest injection | core/platform | ALL | M1 → M2/M3 | P0 | Issue #4; blocks DRAFT-016, DRAFT-026b | DRAKVUF-01 |
+| DRAFT-028 | Make `network-setup.sh` fail loudly, install correct rules, and be idempotent | platform/networking | ALL | M2 | P0 | — (blocks DRAFT-013) | NET-01, NET-04, NET-05 |
+| DRAFT-029 | Restrict analysis-clone access to Dom0 host services | platform/security | ALL | M2 | P0 | DRAFT-028, DRAFT-013; benefits from DRAFT-027 | NET-02 |
+| DRAFT-030 | Stop passing untrusted sample filenames through shell-parsed command lines | core | ALL | M1 | P1 | — (should precede DRAFT-014) | DRAKVUF-03, DRAKVUF-02 |
+| DRAFT-031 | Establish a `shellcheck` baseline that `automation/` actually passes | testing | ALL | M1 | P1 | — (blocks DRAFT-026a) | CI-01 |
+| DRAFT-032 | Reconcile documentation with issues #1/#2 and the three-OS project focus | governance/docs | ALL | M0 | P1 | — | DOC-01…DOC-09, NET-04, GOV-02 |
+| DRAFT-033 | Make `clone-ubuntu.pl` fail safely and lock, before it is copied twice | core/ubuntu | ALL (template) | M1 | P1 | Issue #4 | DRAKVUF-05, DRAKVUF-06 |
+| DRAFT-034 | Establish the Windows analysis-guest track (baseline, profile, anchor, configs) | windows | W | M5 → current | P1 | Issue #3, Issue #4, DRAFT-009, DRAFT-027; supersedes DRAFT-020's design half | Focus change; GOV-02, DOC-09 |
+
+### Recommended order for this batch
+
+Interleaved with the existing backlog, per `project-assessment.md`'s
+"Recommended implementation order":
+
+```
+Issue #3 → Issue #4 → DRAFT-009 → DRAFT-031 → DRAFT-026a → DRAFT-032
+        → DRAFT-028 → DRAFT-013 → DRAFT-029 → DRAFT-027 → DRAFT-030
+        → DRAFT-033 → DRAFT-024 → DRAFT-010 → DRAFT-014 → DRAFT-011
+        → DRAFT-034 → DRAFT-015/016/017 → DRAFT-026b
+```
+
+Two ordering constraints are load-bearing rather than preferences:
+
+- **DRAFT-027 before DRAFT-016 and DRAFT-026b.** The sample-delivery
+  mechanism is about to be written for Android and Windows, and the CI
+  base snapshot currently installs Apache (`docs/workflow-ci.md:403`).
+  Deciding delivery afterwards means rewriting both.
+- **DRAFT-028 before DRAFT-013.** Verifying isolation before fixing a rule
+  that may never have installed only records a known-broken state.
+
+### Recommendations affecting existing entries
+
+Where the recommendations from `project-assessment.md` now live:
+
+| Entry | Recommendation recorded in |
+|---|---|
+| DRAFT-008 / issue #3 | `DRAFT-008.md` — assessment notes added inline to Objective, Dependencies, PLAN step 2, and Acceptance criteria |
+| DRAFT-025 / issue #4 | `DRAFT-025.md` — added to the layout diagram, PLAN steps 2/3/5, Acceptance criteria, Security considerations, Documentation changes |
+| DRAFT-026 | `DRAFT-026.md` — new "Recommended split" section, plus fixes in Dependencies, CREATE and Acceptance criteria |
+| DRAFT-009 … DRAFT-024 | The "Assessment notes" table at the end of this file — these have no draft files yet, so the corrections wait there |
+
+**Applied to the draft files; not applied to GitHub.** The published bodies
+of issues #3 and #4 have therefore diverged from their drafts, deliberately
+— the drafts now carry the recommended changes and the issues do not.
+Reconciling them is a `gh issue edit` operation, which `CONTRIBUTING.md`
+gates behind explicit approval. Nothing has been published, closed,
+committed or pushed.
+
+Two carried forward unchanged, for visibility:
+
+- **DRAFT-026 → SPLIT** into `026a` (static tier; no Dom0/Proxmox/fixture
+  dependencies, blocked only on DRAFT-031) and `026b` (self-hosted tier).
+  The split itself is a structural decision left for review; the four
+  design defects behind it (CI-01 … CI-05) have been fixed in the draft.
+- **DRAFT-012 → FULLY OBSOLETE**, superseded by DRAFT-026a, but still
+  cited as live by `docs/checklists/ubuntu.md:201` and roadmap M1 —
+  DRAFT-032 corrects those references.
+
 ## Note on DRAFT-007
 
 **Resolution (2026-08-08):** the premise was **wrong**, in the same way
@@ -115,3 +188,46 @@ session that drafted this index — see `docs/architecture/licensing.md` and
 `docs/checklists/windows.md` respectively. They remain listed for
 completeness and because DRAFT-021 in particular should still go through a
 real legal review, not just this desk research.
+
+### Assessment notes on DRAFT-009 … DRAFT-024 (2026-08-08)
+
+From the backlog review in `project-assessment.md`. These entries have no
+draft files yet, so the corrections live here — apply them **when each
+entry is drafted in full**, rather than drafting from the title and
+dependency columns above, which have drifted.
+
+The `OS` column reflects the project's three current targets. Where an
+entry was scoped to one OS but the code it governs is shared, that is
+called out — the whole point of recording it now is that the correction is
+cheap before the draft exists and expensive after.
+
+| ID | OS | Assessment | Apply when drafted |
+|---|---|---|---|
+| **009** | ALL | **Priority should rise sharply.** Written when only Ubuntu existed and Android was next. With Android *and* Windows scripts both imminent, this is the gate that stops DRAKVUF-01/02/05/06 being fixed three times. | Start from the source-verified split: **shared** = `dirwatch.c`, `network-setup.sh`, `cleanup.sh`, `tcpdump.sh` (no OS suffix, no OS-specific logic — `cleanup.sh:113-114` takes only `DOMAIN`/`VLAN`); **per-OS** = `clone-*`, `preconfig-*`, `drakvuf-*`, `run_analysis-*`. Include the `carlos`/`vg-root`/`xenbr1` parameterization question, which is genuinely three-shaped (Ubuntu has `/home/carlos`, Android has no such concept, Windows a third form). Move to position 3 in the order. |
+| **010** | ALL | **NEEDS UPDATE.** | Add CI-04: state whether `dirwatch.c` or `dirwatch_old.c` is authoritative (they differ on 132 lines, almost all formatting; the install guide copies only `dirwatch.c`, `docs/drakvuf-on-xen-nested-within-proxmox.md:531`). Record that the file only compiles inside a DRAKVUF source tree — it `#include`s `<config.h>` and `../xen_helper/xen_helper.h` (`dirwatch.c:118,120`). Record that `dirwatch` hard-codes one origin domain per invocation (`:475`), so three concurrent OS pipelines means three `dirwatch` processes unless the contract changes — which DRAFT-014 will press on. |
+| **011** | U → ALL | **PARTIALLY OBSOLETE — shrink, then widen.** | **Remove** the "reconcile with the deployed Dom0 copy" element: issue #2 completed it on 2026-08-08. **Add** DRAKVUF-04 (`ps aux \| grep` PID safety) — 3 of its 4 sites are in shared `cleanup.sh`, so that part is not Ubuntu-only; the `"tcpdump -i xenbr1.$VLAN"` match is unanchored with `.` as a regex wildcard, so VLAN 1 also matches `xenbr1.10`–`19` above 9 clones. Dependency on DRAFT-007 is closed. |
+| **012** | ALL | **FULLY OBSOLETE.** Superseded by DRAFT-026a. | Do not draft. Still cited as live by `docs/checklists/ubuntu.md:201` and roadmap M1 — DRAFT-032 fixes those references. |
+| **013** | A → ALL | **NEEDS UPDATE — retitle away from Android-only.** The mechanism under test is `network-setup.sh`, shared by all three OS families, so this verifies Ubuntu and Windows containment too. | Depends on DRAFT-028 landing first — otherwise it records a known-broken state. Record NET-02 and NET-03 as *expected findings* so the test is not written assuming a pass: the `FORWARD` rule cannot cover traffic to Dom0 itself (`INPUT` chain, no policy set anywhere), and `MASQUERADE` at `network-setup.sh:118` gives clones unrestricted egress by default. Fixes belong to DRAFT-028/029; this entry stays verification-only. |
+| **014** | ALL | **NEEDS UPDATE.** The title parenthetical already anticipates PE, but with Windows current this becomes a genuine three-way routing decision rather than an ELF/APK split. | Note it is the entry that makes `dirwatch`'s one-domain-per-invocation contract actually limiting (see 010). Should follow DRAFT-030, which hardens filename handling before routing widens the input surface. If detection cannot disambiguate a case on content alone, that is the condition under which issue #3's dropped `target_os_source` gets revisited — with evidence. |
+| **015** | A | READY. | Must follow issue #4's path convention and **DRAFT-033's** error-handling/locking pattern rather than copying today's `clone-ubuntu.pl` verbatim — `CLAUDE.md` directs new scripts to be written from the Ubuntu implementation, which currently has its `flock` commented out (`:236-241`) and checks no exit status. |
+| **016** | A | READY. | **DRAFT-027 must land first** so Android is never built against the HTTP delivery path. `docs/checklists/android.md:1003` already prefers `injector -m writefile`; `:1877`'s "keep HTTP as an optional compatibility path" is superseded — no fallback is to be implemented. |
+| **017** | A | READY. | Consumes DRAFT-014. No change. |
+| **018** | ALL | READY. | Defer the MD5-vs-SHA-256 keying decision to issue #3, which now owns it; `docs/architecture/result-schema.md` §3 currently poses the same question independently. |
+| **019** | ALL | READY. | No change. |
+| **020** | W | **PARTIALLY OBSOLETE, and now under-scoped.** | Drop the lifecycle-decision half — resolved by roadmap decision #3 (snapshot-restore is non-viable in this nested setup), though `docs/checklists/windows.md:41` still lists it as open (DOC-05). The remaining half is absorbed by **DRAFT-034**, which is the real Windows track head. Either close this entry into DRAFT-034 or keep it as the baseline-selection sub-task. |
+| **021** | — | **PARTIALLY OBSOLETE.** | The desk research is written (`docs/architecture/licensing.md`). Retitle to reflect that what remains is a real legal review, not a write-up. |
+| **022** | — | READY. | No change. |
+| **023** | U/A → +W | **NEEDS UPDATE — the premise has flipped.** | Currently premised on "tlsmon confirmed N/A". `tlsmon` hooks Windows `ncrypt.dll`/Schannel only (`docs/architecture/networking.md:61-64`) — so with Windows current it is **applicable**, and becomes the project's only working TLS-visibility path. Rescope to "adopt `tlsmon` for Windows; research options for Ubuntu/Android". Roadmap risk #4 and the reuse table (`:90`) need the same correction (DRAFT-032). |
+| **024** | ALL | **READY, priority should rise from P2.** | DRAFT-026b rebuilds DRAKVUF/LibVMI from source in every job with nothing pinned to build against. Scope now spans **two** upstreams with different bus-factor profiles: `tklengyel/drakvuf` (Windows-oriented plugin set, healthy) and the single-maintainer `lfreijo` fork (Linux/Android plugin support, risk #8). The Windows track leans mainly on the former — the pinned fork commit `8dc77880…` is titled "Add **Linux** support for memdump, filetracer, fileextractor, and syscalls plugins". Retitle away from `lfreijo`-only. |
+
+Dependency corrections to the table above, once these are drafted:
+
+- **DRAFT-013** gains a dependency on DRAFT-028 (fix before measuring).
+- **DRAFT-014** gains a soft dependency on DRAFT-030 (harden filename
+  handling before routing widens the input surface).
+- **DRAFT-015** gains a dependency on DRAFT-033 (fix the clone template
+  before copying it).
+- **DRAFT-016** gains a hard dependency on DRAFT-027 (decide delivery
+  before writing the second implementation of it).
+- **DRAFT-020** is superseded in substance by DRAFT-034.
+- **DRAFT-023** gains a dependency on DRAFT-034 for its Windows half.
