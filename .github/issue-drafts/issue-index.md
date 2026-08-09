@@ -95,13 +95,20 @@ Two carried forward unchanged, for visibility:
 
 Added 2026-08-09, produced by issue #3's design work rather than by a
 backlog review. Both are implementation consequences of the decided state
-model; neither is covered anywhere in DRAFT-009…034. **Drafted as index
-entries only — no draft files yet.**
+model; neither is covered anywhere in DRAFT-009…034.
+
+**DRAFT-036 is now drafted in full** — see `.github/issue-drafts/DRAFT-036.md`.
+It carries a publication gate: its Objective, Context and Evidence are
+source-verified and settled, but PLAN/CREATE wait on DRAFT-010's
+C-vs-Python decision, which determines whether the fix is a cross-process
+lease added to `dirwatch.c` or an allocator designed into its replacement.
+Do not publish it as a GitHub issue before then. **DRAFT-035 remains an
+index entry only.**
 
 | Draft ID | Title | Area | OS | Milestone | Priority | Depends on | Origin |
 |---|---|---|---|---|---|---|---|
 | DRAFT-035 | Implement the job control channel: cancellation, retry guard, per-OS watch-directory admission | core | ALL | M1 | P1 | Issue #3; soft dep. on DRAFT-010 | Issue #3 decisions 1 and 3 |
-| DRAFT-036 | Replace fixed clone slots with resource-aware admission and host-global VLAN allocation | core/platform | ALL | M1 | **P0** | Issue #3; blocks concurrent per-OS watchers | Issue #3 decision 4 |
+| DRAFT-036 | Replace fixed clone slots with a host-global admission controller — VLAN leases, memory reservation, starvation-free queue | core/platform | ALL | M1 | **P0** | Issue #3; blocks concurrent per-OS watchers | Issue #3 decision 4 |
 
 **DRAFT-035** — a user must be able to stop a running analysis. The
 model's `cancelled` terminal status needs a mechanism: a cancellation
@@ -133,6 +140,26 @@ count**. Candidate rule and its caveats are in
 `docs/architecture/analysis-pipeline.md`, "Clone concurrency"; the
 `xl restore` peak-vs-steady-state question must be measured on Dom0 before
 the rule is trusted.
+
+It grew a third half in drafting, and all three are one change. A memory
+check is check-then-act, so several watchers deciding at once all see the
+same free memory and all proceed — and a clone's memory is not accounted by
+`xl info` until its domain is built, so a lock released at `xl restore`
+does not close the window. Memory admission is also greedy, which starves
+the largest clone: a Windows job waits for a window that never opens
+because a smaller Ubuntu or Android job is always already eligible. And
+three watchers means three independent `inotify` queues with no relative
+ordering, so the ordering cannot come from the watchers either. VLAN
+leasing, memory reservation and queue order therefore need one host-global,
+crash-safe authority, which is why the draft refuses to split them.
+
+One interaction worth carrying forward: bounded backfill (letting a small
+job run ahead of a reservation it cannot delay) needs a worst-case runtime
+per job, and there isn't one. The retry loop at `dirwatch.c:424-429` has no
+cap and its `if (prepared)` guard is commented out, so a reliably-timing-out
+sample retries forever. That is the same branch DRAFT-035 must add a cancel
+check to and the same cleanup path DRAFT-010 found the worker-slot leak in
+— three issues meeting at one `goto`.
 
 ## Note on DRAFT-007
 

@@ -111,10 +111,27 @@ admission has to be sized against that peak rather than steady-state
 usage — this is the part most likely to be wrong on first attempt and
 should be measured before the rule is trusted.
 
+Memory admission on its own is greedy, and greedy admission starves the
+largest clone: whenever memory frees up, a smaller job is already eligible
+and takes it, so a Windows clone waits for a window that never opens while
+Ubuntu and Android run normally. Each individual decision is correct, which
+is what makes it hard to see. Admission therefore has to own **queue order**
+as well — ordered by `submitted_at`, with a standing reservation for the
+oldest job that cannot yet be afforded, so freed memory accumulates toward
+it rather than being handed to whoever fits. Per-OS reserved capacity is
+not the answer; that is the static partitioning this section exists to
+remove.
+
+Three watchers also means three independent `inotify` queues with no
+relative ordering, so the ordering cannot come from the watchers. VLAN
+leasing, memory reservation and queue order all need the same host-global
+authority, which is why DRAFT-036 treats them as one piece of work.
+
 This is exactly what `queued` means in the state model below: a job that is
 admissible but waiting for capacity sits there *visibly*, with a showable
-reason ("waiting for memory"), instead of being blocked invisibly inside a
-thread pool.
+reason — `waiting_for_memory`, `waiting_for_vlan`, or
+`blocked_by_reservation` when it is held behind a larger job — instead of
+being blocked invisibly inside a thread pool.
 
 **Known upstream issue to check for divergence:** `tklengyel/drakvuf` issue
 #140 describes a timeout-triggered clone retry failing to find its sample
@@ -266,12 +283,14 @@ it never routes. If detection is unavailable or ambiguous the run proceeds
 on the user's choice.
 
 Admission answers *whether the job is valid*. Whether it may **start** is a
-separate question answered in `queued`, against live host capacity — see
-"Clone concurrency" above. A job holds in `queued` with `queue_reason`
-(`waiting_for_memory`, `waiting_for_vlan`) until a clone can be afforded,
-which is why capacity pressure is a visible, reportable condition here
-rather than an invisible stall inside a thread pool. Capacity is a host
-property, so the wait is shared across all three OS watchers.
+separate question answered in `queued`, against live host capacity and
+queue order — see "Clone concurrency" above. A job holds in `queued` with
+`queue_reason` (`waiting_for_memory`, `waiting_for_vlan`,
+`blocked_by_reservation`) until a clone can be afforded, which is why
+capacity pressure is a visible, reportable condition here rather than an
+invisible stall inside a thread pool. Both capacity and queue order are
+host properties, so the wait is shared across all three OS watchers rather
+than being per-pipeline.
 
 > `target_os_source` was considered and dropped: with the OS supplied by
 > the launcher there is one source and recording it is noise. **Revisit
