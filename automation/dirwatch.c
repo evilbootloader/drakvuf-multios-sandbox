@@ -158,7 +158,6 @@ static uint32_t threads;
 static uint32_t injection_pid;
 static bool shutting_down;
 
-//static GMutex locks[128];
 static gint slots_busy[128] = { 0 };
 
 xen_interface_t* xen;
@@ -442,7 +441,6 @@ int main(int argc, char** argv)
 {
     DIR* dir;
     struct dirent* ent;
-    //unsigned int i;
     unsigned int processed = 0;
     unsigned int total_processed = 0;
     int ret = 0;
@@ -518,10 +516,8 @@ int main(int argc, char** argv)
                     continue;
 
                 /*
-                 * Reserve a worker for this sample.  The previous code only
-                 * did this once before scanning the directory, then reset
-                 * threadid to -1 after the first sample and passed -1 to
-                 * prepare() for every remaining file in the same scan.
+                 * One worker slot per sample, reserved inside the scan
+                 * loop rather than once per directory pass.
                  */
                 threadid = -1;
                 while (threadid < 0 && !shutting_down)

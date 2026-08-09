@@ -108,10 +108,8 @@
 #
 # Usage: ./network-setup.sh <number of VLAN tags used>
 
-# Module required for VLAN support
 modprobe 8021q
 
-# Enable IP forwarding
 echo 1 > /proc/sys/net/ipv4/ip_forward
 
 # Enable NAT on the uplink interface

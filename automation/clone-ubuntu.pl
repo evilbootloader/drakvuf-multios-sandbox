@@ -105,11 +105,20 @@
 #************************************************************************#
 
 ######
-# This script creates an LVM disk CoW of the specified VM
-# then live-snapshots the VM to duplicate its memory
-# followed by memsharing to deduplicate memory.
+# Creates a disposable analysis clone of the sandbox template domain:
+#   1. an LVM copy-on-write snapshot of the origin's LV, and
+#   2. `xl restore` of the origin's previously saved memory image,
+# into a rewritten Xen config (own name, own per-VLAN vif, own disk).
 #
-# The LVM volume should have the same name as the domain.
+# The origin is passed as an argument (e.g. ubuntu_sandbox, not the golden
+# ubuntu) and its LVM volume must share that name. The saved memory image
+# is produced out-of-band, once per sandbox template -- see
+# docs/checklists/ubuntu.md and docs/checklists/android.md.
+#
+# CAUTION: the origin is a parameter but the memory image path passed to
+# `xl restore` below is hard-coded. They must be kept in agreement by
+# hand, or a clone gets one domain's disk with another's memory.
+# Tracked as PATH-02 / issue #4.
 #
 # NOTICE:
 # If an LVM volume exists with the clone's name, it is removed.
@@ -126,8 +135,11 @@ our $lvm_vg = "vg-root";
 # Clone network bridge name
 our $clone_bridge = "xenbr1";
 
-# Vif script to pass to clone Xen config.
-# The backend specifies the name of the openvswitch domain.
+# vif options merged into the clone's Xen config. Any bridge=, script= or
+# backend= inherited from the origin's config is stripped first (see the
+# vif rewrite in clone()), then these options plus bridge=<bridge>.<vlan>
+# are appended -- so a clone always lands on its own VLAN sub-interface
+# regardless of what the origin config said.
 our $vif_script = "script=vif-openvswitch";
 
 ############################################################
@@ -154,11 +166,6 @@ sub clone {
     my $vlan   = $_[1];
     my $config = $_[2];
     my $clone  = "$origin-$vlan-clone";
-
-#    my $origin_test = `$xl domid $origin`;
-#    if (length $origin_test == 0) {
-#        die "0";
-#    }
 
     my $clone_test = `$xl domid $clone 2>/dev/null`;
     if (length $clone_test) {
@@ -243,7 +250,6 @@ sub clone {
 
     my $test = `$lvdisplay /dev/$lvm_vg/$clone 2>&1`;
     if (($test =~ tr/\n//) != 1) {
-        #print "Removing existing LVM snapshot of $clone\n";
         `$lvremove -f /dev/$lvm_vg/$clone 2>&1`;
     }
 

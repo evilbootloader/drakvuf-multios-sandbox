@@ -579,16 +579,33 @@ Restore result: Correct
 
 # Phase 2 — Create the Android automation scripts
 
-## 2.0 Create a working Git branch
+## 2.0 Version-control the Dom0 working copies
 
-- [ ] Put the automation scripts under version control.
-- [ ] Create a branch for Android support.
-- [ ] Commit the untouched Ubuntu baseline.
+> **Scope clarification (2026-08-09).** This section applies to the working
+> copies **on Dom0** — the DRAKVUF source checkout (`~/drakvuf`) and the
+> `drakvuf-tools` deployment directory (`~/drakvuf-tools`). Those are the
+> trees where DRAKVUF functionality and engine changes get developed, and
+> branching and committing there is correct.
+>
+> It does **not** apply to this repository (`drakvuf-multios-sandbox`).
+> Here, `CLAUDE.md` and `CONTRIBUTING.md` govern: no branch, no commit, no
+> push without an explicit request; commits are made by the project owner.
+> The four script names below also exist here under `automation/`, so the
+> commands are ambiguous about which tree they mean unless you read this
+> note first.
+
+- [x] Put the automation scripts under version control. *(Done for this
+  repository — DRAFT-001, baseline commit `7764b77`. The Dom0 copies are a
+  separate question, below.)*
+- [ ] Branch the Dom0 DRAKVUF / `drakvuf-tools` checkouts before starting
+  Android work.
+- [ ] Commit the untouched Ubuntu baseline there.
 - [ ] Never modify the only copy of a working script without a commit or backup.
 
 ### Commands used
 
 ```bash
+# On Dom0, in ~/drakvuf-tools (NOT in this repository).
 cd ~/drakvuf-tools
 git status
 git switch -c android-analysis
@@ -608,6 +625,34 @@ Baseline commit:
 ---
 
 ## 2.1 Create Android script copies
+
+> **Sequencing constraint added 2026-08-09.** Do not run the `cp -a`
+> commands below as-is yet. The Ubuntu scripts are a working template but
+> carry known defects catalogued in `project-assessment.md`, and copying
+> them verbatim duplicates every one of them into the Android pipeline —
+> and then into Windows:
+>
+> - **DRAFT-033** must land first. `clone-ubuntu.pl` has its per-origin
+>   `flock` commented out while `dirwatch` runs concurrent workers
+>   (DRAKVUF-05), checks no exit status on `lvremove`/`lvcreate`/`xl
+>   restore` (DRAKVUF-06), and hard-codes `-L64G`.
+> - **DRAFT-027** must land first. `preconfig-ubuntu.sh` stages the sample
+>   over HTTP from Apache; that path is being removed outright, so an
+>   Android copy must never be built against it. See §5.2.
+> - **DRAFT-009** should land first — it defines which scripts are shared
+>   versus per-OS, which decides whether some of these copies should exist
+>   at all. `cleanup.sh` and `tcpdump.sh` already take only `DOMAIN`/`VLAN`
+>   and folders, so the two "decide whether Android needs…" boxes below are
+>   that issue's to answer, not this section's.
+> - **DRAFT-030** covers the untrusted-filename handling that the last
+>   checkbox in §2.7 also demands.
+> - **DRAFT-031** covers the licence-header-before-shebang layout
+>   (SC1128), which these copies would inherit six more times.
+>
+> Also note `clone-ubuntu.pl` hard-codes the Ubuntu saved-state path while
+> taking the origin domain as an argument, so a naive copy restores Ubuntu
+> memory into an Android clone. That one is flagged in the script's own
+> header comment.
 
 - [ ] Create `clone-android.pl` from `clone-ubuntu.pl`.
 - [ ] Create `preconfig-android.sh` from `preconfig-ubuntu.sh`.
@@ -1874,7 +1919,14 @@ Blocked ranges:
 ## 5.2 Sample delivery mode
 
 - [ ] Prefer direct host-to-guest file injection.
-- [ ] Keep HTTP download only as an optional compatibility path.
+- [ ] ~~Keep HTTP download only as an optional compatibility path.~~
+      **Superseded 2026-08-08 (owner decision, DRAFT-027).** The
+      HTTP/Apache delivery path is removed outright — no fallback branch,
+      no off-by-default flag, no configuration switch. Delivery is
+      `injector -m writefile`. Rationale: a retained fallback in a
+      malware-analysis pipeline is an untested code path whose only effect
+      is to restore the exposure the change exists to close. Kept here as
+      history; do not implement it.
 - [ ] Do not expose `/malware_processing` beyond the isolated analysis network.
 - [ ] Verify sample delivery cannot reach the management network.
 - [ ] Verify the guest-side hash after delivery.

@@ -38,7 +38,7 @@ per-OS scripts inherit.
 | DRAFT-029 | Restrict analysis-clone access to Dom0 host services | platform/security | ALL | M2 | P0 | DRAFT-028, DRAFT-013; benefits from DRAFT-027 | NET-02 |
 | DRAFT-030 | Stop passing untrusted sample filenames through shell-parsed command lines | core | ALL | M1 | P1 | — (should precede DRAFT-014) | DRAKVUF-03, DRAKVUF-02 |
 | DRAFT-031 | Establish a `shellcheck` baseline that `automation/` actually passes | testing | ALL | M1 | P1 | — (blocks DRAFT-026a) | CI-01 |
-| DRAFT-032 | Reconcile documentation with issues #1/#2 and the three-OS project focus | governance/docs | ALL | M0 | P1 | — | DOC-01…DOC-09, NET-04, GOV-02 |
+| DRAFT-032 | Reconcile documentation with current project direction and closed issues #1/#2 | governance/docs | ALL | M0 | P1 | — | DOC-01…DOC-09, NET-04, GOV-02; extended 2026-08-09 by the comment audit (CONF-02/03/04/06/07/08/11/12, DOC-N4/N5/N6, TODO-03) |
 | DRAFT-033 | Make `clone-ubuntu.pl` fail safely and lock, before it is copied twice | core/ubuntu | ALL (template) | M1 | P1 | Issue #4 | DRAKVUF-05, DRAKVUF-06 |
 | DRAFT-034 | Establish the Windows analysis-guest track (baseline, profile, anchor, configs) | windows | W | M5 → current | P1 | Issue #3, Issue #4, DRAFT-009, DRAFT-027; supersedes DRAFT-020's design half | Focus change; GOV-02, DOC-09 |
 

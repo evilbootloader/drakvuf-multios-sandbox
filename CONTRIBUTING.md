@@ -46,12 +46,9 @@ Distinguish between:
 - tests that must run on L1 Xen Dom0;
 - tests that execute inside L2 analysis guests.
 
-As of 2026-08-07, `Bash` was non-functional in the Claude Code development
-container used to draft this project's roadmap (`bwrap: No permissions to
-create a new namespace`) — static checks (`bash -n`, `shellcheck`,
-`perl -c`) had to be deferred to the real host or CI. Re-verified working
-as of 2026-08-08 (issue #1) — static checks can run directly in-container
-again. Re-check this note if the failure recurs.
+Static checks (`bash -n`, `shellcheck`, `perl -c`) run in the development
+container. If it ever loses the ability to spawn processes, defer them to
+the real host or CI rather than skipping them.
 
 Do not claim a task is complete without evidence.
 
