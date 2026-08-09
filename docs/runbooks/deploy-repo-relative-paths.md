@@ -76,8 +76,11 @@ ssh -T git@github.com    # expect: "you've successfully authenticated,
 git clone git@github.com:evilbootloader/drakvuf-multios-sandbox.git \
     /root/sandbox_project
 cd /root/sandbox_project
-git checkout <the branch under test>
-git log --oneline -1
+
+# Test the branch BEFORE it merges -- if D4/D5 fail, the fix belongs in
+# PR #5 rather than as a follow-up commit on master.
+git checkout issue-4-paths-and-delivery
+git log --oneline -1     # expect d24b6d0 or later
 ```
 
 The scripts resolve their own location, so `/root/sandbox_project` is the
