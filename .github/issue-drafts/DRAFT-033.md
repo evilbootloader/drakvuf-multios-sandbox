@@ -19,7 +19,11 @@ origin VM simultaneously — while it is still one file rather than three.
 
 `clone-ubuntu.pl` performs the destructive part of the pipeline: it
 removes an existing LVM snapshot, creates a new copy-on-write snapshot of
-the golden LV, and restores a saved memory image into a fresh Xen domain.
+the origin's LV, and restores a saved memory image into a fresh Xen
+domain. *(The origin is the sandbox **template** — `ubuntu_sandbox`, per
+`run_analysis-ubuntu.sh:12` — not the golden `ubuntu`. Corrected
+2026-08-09; the distinction matters because the golden domain is never
+touched by this script at all.)*
 Two source-verified defects.
 
 **DRAKVUF-05 — the per-origin lock is commented out.** The script imports
@@ -45,6 +49,43 @@ independently lists "Use `flock` for per-origin and per-launcher locking"
 as a reliability requirement, and §6.7's concurrency tests
 (`:2171-2183` — "Confirm domains are unique / LVs are unique / cleanup
 does not remove another active clone") are entirely unfilled.
+
+> **DRAKVUF-05 narrowed 2026-08-09 (repository comment audit).** The
+> paragraph above overstates the hazard, and the annotation in it turns
+> out to be the explanation. Source reading:
+>
+> - **This script never touches the origin *domain*.** It reads the
+>   origin's LV as an `lvcreate -s` source; the only `xl destroy` targets
+>   the clone. The requirement "only one clone process may manipulate a
+>   particular origin VM at the same time" came from upstream's
+>   `clone.pl`, which live-snapshots the origin — the same upstream
+>   inheritance that left a header claiming this script memshares to
+>   deduplicate memory, corrected in `b914123`. With the save/restore step
+>   gone (non-functional on this nested setup, per the annotation above
+>   and roadmap decision #3), the thing the lock protected went with it.
+> - **Concurrent workers cannot collide on a clone name.** The name is
+>   `<origin>-<vlan>-clone`, the vlan is `threadid + 1`, and `dirwatch`
+>   claims thread slots with `g_atomic_int_compare_and_exchange`. Raising
+>   the clone count does not change this.
+>
+> What genuinely remains, and what this issue should be scoped to:
+>
+> 1. **DRAKVUF-06 is the real defect** — nothing checks the exit status of
+>    the `xl destroy` → `lvremove` → `lvcreate` sequence, so a clone LV
+>    still held open by a domain that has not finished dying fails
+>    silently. This half of the issue is unaffected by the above.
+> 2. **Name uniqueness depends on one `dirwatch` per origin.** `dirwatch`
+>    hard-codes a single origin per invocation, so a second `dirwatch`
+>    started against the same origin *would* collide — one command away,
+>    and more likely once the Android and Windows launchers exist. That is
+>    a per-launcher lock, which is what
+>    `docs/checklists/android.md:2250` actually asks for, rather than the
+>    per-origin-domain lock the old comment described.
+>
+> Do not implement a lock for the hazard in the original framing. Either
+> scope this issue to (1) and (2), or split the locking half out. The
+> disabled `flock` scaffolding was removed in `b914123`; it is in git
+> history at `7764b77`.
 
 **DRAKVUF-06 — no command's exit status is checked.** Every external call
 runs in backticks with its output discarded or merely printed:

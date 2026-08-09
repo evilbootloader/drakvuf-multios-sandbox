@@ -125,7 +125,6 @@
 #
 use strict;
 use warnings;
-use Fcntl qw(:flock);
 
 ## Settings
 #
@@ -237,16 +236,31 @@ sub clone {
 
     close $fh;
 
-    # Only one clone process may manipulate a particular origin VM
-    # at the same time.
-    #my $lock_file = "/run/lock/drakvuf-clone-$origin.lock";
-
-    #open(my $lock_fh, '>>', $lock_file)
-    #    or die "Could not open lock file $lock_file: $!\n";
-
-    #flock($lock_fh, LOCK_EX)
-    #    or die "Could not acquire lock $lock_file: $!\n";
-
+    # A disabled per-origin flock used to sit here, under the comment
+    # "only one clone process may manipulate a particular origin VM at the
+    # same time". That requirement came from upstream's clone.pl, which
+    # live-snapshots the origin domain -- the same upstream inheritance
+    # that left the wrong description in this file's header. This version
+    # never touches the origin domain at all: it only reads the origin's
+    # LV as a snapshot source, and the sole `xl destroy` above targets the
+    # clone. So the requirement as stated does not apply here.
+    #
+    # What does hold today: clone names are `<origin>-<vlan>-clone`, and
+    # dirwatch derives the vlan from a worker slot claimed with an atomic
+    # compare-and-exchange (dirwatch.c), so two concurrent workers can
+    # never generate the same clone name. Raising the clone count does not
+    # change that.
+    #
+    # KNOWN GAP (DRAFT-033), narrower than the old comment implied:
+    #   - Nothing checks the exit status of the destroy/lvremove/lvcreate
+    #     sequence below, so a clone LV still held open by a domain that
+    #     has not finished dying fails silently (DRAFT-033 / DRAKVUF-06).
+    #   - Clone-name uniqueness depends on there being ONE dirwatch per
+    #     origin. dirwatch hard-codes a single origin per invocation, so a
+    #     second dirwatch started against the same origin would collide --
+    #     one command away, and worth locking against before the Android
+    #     and Windows launchers exist.
+    # The disabled flock is in git history at 7764b77.
 
     my $test = `$lvdisplay /dev/$lvm_vg/$clone 2>&1`;
     if (($test =~ tr/\n//) != 1) {
@@ -258,8 +272,6 @@ sub clone {
 
     my $error=`$xl restore -p -e /tmp/$clone.config /home/user/Documents/ubuntu_sandbox.bak 2>&1`;
     print STDERR $error;
-#    flock($lock_fh, LOCK_UN);
-#    close($lock_fh);
 
     my $cloneID = `$xl domid $clone`;
 

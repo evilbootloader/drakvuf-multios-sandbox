@@ -103,19 +103,44 @@
 #************************************************************************#
 #!/bin/bash
 #
-# Configures VLAN interfaces on the Open vSwitch brindge.
-# Change xenbr0 and xenbr1 to the name of your uplink and OVS bridge.
+# Provisions the per-clone analysis network: one VLAN sub-interface of
+# xenbr1 per clone slot, each with its own /24 gateway.
 #
-# Usage: ./network-setup.sh <number of VLAN tags used>
+# It does NOT create the OVS bridge. xenbr1 is created once at install
+# time (`ovs-vsctl add-br xenbr1`); this script only brings it up.
+# CLAUDE.md and docs/checklists/ubuntu.md both describe this script as
+# "provisioning the OVS bridge" -- that is wrong, and DRAFT-032 corrects
+# it.
+#
+# xenbr0 (uplink) and xenbr1 (analysis bridge) are project-wide fixed
+# names, hard-coded across clone-ubuntu.pl, preconfig-ubuntu.sh,
+# tcpdump.sh, all four misc/*.cfg and CLAUDE.md's naming tables.
+# Renaming them here alone is not enough.
+#
+# Shared by all three OS pipelines -- a defect here is a defect in the
+# Ubuntu, Android and Windows analysis networks simultaneously.
+#
+# KNOWN GAP (DRAFT-028): not idempotent, and silent on failure. There is
+# no `set -e` and no exit-status check anywhere below, and
+# run_analysis-ubuntu.sh calls this on every launch, so every rule is
+# appended again rather than replaced.
+#
+# Usage: ./network-setup.sh <number of clone slots>
 
 modprobe 8021q
 
 echo 1 > /proc/sys/net/ipv4/ip_forward
 
-# Enable NAT on the uplink interface
+# Gives every analysis clone unrestricted outbound Internet access. This
+# is the current lab's deliberate default, not an oversight -- but there
+# is no offline or simulated network mode to switch to yet. The three
+# proposed modes are in docs/architecture/networking.md; DRAFT-013 records
+# the observed behaviour as a test result before any of them is chosen.
 iptables -t nat -A POSTROUTING -o xenbr0 -j MASQUERADE
 
-# Configure the Open vSwitch bridge and add interfaces for each VLAN
+# Bring up the already-created bridge and add one VLAN sub-interface per
+# clone slot. (`vconfig` is deprecated in favour of
+# `ip link add link ... type vlan`; replacing it belongs to DRAFT-028.)
 ip link set xenbr1 up
 for i in `seq 1 $1`;
 do
@@ -123,6 +148,23 @@ do
     ip addr add 172.16.$i.1/24 dev xenbr1.$i
     ip link set xenbr1.$i up
 
-    # Prohibit VLANs talking to each other
+    # Intent: deny clone-to-clone traffic. A clone may reach the uplink
+    # for NAT egress, and nothing else on xenbr1. This is the only
+    # inter-clone isolation mechanism in the whole pipeline.
+    #
+    # KNOWN GAP (DRAFT-028): this rule may never install. `-o !xenbr0` is
+    # the negation form deprecated in iptables 1.4.3; current versions
+    # parse `!xenbr0` as an interface name and reject it. Nothing here
+    # checks the exit status, so a rejected rule fails silently and there
+    # is then NO inter-clone isolation at all -- for Ubuntu, Android and
+    # Windows alike. Do not treat clone separation as established until
+    # `iptables -S FORWARD` on Dom0 shows these rules present.
+    #
+    # KNOWN GAP (DRAFT-029): even when the rule does install, FORWARD
+    # cannot cover traffic addressed to Dom0 itself -- that traverses
+    # INPUT, and no INPUT policy is set anywhere in automation/. A clone
+    # can reach every service listening on every Dom0 address, including
+    # the Apache instance serving /malware_processing, which exposes every
+    # other in-flight sample by filename.
     iptables -A FORWARD -i xenbr1.$i -o !xenbr0 -j DROP
 done

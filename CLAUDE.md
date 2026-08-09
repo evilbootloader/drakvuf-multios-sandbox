@@ -132,6 +132,17 @@ Do not modify the Ubuntu behavior unless required and explicitly requested.
 - Clearly distinguish:
   - commands validated from project evidence;
   - proposed commands that still require testing on Xen Dom0.
+- Comments answer *why*, not *what*, and a comment asserting a security,
+  isolation or concurrency guarantee must be true today or say plainly
+  that it is not (`KNOWN GAP (DRAFT-NNN)`).
+- Update the comments, checklists and cross-references a change touches,
+  in the same change. Leaving one describing the pre-change behaviour is
+  a defect in the change.
+- Never edit dated evidence blocks or the imported source guides in
+  place — annotate, and record the discrepancy in the living docs.
+
+The full rationale, with the worked examples behind each rule, is in
+`CONTRIBUTING.md`'s "Comments and historical context" section.
 
 ## Testing
 
