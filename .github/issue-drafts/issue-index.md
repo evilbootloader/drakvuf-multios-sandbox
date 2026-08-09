@@ -14,7 +14,7 @@ DRAFT-009 onward (not yet drafted in full, title-index only).
 | DRAFT-005 | Add CONTRIBUTING.md capturing PLAN→CREATE→TEST→DEPLOY lifecycle + issue template | governance | M0 | P1 | DRAFT-003 | **Closed** — done 2026-08-07 |
 | DRAFT-006 | Reconcile `misc/` Xen guest config naming and cross-references | governance | M0 | P2 | DRAFT-001 | **Closed** — [#1](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/1), done 2026-08-08 |
 | DRAFT-007 | Verify `drakvuf-ubuntu.sh`'s `<USER>` placeholder bug against real behavior | ubuntu | M1 | P0 | DRAFT-001 | **Closed** — [#2](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/2), done 2026-08-08; premise refuted (see note below) |
-| DRAFT-008 | Define OS-independent analysis job/result state model | core | M0 | P0 | DRAFT-001 | **Design complete** — [#3](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/3), 2026-08-09; model in `docs/architecture/analysis-pipeline.md`. Issue not yet closed on GitHub |
+| DRAFT-008 | Define OS-independent analysis job/result state model | core | M0 | P0 | DRAFT-001 | **Closed** — [#3](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/3), done 2026-08-09; model in `docs/architecture/analysis-pipeline.md` |
 | DRAFT-025 | Standardize Xen analysis pipeline paths | platform | M0 | P1 | DRAFT-001; informed by DRAFT-006, DRAFT-007 | Published — [#4](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/4) |
 | DRAFT-026 | Implement GitHub Actions and self-hosted Xen integration runner | ci | M1 | P1 | DRAFT-001; soft dep. on DRAFT-025; supersedes DRAFT-012; informed by DRAFT-006, DRAFT-007 | Drafted, not published — see `.github/issue-drafts/DRAFT-026.md` |
 
@@ -209,6 +209,27 @@ around a canonical `/root/sandbox_project` Dom0 checkout, while explicitly
 leaving `/malware_*` runtime data paths untouched. Numbered 025 (next
 available) rather than inserted into the 009–024 range so the original
 roadmap-derived title index stays intact. See `.github/issue-drafts/DRAFT-025.md`.
+
+**Scope note added 2026-08-09, on closing issue #3.** That carve-out is
+now load-bearing rather than incidental: issue #3 changed the `/malware_*`
+layout, so #4 must keep its hands off it deliberately, not merely by
+omission. Specifically, `/malware_incoming` gains a per-OS subdirectory
+level (`ubuntu/`, `android/`, `windows/`), and result directories move from
+`/malware_finished/<MD5>` to `/malware_finished/<analysis_id>` with an
+`index/by-sha256/` mapping. Two consequences for #4, neither of which
+changes what it implements:
+
+- The runtime data layout is owned by issue #3's state model and
+  DRAFT-018, not by #4. #4 should not standardize `/malware_*` paths even
+  where they sit next to the repo-owned ones it does move.
+- Any documentation #4 touches must not restate the current flat
+  MD5-keyed layout as settled. `docs/architecture/result-schema.md` §1
+  still describes it, correctly, as *current source-verified behaviour* —
+  that framing is what keeps it accurate, and #4 should preserve it rather
+  than promoting it to a convention.
+
+Nothing was edited on GitHub; `CONTRIBUTING.md` gates `gh issue edit`
+behind explicit approval, and #4's published body is unchanged.
 
 ## Revision note on DRAFT-006
 

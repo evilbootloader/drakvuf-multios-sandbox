@@ -1,9 +1,10 @@
 # DRAFT-008: Define OS-independent analysis job/result state model
 
-**Status:** Published — [issue #3](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/3);
-design complete 2026-08-09, see Resolution below. The GitHub issue has
-**not** been closed or edited — that needs explicit approval per
-`CONTRIBUTING.md`.
+**Status:** **Closed** — [issue #3](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/3),
+closed as completed 2026-08-09. Design complete; see Resolution below.
+The issue *body* was never updated with the 2026-08-08 assessment and
+still lists `target_os_source`; rather than rewriting it, the closing
+comment states the outcome and says so explicitly.
 **Area:** core
 **Milestone:** M0
 **Priority:** P0
