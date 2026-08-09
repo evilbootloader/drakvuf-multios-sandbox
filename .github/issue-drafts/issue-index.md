@@ -15,7 +15,7 @@ DRAFT-009 onward (not yet drafted in full, title-index only).
 | DRAFT-006 | Reconcile `misc/` Xen guest config naming and cross-references | governance | M0 | P2 | DRAFT-001 | **Closed** — [#1](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/1), done 2026-08-08 |
 | DRAFT-007 | Verify `drakvuf-ubuntu.sh`'s `<USER>` placeholder bug against real behavior | ubuntu | M1 | P0 | DRAFT-001 | **Closed** — [#2](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/2), done 2026-08-08; premise refuted (see note below) |
 | DRAFT-008 | Define OS-independent analysis job/result state model | core | M0 | P0 | DRAFT-001 | **Closed** — [#3](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/3), done 2026-08-09; model in `docs/architecture/analysis-pipeline.md` |
-| DRAFT-025 | Standardize Xen analysis pipeline paths | platform | M0 | P1 | DRAFT-001; informed by DRAFT-006, DRAFT-007 | Published — [#4](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/4) |
+| DRAFT-025 | Standardize Xen analysis pipeline paths | platform | M0 | P1 | DRAFT-001; informed by DRAFT-006, DRAFT-007 | Published — [#4](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/4), retitled 2026-08-09 to "…paths **and replace HTTP sample delivery**" when DRAFT-027 was folded in; **CREATE done**, DEPLOY pending (`docs/runbooks/deploy-repo-relative-paths.md`). Scope expanded — see note below |
 | DRAFT-026 | Implement GitHub Actions and self-hosted Xen integration runner | ci | M1 | P1 | DRAFT-001; soft dep. on DRAFT-025; supersedes DRAFT-012; informed by DRAFT-006, DRAFT-007 | Drafted, not published — see `.github/issue-drafts/DRAFT-026.md` |
 
 ## Second batch — DRAFT-027 through DRAFT-034
@@ -33,7 +33,7 @@ per-OS scripts inherit.
 
 | Draft ID | Title | Area | OS | Milestone | Priority | Depends on | Origin finding |
 |---|---|---|---|---|---|---|---|
-| DRAFT-027 | Replace HTTP/Apache sample delivery with direct guest injection | core/platform | ALL | M1 → M2/M3 | P0 | Issue #4; blocks DRAFT-016, DRAFT-026b | DRAKVUF-01 |
+| DRAFT-027 | Replace HTTP/Apache sample delivery with direct guest injection | core/platform | ALL | M1 → M2/M3 | P0 | Issue #4; blocks DRAFT-016, DRAFT-026b | DRAKVUF-01 — **implemented for Ubuntu 2026-08-09 inside issue #4**, never published separately |
 | DRAFT-028 | Make `network-setup.sh` fail loudly, install correct rules, and be idempotent | platform/networking | ALL | M2 | P0 | — (blocks DRAFT-013) | NET-01, NET-04, NET-05 |
 | DRAFT-029 | Restrict analysis-clone access to Dom0 host services | platform/security | ALL | M2 | P0 | DRAFT-028, DRAFT-013; benefits from DRAFT-027 | NET-02 |
 | DRAFT-030 | Stop passing untrusted sample filenames through shell-parsed command lines | core | ALL | M1 | P1 | — (should precede DRAFT-014) | DRAKVUF-03, DRAKVUF-02 |
@@ -230,6 +230,30 @@ changes what it implements:
 
 Nothing was edited on GitHub; `CONTRIBUTING.md` gates `gh issue edit`
 behind explicit approval, and #4's published body is unchanged.
+
+> **Superseded in part, 2026-08-09 (same day), at the maintainer's
+> request.** The first bullet no longer holds: **#4 did implement the
+> per-OS `/malware_*` subdirectory level**, for Ubuntu. The three
+> `dirwatch` folder arguments now point at
+> `/malware_{incoming,processing,finished}/ubuntu`.
+>
+> Two reasons it moved into #4 rather than waiting for DRAFT-018:
+>
+> 1. The per-OS level is *launcher configuration* — which directory a
+>    `dirwatch` instance watches — not result schema. It is the same class
+>    of value as the `.cfg` and profile paths #4 was already relocating.
+> 2. It could not be deferred safely once #4 touched `/malware_processing`:
+>    Apache's `DocumentRoot` was that directory, so a per-OS level would
+>    have 404'd the guest's `wget`, silently. DRAFT-027 was implemented in
+>    the same change to remove the coupling entirely.
+>
+> **The second bullet stands unchanged and was honoured.** Result
+> directories are still MD5-keyed; nothing #4 touched promotes that to a
+> convention, and `result-schema.md` §1's framing is intact. The
+> `analysis_id` rename and the `index/by-sha256/` mapping remain
+> DRAFT-018's.
+>
+> See `DRAFT-025.md`, "CREATE completed 2026-08-09".
 
 ## Revision note on DRAFT-006
 

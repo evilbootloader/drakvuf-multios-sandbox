@@ -437,3 +437,80 @@ place untouched (DEPLOY step 6) and `dirwatch`'s invocation can be pointed
 back at it with a one-line revert of `run_analysis-ubuntu.sh`. No data
 loss risk — `.bak` files are moved, not deleted, and profiles are copied
 before any old copy is removed.
+
+# CREATE completed 2026-08-09 — with three deliberate scope changes
+
+Repo-side work is done and statically verified. Nothing is deployed;
+DEPLOY is `docs/runbooks/deploy-repo-relative-paths.md`, not yet executed.
+
+**Issue #4 was updated on GitHub the same day, with approval.** Its body
+was rewritten to match what was built (per `CONTRIBUTING.md`'s "Issue
+dependency and cleanup" rule) and it was retitled to "[Platform]
+Standardize Xen analysis pipeline paths **and replace HTTP sample
+delivery**" to reflect DRAFT-027 being folded in. The pre-rewrite body
+remains in GitHub's edit history. This draft stays the draft of record;
+the sections below are the fuller account the issue body summarizes.
+
+Three things went beyond what this draft scoped, each at the maintainer's
+explicit request in session:
+
+## 1. `/malware_*` is no longer carved out
+
+This draft, and `issue-index.md`'s "Note on DRAFT-025", both stated that
+#4 must not touch the runtime data paths because issue #3 and DRAFT-018
+own them. **That carve-out was lifted on request.** The three folder
+arguments now point at `/malware_{incoming,processing,finished}/ubuntu`,
+implementing the per-OS layout issue #3 decided but never built.
+
+The carve-out's *reasoning* still holds and is unchanged: the result
+directory is still MD5-keyed, not `analysis_id`-keyed, and
+`result-schema.md` §1 still describes that as current source-verified
+behaviour rather than a settled convention. What #4 implemented is the
+directory level above it — the OS-selection mechanism — which is
+`dirwatch` launcher configuration, not result schema.
+
+## 2. DRAFT-027 was folded in rather than sequenced after
+
+Per-OS `/malware_processing/ubuntu` breaks the HTTP delivery path:
+Apache's `DocumentRoot` is `/malware_processing`, so the guest's
+`wget http://<gw>/<filename>` would 404 — silently, mid-`&&`-chain, with
+no sample staged and a trace of nothing. Rather than work around that,
+DRAFT-027 was implemented in the same change and the coupling removed.
+
+**DRAFT-027's PLAN steps 1–2 did not need the Dom0 capture they ask
+for.** That capture already existed, taken during issue #2 and recorded
+at `docs/runbooks/verify-user-placeholder.md:154-157`. It also refuted
+the Android checklist's candidate command, which had `-e`/`-f` where the
+real interface is `-B` (Dom0 source) and `-e` (guest destination) — see
+DRAFT-027's own resolution note.
+
+## 3. Two defects found while editing the affected lines
+
+Neither was in scope; both were in code this issue had to touch anyway,
+and both are recorded where they were found rather than deferred:
+
+- **Guest DNS never resolved.** `preconfig-ubuntu.sh` pointed
+  `/etc/resolv.conf` at the clone's gateway, where nothing has ever
+  listened on port 53. Now `GUEST_NAMESERVER`, defaulting to `1.1.1.1`.
+  No follow-on issue: `tcpdump.sh` already captures the queries (plaintext
+  UDP/53 on the clone's VLAN interface), and FakeNet-NG's `PREROUTING`
+  redirect will intercept them unchanged when a simulated mode lands, so
+  the value does not need revisiting. Full reasoning in
+  `docs/architecture/networking.md`.
+- **`automation/*.sh` run under `dash`, not `bash`.** Five of six carry
+  the DRAKVUF license header above the shebang, so `#!/bin/bash` never
+  reaches the kernel and GLib falls back to `/bin/sh`. This nearly
+  defeated the issue: a first pass used `${BASH_SOURCE[0]}`, which dash
+  evaluates to empty *without stopping*, silently making `SCRIPT_DIR`
+  equal to `$PWD`. Resolution uses `$0`. The shebang placement itself is
+  still DRAFT-031's to fix.
+
+## Acceptance criteria still open
+
+- The out-of-repo location-independence test, and the Apache-stopped
+  delivery run — both require Dom0 (runbook D4/D5).
+- Whether `writefile` sets the executable bit is still unknown from
+  `--help`; a `chmod` injection runs unconditionally until D5 answers it.
+- Guest-side vs Dom0-side SHA-256 comparison needs a method decision
+  (runbook D6) — `cleanup.sh` destroys the clone before the guest copy
+  can be read.

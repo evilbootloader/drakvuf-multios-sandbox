@@ -1,6 +1,37 @@
 # DRAFT-027: Replace HTTP/Apache sample delivery with direct guest injection
 
-**Status:** Drafted, not published
+> **Resolution 2026-08-09 — implemented for Ubuntu as part of issue #4,
+> never published as its own issue.** Folded in because issue #4's per-OS
+> `/malware_processing/ubuntu` change would otherwise have broken HTTP
+> delivery (Apache's `DocumentRoot` is `/malware_processing`); removing
+> the dependency was cleaner than working around it.
+>
+> **PLAN steps 1–2 required no new Dom0 work.** They ask for an
+> `injector --help` capture to settle whether `writefile` exists and what
+> its arguments are. That capture was already taken during issue #2 and
+> is recorded at `docs/runbooks/verify-user-placeholder.md:154-157`:
+>
+> ```text
+> writefile - push a file (specified by host path -B) to the VM and store it on guest path specified by -e
+> -f <args for execproc>    [BOTH] - ... (requires -m execproc or -m shellexec)
+> ```
+>
+> This **refutes the candidate command** at
+> `docs/checklists/android.md:1068-1079`, which used `-e` for the host
+> source and `-f` for the guest destination. Both are wrong: `-e` is the
+> guest destination, `-B` is the host source, and `-f` is not read by
+> `writefile` at all. DRAFT-016 would have inherited that command
+> verbatim. Corrected in place with the original preserved.
+>
+> **Still open:** PLAN step 3 (does `writefile` set the executable bit?)
+> is not answered by `--help`, so a separate `chmod` injection runs
+> unconditionally. The Apache-stopped acceptance run is runbook D5 in
+> `docs/runbooks/deploy-repo-relative-paths.md` and has not been
+> executed. Android and Windows delivery remain unimplemented, as this
+> draft always intended.
+
+**Status:** Implemented for Ubuntu 2026-08-09 (via issue #4); not
+published as a separate issue
 **Area:** core / platform (affects Ubuntu, Android, Windows)
 **Milestone:** M1 (decision) → M2/M3 (per-OS implementation)
 **Priority:** P0
