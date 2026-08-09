@@ -263,8 +263,17 @@ answered.
 
 Dated evidence blocks in `docs/checklists/`, `docs/runbooks/`, and the
 resolution sections of closed issue drafts are records of what was true
-when written. Annotate them; never edit them in place. The imported source
-guides — `docs/Project-definition.txt`,
+when written. Annotate them; never edit them in place.
+
+"Never edit in place" scopes *what*, not *how*. Ordinary files — code,
+`CLAUDE.md`, the roadmap, the architecture docs — are edited and the diff
+is committed; that is what version control is for. The exception is
+evidence, which is append-only: its value is that the file itself still
+says "on 2026-08-08 we ran X and observed Y." Rewriting that sentence
+destroys the record even though git retains the bytes, because nobody
+diffs history to find a change they do not suspect.
+
+The imported source guides — `docs/Project-definition.txt`,
 `docs/drakvuf-on-xen-nested-within-proxmox.md`, `docs/android_setup.md` —
 are provenance for how the lab was originally built and are not kept in
 sync with later renames or fixes. Where their staleness is genuinely

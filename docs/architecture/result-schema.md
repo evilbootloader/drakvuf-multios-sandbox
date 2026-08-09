@@ -3,8 +3,9 @@
 > No formal schema is implemented anywhere in this repository yet. This
 > document records (a) what output locations already exist per
 > source-verified script behavior, and (b) the design work still pending
-> (DRAFT-018, Milestone M4). Do not treat anything below Section 2 as
-> decided.
+> (DRAFT-018, Milestone M4). Section 3 marks which of its questions were
+> **decided** by issue #3 on 2026-08-09 and which remain open; everything
+> else below Section 2 is undecided.
 
 ## 1. Current, source-verified output locations (Ubuntu)
 
@@ -25,7 +26,9 @@ SHA-256):
 
 The Android checklist's own "Proposed result layout" (§4.1) uses SHA-256
 instead of MD5 and a much richer structure — this is Candidate/proposed,
-not yet implemented for either OS.
+not yet implemented for either OS. Its keying question was settled on
+2026-08-09 in favour of neither: result directories are named by
+`analysis_id`, with SHA-256 as an indexed field (Section 3).
 
 ## 2. Reference point, not a contract: DRAKVUF Sandbox
 
@@ -37,16 +40,33 @@ inspiration only, not something to build against as a stable contract.
 
 ## 3. Design work pending (DRAFT-018)
 
-Not yet decided:
+Two questions this section used to pose were answered elsewhere on
+2026-08-09 by issue #3, which owns the job/result state model. They are
+recorded here as **decided, not open**, so the two documents cannot answer
+them differently:
 
-- Whether to key results by SHA-256 (as the Android checklist proposes) or
-  keep MD5 (as the current Ubuntu scripts do) — the Android proposal is the
-  better default for a shared schema, but changing Ubuntu's existing keying
-  is itself a modernization task, not a free rewrite.
-- The OS-independent `status.json` shape (draft field list already exists
-  in `docs/checklists/android.md` §7.3 and is referenced from
-  `analysis-pipeline.md`'s job/state model section — these two documents
-  should converge, not diverge, once DRAFT-008/DRAFT-018 are actually done).
+- **Result keying — decided.** SHA-256 is the sample key; MD5 survives only
+  as an identifier for cross-referencing external corpora, alongside SHA-1.
+  Result *directories* are named by `analysis_id` rather than by any hash,
+  so re-submitting a sample cannot collide with its earlier run. See
+  `analysis-pipeline.md`, "Sample identification". Migrating the existing
+  MD5-keyed Ubuntu output is DRAFT-011's work, not a free rewrite.
+- **`status.json` shape — decided.** Field list, state machine, status
+  taxonomy and the UI projection live in `analysis-pipeline.md`; this
+  document does not restate them. `docs/checklists/android.md` §4.1/§7.3
+  carry annotations recording what the shared model took from their
+  proposals and what it changed.
+
+Still genuinely open, and what remains of DRAFT-018:
+
+- The storage layout itself — which artifacts land where inside a result
+  directory, and what the atomic-publication boundary is in practice. The
+  state model fixes the directory *name* and the temp-then-rename rule; it
+  does not fix the contents.
+- Which `type_identifiers` are actually computed. `imphash` and `telfhash`
+  need a parsing library on Dom0 (`pefile`/LIEF, `telfhash`) that the
+  project does not currently depend on; the model defines the fields as
+  nullable and leaves the dependency decision here.
 - Whether/how to fold in `capa` post-processing output (see
   `upstream-drakvuf.md` — capa v7.2.0 has a native DRAKVUF-log feature
   extractor, which is the cheapest integration path once this schema and

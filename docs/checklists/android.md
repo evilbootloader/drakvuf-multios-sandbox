@@ -1738,6 +1738,18 @@ Exit status:
 └── cleanup.log
 ```
 
+> **Reconciled 2026-08-09 (issue #3).** The OS-independent state model in
+> `docs/architecture/analysis-pipeline.md` adopts this layout's substance —
+> one self-contained directory per run, the original sample preserved
+> beside its artifacts, and the atomic temp-then-`mv` publication pattern
+> in "Commands used" below — with **one change: the directory is named by
+> `analysis_id`, not by SHA-256.** Keying a directory by content hash means
+> a second run of the same sample collides with the first; `analysis_id` is
+> per-run, and SHA-256 becomes an indexed field so that "every run of this
+> sample" remains a single lookup. The stored sample inside the directory
+> stays content-addressed (`sample/<sha256>`). Everything else here is
+> unchanged and is still the Android target.
+
 ### Commands used
 
 ```bash
@@ -2384,6 +2396,30 @@ Maximum logcat size:
   "errors": []
 }
 ```
+
+> **Reconciled 2026-08-09 (issue #3).** This document is the direct ancestor
+> of the shared job record in `docs/architecture/analysis-pipeline.md`,
+> which adopts its `status` + `stage` split, its atomic-write requirement,
+> and the candidate status vocabulary from §2.8. Three differences to carry
+> into the implementation:
+>
+> - **`status` is now a closed, OS-independent set** — `completed`,
+>   `failed`, `rejected`, `cancelled`, `interrupted`. The richer vocabulary
+>   at §2.8 (`install_failed`, `hash_mismatch`, `analysis_timeout`, …)
+>   becomes `failure_reason`, paired with `failure_stage`, and stays
+>   Android-scoped where it is Android-specific. Nothing was discarded —
+>   every value maps, and the mapping table is in the shared model.
+> - **`cleanup_status` keeps its own axis**, which is what this section's
+>   "Record cleanup success independently from analysis success" already
+>   asked for; the shared model promotes it from a checkbox to a rule.
+> - **`stimulate` is a stage, not a state**, because only Android has one.
+>
+> Fields the shared model adds that are missing here: `analysis_id` (which
+> also names the result directory), `attempt` — `dirwatch` retries a
+> timed-out sample on a *fresh* clone, so one submission can produce
+> several clone lifecycles — `guest_filename`, `queue_reason`, the SHA-1
+> and MD5 identification hashes, and `cancel_requested_at`/`cancelled_by`
+> for user-initiated stops.
 
 ### Evidence and notes
 

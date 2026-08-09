@@ -85,7 +85,7 @@ for full sourced detail. Condensed:
 | Component (from CERT-Polska `drakvuf-sandbox`) | Verdict | Why |
 |---|---|---|
 | Task/job queue (Flask + RQ + Redis) | Reuse/Adapt | Simple, well-understood; adaptable to drive Xen/LVM/OVS clones instead of snapshot restores. |
-| Analysis state machine | Reference-only | Good conceptual model; this project's clone-per-run, multi-OS shape needs its own state machine. |
+| Analysis state machine | Reference-only | Good conceptual model; this project's clone-per-run, multi-OS shape needs its own state machine. **Defined 2026-08-09** (issue #3) — `docs/architecture/analysis-pipeline.md`. |
 | Network setup (bridge-per-worker + NAT/dnsmasq) | Reference-only | Conceptually close to existing OVS-per-VLAN approach; not a drop-in. |
 | TLSMON (TLS key extraction) | **Not applicable** | Confirmed by direct source read: hooks Windows `ncrypt.dll`/Schannel only. No Linux/Android path exists upstream. |
 | capa post-processing | Reuse/Adapt | Apache-2.0, no licensing friction. capa v7.2.0 added a native DRAKVUF-log feature extractor. |
@@ -153,14 +153,14 @@ per-OS quality track, not a gate for anything else.
 
 | # | Milestone | Contents | Gate |
 |---|---|---|---|
-| M0 | Foundations | git init, README, docs reorg, CONTRIBUTING.md, job/result state model, licensing spike write-up | No Xen changes; pure planning/docs/scaffolding |
+| M0 | Foundations | git init, README, docs reorg, CONTRIBUTING.md, ~~job/result state model~~ (done 2026-08-09, issue #3), licensing spike write-up | No Xen changes; pure planning/docs/scaffolding |
 | M1 | Ubuntu regression baseline | ~~Verify the `<USER>` bug~~ and ~~reconcile the repo↔Dom0 drift it exposed~~ (both done 2026-08-08, issue #2); document current behavior precisely, retrofit structured status output without changing behavior, add `bash -n`/`shellcheck`/`perl -c` CI plus a drift check | Proves the job model works on the one pipeline that already runs |
 | M2 | Containment closure | Finish Android §1.3 network isolation verification; decide shared-vs-per-OS script boundaries | Requires Xen Dom0 for the isolation tests |
 | M3 | Android MVP | Resume checklist Phase 2 → MVP gate using the now-defined job model | Bulk of the existing "Candidate" checklist content gets executed here |
 | M4 | Artifact schema + enrichment | Result schema, capa integration | After M1/M3 produce real logs to validate against |
 | M5 | Windows planning spike | Baseline selection, profile/symbol requirements (VM-lifecycle model already settled: clone-per-run) | Design only |
 | M6 | Ops hardening | Observability, CI expansion, resource limits/abuse resistance | After ≥2 OS pipelines exist |
-| M7 | Web platform MVP | Job submission API, queue, minimal UI | Only after M0–M6 and the licensing decision are resolved |
+| M7 | Web platform MVP | Job submission API, queue, minimal UI — built on the state model's presentation projection (`display_phase`, the per-state artifact/cancellable/retryable contract) rather than a UI-specific status vocabulary | Only after M0–M6 and the licensing decision are resolved |
 | M8 | Public hardening + legal gate | AuthN/Z, rate limiting, tenant isolation, formal legal review | Before any external/paying users |
 | M9 | Upstream DRAKVUF contribution | Only after a stable OS pipeline + resolved repo strategy | Deliberately last |
 

@@ -49,9 +49,16 @@ subfolders):
   `dirwatch.c` shipped in the upstream DRAKVUF repository. A `GThreadPool` +
   `inotify` watcher on the incoming-sample folder, launched via a fixed
   15-argument CLI contract that hard-codes a single origin domain per
-  invocation. It does **not** yet detect which guest OS a dropped sample
-  needs (e.g. by file magic); that routing/detection logic is still to be
-  built. For each sample it calls back into the worker scripts below, in
+  invocation. Since issue #3 (2026-08-09) that constraint **is** the
+  OS-selection mechanism rather than a gap: the target OS is chosen by the
+  submitter, via one incoming directory and one `dirwatch` instance per OS.
+  File magic is recorded for identification and mismatch-rejection only —
+  it does not route. Two things this still needs before per-OS watchers
+  can run concurrently are tracked as DRAFT-036: memory-based clone
+  admission, and a host-global VLAN allocator (today the thread-slot index
+  *is* the VLAN, and the slot array is process-local, so two instances
+  would collide). See `docs/architecture/analysis-pipeline.md`.
+  For each sample it calls back into the worker scripts below, in
   order: `clone-ubuntu.pl` → `preconfig-ubuntu.sh` → `drakvuf-ubuntu.sh` →
   `cleanup.sh`, with `tcpdump.sh` started on a side thread. The preconfig
   phase is guarded by a 60s timeout and the drakvuf-trace phase by a 180s

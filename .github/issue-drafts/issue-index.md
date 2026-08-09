@@ -14,7 +14,7 @@ DRAFT-009 onward (not yet drafted in full, title-index only).
 | DRAFT-005 | Add CONTRIBUTING.md capturing PLAN→CREATE→TEST→DEPLOY lifecycle + issue template | governance | M0 | P1 | DRAFT-003 | **Closed** — done 2026-08-07 |
 | DRAFT-006 | Reconcile `misc/` Xen guest config naming and cross-references | governance | M0 | P2 | DRAFT-001 | **Closed** — [#1](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/1), done 2026-08-08 |
 | DRAFT-007 | Verify `drakvuf-ubuntu.sh`'s `<USER>` placeholder bug against real behavior | ubuntu | M1 | P0 | DRAFT-001 | **Closed** — [#2](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/2), done 2026-08-08; premise refuted (see note below) |
-| DRAFT-008 | Define OS-independent analysis job/result state model | core | M0 | P0 | DRAFT-001 | Published — [#3](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/3) |
+| DRAFT-008 | Define OS-independent analysis job/result state model | core | M0 | P0 | DRAFT-001 | **Design complete** — [#3](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/3), 2026-08-09; model in `docs/architecture/analysis-pipeline.md`. Issue not yet closed on GitHub |
 | DRAFT-025 | Standardize Xen analysis pipeline paths | platform | M0 | P1 | DRAFT-001; informed by DRAFT-006, DRAFT-007 | Published — [#4](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/4) |
 | DRAFT-026 | Implement GitHub Actions and self-hosted Xen integration runner | ci | M1 | P1 | DRAFT-001; soft dep. on DRAFT-025; supersedes DRAFT-012; informed by DRAFT-006, DRAFT-007 | Drafted, not published — see `.github/issue-drafts/DRAFT-026.md` |
 
@@ -90,6 +90,49 @@ Two carried forward unchanged, for visibility:
 - **DRAFT-012 → FULLY OBSOLETE**, superseded by DRAFT-026a, but still
   cited as live by `docs/checklists/ubuntu.md:201` and roadmap M1 —
   DRAFT-032 corrects those references.
+
+## Third batch — DRAFT-035, DRAFT-036
+
+Added 2026-08-09, produced by issue #3's design work rather than by a
+backlog review. Both are implementation consequences of the decided state
+model; neither is covered anywhere in DRAFT-009…034. **Drafted as index
+entries only — no draft files yet.**
+
+| Draft ID | Title | Area | OS | Milestone | Priority | Depends on | Origin |
+|---|---|---|---|---|---|---|---|
+| DRAFT-035 | Implement the job control channel: cancellation, retry guard, per-OS watch-directory admission | core | ALL | M1 | P1 | Issue #3; soft dep. on DRAFT-010 | Issue #3 decisions 1 and 3 |
+| DRAFT-036 | Replace fixed clone slots with resource-aware admission and host-global VLAN allocation | core/platform | ALL | M1 | **P0** | Issue #3; blocks concurrent per-OS watchers | Issue #3 decision 4 |
+
+**DRAFT-035** — a user must be able to stop a running analysis. The
+model's `cancelled` terminal status needs a mechanism: a cancellation
+request channel, a check at each transition, and reuse of the existing
+clone-destroy primitive (`timer_thread` → `cleanup()`,
+`dirwatch.c:240-241`). Carries one non-obvious requirement: the cancel flag
+must also be checked at `dirwatch.c:425`, alongside `shutting_down`, or the
+retry branch re-clones the sample and the "stop" becomes an unbounded loop.
+Also owns creating the per-OS watch directories and the one-`dirwatch`-per-OS
+launch arrangement. The only prior mention of cancellation anywhere in the
+repository is `DRAFT-026.md:243`, which is about cancelling a *CI* job.
+
+**DRAFT-036** — P0 because it contains a **blocking defect**, not just an
+efficiency gain. `slots_busy[]` is process-local (`dirwatch.c:161`) and the
+slot index doubles as the VLAN (`:297`), so the moment a second `dirwatch`
+instance runs, both allocate VLAN 1 and both clones land on `xenbr1.1` /
+`172.16.1.0/24` — defeating the per-VLAN isolation `network-setup.sh`
+exists to provide. Per-OS watchers cannot run concurrently until VLAN
+allocation is host-global, which makes this a prerequisite of issue #3's
+OS-selection mechanism rather than a follow-up to it.
+
+The efficiency half is the other reason: independent per-OS `<max clones>`
+caps cannot lend capacity to each other, so any static split ("5 Windows,
+3 Ubuntu, 3 Android") is either wasteful when one OS is busy or
+overcommitted when all three are. Clones are not interchangeable either —
+`misc/*_sandbox.cfg` pins `memory = maxmem = 2048` with no ballooning, and
+Windows will want more — so the admissible quantity is **memory, not clone
+count**. Candidate rule and its caveats are in
+`docs/architecture/analysis-pipeline.md`, "Clone concurrency"; the
+`xl restore` peak-vs-steady-state question must be measured on Dom0 before
+the rule is trusted.
 
 ## Note on DRAFT-007
 
@@ -208,11 +251,11 @@ cheap before the draft exists and expensive after.
 | **011** | U → ALL | **PARTIALLY OBSOLETE — shrink, then widen.** | **Remove** the "reconcile with the deployed Dom0 copy" element: issue #2 completed it on 2026-08-08. **Add** DRAKVUF-04 (`ps aux \| grep` PID safety) — 3 of its 4 sites are in shared `cleanup.sh`, so that part is not Ubuntu-only; the `"tcpdump -i xenbr1.$VLAN"` match is unanchored with `.` as a regex wildcard, so VLAN 1 also matches `xenbr1.10`–`19` above 9 clones. Dependency on DRAFT-007 is closed. |
 | **012** | ALL | **FULLY OBSOLETE.** Superseded by DRAFT-026a. | Do not draft. Still cited as live by `docs/checklists/ubuntu.md:201` and roadmap M1 — DRAFT-032 fixes those references. |
 | **013** | A → ALL | **NEEDS UPDATE — retitle away from Android-only.** The mechanism under test is `network-setup.sh`, shared by all three OS families, so this verifies Ubuntu and Windows containment too. | Depends on DRAFT-028 landing first — otherwise it records a known-broken state. Record NET-02 and NET-03 as *expected findings* so the test is not written assuming a pass: the `FORWARD` rule cannot cover traffic to Dom0 itself (`INPUT` chain, no policy set anywhere), and `MASQUERADE` at `network-setup.sh:118` gives clones unrestricted egress by default. Fixes belong to DRAFT-028/029; this entry stays verification-only. |
-| **014** | ALL | **NEEDS UPDATE.** The title parenthetical already anticipates PE, but with Windows current this becomes a genuine three-way routing decision rather than an ELF/APK split. | Note it is the entry that makes `dirwatch`'s one-domain-per-invocation contract actually limiting (see 010). Should follow DRAFT-030, which hardens filename handling before routing widens the input surface. If detection cannot disambiguate a case on content alone, that is the condition under which issue #3's dropped `target_os_source` gets revisited — with evidence. |
+| **014** | ALL | **NEEDS UPDATE.** The title parenthetical already anticipates PE, but with Windows current this becomes a genuine three-way routing decision rather than an ELF/APK split. **Superseded 2026-08-09 (issue #3): there is no routing decision left.** | ~~Note it is the entry that makes `dirwatch`'s one-domain-per-invocation contract actually limiting (see 010).~~ The opposite held: issue #3 adopted that contract as the OS-selection mechanism (one watch directory per OS, chosen by the submitter), so detection no longer decides where a sample runs. **Retitle** from "Decide sample OS auto-detection contract" to a typing and identification contract. Remaining scope: `detected_type` as an advisory admission check (mismatch → `rejected`/`unsupported_type`), and the `type_identifiers` set — `imphash`/`telfhash`/APK signing identity — including whether Dom0 takes a `pefile`/LIEF dependency to compute them. Still should follow DRAFT-030. The `target_os_source` revisit condition survives unchanged. |
 | **015** | A | READY. | Must follow issue #4's path convention and **DRAFT-033's** error-handling/locking pattern rather than copying today's `clone-ubuntu.pl` verbatim — `CLAUDE.md` directs new scripts to be written from the Ubuntu implementation, which currently has its `flock` commented out (`:236-241`) and checks no exit status. |
 | **016** | A | READY. | **DRAFT-027 must land first** so Android is never built against the HTTP delivery path. `docs/checklists/android.md:1003` already prefers `injector -m writefile`; `:1877`'s "keep HTTP as an optional compatibility path" is superseded — no fallback is to be implemented. |
-| **017** | A | READY. | Consumes DRAFT-014. No change. |
-| **018** | ALL | READY. | Defer the MD5-vs-SHA-256 keying decision to issue #3, which now owns it; `docs/architecture/result-schema.md` §3 currently poses the same question independently. |
+| **017** | A | READY. | Consumes DRAFT-014. ~~No change.~~ **Rescoped 2026-08-09 (issue #3):** follows DRAFT-014's rescope — Android "classification" is now identification (package name, `version_code`, signing-certificate SHA-256, ABI), not a routing input. An unsupported ABI or a non-APK is an admission rejection, not a dispatch decision. |
+| **018** | ALL | READY. | ~~Defer the MD5-vs-SHA-256 keying decision to issue #3, which now owns it; `docs/architecture/result-schema.md` §3 currently poses the same question independently.~~ **Done 2026-08-09:** issue #3 decided it — result directories are named by `analysis_id`, SHA-256 is the sample key and index, MD5/SHA-1 are identifiers only — and `result-schema.md` §3 now defers. What remains for 018: the storage layout inside a result directory, the atomic-publication boundary in practice, and the `pefile`/LIEF/`telfhash` dependency decision that gates which `type_identifiers` are computed. |
 | **019** | ALL | READY. | No change. |
 | **020** | W | **PARTIALLY OBSOLETE, and now under-scoped.** | Drop the lifecycle-decision half — resolved by roadmap decision #3 (snapshot-restore is non-viable in this nested setup), though `docs/checklists/windows.md:41` still lists it as open (DOC-05). The remaining half is absorbed by **DRAFT-034**, which is the real Windows track head. Either close this entry into DRAFT-034 or keep it as the baseline-selection sub-task. |
 | **021** | — | **PARTIALLY OBSOLETE.** | The desk research is written (`docs/architecture/licensing.md`). Retitle to reflect that what remains is a real legal review, not a write-up. |
@@ -231,3 +274,21 @@ Dependency corrections to the table above, once these are drafted:
   before writing the second implementation of it).
 - **DRAFT-020** is superseded in substance by DRAFT-034.
 - **DRAFT-023** gains a dependency on DRAFT-034 for its Windows half.
+
+Added 2026-08-09 from issue #3:
+
+- **DRAFT-036 before any concurrent per-OS watcher**, and therefore before
+  DRAFT-035's launch arrangement and before DRAFT-015/016 are exercised
+  alongside Ubuntu. It is a correctness prerequisite (VLAN collision), not
+  a tuning task.
+- **DRAFT-014 and DRAFT-017** lose their routing premise and are rescoped
+  to identification; see the assessment table above.
+- **DRAFT-011** gains the shared model as its target output — it is the
+  first pipeline to emit `status.json`, and therefore the first real test
+  of whether the model survives contact with a running pipeline.
+
+### Recommended order, revised 2026-08-09
+
+The order block above predates issue #3. Insert DRAFT-036 immediately after
+issue #4 — it blocks the multi-OS arrangement everything downstream
+assumes — and DRAFT-035 after DRAFT-009. Issue #3 itself is now done.

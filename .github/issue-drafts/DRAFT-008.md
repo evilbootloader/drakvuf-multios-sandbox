@@ -1,6 +1,9 @@
 # DRAFT-008: Define OS-independent analysis job/result state model
 
-**Status:** Published — [issue #3](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/3)
+**Status:** Published — [issue #3](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/3);
+design complete 2026-08-09, see Resolution below. The GitHub issue has
+**not** been closed or edited — that needs explicit approval per
+`CONTRIBUTING.md`.
 **Area:** core
 **Milestone:** M0
 **Priority:** P0
@@ -123,25 +126,32 @@ Not applicable.
 
 # Acceptance criteria
 
-- [ ] Field list finalized and written into
+- [x] Field list finalized and written into
   `docs/architecture/analysis-pipeline.md`.
-- [ ] State machine finalized, reconciled with
+- [x] State machine finalized, reconciled with
   `docs/checklists/android.md` §7.3's proposal (update one or both so they
-  agree).
-- [ ] Recovery-after-interruption addressed explicitly, not deferred
-  silently.
-- [ ] Ubuntu's simpler existing model reconciled (documented as
-  intentionally superseded, not silently ignored).
-- [ ] The state machine is walked through against **all three** OS
+  agree). — Both: the shared model records what it adopted and changed, and
+  §4.1/§7.3 carry dated reconciliation annotations.
+- [x] Recovery-after-interruption addressed explicitly, not deferred
+  silently. — `status.json` as durable source of truth, persist-intent-
+  before-acting, and a startup sweep to `interrupted`.
+- [x] Ubuntu's simpler existing model reconciled (documented as
+  intentionally superseded, not silently ignored). — "What this supersedes",
+  with the reason it is superseded and the note that Ubuntu keeps its
+  current behaviour until DRAFT-011.
+- [x] The state machine is walked through against **all three** OS
   execution sequences — Ubuntu (stage + execute), Android (install →
   launch → stimulate), Windows (PE execution) — and any state that only
   fits one of them is identified as such. *(Added from
-  `project-assessment.md`; Windows is a current target.)*
-- [ ] Result keying (MD5 vs. SHA-256) is decided here, and
+  `project-assessment.md`; Windows is a current target.)* — The `state`
+  sequence is identical for all three; `stimulate` was the only OS-specific
+  element and is demoted to a `stage`.
+- [x] Result keying (MD5 vs. SHA-256) is decided here, and
   `docs/architecture/result-schema.md` §3 is updated to reference this
   decision instead of restating the open question. *(Added from
-  `project-assessment.md`.)*
-- [ ] `target_os_source` is absent from the finalized field list, with a
+  `project-assessment.md`.)* — Decided in favour of neither as a *directory*
+  key: SHA-256 is the sample key, `analysis_id` names the directory.
+- [x] `target_os_source` is absent from the finalized field list, with a
   one-line note recording the condition under which DRAFT-014 would
   revisit it. *(Reflects the draft's PLAN step 2 annotation.)*
 
@@ -168,3 +178,53 @@ a silent rewrite, per the "preserve evidence" rule).
 # Recovery / rollback
 
 Not applicable — design document only.
+
+# Resolution (2026-08-09)
+
+Design complete. The model lives in `docs/architecture/analysis-pipeline.md`
+under "Decided: OS-independent job/result state model"; `result-schema.md`
+§3 and `docs/checklists/android.md` §4.1/§7.3 were updated to agree with it.
+No script was changed and nothing was published to GitHub.
+
+Four decisions went beyond what this draft anticipated, all taken with the
+maintainer in session:
+
+1. **Target OS is selected by the submitter, via per-OS incoming
+   directories** — `/malware_incoming/{ubuntu,android,windows}`, one
+   `dirwatch` per OS. This makes the draft's `target_os_source` removal
+   structural rather than merely unnecessary: the OS token is never parsed
+   from attacker-influenced bytes, so there is no provenance to record and
+   nothing to sanitize. It also rescopes DRAFT-014 — file magic still runs,
+   but it reports rather than routes.
+2. **`analysis_id` names the result directory, not a hash.** The draft's
+   PLAN step 1 framed keying as MD5-vs-SHA-256 and expected SHA-256 to win.
+   Both are wrong for a *directory* name, because a hash cannot distinguish
+   two runs of the same sample. SHA-256 is the sample key and an index;
+   MD5 and SHA-1 are retained as identifiers for external cross-referencing.
+3. **Cancellation is part of the model.** The draft did not consider
+   user-initiated stops. `cancelled` is a terminal status distinct from
+   `failed`, and the design records a required property of any
+   implementation: a cancel flag must be checked at `dirwatch.c:425`,
+   because the timeout path it would otherwise reuse falls through to a
+   fresh-clone retry and would loop instead of stopping.
+4. **Clone admission must be resource-driven, not a fixed count.** Raised
+   in review of decision 1: three watchers with independent `<max clones>`
+   caps cannot lend capacity to each other, so any static split is either
+   wasteful or overcommitted. This also surfaced a blocking defect —
+   `slots_busy[]` is process-local *and* doubles as the VLAN allocator
+   (`dirwatch.c:161,297`), so per-OS watchers would collide on VLAN 1.
+   Both are recorded in the pipeline doc and tracked as DRAFT-036.
+
+**Correction to this draft's Context section.** It attributes the
+`received → classified → … → completed` state list to
+`docs/checklists/android.md` §7.3. That section contains no such list — it
+proposes a `status.json` with `status` and `stage` fields. The state list
+existed only in `analysis-pipeline.md`'s own candidate block. What §7.3 and
+§2.8 actually contributed is the status vocabulary and the `stage` concept,
+both of which the shared model adopted. The Context above is left as
+written; this note is the correction.
+
+Follow-on work created: **DRAFT-035** (job control channel — cancellation,
+the `dirwatch.c:425` retry guard, per-OS watch-directory admission) and
+**DRAFT-036** (resource-aware clone admission and host-global VLAN
+allocation). Rescoped: DRAFT-014, DRAFT-017, DRAFT-018.
