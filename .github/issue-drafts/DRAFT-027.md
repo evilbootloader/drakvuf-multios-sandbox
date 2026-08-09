@@ -23,12 +23,23 @@
 > `writefile` at all. DRAFT-016 would have inherited that command
 > verbatim. Corrected in place with the original preserved.
 >
-> **Still open:** PLAN step 3 (does `writefile` set the executable bit?)
-> is not answered by `--help`, so a separate `chmod` injection runs
-> unconditionally. The Apache-stopped acceptance run is runbook D5 in
-> `docs/runbooks/deploy-repo-relative-paths.md` and has not been
-> executed. Android and Windows delivery remain unimplemented, as this
-> draft always intended.
+> **Closed 2026-08-09 for Ubuntu.** The Apache-stopped acceptance run
+> (runbook D5) passed on Dom0 against commit `57713fc`, and D6 confirmed
+> delivery integrity with a `readfile` pull whose hash matched the Dom0
+> source exactly.
+>
+> **PLAN step 3 is answered: `writefile` leaves the file executable.**
+> `injector --help` does not say so, which is why the first implementation
+> issued a `chmod` injection unconditionally. Removing it on Dom0 and
+> confirming analyses still traced settled it; the step is gone from
+> `preconfig-ubuntu.sh`, so delivery is now two injections, not three.
+>
+> Android and Windows delivery remain unimplemented, as this draft always
+> intended — but they now inherit an execution-evidenced mechanism rather
+> than a candidate one. One caveat carried into
+> `docs/checklists/android.md`: the executable-bit finding is an Ubuntu
+> `execve` result, and an APK is installed rather than `execve`'d, so the
+> question there is readability by the installer, not the x bit.
 
 **Status:** Implemented for Ubuntu 2026-08-09 (via issue #4); not
 published as a separate issue

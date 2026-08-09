@@ -119,7 +119,22 @@ then calls back into the worker scripts in order —
 `clone_script → config_script → drakvuf_script → cleanup_script`, with
 `tcpdump_script` started on a separate thread. A 60s timeout guards the
 preconfig phase and a 180s timeout guards the drakvuf-trace phase; either
-timeout triggers `cleanup_script` and a fresh clone retry. Concurrency is
+timeout triggers `cleanup_script` and a fresh clone retry.
+
+> **The trace-phase headroom is about 55s, and it has been exceeded.**
+> `drakvuf-ubuntu.sh` does `sleep 5` then `drakvuf ... -t 120`, so a run
+> nominally costs ~125s against the 180s guard — and `-t 120` bounds
+> *tracing*, not the writing of `memdump`/`fileextractor` output that
+> follows, which has reached ~120 MB beside a 98 MB log for a single
+> sample. Two consecutive timeouts were observed on Dom0 2026-08-09, on
+> the first runs **after a reboot** — runs before it, and after those two,
+> were fine. Most likely the 2.1 GB saved image being read cold from disk
+> with an empty page cache, but that is a hypothesis and was not measured.
+> The retry path behaved correctly both times.
+> Neither `180` nor `120` is configurable today — the first is compiled
+> into `dirwatch.c`, the second is a literal in the trace script — so
+> tuning the headroom currently means editing code. See
+> `docs/runbooks/deploy-repo-relative-paths.md`, D5 observations. Concurrency is
 capped by a thread pool sized from the `<max clones>` argument (validated
 1–128 in upstream; this project's copy has not been independently
 re-verified against that bound).

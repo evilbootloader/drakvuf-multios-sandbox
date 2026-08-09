@@ -181,28 +181,20 @@ if [ $RC -ne 0 ]; then
     exit $RC
 fi
 
-# 2. Make it executable. drakvuf-ubuntu.sh runs the sample with
-#    `-m execproc`, which is execve with no guest shell (established in
-#    issue #2), and execve requires the x bit. Whether writefile already
-#    sets it is not stated in the injector help, so this runs
-#    unconditionally -- it is idempotent, and a missing x bit would
-#    surface later as an opaque empty trace.
+# No chmod step needed. drakvuf-ubuntu.sh runs the sample with
+# `-m execproc`, which is execve with no guest shell (issue #2), and
+# execve does require the x bit -- but writefile leaves the staged file
+# executable on its own, so nothing has to set it.
 #
-#    execproc rather than a shell: argv is passed as separate -f values,
-#    so there is no command string to escape out of.
-injector -r "$REKALL" -d "$DOMAIN" -i "$PID" -m execproc \
-    -e "/usr/bin/chmod" \
-    -f "+x" \
-    -f "$GUEST_SAMPLE" \
-    1>>"$LOG" 2>&1
-RC=$?
+# The injector help does not say that. It was established on Dom0
+# 2026-08-09, by removing a chmod injection that had been there and
+# confirming runs still traced
+# (docs/runbooks/deploy-repo-relative-paths.md, D5).
+#
+# If a sample ever traces empty with a successful WriteFile in this log,
+# check the staged file's mode first -- that is what this removal assumed.
 
-if [ $RC -ne 0 ]; then
-    echo "preconfig: chmod injection failed (rc=$RC)" >>"$LOG"
-    exit $RC
-fi
-
-# 3. Configure the clone's network for the analysis itself. Separate from
+# 2. Configure the clone's network for the analysis itself. Separate from
 #    delivery now, where it used to be one `&&` chain with it. No
 #    filename is interpolated here.
 #

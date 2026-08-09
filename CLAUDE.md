@@ -78,9 +78,10 @@ subfolders):
   `dirwatch` with a fixed 3-argument contract.
 - `preconfig-ubuntu.sh` — stages the sample into the guest via
   `injector -m writefile` (`-B` Dom0 source, `-e` guest destination), then
-  `chmod +x` via `execproc`, then configures the clone's network. Three
-  separate injections; delivery deliberately runs first and does not need
-  guest networking.
+  configures the clone's network. Two separate injections; delivery
+  deliberately runs first and does not need guest networking. No `chmod`
+  step: `writefile` leaves the file executable, evidenced on Dom0
+  2026-08-09.
 - `drakvuf-ubuntu.sh` — runs the DRAKVUF trace (`syscalls`, `filetracer`, `fileextractor`,
   `memdump` 120s timeout, `--memdump-dir`) and kills the per-VLAN `tcpdump`
   process afterward. Executes the staged sample at
@@ -142,13 +143,19 @@ and repo and host no longer diverge anywhere. The earlier
 Ubuntu analysis runs do execute their samples, which is now
 execution-evidenced (`docs/runbooks/verify-user-placeholder.md`).
 
-**That parity ended deliberately on 2026-08-09 (issue #4).** `automation/`
-is now ahead of the deployed Dom0 host, which still runs the old
-`/home/user/drakvuf-tools` copies with HTTP delivery. Re-syncing is a
-deployment, not a copy: follow
-`docs/runbooks/deploy-repo-relative-paths.md`, which has not been executed
-yet. Until it has, do not treat the repo as describing what the host is
-doing.
+**Parity is now maintained by a checkout, not by copying (2026-08-09,
+issue #4).** Dom0 runs a clone of this repository at
+`/root/sandbox_project`, pulled over a read-only deploy key, so the
+question issue #2 needed a whole runbook to answer is now one command:
+
+    git -C /root/sandbox_project log -1        # what is deployed
+    git -C /root/sandbox_project status --porcelain   # local drift, expect empty
+
+The old `/home/user/drakvuf-tools` checkout is renamed to
+`…​.retired-issue4` and kept as the rollback path. Do not edit deployed
+scripts in place — that is how the drift issue #2 diagnosed happened.
+Change them here, push, and pull on Dom0, never while an analysis is in
+flight (`dirwatch` re-reads the worker scripts per sample).
 
 Known issues in the current Ubuntu scripts (do not silently fix — flag and
 confirm before changing):

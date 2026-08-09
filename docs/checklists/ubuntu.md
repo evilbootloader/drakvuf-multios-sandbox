@@ -28,7 +28,8 @@
 | Golden Xen config | `misc/ubuntu.cfg` (tracked in this repo; renamed from `linux.cfg` in issue #1) |
 | Sandbox Xen config | `misc/ubuntu_sandbox.cfg` (tracked in this repo; renamed from `linux_sandbox.cfg` in issue #1) |
 | Current phase | M1 — Ubuntu regression baseline (see roadmap) |
-| Current blocker | None. The `<USER>` question and the repo↔Dom0 drift it uncovered were both resolved 2026-08-08 (issue #2); `automation/` now mirrors the tested production host and issue #1's host-side rename is done. Ubuntu is a usable M1 regression baseline |
+| Current blocker | None. Issue #4 deployed and verified end to end on Dom0 2026-08-09 (commit `57713fc`): the pipeline runs from a checkout at any path and delivers samples by injection with `apache2` stopped. Ubuntu is a usable M1 regression baseline |
+| Deployed on Dom0 | `/root/sandbox_project`, branch `issue-4-paths-and-delivery`, via a read-only deploy key. `git -C /root/sandbox_project log -1` is now the authoritative answer to "what is running?" |
 
 ### Status legend
 
@@ -73,10 +74,66 @@ execution. None of the checkboxes below represent execution evidence.
   inter-VLAN DROP), brings the bridge up with `ip link set xenbr1 up`.
   *(Updated 2026-08-08 to the production copy, which replaced the
   deprecated `ifconfig xenbr1 up`.)*
-- [x] `automation/run_analysis-ubuntu.sh` exists — brings `xenbr1` up, runs
-  `network-setup.sh 2`, launches `dirwatch` with the arguments above.
+- [x] `automation/run_analysis-ubuntu.sh` exists — sources
+  `pipeline-ubuntu.env`, pre-flight checks the `.cfg`/profile/state,
+  creates the per-OS malware directories, brings `xenbr1` up, runs
+  `network-setup.sh`, launches `dirwatch` with the arguments above.
+  *(Updated 2026-08-09, issue #4.)*
+- [x] `automation/pipeline-ubuntu.env` exists — the sourced per-OS config
+  every other script reads. *(Added 2026-08-09, issue #4.)*
 - [x] `misc/ubuntu_sandbox.cfg` exists — Xen HVM config for `ubuntu_sandbox`
   (2048MB/1vcpu, `bridge=xenbr1`, `altp2m=2`).
+
+## Execution evidence — repo-relative paths and injection delivery (2026-08-09)
+
+**Deployed and verified end to end on Dom0**, commit `57713fc`, full
+transcript in `docs/runbooks/deploy-repo-relative-paths.md`. This is
+execution evidence, not source reading.
+
+- [x] **The pipeline runs from a checkout at any path.** Launched from
+  `/tmp` against `/root/sandbox_project`; behaved identically to launching
+  from inside the checkout. Closes issue #4's core claim.
+- [x] **Sample delivery is host-to-guest injection, with Apache stopped.**
+  `preconfig.log` for the benign fixture (sha256 `81cd9ba0…`, md5
+  `107529d2…`):
+
+  ```text
+  [INJECT] METHOD:WriteFile STATUS:SUCCESS PID:1415
+           FILE:"/malware_processing/ubuntu/benign"
+  [INJECT] METHOD:ExecProc  STATUS:SUCCESS PID:1415 FILE:"/usr/bin/sh"
+           ARGUMENTS:"-c sudo ip addr flush dev eth0 && ... &&
+           echo 'nameserver 1.1.1.1' | sudo tee /etc/resolv.conf"
+  ```
+
+  followed by an 88,812-line `drakvuf.log`. `apache2` was stopped for the
+  duration, which is what proves the dependency is gone rather than idle.
+- [x] **Delivery integrity confirmed by `readfile`**, the documented
+  inverse of `writefile`: the file pulled back out of the guest hashed
+  `81cd9ba0d4802395d3450d3746a1dad1a24bfa46bbb04d03b094c66f82be8d08`,
+  identical to the Dom0 source. That injection was a one-off for the
+  runbook and is deliberately **not** in `preconfig-ubuntu.sh` — it costs
+  a round trip per sample.
+- [x] **`writefile` leaves the staged file executable.** `injector --help`
+  does not say either way, so the first implementation issued a `chmod`
+  injection. Removing it and confirming analyses still trace settled it;
+  the step is gone from the repo. Answers DRAFT-027's PLAN step 3.
+- [x] **Guest DNS resolves.** `nameserver 1.1.1.1` in place of the
+  gateway address that never had a resolver behind it.
+
+Three things the same run surfaced that are **not** fixed:
+
+- `network-setup.sh` is not idempotent — the second launch produced
+  `RTNETLINK answers: File exists` and `Error: ipv4: Address already
+  assigned`. First execution evidence for **DRAFT-028**, previously
+  reasoned from source only.
+- A running clone showed `maxmem` unlimited in `xl top`, though all four
+  `misc/*.cfg` set `maxmem` equal to `memory`. Undiagnosed, and a
+  precondition for **DRAFT-036**'s memory-based admission.
+- `drakvuf-ubuntu.sh` hit `dirwatch`'s 180s trace guard on the first two
+  runs **after a Dom0 reboot**, then settled; runs before the reboot were
+  fine. Probably the 2.1 GB saved image read cold from disk, but
+  unmeasured. The retry path worked correctly both times. See the pipeline
+  doc's headroom note.
 
 ## Known issues
 

@@ -505,12 +505,44 @@ and both are recorded where they were found rather than deferred:
   equal to `$PWD`. Resolution uses `$0`. The shebang placement itself is
   still DRAFT-031's to fix.
 
-## Acceptance criteria still open
+## DEPLOY completed 2026-08-09 — all acceptance criteria met
 
-- The out-of-repo location-independence test, and the Apache-stopped
-  delivery run — both require Dom0 (runbook D4/D5).
-- Whether `writefile` sets the executable bit is still unknown from
-  `--help`; a `chmod` injection runs unconditionally until D5 answers it.
-- Guest-side vs Dom0-side SHA-256 comparison needs a method decision
-  (runbook D6) — `cleanup.sh` destroys the clone before the guest copy
-  can be read.
+The runbook was executed on Dom0 the same day, against commit `57713fc`.
+D1–D6 passed; evidence is in
+`docs/runbooks/deploy-repo-relative-paths.md`, summarized in
+`docs/checklists/ubuntu.md`.
+
+- Location independence: launched from `/tmp`, behaved identically.
+- Delivery: `WriteFile STATUS:SUCCESS` with `apache2` stopped, 88,812-line
+  trace.
+- Integrity: `readfile` pull hashed identically to the Dom0 source.
+- `writefile` **does** leave the file executable — the `chmod` injection
+  was removed, so delivery is two injections rather than three.
+
+Dom0 now runs a checkout of this repository at `/root/sandbox_project`
+over a read-only deploy key, which makes `git log -1` / `git status
+--porcelain` the permanent answer to the repo↔host question that issue #2
+needed a runbook to settle once.
+
+## Three findings the deployment surfaced, none caused by this issue
+
+Recorded because this is where they were seen; all are pre-existing.
+
+- **`network-setup.sh` is not idempotent** — `RTNETLINK answers: File
+  exists`, `Error: ipv4: Address already assigned` on the second launch.
+  First execution evidence for **DRAFT-028**, which had been reasoned from
+  source only.
+- **A clone showed `maxmem` unlimited in `xl top`**, though all four
+  `misc/*.cfg` set `maxmem` equal to `memory`. Undiagnosed. Recorded
+  against **DRAFT-036** as a precondition — memory-based admission cannot
+  work if a clone's ceiling is unbounded at runtime.
+- **Two trace-phase timeouts on the first runs after a Dom0 reboot**, then
+  none; runs before the reboot were fine. Probably the 2.1 GB saved image
+  read cold from disk, but unmeasured — `drop_caches` would falsify it
+  cheaply. The retry path worked correctly. `dirwatch`'s 180s guard leaves
+  ~55s over `drakvuf-ubuntu.sh`'s `sleep 5` + `-t 120`, and neither number
+  is configurable today.
+
+Follow-up not blocking this issue: retiring `/home/user/drakvuf-tools`
+broke `misc/android.cfg`'s install-cdrom path, which pointed at an ISO in
+that directory. Annotated in the config; no analysis is affected.

@@ -1099,9 +1099,12 @@ injector -h 2>&1 | tee -a /tmp/injector-help.txt
 > This is why the section above says to check the installed help first.
 > It had not been checked when the candidate was written.
 
-Validated argument shape (from the captured help above; the *invocation*
-still requires an end-to-end Dom0 run to confirm — see
-`docs/runbooks/deploy-repo-relative-paths.md`):
+Validated argument shape — and as of 2026-08-09 the invocation itself is
+**execution-evidenced**, not just help-evidenced: the Ubuntu pipeline ran
+this exact form end to end on Dom0 with `apache2` stopped, and a `readfile`
+pull confirmed the delivered bytes hashed identically to the Dom0 source
+(`docs/runbooks/deploy-repo-relative-paths.md`, D5/D6). Android inherits a
+working mechanism rather than a candidate one:
 
 ```bash
 injector \
@@ -1119,6 +1122,15 @@ destination contains no component derived from the submitted filename —
 `$SHA256` is computed Dom0-side from the file's contents. The Ubuntu
 implementation of exactly this shape is in
 `automation/preconfig-ubuntu.sh`.
+
+**No `chmod` step is needed after it.** `writefile` leaves the staged file
+executable on its own — established on Dom0 2026-08-09 by removing a
+`chmod` injection and confirming analyses still traced. `injector --help`
+does not state this either way, which is why the Ubuntu implementation
+carried the extra injection until it was tested. Verify it holds on
+Android before relying on it: the Ubuntu guest is `execve`-based, and an
+APK is installed rather than `execve`'d, so the relevant question there is
+whether the file lands readable by the installer, not executable.
 
 ### Candidate guest preparation command
 
