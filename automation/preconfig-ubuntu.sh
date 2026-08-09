@@ -102,6 +102,38 @@
 #                                                                        #
 #************************************************************************#
 #!/bin/bash
+#
+# Stages one sample into a booted analysis clone and configures its
+# network. Called by dirwatch with a fixed 7-argument list.
+#
+# Delivery is host-to-guest injection. It used to be a guest-side fetch
+# from a Dom0 web server, removed outright as of issue #4 / DRAFT-027 --
+# no fallback branch, no flag, no configuration switch. The mechanism and
+# the four reasons it went are recorded once, in
+# docs/architecture/analysis-pipeline.md ("Historical: HTTP delivery via
+# Apache"), rather than restated here.
+
+# $0, not ${BASH_SOURCE[0]}, and this is not a style choice. The DRAKVUF
+# license header above sits BEFORE the shebang, so `#!/bin/bash` is on
+# line 104 where the kernel never looks. execv() therefore fails ENOEXEC
+# and GLib's g_spawn_* -- how dirwatch invokes this script -- falls back
+# to /bin/sh, which is dash on Ubuntu. Under dash `${BASH_SOURCE[0]}` is
+# a "Bad substitution" that dash reports and then CONTINUES past, leaving
+# the variable empty and SCRIPT_DIR silently equal to $PWD: exactly the
+# working-directory dependency issue #4 exists to remove. $0 is correct
+# under both shells. Keep the rest of this file POSIX too.
+SCRIPT_DIR="$(
+    cd -- "$(dirname -- "$0")" &&
+    pwd
+)"
+
+REPO_ROOT="$(
+    cd -- "$SCRIPT_DIR/.." &&
+    pwd
+)"
+
+# shellcheck source=automation/pipeline-ubuntu.env
+. "$SCRIPT_DIR/pipeline-ubuntu.env"
 
 ARGC=$#
 if [ $ARGC -le 6 ]; then
@@ -115,13 +147,67 @@ VLAN=$4
 RUNFOLDER=$5
 RUNFILE=$6
 OUTPUTFOLDER=$7
-MD5=$(md5sum $RUNFOLDER/$RUNFILE | awk -F" " '{print $1}')
-USER="carlos"
-CMD="/usr/bin/sh"
-ARG1="-c" 
-ARG2="sudo ip addr flush dev eth0 && sudo ip addr add 172.16.$VLAN.2/24 dev eth0 && sudo ip route replace default via 172.16.$VLAN.1 dev eth0 && echo 'nameserver 172.16.$VLAN.1' | sudo tee /etc/resolv.conf && wget 'http://172.16.$VLAN.1/$RUNFILE' -O '/home/$USER/Desktop/test' && chmod +x '/home/$USER/Desktop/test'"
 
-mkdir -p $OUTPUTFOLDER/$MD5 1>/dev/null 2>&1
-injector -r $REKALL -d $DOMAIN -i $PID -m execproc -e "$CMD" -f "$ARG1" -f "$ARG2" 1>$OUTPUTFOLDER/$MD5/preconfig.log 2>&1
+# MD5 keys the result directory. Unchanged -- issue #3 decided results
+# will move to an analysis_id, but implementing that is DRAFT-018, not
+# this change.
+MD5=$(md5sum -- "$RUNFOLDER/$RUNFILE" | awk -F" " '{print $1}')
+
+# SHA-256 names the file inside the guest. The submitted filename is
+# untrusted and is now interpolated into no command string at all, guest
+# or host -- which is what removes the quote-escape hazard the old
+# single-quoted download URL carried (DRAKVUF-02/03 for this script).
+SHA256=$(sha256sum -- "$RUNFOLDER/$RUNFILE" | awk -F" " '{print $1}')
+
+GUEST_SAMPLE="$GUEST_STAGING_DIR/$SHA256"
+
+LOG="$OUTPUTFOLDER/$MD5/preconfig.log"
+mkdir -p "$OUTPUTFOLDER/$MD5" 1>/dev/null 2>&1
+
+# 1. Deliver. Deliberately first: delivery no longer depends on guest
+#    networking, and running it before the network exists is what keeps
+#    an `offline` analysis mode possible (docs/architecture/networking.md).
+#    -B is the Dom0 source, -e the guest destination -- confirmed from the
+#    installed build's own help, captured on Dom0 2026-08-08 and recorded
+#    at docs/runbooks/verify-user-placeholder.md:155.
+injector -r "$REKALL" -d "$DOMAIN" -i "$PID" -m writefile \
+    -B "$RUNFOLDER/$RUNFILE" \
+    -e "$GUEST_SAMPLE" \
+    1>"$LOG" 2>&1
+RC=$?
+
+if [ $RC -ne 0 ]; then
+    echo "preconfig: writefile failed (rc=$RC); sample not staged" >>"$LOG"
+    exit $RC
+fi
+
+# No chmod step needed. drakvuf-ubuntu.sh runs the sample with
+# `-m execproc`, which is execve with no guest shell (issue #2), and
+# execve does require the x bit -- but writefile leaves the staged file
+# executable on its own, so nothing has to set it.
+#
+# The injector help does not say that. It was established on Dom0
+# 2026-08-09, by removing a chmod injection that had been there and
+# confirming runs still traced
+# (docs/runbooks/deploy-repo-relative-paths.md, D5).
+#
+# If a sample ever traces empty with a successful WriteFile in this log,
+# check the staged file's mode first -- that is what this removal assumed.
+
+# 2. Configure the clone's network for the analysis itself. Separate from
+#    delivery now, where it used to be one `&&` chain with it. No
+#    filename is interpolated here.
+#
+#    The nameserver is GUEST_NAMESERVER, not the gateway. Nothing has
+#    ever listened on port 53 at 172.16.<vlan>.1, so guest name
+#    resolution failed on every run before this change -- see the
+#    reasoning and the containment caveats in pipeline-ubuntu.env.
+NETCFG="sudo ip addr flush dev eth0 && sudo ip addr add 172.16.$VLAN.2/24 dev eth0 && sudo ip route replace default via 172.16.$VLAN.1 dev eth0 && echo 'nameserver $GUEST_NAMESERVER' | sudo tee /etc/resolv.conf"
+
+injector -r "$REKALL" -d "$DOMAIN" -i "$PID" -m execproc \
+    -e "/usr/bin/sh" \
+    -f "-c" \
+    -f "$NETCFG" \
+    1>>"$LOG" 2>&1
 
 exit $?;

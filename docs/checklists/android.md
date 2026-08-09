@@ -1067,17 +1067,70 @@ injector -h 2>&1 | tee -a /tmp/injector-help.txt
 
 ### Candidate host-to-guest transfer
 
+> **Corrected 2026-08-09 (issue #4 / DRAFT-027). The original candidate
+> below had the arguments wrong.** It is kept verbatim because it is what
+> the Android delivery design said, and `preconfig-android.sh`
+> (DRAFT-016) would have inherited it:
+>
+> ```bash
+> # WRONG -- do not use. Superseded by the validated form further down.
+> injector -r "$REKALL" -d "$DOMAIN" -i "$PID" -m writefile \
+>     -e "$RUNFOLDER/$RUNFILE" \
+>     -f "/data/local/tmp/drakvuf/$SHA256/sample.bin" \
+>     > "$RESULT_DIR/writefile.log" 2>&1
+> ```
+>
+> Two defects, both settled by the `injector --help` capture taken on Dom0
+> 2026-08-08 and recorded at
+> `docs/runbooks/verify-user-placeholder.md:154-157`:
+>
+> ```text
+> writefile - push a file (specified by host path -B) to the VM and store it on guest path specified by -e
+> -f <args for execproc>    [BOTH] - Arguments specified for exec to include (requires -m execproc or -m shellexec)
+> ```
+>
+> 1. `-e` is the **guest destination**, not the host source; the host
+>    source is `-B`. The candidate has them swapped, so it would have
+>    tried to write the guest file *to* the Dom0 sample path.
+> 2. `-f` is accepted only with `-m execproc` or `-m shellexec`. Passing
+>    it with `-m writefile` supplies the destination through an option
+>    that mode does not read.
+>
+> This is why the section above says to check the installed help first.
+> It had not been checked when the candidate was written.
+
+Validated argument shape — and as of 2026-08-09 the invocation itself is
+**execution-evidenced**, not just help-evidenced: the Ubuntu pipeline ran
+this exact form end to end on Dom0 with `apache2` stopped, and a `readfile`
+pull confirmed the delivered bytes hashed identically to the Dom0 source
+(`docs/runbooks/deploy-repo-relative-paths.md`, D5/D6). Android inherits a
+working mechanism rather than a candidate one:
+
 ```bash
-# Replace option names only after verifying local injector help/source.
 injector \
     -r "$REKALL" \
     -d "$DOMAIN" \
     -i "$PID" \
     -m writefile \
-    -e "$RUNFOLDER/$RUNFILE" \
-    -f "/data/local/tmp/drakvuf/$SHA256/sample.bin" \
+    -B "$RUNFOLDER/$RUNFILE" \
+    -e "/data/local/tmp/drakvuf/$SHA256/sample.bin" \
     > "$RESULT_DIR/writefile.log" 2>&1
 ```
+
+`-B` takes the Dom0-side source and `-e` the guest-side destination. The
+destination contains no component derived from the submitted filename —
+`$SHA256` is computed Dom0-side from the file's contents. The Ubuntu
+implementation of exactly this shape is in
+`automation/preconfig-ubuntu.sh`.
+
+**No `chmod` step is needed after it.** `writefile` leaves the staged file
+executable on its own — established on Dom0 2026-08-09 by removing a
+`chmod` injection and confirming analyses still traced. `injector --help`
+does not state this either way, which is why the Ubuntu implementation
+carried the extra injection until it was tested. Verify it holds on
+Android before relying on it: the Ubuntu guest is `execve`-based, and an
+APK is installed rather than `execve`'d, so the relevant question there is
+whether the file lands readable by the installer, not executable.
 
 ### Candidate guest preparation command
 

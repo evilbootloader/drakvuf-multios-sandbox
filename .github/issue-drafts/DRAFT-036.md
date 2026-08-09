@@ -196,6 +196,27 @@ Deliberately thin below step 2 — the mechanism depends on DRAFT-010.
    admit if    required <= available
    ```
 
+   > **Precondition, observed on Dom0 2026-08-09 during issue #4's
+   > deployment: a running analysis clone showed `maxmem` unlimited in
+   > `xl top`.** This rule assumes a clone's consumption is bounded by its
+   > config, and all four `misc/*.cfg` do set `maxmem` equal to `memory`
+   > (2048 for the sandbox templates). If the *effective* ceiling is
+   > unbounded, `required` above is a guess rather than a bound, and a
+   > clone can grow into memory the controller had reserved for another —
+   > which converts this from an admission rule into a hint.
+   >
+   > Likely cause is how `xl restore` reconciles the passed config against
+   > the settings inside the saved image; `clone-ubuntu.pl` copies
+   > `maxmem`/`memory` through verbatim and rewrites only `name=`, `vif=`
+   > and `disk=`. **Not diagnosed** — needs `xl list -l <clone>` compared
+   > against the generated `/tmp/<clone>.config`.
+   >
+   > Settle this before implementing step 3. If clones cannot be capped,
+   > this issue needs a different mechanism (a hard `maxmem` set on the
+   > clone after restore, or admission against a pessimistic ceiling)
+   > rather than a more careful version of the same arithmetic. See
+   > `docs/runbooks/deploy-repo-relative-paths.md`, D5 observations.
+
    Dom0 is pinned at `dom0_mem=4096M,max:4096M`
    (`docs/drakvuf-on-xen-nested-within-proxmox.md:280`) and does not
    balloon, so the reserve covers Xen's own allocation and the restore

@@ -1,6 +1,48 @@
 # DRAFT-027: Replace HTTP/Apache sample delivery with direct guest injection
 
-**Status:** Drafted, not published
+> **Resolution 2026-08-09 — implemented for Ubuntu as part of issue #4,
+> never published as its own issue.** Folded in because issue #4's per-OS
+> `/malware_processing/ubuntu` change would otherwise have broken HTTP
+> delivery (Apache's `DocumentRoot` is `/malware_processing`); removing
+> the dependency was cleaner than working around it.
+>
+> **PLAN steps 1–2 required no new Dom0 work.** They ask for an
+> `injector --help` capture to settle whether `writefile` exists and what
+> its arguments are. That capture was already taken during issue #2 and
+> is recorded at `docs/runbooks/verify-user-placeholder.md:154-157`:
+>
+> ```text
+> writefile - push a file (specified by host path -B) to the VM and store it on guest path specified by -e
+> -f <args for execproc>    [BOTH] - ... (requires -m execproc or -m shellexec)
+> ```
+>
+> This **refutes the candidate command** at
+> `docs/checklists/android.md:1068-1079`, which used `-e` for the host
+> source and `-f` for the guest destination. Both are wrong: `-e` is the
+> guest destination, `-B` is the host source, and `-f` is not read by
+> `writefile` at all. DRAFT-016 would have inherited that command
+> verbatim. Corrected in place with the original preserved.
+>
+> **Closed 2026-08-09 for Ubuntu.** The Apache-stopped acceptance run
+> (runbook D5) passed on Dom0 against commit `57713fc`, and D6 confirmed
+> delivery integrity with a `readfile` pull whose hash matched the Dom0
+> source exactly.
+>
+> **PLAN step 3 is answered: `writefile` leaves the file executable.**
+> `injector --help` does not say so, which is why the first implementation
+> issued a `chmod` injection unconditionally. Removing it on Dom0 and
+> confirming analyses still traced settled it; the step is gone from
+> `preconfig-ubuntu.sh`, so delivery is now two injections, not three.
+>
+> Android and Windows delivery remain unimplemented, as this draft always
+> intended — but they now inherit an execution-evidenced mechanism rather
+> than a candidate one. One caveat carried into
+> `docs/checklists/android.md`: the executable-bit finding is an Ubuntu
+> `execve` result, and an APK is installed rather than `execve`'d, so the
+> question there is readability by the installer, not the x bit.
+
+**Status:** Implemented for Ubuntu 2026-08-09 (via issue #4); not
+published as a separate issue
 **Area:** core / platform (affects Ubuntu, Android, Windows)
 **Milestone:** M1 (decision) → M2/M3 (per-OS implementation)
 **Priority:** P0

@@ -601,6 +601,32 @@ Do not skip `autogen.sh` after changing `Makefile.am`; otherwise the generated M
 
 #### Create the analysis directories
 
+> **Annotation added 2026-08-09 (issue #4). The Apache configuration in
+> the rest of this subsection is now HISTORICAL and should not be
+> followed on a new install.** This guide is preserved as imported source
+> material; the notes below record where current practice diverges, per
+> `CONTRIBUTING.md`'s evidence-preservation rule.
+>
+> 1. **The three directories now have a per-OS level below them:**
+>    `/malware_incoming/{ubuntu,android,windows}`, and likewise for
+>    `/malware_processing` and `/malware_finished`. Which directory a
+>    sample lands in *is* how its target OS is chosen — one `dirwatch`
+>    instance per OS (issue #3). `automation/run_analysis-<os>.sh`
+>    creates its own three subdirectories at launch, so only the three
+>    top-level `mkdir`s below are still done by hand.
+> 2. **`chown www-data` and the Apache stanzas are obsolete.** The
+>    pipeline no longer serves samples over HTTP; delivery is
+>    `injector -m writefile` directly from Dom0 (issue #4 / DRAFT-027).
+>    `/malware_processing` needs no web server and no `www-data`
+>    ownership. Apache being reachable from every clone, with every
+>    in-flight sample under its `DocumentRoot`, is precisely why the
+>    mechanism was removed — see
+>    `docs/architecture/analysis-pipeline.md`, "Historical: HTTP delivery
+>    via Apache".
+> 3. Apache may still be installed for unrelated operator convenience.
+>    Retiring the service is a separate operational decision, not part of
+>    issue #4.
+
 ```bash
 # Run on L1: Virtual machine running Xen, Dom0 and DRAKVUF
 
@@ -645,6 +671,34 @@ DocumentRoot /malware_processing
 ```
 
 ### Setup automation scripts
+
+> **Annotation added 2026-08-09 (issue #4). Superseded — do not follow
+> the steps in this subsection.** They describe editing several scripts
+> in place inside a `~/drakvuf-tools` checkout. Current practice:
+>
+> - Clone this repository to **`/root/sandbox_project`**. The scripts
+>   resolve every repository-owned asset from their own location, so the
+>   checkout works at any path; `/root/sandbox_project` is simply the
+>   documented one.
+> - **Edit one file, not four:** `automation/pipeline-ubuntu.env`. It
+>   holds the injection PID, clone count, sandbox domain, guest user and
+>   staging directory, resolver, and the paths to the `.cfg`, the LibVMI
+>   profile and the saved state. `run_analysis-ubuntu.sh`,
+>   `preconfig-ubuntu.sh` and `drakvuf-ubuntu.sh` all source it.
+> - `network-setup.sh` no longer needs invoking by hand — the launcher
+>   runs it with the clone count from that same file, so the two cannot
+>   be raised independently.
+> - `systemctl restart apache2` is obsolete; see the annotation on
+>   "Create the analysis directories" above.
+> - `linux_sandbox.cfg` was renamed to `misc/ubuntu_sandbox.cfg` in issue
+>   #1, and the LibVMI profiles moved to `profiles/` in issue #4 (see
+>   `profiles/README.md` — they are no longer git-tracked).
+> - The `<USER>` substitution step is gone. That placeholder was a
+>   repository-only defect, never a production one (issue #2); the guest
+>   user is now `GUEST_USER` in the env file.
+>
+> The current end-to-end procedure is
+> `docs/runbooks/deploy-repo-relative-paths.md`.
 
 ```bash
 # Run on L1: Virtual machine running Xen, Dom0 and DRAKVUF

@@ -349,14 +349,32 @@ exact chosen mechanism here once built.
 ## Repository installation
 
 Each Level 2 job checks out the PR branch via `actions/checkout` into the
-runner's work directory inside the freshly-reset L1 VM. This does not yet
-match the canonical `/root/sandbox_project` path DRAFT-025 (issue #4,
-published but not yet CREATEd/DEPLOYED) defines — until that lands, jobs
-must derive paths from `$GITHUB_WORKSPACE` rather than assuming
-`/root/sandbox_project`, and the stopgap `dirwatch` invocation (see
-"Ubuntu pipeline" sub-stage) must do the same rather than relying on
-`run_analysis-ubuntu.sh`'s current hard-coded `/home/user/drakvuf-tools/...`
-paths.
+runner's work directory inside the freshly-reset L1 VM.
+
+**Resolved 2026-08-09 (issue #4).** The checkout no longer has to sit at
+any particular path. Every script resolves its own location and derives
+repository-owned assets from it, so `actions/checkout`'s work directory
+works unchanged and the `$GITHUB_WORKSPACE` stopgap described here is no
+longer needed — jobs can invoke `automation/run_analysis-ubuntu.sh`
+directly instead of reconstructing the `dirwatch` command line. That was
+the point of standardizing on `/root/sandbox_project`: it is the
+documented location, not a required one.
+
+Two things a job must still stage into the checkout, because neither is
+git-tracked:
+
+- `profiles/linux.json` (and `profiles/android.json` when the Android
+  pipeline runs) — see `profiles/README.md`. Cache these in the base
+  snapshot and copy or symlink them in; regenerating `dwarf2json` output
+  per job would dominate the runtime.
+- `state/<origin>.bak` — produced by the base snapshot's sandbox-VM
+  creation step, which already ends in `xl save`. Write it to
+  `state/<origin>.bak` inside the checkout rather than to
+  `/home/user/Documents/`.
+
+Both paths come from `automation/pipeline-ubuntu.env`, so a job that
+needs to override them sets `KERNEL_PROFILE` / `SAVED_STATE` rather than
+patching scripts.
 
 ## Test stages
 
@@ -400,7 +418,10 @@ Unchanged from the GitHub-hosted section above. Trigger: `pull_request`
   3. **Sandbox VM creation, per touched OS family, from the pre-existing
      golden LV** — `lvcreate` + `dd`-clone from `vg-root/ubuntu` or
      `vg-root/android` (already installed, part of the base snapshot),
-     `apt install screen apache2 tcpdump vlan openvswitch-switch`,
+     `apt install screen tcpdump vlan openvswitch-switch`
+     (**`apache2` dropped 2026-08-09, issue #4** — sample delivery is
+     `injector -m writefile` and the pipeline no longer depends on a web
+     server; see `docs/architecture/analysis-pipeline.md`),
      `network-setup.sh <n>`, `xl create <os>_sandbox.cfg`, install the
      long-lived injection-anchor process inside the guest, record its
      PID/TGID, `xl save` to capture the `.bak` state — the documented
