@@ -21,20 +21,98 @@ dirwatch <loop(0)|poll(1)> <origin domain> <domain config> <kernel json> \
   <cleanup_script> <tcpdump_script>
 ```
 
-`automation/run_analysis-ubuntu.sh` invokes it with:
+`automation/run_analysis-ubuntu.sh` invokes it with values resolved from
+its own location — `$REPO_ROOT` is the checkout, wherever that is:
 
 ```
-dirwatch 1 ubuntu_sandbox /home/user/drakvuf-tools/ubuntu_sandbox.cfg \
-  /root/linux.json 1415 /malware_incoming /malware_processing \
-  /malware_finished 2 <clone-ubuntu.pl> <preconfig-ubuntu.sh> \
-  <drakvuf-ubuntu.sh> <cleanup.sh> <tcpdump.sh>
+dirwatch 1 ubuntu_sandbox $REPO_ROOT/misc/ubuntu_sandbox.cfg \
+  $REPO_ROOT/profiles/linux.json 1415 \
+  /malware_incoming/ubuntu /malware_processing/ubuntu \
+  /malware_finished/ubuntu 2 \
+  $REPO_ROOT/automation/{clone-ubuntu.pl,preconfig-ubuntu.sh,\
+  drakvuf-ubuntu.sh,cleanup.sh,tcpdump.sh}
 ```
 
-Note the deployment paths (`/home/user/drakvuf-tools/...`) don't match this
-repo's `automation/`/`misc/` directory names — see the Ubuntu checklist's
-"known issues" section. The domain config path in that invocation
-(`ubuntu_sandbox.cfg`) corresponds to what's tracked here as
-`misc/ubuntu_sandbox.cfg` (renamed from `linux_sandbox.cfg` in issue #1).
+All fourteen values come from `automation/pipeline-ubuntu.env`, a sourced
+config file rather than literals in the launcher, so a second OS pipeline
+is a copy of that one file plus its own `run_analysis-<os>.sh`. The
+15-argument CLI contract itself is unchanged — issue #4 changed only the
+values.
+
+Until issue #4 the first four of those were hard-coded deployment paths
+(`/home/user/drakvuf-tools/...`, `/root/linux.json`) that matched neither
+this repository's layout nor each other's conventions.
+
+> **Scripts in `automation/` run under `dash`, not `bash`.** Five of the
+> six carry the DRAKVUF license header *above* the shebang, so
+> `#!/bin/bash` lands on line 104 and the kernel never sees it; `execv`
+> fails `ENOEXEC` and GLib's `g_spawn_*` falls back to `/bin/sh`. Anything
+> written for these scripts must be POSIX — a bash-only construct such as
+> `${BASH_SOURCE[0]}` does not fail loudly under dash, it evaluates empty
+> and carries on. `run_analysis-ubuntu.sh` is the exception; its shebang
+> is on line 1. Recorded here 2026-08-09; the shebang placement itself is
+> DRAFT-031's to fix.
+
+### Sample delivery: host-to-guest injection
+
+**Applies to all three OS pipelines.** Ubuntu implements it; Android
+(DRAFT-016) and Windows (DRAFT-034) inherit it rather than choosing
+again.
+
+The sample is written into the guest by `injector`, from Dom0:
+
+```
+injector -r <profile> -d <clone> -i <pid> -m writefile \
+    -B <dom0 source path> -e <guest destination path>
+```
+
+`-B` is the Dom0 source and `-e` the guest destination — confirmed from
+the installed build's own `--help`, captured on Dom0 2026-08-08 and
+recorded at `docs/runbooks/verify-user-placeholder.md:154-157`. (`-f` is
+**not** part of this: it is accepted only with `-m execproc` or
+`-m shellexec`.)
+
+Two properties the destination path must have, on every OS:
+
+1. **No component derived from the submitted filename.** The guest path is
+   `<staging dir>/<sha256>`, and the SHA-256 is computed Dom0-side from
+   the file's contents. The submitted filename is untrusted and is now
+   interpolated into no command string at all.
+2. **Identical to what the trace phase executes.** `preconfig-*` and
+   `drakvuf-*` derive it by the same rule from the same two `dirwatch`
+   arguments, so staging and execution cannot name different files. Issue
+   #2 found exactly that drift in the previous design.
+
+Delivery does not require guest networking and runs before it is
+configured, which is what leaves an `offline` network mode reachable
+(`networking.md`).
+
+#### Historical: HTTP delivery via Apache (removed 2026-08-09)
+
+Until issue #4 / DRAFT-027, the guest fetched its own sample:
+`preconfig-ubuntu.sh` injected a shell command running
+`wget 'http://172.16.<vlan>.1/<filename>'` against an Apache instance on
+the Dom0 analysis gateway whose `DocumentRoot` was `/malware_processing`.
+
+It worked — issue #2 evidenced six successful staged runs — and it was
+removed anyway, with no fallback branch, flag, or configuration switch.
+Four reasons, recorded so the decision is not relitigated from scratch:
+
+- It required a privileged Dom0 service reachable from every clone, and
+  that service's document root was **every other in-flight sample,
+  addressable by filename**. Nothing in `automation/` sets an INPUT
+  policy (DRAFT-029), so clones could reach it freely.
+- It made an `offline` network mode structurally impossible: the guest
+  network had to be up *before* the sample could be staged.
+- It forced the untrusted filename into a guest shell command, inside a
+  single-quoted URL inside `sh -c` — a filename containing `'` escapes
+  the quoting.
+- It did not generalize. `wget` is reasonable on Ubuntu; Android's shell
+  may not provide it usably and Windows would need a third mechanism.
+
+A retained fallback would have been an untested code path whose only
+function was to restore that exposure. There are deliberately no
+instructions here for re-enabling it.
 
 Per-sample flow: on a new file, `dirwatch` moves it out of the watch folder,
 then calls back into the worker scripts in order —

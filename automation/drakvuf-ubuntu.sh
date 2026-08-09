@@ -102,6 +102,25 @@
 #                                                                        #
 #************************************************************************#
 #!/bin/bash
+#
+# Runs the DRAKVUF trace against a clone that preconfig-ubuntu.sh has
+# already staged. Called by dirwatch with the same fixed 7-argument list.
+
+# $0, not ${BASH_SOURCE[0]} -- this script is executed by dash, not bash,
+# because its shebang sits below the license header and GLib falls back
+# to /bin/sh on ENOEXEC. See the fuller note in preconfig-ubuntu.sh.
+SCRIPT_DIR="$(
+    cd -- "$(dirname -- "$0")" &&
+    pwd
+)"
+
+REPO_ROOT="$(
+    cd -- "$SCRIPT_DIR/.." &&
+    pwd
+)"
+
+# shellcheck source=automation/pipeline-ubuntu.env
+. "$SCRIPT_DIR/pipeline-ubuntu.env"
 
 ARGC=$#
 if [ $ARGC -le 6 ]; then
@@ -115,8 +134,20 @@ VLAN=$4
 RUNFOLDER=$5
 RUNFILE=$6
 OUTPUTFOLDER=$7
-MD5=$(md5sum $RUNFOLDER/$RUNFILE | awk -F" " '{print $1}')
-CMD="/home/carlos/Desktop/test"
+MD5=$(md5sum -- "$RUNFOLDER/$RUNFILE" | awk -F" " '{print $1}')
+
+# The staged sample's guest path. Both this script and
+# preconfig-ubuntu.sh build it the same way -- GUEST_STAGING_DIR from
+# pipeline-ubuntu.env plus the sample's own SHA-256 -- from the same two
+# dirwatch arguments, so staging and execution cannot name different
+# files. That drift is not hypothetical: it is exactly what issue #2
+# found when this line held a literal `/home/<USER>/Desktop/test` while
+# preconfig staged to `/home/carlos/Desktop/test`.
+#
+# `-e` is execve-direct with no guest shell (issue #2), so this path is
+# resolved Dom0-side and must be exact.
+SHA256=$(sha256sum -- "$RUNFOLDER/$RUNFILE" | awk -F" " '{print $1}')
+CMD="$GUEST_STAGING_DIR/$SHA256"
 
 sleep 5 2>&1
 drakvuf -r $REKALL -d $DOMAIN -i $PID -m execproc -e "$CMD" -D $OUTPUTFOLDER/$MD5 -o json -t 120 -a syscalls -a filetracer -a fileextractor -a memdump --memdump-dir $OUTPUTFOLDER/$MD5 1>$OUTPUTFOLDER/$MD5/drakvuf.log 2>&1

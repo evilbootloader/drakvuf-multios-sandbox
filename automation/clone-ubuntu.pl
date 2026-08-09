@@ -115,16 +115,26 @@
 # is produced out-of-band, once per sandbox template -- see
 # docs/checklists/ubuntu.md and docs/checklists/android.md.
 #
-# CAUTION: the origin is a parameter but the memory image path passed to
-# `xl restore` below is hard-coded. They must be kept in agreement by
-# hand, or a clone gets one domain's disk with another's memory.
-# Tracked as PATH-02 / issue #4.
+# The memory image used to be a hard-coded /home/user/Documents path while
+# the origin was a parameter, so the two had to be kept in agreement by
+# hand or a clone got one domain's disk with another's memory. Issue #4
+# removed that class of mistake rather than documenting it: the path is
+# now derived from the origin argument, as
+# "<repo root>/state/<origin>.bak", so disk and memory cannot name
+# different domains. dirwatch passes no extra argument for it -- its
+# CLONE_CMD is a fixed `<script> <origin> <vlan> <config>`
+# (dirwatch.c:122) -- which is why this is derived rather than passed.
 #
 # NOTICE:
 # If an LVM volume exists with the clone's name, it is removed.
 #
 use strict;
 use warnings;
+
+# RealBin, not Bin: DEPLOY keeps the old ~/drakvuf-tools path alive as a
+# symlink during the transition, and the state/ directory belongs to the
+# real checkout, not to whatever alias invoked this script.
+use FindBin;
 
 ## Settings
 #
@@ -270,7 +280,15 @@ sub clone {
     `$lvcreate -s -n $clone -L64G /dev/$lvm_vg/$origin 2>&1`;
 
 
-    my $error=`$xl restore -p -e /tmp/$clone.config /home/user/Documents/ubuntu_sandbox.bak 2>&1`;
+    my $saved_state = "$FindBin::RealBin/../state/$origin.bak";
+
+    unless (-r $saved_state) {
+        die "Saved memory image not found or unreadable: $saved_state\n"
+          . "Expected <repo root>/state/<origin domain>.bak -- see "
+          . "docs/runbooks/deploy-repo-relative-paths.md\n";
+    }
+
+    my $error=`$xl restore -p -e /tmp/$clone.config $saved_state 2>&1`;
     print STDERR $error;
 
     my $cloneID = `$xl domid $clone`;

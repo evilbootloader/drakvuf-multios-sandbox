@@ -6,7 +6,16 @@ malware_finished/
 *.dmp
 *.memdump
 drakvuf.json
+
+# Xen `xl save` memory images for the sandbox templates. Multi-gigabyte,
+# and they can hold in-guest data from whenever the template was saved.
+# The bare pattern already covers state/*.bak — see state/README.md.
 *.bak
+
+# LibVMI/DRAKVUF kernel profiles: ~48MB and ~62MB of dwarf2json output,
+# regenerated per kernel build rather than authored. Tracked under misc/
+# until issue #4; see profiles/README.md for hashes and regeneration.
+profiles/*.json
 
 # Secrets / local config
 .env

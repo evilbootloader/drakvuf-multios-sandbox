@@ -63,13 +63,29 @@ subfolders):
   `cleanup.sh`, with `tcpdump.sh` started on a side thread. The preconfig
   phase is guarded by a 60s timeout and the drakvuf-trace phase by a 180s
   timeout; either timeout triggers `cleanup.sh` and a fresh clone retry.
-- `clone-ubuntu.pl` — LVM copy-on-write snapshot + `xl restore` of the golden
-  VM's saved memory image, producing a disposable sandbox clone.
-- `preconfig-ubuntu.sh` — network-configures the booted clone and stages the
-  sample into the guest via `injector`.
+- `pipeline-ubuntu.env` — sourced config holding every per-OS value the
+  scripts below need (sandbox domain, `.cfg`, profile, saved state,
+  injection PID, clone count, malware directories, guest user and staging
+  dir, resolver). Added in issue #4. Each entry is `${NAME:-default}`, so
+  the environment wins — that is how CI overrides paths without patching
+  files. A second OS pipeline is a copy of this one file plus its own
+  `run_analysis-<os>.sh`.
+- `clone-ubuntu.pl` — LVM copy-on-write snapshot + `xl restore` of the
+  sandbox template's saved memory image, producing a disposable clone. The
+  restore path is derived via `FindBin` as `<repo root>/state/<origin>.bak`,
+  so the disk snapshot and the memory image cannot name different domains.
+  It does **not** read `pipeline-ubuntu.env` — it is Perl, invoked by
+  `dirwatch` with a fixed 3-argument contract.
+- `preconfig-ubuntu.sh` — stages the sample into the guest via
+  `injector -m writefile` (`-B` Dom0 source, `-e` guest destination), then
+  `chmod +x` via `execproc`, then configures the clone's network. Three
+  separate injections; delivery deliberately runs first and does not need
+  guest networking.
 - `drakvuf-ubuntu.sh` — runs the DRAKVUF trace (`syscalls`, `filetracer`, `fileextractor`,
   `memdump` 120s timeout, `--memdump-dir`) and kills the per-VLAN `tcpdump`
-  process afterward. Executes the staged sample at `/home/carlos/Desktop/test`.
+  process afterward. Executes the staged sample at
+  `$GUEST_STAGING_DIR/<sha256>`, built by the same rule `preconfig-ubuntu.sh`
+  stages to.
 - `cleanup.sh` — pauses/destroys the clone domain and kills any lingering
   `injector`/`drakvuf` processes for it.
 - `tcpdump.sh` — captures traffic on the clone's VLAN sub-interface to a
@@ -77,8 +93,21 @@ subfolders):
 - `network-setup.sh` — provisions the OVS bridge and per-VLAN isolated
   networks (`172.16.<vlan>.1/24` gateway per VLAN) that `clone-ubuntu.pl` and
   `preconfig-ubuntu.sh` assume already exist.
-- `run_analysis-ubuntu.sh` — top-level entry point; brings `xenbr1` up, runs
+- `run_analysis-ubuntu.sh` — top-level entry point; sources
+  `pipeline-ubuntu.env`, pre-flight checks the `.cfg`/profile/saved state,
+  creates the per-OS malware directories, brings `xenbr1` up, runs
   `network-setup.sh`, then launches `dirwatch` with the arguments above.
+
+**Scripts in `automation/` execute under `dash`, not `bash`.** Five of the
+six carry the DRAKVUF license header *above* the shebang, so `#!/bin/bash`
+sits on line 104 where the kernel never sees it; `execv` fails `ENOEXEC`
+and GLib's `g_spawn_*` (how `dirwatch` invokes them) falls back to
+`/bin/sh`. Write POSIX for these files. A bash-only construct does not
+fail loudly — `${BASH_SOURCE[0]}` evaluates to empty under dash and the
+script carries on, which in issue #4 silently turned `SCRIPT_DIR` into
+`$PWD`. Use `$0`. `run_analysis-ubuntu.sh` is the exception (line-1
+shebang), but uses `$0` too so the idiom is uniform. Check with
+`dash -n SCRIPT` as well as `bash -n SCRIPT`.
 
 The Xen guest `.cfg` files these scripts reference are tracked under
 `misc/`, not `automation/`: `misc/ubuntu.cfg` (golden `ubuntu`),
@@ -113,15 +142,31 @@ and repo and host no longer diverge anywhere. The earlier
 Ubuntu analysis runs do execute their samples, which is now
 execution-evidenced (`docs/runbooks/verify-user-placeholder.md`).
 
+**That parity ended deliberately on 2026-08-09 (issue #4).** `automation/`
+is now ahead of the deployed Dom0 host, which still runs the old
+`/home/user/drakvuf-tools` copies with HTTP delivery. Re-syncing is a
+deployment, not a copy: follow
+`docs/runbooks/deploy-repo-relative-paths.md`, which has not been executed
+yet. Until it has, do not treat the repo as describing what the host is
+doing.
+
 Known issues in the current Ubuntu scripts (do not silently fix — flag and
 confirm before changing):
 
-- `run_analysis-ubuntu.sh` hard-codes deployment paths under
-  `/home/user/drakvuf-tools/...`, which do not match this repo's
-  `automation/` directory name.
-- Both `drakvuf-ubuntu.sh` and `preconfig-ubuntu.sh` hard-code the guest
-  username `carlos`. This is now consistent between them and matches
-  production, but parameterizing it remains open M1 work.
+- ~~`run_analysis-ubuntu.sh` hard-codes deployment paths under
+  `/home/user/drakvuf-tools/...`~~ — fixed in issue #4 (2026-08-09).
+- ~~Both `drakvuf-ubuntu.sh` and `preconfig-ubuntu.sh` hard-code the guest
+  username `carlos`~~ — moved to `GUEST_USER` in `pipeline-ubuntu.env` in
+  issue #4. Still a fixed value rather than one discovered from the guest;
+  that remains open M1 work.
+- `clone-ubuntu.pl` still hard-codes `vg-root` and `xenbr1`, and
+  `network-setup.sh` the `172.16.<vlan>.0/24` scheme. Neither reads
+  `pipeline-ubuntu.env`. Open M1 work, gated on DRAFT-009.
+- Guest DNS pointed at the clone's gateway, where nothing listens, so name
+  resolution failed on every run before 2026-08-09. Now `GUEST_NAMESERVER`
+  (default `1.1.1.1`). Android's golden image has the same dead assumption
+  baked in as an in-guest DNAT to `172.16.10.1:53` — still unfixed.
+  See `docs/architecture/networking.md`.
 
 Do not modify the Ubuntu behavior unless required and explicitly requested.
 
@@ -162,6 +207,11 @@ For Perl scripts:
 
     perl -c SCRIPT
 
+Also check the shell scripts with `dash -n SCRIPT`. They execute under
+`dash`, not `bash` — see the note in "Current implementation" — so
+`bash -n` alone will accept bash-only syntax that fails silently in
+production.
+
 After changing shared Ubuntu/Android code, verify that Ubuntu behavior has not
 changed unintentionally.
 
@@ -196,23 +246,32 @@ Never operate on:
 
 unless explicitly instructed.
 
+Repository-owned paths below are relative to the checkout root, which
+resolves at runtime from each script's own location — `/root/sandbox_project`
+is the documented Dom0 location, not a required one. `profiles/*.json` and
+`state/*.bak` are **not git-tracked**; a fresh checkout has neither. See
+`profiles/README.md` and `state/README.md`.
+
 ## Current Android names
 
 Golden domain: `android`
 Sandbox domain: `android_sandbox`
-LibVMI profile: `/root/android.json`
+LibVMI profile: `profiles/android.json`
 Volume group: `vg-root`
 Analysis bridge: `xenbr1`
-Saved state: `/home/user/Documents/android_sandbox.bak`
+Saved state: `state/android_sandbox.bak`
+Incoming / processing / finished: `/malware_{incoming,processing,finished}/android`
 
 ## Current Ubuntu names
 
 Golden domain: `ubuntu`
 Sandbox domain: `ubuntu_sandbox`
-LibVMI profile: `/root/linux.json`
+LibVMI profile: `profiles/linux.json`
 Volume group: `vg-root`
 Analysis bridge: `xenbr1`
-Saved state: `/home/user/Documents/ubuntu_sandbox.bak`
+Saved state: `state/ubuntu_sandbox.bak`
+Incoming / processing / finished: `/malware_{incoming,processing,finished}/ubuntu`
+Guest staging: `/home/carlos/Desktop/<sha256>`
 
 ## Workflow
 

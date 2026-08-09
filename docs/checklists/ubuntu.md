@@ -21,10 +21,10 @@
 |---|---|
 | Golden domain | `ubuntu` |
 | Sandbox domain | `ubuntu_sandbox` |
-| LibVMI profile | `/root/linux.json` |
+| LibVMI profile | `profiles/linux.json` (untracked; moved from `/root/linux.json` in issue #4) |
 | Volume group | `vg-root` |
 | Analysis bridge | `xenbr1` |
-| Saved state | `/home/user/Documents/ubuntu_sandbox.bak` |
+| Saved state | `state/ubuntu_sandbox.bak` (untracked; moved from `/home/user/Documents/` in issue #4) |
 | Golden Xen config | `misc/ubuntu.cfg` (tracked in this repo; renamed from `linux.cfg` in issue #1) |
 | Sandbox Xen config | `misc/ubuntu_sandbox.cfg` (tracked in this repo; renamed from `linux_sandbox.cfg` in issue #1) |
 | Current phase | M1 — Ubuntu regression baseline (see roadmap) |
@@ -48,11 +48,17 @@ execution. None of the checkboxes below represent execution evidence.
   15-arg CLI contract, 60s preconfig timeout / 180s drakvuf-trace timeout,
   calls back into the scripts below in order.
 - [x] `automation/clone-ubuntu.pl` exists — LVM copy-on-write snapshot +
-  `xl restore` of `/home/user/Documents/ubuntu_sandbox.bak`, clone naming
-  `<origin>-<vlan>-clone`, hard-codes `vg-root` and `xenbr1`.
+  `xl restore` of the saved state, clone naming `<origin>-<vlan>-clone`,
+  hard-codes `vg-root` and `xenbr1`. *(Updated 2026-08-09, issue #4: the
+  restore path was `/home/user/Documents/ubuntu_sandbox.bak` and is now
+  derived from `FindBin` and the origin argument as
+  `<repo root>/state/<origin>.bak`.)*
 - [x] `automation/preconfig-ubuntu.sh` exists — configures guest networking
-  (`172.16.<VLAN>.2/24`), downloads the sample via `wget`, hard-codes guest
-  username `carlos`.
+  (`172.16.<VLAN>.2/24`) and stages the sample, hard-codes guest username
+  `carlos`. *(Updated 2026-08-09, issue #4 / DRAFT-027: staging was a
+  guest-side `wget` against Apache on the gateway and is now
+  `injector -m writefile` from Dom0. The guest resolver also changed — see
+  `docs/architecture/networking.md`.)*
 - [x] `automation/drakvuf-ubuntu.sh` exists — runs the DRAKVUF trace
   (`syscalls`, `filetracer`, `fileextractor`, `memdump` via `--memdump-dir`,
   120s timeout, JSON output), executes `/home/carlos/Desktop/test`, kills
@@ -179,10 +185,13 @@ execution. None of the checkboxes below represent execution evidence.
     `<USER>` is not variable syntax in any shell.
 
 [i2]: https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/2
-- [ ] `run_analysis-ubuntu.sh` hard-codes deployment paths under
-  `/home/user/drakvuf-tools/...`, which do not match this repo's
-  `automation/` directory name — relevant only if run as-is from this
-  checkout rather than a host with that exact layout.
+- [x] ~~`run_analysis-ubuntu.sh` hard-codes deployment paths under
+  `/home/user/drakvuf-tools/...`~~ — **fixed 2026-08-09 (issue #4).** All
+  fourteen `dirwatch` arguments now come from
+  `automation/pipeline-ubuntu.env`, with repository-owned assets resolved
+  from the script's own location. Static verification only so far; the
+  out-of-repo invocation test still needs running on Dom0
+  (`docs/runbooks/deploy-repo-relative-paths.md`).
 
 ## Planned M1 work
 
@@ -201,10 +210,15 @@ execution. None of the checkboxes below represent execution evidence.
 - [ ] Add `bash -n` / `shellcheck` / `perl -c` CI for `automation/*`
   (DRAFT-012) — blocked on Bash being non-functional in this dev container
   as of 2026-08-07; must run on the real host or real CI.
-- [ ] Parameterize hard-coded values (`carlos`, `vg-root`, `xenbr1`,
-  `/home/user/drakvuf-tools/...`) per `CLAUDE.md`'s "prefer parameterization"
-  rule, once the shared-vs-OS-specific script boundary (DRAFT-009) is
-  decided.
+- [ ] Parameterize the remaining hard-coded values — `vg-root` and the
+  `xenbr1` / `172.16.<vlan>` scheme in `clone-ubuntu.pl` and
+  `network-setup.sh` — per `CLAUDE.md`'s "prefer parameterization" rule,
+  once the shared-vs-OS-specific script boundary (DRAFT-009) is decided.
+  *(Partially done 2026-08-09, issue #4: deployment paths, guest user
+  `carlos`, injection PID, clone count and resolver all moved into
+  `automation/pipeline-ubuntu.env`. `clone-ubuntu.pl` does not read that
+  file — it is Perl, invoked by `dirwatch` with a fixed 3-argument
+  contract — so its constants are untouched.)*
 
 ### Evidence and notes
 
