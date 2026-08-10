@@ -360,6 +360,25 @@ Requires manual Dom0 coordination — present, do not execute automatically:
 - [ ] Android automation scripts, when implemented (DRAFT-015/016), are
       written against this same convention from the start.
 
+> **Widened and reassigned 2026-08-10.** This criterion is **the only one
+> still open**, and it cannot be satisfied by this issue — the scripts it
+> governs do not exist yet. Three corrections:
+>
+> 1. **Windows is missing from it.** DRAFT-034 builds a fourth script set
+>    against the same convention and was not a current target when this
+>    criterion was written. Read it as DRAFT-015/016 **and DRAFT-034**.
+> 2. **It now also covers the delivery syntax**, not just the path
+>    convention. DRAFT-027 landed inside this issue, so a new per-OS
+>    pipeline inherits `injector -m writefile` with `-B` as the **Dom0
+>    source** and `-e` as the **guest destination** — the order that
+>    refuted the Android checklist's candidate command
+>    (`docs/runbooks/verify-user-placeholder.md:154-157`). There is no HTTP
+>    fallback to inherit.
+> 3. **DRAFT-009 is where it is discharged.** That issue produces the
+>    conformance checklist a new per-OS pipeline is written against; this
+>    criterion is satisfied when each of DRAFT-015/016/034 is accepted
+>    against that checklist, not by anything done here.
+
 *Added 2026-08-08 from `project-assessment.md` → Issue #4:*
 
 - [ ] The `misc/*.cfg` installer-ISO paths (`misc/ubuntu.cfg:24`,
@@ -506,6 +525,14 @@ and both are recorded where they were found rather than deferred:
   still DRAFT-031's to fix.
 
 ## DEPLOY completed 2026-08-09 — all acceptance criteria met
+
+> **Annotation, 2026-08-10 — one criterion is open, not met.** The heading
+> above is left as written because it is the dated deployment record, but
+> it overstates by one: the Android/Windows convention-inheritance
+> criterion is carried forward deliberately and is discharged by
+> DRAFT-009 + DRAFT-015/016/034. See the annotation on that criterion in
+> Acceptance criteria above. Everything the deployment itself could prove
+> did pass.
 
 The runbook was executed on Dom0 the same day, against commit `57713fc`.
 D1–D6 passed; evidence is in

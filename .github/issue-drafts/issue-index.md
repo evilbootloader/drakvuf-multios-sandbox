@@ -3,7 +3,9 @@
 Full draft-title index, first batch (DRAFT-001 through DRAFT-008 — the
 scope approved for this session). See `docs/roadmap/project-roadmap.md` for
 the complete brainstormed workstream list this was derived from, and for
-DRAFT-009 onward (not yet drafted in full, title-index only).
+the DRAFT-009 onward range. Most of that range is still title-index only;
+the exceptions, each with its own `DRAFT-NNN.md`, are DRAFT-009, DRAFT-010,
+DRAFT-025 through DRAFT-034, and DRAFT-036.
 
 | Draft ID | Title | Area | Milestone | Priority | Depends on | Status |
 |---|---|---|---|---|---|---|
@@ -15,7 +17,7 @@ DRAFT-009 onward (not yet drafted in full, title-index only).
 | DRAFT-006 | Reconcile `misc/` Xen guest config naming and cross-references | governance | M0 | P2 | DRAFT-001 | **Closed** — [#1](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/1), done 2026-08-08 |
 | DRAFT-007 | Verify `drakvuf-ubuntu.sh`'s `<USER>` placeholder bug against real behavior | ubuntu | M1 | P0 | DRAFT-001 | **Closed** — [#2](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/2), done 2026-08-08; premise refuted (see note below) |
 | DRAFT-008 | Define OS-independent analysis job/result state model | core | M0 | P0 | DRAFT-001 | **Closed** — [#3](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/3), done 2026-08-09; model in `docs/architecture/analysis-pipeline.md` |
-| DRAFT-025 | Standardize Xen analysis pipeline paths | platform | M0 | P1 | DRAFT-001; informed by DRAFT-006, DRAFT-007 | Published — [#4](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/4), retitled 2026-08-09 to "…paths **and replace HTTP sample delivery**" when DRAFT-027 was folded in; **CREATE done**, DEPLOY pending (`docs/runbooks/deploy-repo-relative-paths.md`). Scope expanded — see note below |
+| DRAFT-025 | Standardize Xen analysis pipeline paths | platform | M0 | P1 | DRAFT-001; informed by DRAFT-006, DRAFT-007 | Published — [#4](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/4), retitled 2026-08-09 to "…paths **and replace HTTP sample delivery**" when DRAFT-027 was folded in; **Closed 2026-08-10** — CREATE and DEPLOY both complete (`docs/runbooks/deploy-repo-relative-paths.md`), PR #5 merged. One acceptance criterion carried forward to DRAFT-009/#6 and DRAFT-015/016/034. Scope expanded — see note below |
 | DRAFT-026 | Implement GitHub Actions and self-hosted Xen integration runner | ci | M1 | P1 | DRAFT-001; soft dep. on DRAFT-025; supersedes DRAFT-012; informed by DRAFT-006, DRAFT-007 | Drafted, not published — see `.github/issue-drafts/DRAFT-026.md` |
 
 ## Second batch — DRAFT-027 through DRAFT-034
@@ -280,7 +282,7 @@ Not yet drafted in full — titles only, from `docs/roadmap/project-roadmap.md`:
 
 | Draft ID | Title | Area | Milestone | Priority | Depends on |
 |---|---|---|---|---|---|
-| DRAFT-009 | Define shared-vs-OS-specific script boundary | core | M0 | P1 | DRAFT-008 |
+| ~~DRAFT-009~~ | **Drafted in full and published 2026-08-10 — [#6](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/6).** See `.github/issue-drafts/DRAFT-009.md`. Retitled "Define the shared-vs-OS-specific script boundary **and the per-OS configuration contract**"; priority raised P1 → **P0** | core/platform | M0 | **P0** | DRAFT-008 (closed), issue #4 (closed) |
 | ~~DRAFT-010~~ | **Now drafted in full — see `.github/issue-drafts/DRAFT-010.md`.** Retitled "Document `dirwatch.c`'s interface and resolve the two-source ambiguity"; priority raised to P1 | core | M0 | P1 | — |
 | DRAFT-011 | Retrofit Ubuntu pipeline with structured status output (no behavior change) | ubuntu | M1 | P1 | ~~DRAFT-007~~ (closed 2026-08-08), DRAFT-008 |
 | DRAFT-012 | ~~Add static CI (`bash -n`, `shellcheck`, `perl -c`) for `automation/*`~~ — superseded by DRAFT-026 | testing | M1 | P1 | DRAFT-001 |
@@ -318,9 +320,9 @@ cheap before the draft exists and expensive after.
 
 | ID | OS | Assessment | Apply when drafted |
 |---|---|---|---|
-| **009** | ALL | **Priority should rise sharply.** Written when only Ubuntu existed and Android was next. With Android *and* Windows scripts both imminent, this is the gate that stops DRAKVUF-01/02/05/06 being fixed three times. | Start from the source-verified split: **shared** = `dirwatch.c`, `network-setup.sh`, `cleanup.sh`, `tcpdump.sh` (no OS suffix, no OS-specific logic — `cleanup.sh:113-114` takes only `DOMAIN`/`VLAN`); **per-OS** = `clone-*`, `preconfig-*`, `drakvuf-*`, `run_analysis-*`. Include the `carlos`/`vg-root`/`xenbr1` parameterization question, which is genuinely three-shaped (Ubuntu has `/home/carlos`, Android has no such concept, Windows a third form). Move to position 3 in the order. |
+| **009** | ALL | **DRAFTED IN FULL 2026-08-10** — see `DRAFT-009.md`; this row is superseded. | ~~Start from the source-verified split…~~ Applied, and the scope shrank in the process: issue #4 shipped `pipeline-ubuntu.env`, so the file-level split and the per-OS-config decision are already settled and written down (`pipeline-ubuntu.env:15-18`). What the draft actually owns is the parameterization contract — the `carlos`/`vg-root`/`xenbr1` question, still genuinely three-shaped — plus three things the assessment did not anticipate: host-global values sitting in per-OS files (`ANALYSIS_BRIDGE` has one consumer while `xenbr1` is hard-coded in six places), `clone-*.pl` being outside the config mechanism entirely, and the rule that a template defect is fixed before the template is copied. DRAKVUF-01 is no longer at risk of triplication — DRAFT-027 landed inside issue #4. |
 | **010** | ALL | **DRAFTED IN FULL 2026-08-09** — see `DRAFT-010.md`; this row is superseded. | ~~Add CI-04…~~ Done, and CI-04's premise was corrected in the process: the two sources differ **behaviourally**, not "almost entirely [in] formatting". `dirwatch_old.c` has a `worker_finished:` cleanup path that `dirwatch.c` lacks, so the built file leaks a worker slot and its `start_drakvuf` struct when a timeout retry coincides with shutdown. Separately, the 519-line version at `2514168` carries none of this project's modifications and allocates slots with upstream's `GMutex locks[128]`, so it is very likely pristine upstream — the `_old` name was correct for *that* file and was invalidated when `885ad3c` overwrote it with a newer host variant. |
-| **011** | U → ALL | **PARTIALLY OBSOLETE — shrink, then widen.** | **Remove** the "reconcile with the deployed Dom0 copy" element: issue #2 completed it on 2026-08-08. **Add** DRAKVUF-04 (`ps aux \| grep` PID safety) — 3 of its 4 sites are in shared `cleanup.sh`, so that part is not Ubuntu-only; the `"tcpdump -i xenbr1.$VLAN"` match is unanchored with `.` as a regex wildcard, so VLAN 1 also matches `xenbr1.10`–`19` above 9 clones. Dependency on DRAFT-007 is closed. |
+| **011** | U → ALL | **PARTIALLY OBSOLETE — shrink, then widen.** | **Remove** the "reconcile with the deployed Dom0 copy" element: issue #2 completed it on 2026-08-08. **Add** DRAKVUF-04 (`ps aux \| grep` PID safety) — 3 of its 4 sites are in shared `cleanup.sh`, so that part is not Ubuntu-only; the `"tcpdump -i xenbr1.$VLAN"` match is unanchored with `.` as a regex wildcard, so VLAN 1 also matches `xenbr1.10`–`19` above 9 clones. Dependency on DRAFT-007 is closed. **Added 2026-08-10 (issue #6):** this draft owns **emitting** `guest_filename` and `original_filename` as separate fields in `status.json`, so a reader can see when the two differ and why. It does not own the normalizer or the staging change — those went to DRAFT-030 in the same pass, because they are one input travelling one hop and splitting them would mean two normalizers. Gains a soft dependency on DRAFT-030: the field is meaningless before a normalized name exists. |
 | **012** | ALL | **FULLY OBSOLETE.** Superseded by DRAFT-026a. | Do not draft. Still cited as live by `docs/checklists/ubuntu.md:201` and roadmap M1 — DRAFT-032 fixes those references. |
 | **013** | A → ALL | **NEEDS UPDATE — retitle away from Android-only.** The mechanism under test is `network-setup.sh`, shared by all three OS families, so this verifies Ubuntu and Windows containment too. | Depends on DRAFT-028 landing first — otherwise it records a known-broken state. Record NET-02 and NET-03 as *expected findings* so the test is not written assuming a pass: the `FORWARD` rule cannot cover traffic to Dom0 itself (`INPUT` chain, no policy set anywhere), and `MASQUERADE` at `network-setup.sh:118` gives clones unrestricted egress by default. Fixes belong to DRAFT-028/029; this entry stays verification-only. |
 | **014** | ALL | **NEEDS UPDATE.** The title parenthetical already anticipates PE, but with Windows current this becomes a genuine three-way routing decision rather than an ELF/APK split. **Superseded 2026-08-09 (issue #3): there is no routing decision left.** | ~~Note it is the entry that makes `dirwatch`'s one-domain-per-invocation contract actually limiting (see 010).~~ The opposite held: issue #3 adopted that contract as the OS-selection mechanism (one watch directory per OS, chosen by the submitter), so detection no longer decides where a sample runs. **Retitle** from "Decide sample OS auto-detection contract" to a typing and identification contract. Remaining scope: `detected_type` as an advisory admission check (mismatch → `rejected`/`unsupported_type`), and the `type_identifiers` set — `imphash`/`telfhash`/APK signing identity — including whether Dom0 takes a `pefile`/LIEF dependency to compute them. Still should follow DRAFT-030. The `target_os_source` revisit condition survives unchanged. |
@@ -358,6 +360,56 @@ Added 2026-08-09 from issue #3:
 - **DRAFT-011** gains the shared model as its target output — it is the
   first pipeline to emit `status.json`, and therefore the first real test
   of whether the model survives contact with a running pipeline.
+
+Added 2026-08-10, on drafting DRAFT-009:
+
+- **Issue #4 has one acceptance criterion still open**, deliberately: new
+  per-OS scripts inherit its path convention and the corrected
+  `injector -m writefile` syntax. It cannot be closed by #4 — the scripts do
+  not exist — and its original wording predates Windows as a current target.
+  Widened to **DRAFT-015/016 and DRAFT-034**, and discharged through
+  DRAFT-009's conformance checklist. Annotated in `DRAFT-025.md`.
+- **DRAFT-009 hands ordering constraints to three drafts, but does not
+  perform them.** ~~These are proposed by the draft and become entries in
+  this section when it is executed — not applied in advance.~~ **Applied
+  2026-08-10** as issue #6 executed; see the three entries below.
+- **DRAFT-009 must not pre-empt DRAFT-036.** It may decide *where* a
+  host-global value lives; DRAFT-036 decides *who allocates it*. Nor may it
+  change `dirwatch`'s callback contract, which is DRAFT-010's. *(Honoured —
+  issue #6 changed no contract and designed no allocator.)*
+
+Dependency corrections produced by issue #6, 2026-08-10. These are
+defect-multiplication constraints, not preferences:
+
+- **DRAFT-033 before DRAFT-015.** `clone-ubuntu.pl` is the template
+  `clone-android.pl` is written from, and it checks no exit status. Copying
+  first puts the defect in three files.
+- **DRAFT-030 before DRAFT-016.** Sharpened from the earlier soft
+  dependency: DRAFT-030 now owns the guest-filename normalizer and the
+  staging retrofit, so writing `preconfig-android.sh` first means writing it
+  against SHA-256 staging and rewriting it immediately.
+- **DRAFT-031 before DRAFT-015 or DRAFT-016.** The
+  licence-header-above-shebang layout is inherited by every copy made before
+  it is fixed.
+
+Scope moved by issue #6, same date:
+
+- **DRAFT-030 gains** the guest-filename normalizer (one implementation for
+  all three pipelines), the Ubuntu staging retrofit — which **changes Ubuntu
+  runtime behaviour** and needs its own end-to-end run — and re-establishing
+  the single-argv invariant per OS, since Android installs rather than
+  `execve`s and issue #2's finding does not carry over.
+- **DRAFT-011 gains** emitting `guest_filename` and `original_filename` as
+  separate fields, plus a soft dependency on DRAFT-030.
+- **Proposed, needs confirming:** `automation/platform.env` is a code change
+  issue #6 cannot make. Each file's existing owner wires its own — DRAFT-028
+  creates it and wires `network-setup.sh`, DRAFT-033 wires `clone-*.pl`,
+  DRAFT-011 wires `cleanup.sh` and `tcpdump.sh`.
+- **DRAFT-016 and DRAFT-017 lose the in-guest collection steps.** `logcat`,
+  `logd`, `dumpsys` and `dmesg` are withdrawn; `docs/checklists/android.md`
+  §4.2–4.4 are annotated as historical candidates. Android's semantic
+  visibility is reduced as a result, knowingly — see
+  `docs/architecture/analysis-pipeline.md`, decision 4.
 
 ### Recommended order, revised 2026-08-09
 

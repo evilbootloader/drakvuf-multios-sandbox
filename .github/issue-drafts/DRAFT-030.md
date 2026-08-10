@@ -16,6 +16,47 @@ Make `automation/dirwatch.c` handle adversary-chosen sample filenames
 safely, by removing them from string-formatted command lines that are
 subsequently re-parsed with shell quoting rules.
 
+> **Scope added 2026-08-10 by issue #6, at the maintainer's direction.**
+> This draft now also owns the **guest-side** half of filename handling,
+> because it is the same input travelling one hop further and splitting it
+> across two issues would mean two normalizers.
+>
+> Issue #6 decided the contract and does not implement it: the sample is
+> staged at `<GUEST_STAGING_DIR>/<guest_filename>`, where `guest_filename`
+> is the *normalized submitted name*, not the SHA-256 Ubuntu writes today
+> (`preconfig-ubuntu.sh:162`, `drakvuf-ubuntu.sh:150`). Three things follow,
+> all of them this issue's:
+>
+> 1. **Write the normalizer.** None exists anywhere in the repository. Rules
+>    are specified in `docs/architecture/analysis-pipeline.md`, "Filenames:
+>    two namespaces": path separators and NUL stripped, length capped,
+>    Windows reserved names (`CON`, `PRN`, trailing dot or space) rejected.
+>    It must be reusable by all three pipelines — one implementation, not
+>    one per OS.
+> 2. **Retrofit Ubuntu's staging and execution paths** to the normalized
+>    name, keeping the existing invariant that `preconfig-*` and `drakvuf-*`
+>    derive the guest path by the same rule from the same arguments (the
+>    drift issue #2 found). **This changes Ubuntu runtime behaviour** and is
+>    the first such change since issue #4 — it needs its own benign
+>    end-to-end run, not just static checks.
+> 3. **Preserve the argv invariant across the hop.** The name may reach the
+>    guest only as a single argv element. `injector -m writefile -e` and
+>    `drakvuf -e` both satisfy this today, the latter established as
+>    execve-direct by issue #2. Android's install path is *not* `execve`, so
+>    that finding does not carry over unexamined — re-establish it per OS
+>    rather than inheriting it.
+>
+> Why the guest gets the real name at all, since it is the obvious thing to
+> question: extension-driven handler dispatch, `argv[0]` self-checks and APK
+> filename assumptions are real evasion behaviour, and a sample renamed to a
+> hash exercises none of them. This was demonstrated accidentally on the
+> Android guest on 2026-08-10 — a `toybox` binary copied to `probe` reported
+> `Unknown command`, because toybox dispatches on `argv[0]`
+> (`docs/checklists/android.md`, "Staging directory — execution evidence").
+>
+> `guest_filename` and `original_filename` are stored as separate fields so
+> a reader can see when the two differ; **emitting** them is DRAFT-011's.
+
 # Context
 
 `dirwatch` is the shared orchestrator — it takes the domain, config and
