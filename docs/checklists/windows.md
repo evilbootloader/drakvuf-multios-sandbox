@@ -26,6 +26,36 @@
 | Current phase | Not started |
 | Current blocker | M5 planning spike not yet begun |
 
+### Inherited contract (issue #6, 2026-08-10)
+
+The Windows pipeline is not designed from scratch. It must satisfy the
+conformance checklist **C1–C10** in
+`docs/architecture/analysis-pipeline.md`, "Shared and per-OS code
+boundary" — five files and no more, no forked copy of any shared script,
+and a `pipeline-windows.env` that defines the per-OS values without
+redefining the host-global ones.
+
+Four consequences worth knowing before Phase 0 starts, because each closes
+off a design option that would otherwise look open:
+
+- **Delivery is decided.** `injector -m writefile`, `-B` Dom0 source, `-e`
+  guest destination, one injection, no guest shell beforehand. There is no
+  HTTP path to choose and no fallback to build.
+- **The staging directory must already exist in the saved image**, and must
+  permit the execution method Windows uses. Both need testing on the guest,
+  not reading off a path — the Android evidence
+  (`docs/checklists/android.md`, "Staging directory") is the worked example
+  of a path that satisfies one and silently fails the other.
+- **No in-guest collection.** No Windows equivalent of `logcat`/`dmesg` may
+  be introduced; output comes from introspection and the pcap.
+- **`CLONE_LV_SIZE` is per-OS** and Windows is the reason it exists as a
+  variable: `-L64G` is hard-coded today and a Windows golden LV is unlikely
+  to want it.
+
+`tlsmon` remains the one item where Windows *gains* capability the other
+targets lack — it hooks `ncrypt.dll`/Schannel and has no Linux hook path,
+making it the project's only working TLS-visibility route (DRAFT-023).
+
 ### Status legend
 
 - [ ] Not started

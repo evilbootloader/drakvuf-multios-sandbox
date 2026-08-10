@@ -184,6 +184,14 @@ Do not modify the Ubuntu behavior unless required and explicitly requested.
 - Do not commit changes unless explicitly requested.
 - Do not push to remotes unless explicitly requested.
 - Before editing a script, inspect the corresponding Ubuntu implementation.
+- **Writing a new per-OS script means satisfying the conformance checklist
+  (C1–C10) in `docs/architecture/analysis-pipeline.md`, "Shared and per-OS
+  code boundary" — not copying the Ubuntu file and editing it.** The Ubuntu
+  implementation is the reference for *shape*, and it still carries known
+  defects (no exit-status checks in `clone-ubuntu.pl`, SHA-256 as the guest
+  leaf name, the licence header above the shebang). Copying it copies those.
+  A defect known in the template is fixed in the template before the copy is
+  made.
 - Prefer parameterization over duplicated hard-coded values.
 - Preserve existing interfaces until their callers have been inspected.
 - Do not invent `dirwatch`, `injector`, or DRAKVUF command-line options.

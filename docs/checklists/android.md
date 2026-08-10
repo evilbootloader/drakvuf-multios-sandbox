@@ -1041,7 +1041,14 @@ The current Ubuntu preconfiguration script:
 - [ ] Validate all seven expected arguments from `dirwatch`.
 - [ ] Return a nonzero code on invalid input.
 - [ ] Create a SHA-256 result directory.
-- [ ] Create a per-analysis guest directory under `/data/local/tmp/drakvuf/<SHA256>`.
+- [ ] ~~Create a per-analysis guest directory under `/data/local/tmp/drakvuf/<SHA256>`.~~
+      **Superseded 2026-08-10 (issue #6).** Staging is flat into
+      `/data/local/tmp`, which pre-exists; `writefile` cannot create
+      parents. **No per-analysis guest directory is needed at all** — it
+      existed to hold in-guest collection output, and in-guest collection is
+      withdrawn (see the note above §4.2). The guest filesystem is written
+      once and never read back.
+      See "Staging directory — execution evidence" below.
 - [ ] Transfer the sample without relying on a guest web browser or desktop path.
 - [ ] Prefer `injector -m writefile` if supported by the installed branch.
 - [ ] Verify the guest copy with SHA-256.
@@ -1150,6 +1157,61 @@ injector \
 ```
 
 > The candidate command still requires careful quoting validation. A fixed guest destination derived only from SHA-256 is safer than using the uploaded filename.
+
+### Staging directory — execution evidence, Dom0/guest 2026-08-10 (issue #6)
+
+Run on the working BlissOS guest by the maintainer, against the live
+injection anchor (PID 5715). This settles the Android half of issue #6's
+guest-path decision and **supersedes the candidate guest-preparation
+command above**, which is no longer required.
+
+Three hypotheses were tested with another process as the unique terminal 
+that was usable was showing process 5715 (nano). One was refuted:
+
+| Hypothesis | Result | Evidence |
+|---|---|---|
+| `/storage/self/primary` resolves per-process, so the anchor may not see it | **REFUTED** | `ls -ld /proc/6248/root/storage/self/primary/Download/` → `drwxrwx--- root everybody`; `readlink -f` → `/storage/emulated/0` |
+| External storage is mounted `noexec` | **CONFIRMED** | `/dev/fuse /storage/emulated fuse rw,lazytime,nosuid,nodev,noexec,…` |
+| FUSE synthesizes mode, so `chmod` does not stick | **CONFIRMED** | `chmod 755` on a file in `Download/` left it `-rw-rw---- root everybody u:object_r:fuse:s0` |
+
+Execution probe, both locations, same binary (`/system/bin/toybox`):
+
+```text
+/storage/self/primary/Download/probe echo OK
+  -> /system/bin/sh: …/probe: can't execute: Permission denied   (execve refused)
+
+/data/local/tmp/probe echo OK
+  -> toybox: Unknown command /data/local/tmp/probe               (binary RAN)
+  -> ls -lZ: -rwxr-xr-x 1 root shell u:object_r:shell_data_file:s0
+```
+
+The second is a **successful execution**. The message is toybox's own
+multi-call applet dispatch failing on an unrecognized `argv[0]`, not an
+`execve` failure — the shell reports those itself, as it did for the first.
+Incidentally this is a live demonstration of the `argv[0]`-dependent
+behaviour that `docs/architecture/analysis-pipeline.md`'s "Filenames: two
+namespaces" cites as the reason the guest keeps the submitted name.
+
+**None of this is SELinux.** `noexec` is a mount option enforced by the VFS
+before any LSM hook, and FUSE mode synthesis is the daemon's `derive=multi`
+/ `default_normal` behaviour. Neither is reachable by policy, and no `avc`
+denial is produced by either. Setting the guest permissive would change
+nothing here — and would make observed malware behaviour unrepresentative,
+so it is not a workaround to reach for.
+
+**Decision: `GUEST_STAGING_DIR=/data/local/tmp` for Android**, with no
+`drakvuf/` subdirectory. `/data/local/tmp` already exists in the saved
+image, which the contract requires because `injector -m writefile` does not
+create parent directories. Creating a subdirectory instead would mean
+modifying and re-saving the golden image, and also giving proof of being 
+analyzed, changing the injection anchor PID — a real cost for tidiness only.
+
+`/storage/self/primary/Download` is **not** ruled out for APK-only analysis,
+where `pm install` reads the file and never executes it, and where the
+provenance realism is genuinely useful. It is deferred rather than adopted:
+it cannot serve native ELF, `.so` or `dalvikvm`/`CLASSPATH` samples, and
+selecting a staging directory from `detected_type` would make that field
+load-bearing when the state model deliberately keeps it advisory.
 
 ### Candidate metadata
 
@@ -1821,6 +1883,35 @@ mv -- "$RESULT_TMP" "$RESULT_FINAL"
 ```
 
 ---
+
+> **WITHDRAWN 2026-08-10 (issue #6) — applies to §4.2, §4.3 and §4.4.**
+> `logcat`, `logd`, `dumpsys` and `dmesg` are not used, for the time being.
+> No in-guest collection runs on any target; analysis output comes from
+> hypervisor introspection and the host-side pcap, and the guest filesystem
+> is written once (the sample) and never read back.
+>
+> **Not because these are installed agents** — they ship with Android, so by
+> the narrow criterion ("nothing persistent is installed in the guest") they
+> would pass. Because a collector inside the guest is visible to the sample
+> in `ps`/`/proc`, writes a file the sample can truncate or poison, needs
+> in-guest state to stop, and duplicates inside the trust boundary what
+> introspection provides from outside it. `injector`'s drakshell stays the
+> one accepted entry because it self-terminates before the sample runs.
+>
+> The §4.2 candidate is the clearest case: `logcat -b all -f … &` plus a
+> PID file and a `kill -TERM` runs for the entire analysis, alongside the
+> malware.
+>
+> **The cost is accepted knowingly.** These carried Android framework
+> semantics — ActivityManager, PackageManager, ART, Intent dispatch,
+> permission grants — that kernel-syscall tracing does not reconstruct. The
+> Android track has less semantic visibility as a result. Revisiting means
+> finding an *external* source for those events (reading `logd`'s buffers
+> through LibVMI, say), not re-admitting an in-guest process.
+>
+> Sections 4.2–4.4 are kept below as the historical candidate. Do not
+> implement them. Rationale in `docs/architecture/analysis-pipeline.md`,
+> "Shared and per-OS code boundary" → decision 4.
 
 ## 4.2 Capture logcat
 
