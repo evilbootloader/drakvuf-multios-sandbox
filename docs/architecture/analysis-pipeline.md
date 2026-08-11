@@ -135,9 +135,14 @@ timeout triggers `cleanup_script` and a fresh clone retry.
 > into `dirwatch.c`, the second is a literal in the trace script — so
 > tuning the headroom currently means editing code. See
 > `docs/runbooks/deploy-repo-relative-paths.md`, D5 observations. Concurrency is
-capped by a thread pool sized from the `<max clones>` argument (validated
-1–128 in upstream; this project's copy has not been independently
-re-verified against that bound).
+capped by a thread pool sized from the `<max clones>` argument, which this
+project's copy validates as 1–128 in `main()` — `dirwatch.c:486-488`
+rejects anything outside that range with "Invalid clone count %u (valid
+range: 1-128)", and `slots_busy[]` is sized `[128]` to match
+(`dirwatch.c:161`). *(Corrected 2026-08-11: this previously said the bound
+was "validated 1–128 in upstream" and that this copy "has not been
+independently re-verified against that bound". It has been, against the
+source in this repository.)*
 
 One origin domain is hard-coded per invocation (`dirwatch.c:472`), so a
 `dirwatch` process serves exactly one guest OS. The state model below turns
@@ -850,6 +855,12 @@ Two rules make it safe:
   a shell-parsed string**. `drakvuf -e` is execve-direct with no guest
   shell — established by issue #2 (`docs/runbooks/verify-user-placeholder.md`)
   — so a name cannot dereference guest-side through that path.
+  **This finding is qualified `[LINUX]` at its source.** `injector --help`
+  reads `[LINUX] (execproc -> execve(...); 64bit only)`, so it is
+  established for Ubuntu and Android and **must not be assumed for
+  Windows**: the Windows injection method has not been read, and this rule
+  is a security property, not a convenience. Re-establish it per OS before
+  relying on it — `docs/checklists/windows.md` carries the same warning.
 - `guest_filename` is *normalized, not discarded*: path separators and NUL
   stripped, length capped, Windows reserved names (`CON`, `PRN`, trailing
   dot or space) rejected. It is stored separately from `original_filename`

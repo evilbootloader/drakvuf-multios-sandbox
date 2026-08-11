@@ -52,10 +52,15 @@ feedback ahead of the heavy tier.
   at all.
 - Never execute a real malware sample automatically, from a PR or
   otherwise.
-- Prevent installation-documentation drift: "Ubuntu automation works" is
-  currently an assertion in `docs/Project-definition.txt`/`CLAUDE.md`
-  that predates issue #2's source-reading finding and has never been
-  re-verified by execution evidence in this repository.
+- Prevent repo↔Dom0 drift from recurring. "Ubuntu automation works" is no
+  longer an unverified assertion — issue #2 established it by execution on
+  2026-08-08 (`ExecProc Status:Success`, ~359k trace records, clean
+  `exit_group`), and lines 41-43 and 599-605 below record the same. What
+  that verification *found* was that `automation/` had silently diverged
+  from the deployed copies, and nothing detects that automatically. Since
+  2026-08-09 parity is maintained by a checkout on Dom0 rather than by
+  copying, which narrows the window without closing it: an in-place edit to
+  a deployed script still goes unnoticed. That is what this tier is for.
 
 ## CI architecture
 
@@ -635,9 +640,11 @@ sudo systemctl status actions.runner.<repo>.<runner-name>.service
 ## Future CI work
 
 - `android-pipeline` once DRAFT-015/016 land.
-- Windows CI once the M5 planning spike (`docs/checklists/windows.md`)
-  produces a baseline — note a Windows golden VM would follow the same
-  "already in the base snapshot" pattern established here.
+- Windows CI once **DRAFT-034** (`docs/checklists/windows.md`) produces a
+  baseline — note a Windows golden VM would follow the same "already in the
+  base snapshot" pattern established here. *(Was "once the M5 planning
+  spike produces a baseline"; Windows is a current target and DRAFT-034 is
+  its track head, not a deferred M5 exercise.)*
 - `capa` post-processing tests once the result schema (DRAFT-018) and
   real DRAKVUF logs exist.
 - Scheduled nightly/weekly endurance runs

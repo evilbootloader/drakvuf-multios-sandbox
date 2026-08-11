@@ -1,4 +1,4 @@
-# DRAKVUF Android Automation Project
+# DRAKVUF Multi-OS Sandbox
 
 Automation for a DRAKVUF malware-analysis laboratory.
 
@@ -7,14 +7,21 @@ L0: Proxmox/KVM
 └── L1: Xen Dom0 + DRAKVUF/LibVMI
     ├── L2 Ubuntu analysis VM
     ├── L2 Android/BlissOS analysis VM
-    └── L2 Windows analysis VM (planned)
+    └── L2 Windows analysis VM
 ```
 
 The goal is a sandbox where a sample dropped into `/malware_incoming/<os>/`
 is analysed under DRAKVUF in a disposable clone of that OS's guest. The
 target OS is chosen by which directory the sample is submitted to, with one
-watcher per OS. Ubuntu automation is mostly done; Android automation is in
-progress; Windows is a planned future target.
+watcher per OS.
+
+All three OS targets are current, at different stages:
+
+| Target | State |
+|---|---|
+| **Ubuntu** | Mostly done, evidenced end to end on Dom0 |
+| **Android/BlissOS** | Phase 1 evidenced (golden→sandbox clone, injection anchor, saved state); no automation scripts yet |
+| **Windows** | Track open, design contract fixed (issue #6's C1–C10), no execution evidence yet |
 
 ## Running it
 
@@ -57,9 +64,15 @@ guest state in `state/`; neither is git-tracked. See `profiles/README.md`,
 - `docs/checklists/` — per-OS implementation checklists with execution
   evidence (`android.md`, `ubuntu.md`, `windows.md`, `platform.md`). These
   track what's actually been done and evidenced, distinct from the roadmap.
+- `docs/runbooks/` — dated execution transcripts from real Dom0 work
+  (`verify-user-placeholder.md`, `deploy-repo-relative-paths.md`).
+  Append-only evidence: annotate, never edit in place.
+- `docs/workflow-ci.md` — the CI design: a GitHub-hosted static tier and a
+  self-hosted Xen integration tier (DRAFT-026a/b). Neither is implemented.
 - `docs/Project-definition.txt`,
   `docs/drakvuf-on-xen-nested-within-proxmox.md`, `docs/android_setup.md` —
-  the original infrastructure setup guides.
+  the original infrastructure setup guides. Historical provenance, kept
+  verbatim and not synced with later renames or fixes — see `CLAUDE.md`.
 - `.github/issue-drafts/` — locally-drafted GitHub issues, reviewed before
   anything is published with `gh`.
 
@@ -72,9 +85,15 @@ review gates. See `CONTRIBUTING.md`.
 
 ```bash
 bash -n SCRIPT       # shell scripts
+dash -n SCRIPT       # they execute under dash in production — see CLAUDE.md
 shellcheck SCRIPT
-perl -c SCRIPT        # Perl scripts
+perl -c SCRIPT       # Perl scripts
 ```
+
+`shellcheck` does not pass cleanly today: five of the six `automation/*.sh`
+report `SC1128`, because the DRAKVUF licence header sits above the shebang.
+Establishing a baseline the scripts actually pass is DRAFT-031, and it gates
+the static CI tier.
 
 ## Infrastructure boundary
 

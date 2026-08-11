@@ -68,14 +68,41 @@ practiced in the checklists' "Record platform versions" sections).
 Confirm this via an actual build-from-pinned-revision test before treating
 it as settled (see roadmap "Architecture decisions needing experiments").
 
-Do not begin modifying DRAKVUF engine code itself until a stable per-OS
-pipeline exists (Milestone M9, deliberately last).
+**Corrected 2026-08-11 (CONF-11).** This section previously read "Do not
+begin modifying DRAKVUF engine code itself until a stable per-OS pipeline
+exists (Milestone M9, deliberately last)." That is no longer the project's
+direction: **modifying the engine — adding functionality to DRAKVUF, not
+just orchestrating it — is near-term intended work.**
+
+This correction is unlike the others in the same pass, and the difference
+is worth stating: nothing in the repository contradicted the old sentence.
+Ordinary drift leaves a seam — one document disagreeing with another, or
+with the code — and here all four locations that stated the M9 constraint
+agreed with each other. Only the project's actual direction disagreed with
+all of them, so a reader had no signal the constraint was stale and would
+have deferred engine work, citing M9 correctly.
+
+Two consequences that change technical statements rather than sequencing:
+
+- **DRAFT-024's purpose changes.** Pinning both upstreams is currently
+  justified as bus-factor insurance (roadmap risk #8) at P2. If engine code
+  is about to be modified, a pinned revision becomes the baseline those
+  changes are diffed from — a prerequisite, not a precaution.
+- **DRAFT-010's purpose changes.** Documenting `dirwatch.c`'s interface
+  becomes input to engine work rather than documentation for its own sake,
+  and its unresolved `dirwatch.c` / `dirwatch_old.c` authority question
+  stops being a tidy-up.
+
+Milestones are deliberately **not** renumbered here; the affected drafts
+propose their own resequencing.
 
 ## DRAKVUF Sandbox (CERT-Polska) — what's reusable
 
 See `docs/roadmap/project-roadmap.md`'s reuse-vs-build table for the
 condensed verdicts (Flask+RQ+Redis queue: reuse/adapt; TLS visibility via
-tlsmon: not applicable — Windows-only; VM lifecycle via snapshot-restore:
+tlsmon: Windows-only, therefore **applicable to the Windows track and to
+nothing else** — not the blanket "not applicable" this line used to read,
+now that Windows is current; VM lifecycle via snapshot-restore:
 not applicable to this project's clone-per-run model, and additionally
 confirmed non-viable in this nested Xen-inside-Proxmox setup at all, per
 `docs/checklists/windows.md`; capa integration: reuse/adapt, capa v7.2.0

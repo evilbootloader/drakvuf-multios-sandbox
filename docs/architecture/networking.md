@@ -14,7 +14,7 @@ Provisions the isolated per-clone networking that `clone-ubuntu.pl` and
 - `echo 1 > /proc/sys/net/ipv4/ip_forward` — enables IP forwarding.
 - `iptables -t nat -A POSTROUTING -o xenbr0 -j MASQUERADE` — NATs outbound
   traffic via the uplink bridge `xenbr0`.
-- `ifconfig xenbr1 up`.
+- `ip link set xenbr1 up`.
 - For each VLAN `1..N` (`N` = clone count argument): `vconfig add xenbr1 $i`,
   gateway `172.16.$i.1/24` on `xenbr1.$i`, and
   `iptables -A FORWARD -i xenbr1.$i -o !xenbr0 -j DROP` (blocks inter-VLAN
@@ -23,6 +23,16 @@ Provisions the isolated per-clone networking that `clone-ubuntu.pl` and
 This is the source of the `172.16.<VLAN>.1` gateway value used by
 `preconfig-ubuntu.sh`, and of the `xenbr1.<vlan>` interface name
 `clone-ubuntu.pl` attaches clones to and `tcpdump.sh` captures on.
+
+**It does not create `xenbr1`, despite being the file named
+`network-setup.sh`.** It calls only `modprobe`, `ip`, `vconfig` and
+`iptables`; the OVS bridge itself comes from a separate one-time install
+step, `ovs-vsctl add-br xenbr1`
+(`docs/drakvuf-on-xen-nested-within-proxmox.md`). Running
+`network-setup.sh` on a host that has never had that step performed
+therefore does not establish the analysis network — it configures VLAN
+sub-interfaces on a bridge that does not exist. Part of why **DRAFT-028**
+(fail loudly, install correct rules, be idempotent) exists.
 
 ## Confirmed defect: guest DNS never resolved (fixed 2026-08-09)
 
@@ -129,3 +139,9 @@ guests. Any TLS visibility for Ubuntu/Android analysis requires original
 engineering (hypervisor memory scanning, or in-guest key logging — which
 conflicts with the project's agentless design goal) or must be deferred.
 Tracked as a research spike, DRAFT-023.
+
+**With Windows a current target, that same finding reads the other way
+round for the Windows pipeline: `tlsmon` is the one working TLS-visibility
+path the project has**, not a plugin it cannot use. The constraint above is
+a per-OS limitation of Ubuntu and Android, not a project-wide one — see
+`docs/roadmap/project-roadmap.md` risk #4.

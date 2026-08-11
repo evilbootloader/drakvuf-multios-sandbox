@@ -1,4 +1,4 @@
-# DRAKVUF Android Automation Project
+# DRAKVUF Multi-OS Sandbox
 
 ## Project purpose
 
@@ -8,23 +8,23 @@ Architecture:
 
 L0: Proxmox/KVM
 └── L1: Xen Dom0 + DRAKVUF
-    └── L2: Ubuntu, BlissOS/Android, or (planned) Windows analysis guest
+    └── L2: Ubuntu, BlissOS/Android, or Windows analysis guest
 
-The goal is a sandbox that can watch `/malware_incoming`, determine which
-guest OS a dropped sample needs, and launch the matching clone for analysis
-under DRAKVUF. Ubuntu automation is mostly done and must remain functional.
-Windows is a planned future target.
+The goal is a sandbox that can watch `/malware_incoming/<os>/`, and launch a
+disposable clone of that OS's guest for analysis under DRAKVUF. Ubuntu
+automation is mostly done and must remain functional.
 
-The current development goal is to add Android/BlissOS automation alongside
-the Ubuntu implementation.
+**All three OS targets are current.** Ubuntu is evidenced end to end;
+Android has evidenced Phase 1 and no scripts yet; Windows has an open track
+with a fixed design contract and no execution evidence. Android/BlissOS
+automation is the nearest development goal, but shared code should be fixed
+once for three OS families rather than for Ubuntu and then re-discovered
+twice.
 
 ## Source documentation
 
 Before making architectural changes, read the relevant documents under `docs/`:
 
-- `docs/Project-definition.txt`
-- `docs/drakvuf-on-xen-nested-within-proxmox.md`
-- `docs/android_setup.md`
 - `docs/roadmap/project-roadmap.md` — the living milestone/dependency-graph
   roadmap across all OS targets; check here first for current sequencing
   and open architecture decisions.
@@ -36,6 +36,22 @@ Before making architectural changes, read the relevant documents under `docs/`:
   source of truth for Android automation progress.
 - `docs/architecture/` — analysis-pipeline, networking, result-schema,
   upstream-drakvuf, and licensing write-ups.
+- `docs/runbooks/` — dated execution transcripts. Append-only evidence.
+- `docs/workflow-ci.md` — the CI design (DRAFT-026a/b).
+
+**Historical provenance — how the lab was originally built, not
+current-state reading.** These are imported source guides, kept verbatim
+and deliberately *not* synced with later renames or fixes. Read them for
+setup procedure; do not read them for what the project currently supports:
+
+- `docs/Project-definition.txt` — five lines, and both of its claims are now
+  wrong. It says the project analyses "ubuntu malware (without network
+  connection)": Android Phase 1 is evidenced, Windows is current, and clones
+  have unrestricted NAT egress by default. It also points at
+  `automated_drakvuf_on_xen_nested_within.md`, a filename that does not
+  exist — the file is `drakvuf-on-xen-nested-within-proxmox.md`.
+- `docs/drakvuf-on-xen-nested-within-proxmox.md`
+- `docs/android_setup.md`
 
 Do not silently treat commands labelled "Candidate" in the checklists as proven.
 They must be validated before being treated as working commands.
@@ -91,9 +107,13 @@ subfolders):
   `injector`/`drakvuf` processes for it.
 - `tcpdump.sh` — captures traffic on the clone's VLAN sub-interface to a
   per-sample pcap.
-- `network-setup.sh` — provisions the OVS bridge and per-VLAN isolated
-  networks (`172.16.<vlan>.1/24` gateway per VLAN) that `clone-ubuntu.pl` and
-  `preconfig-ubuntu.sh` assume already exist.
+- `network-setup.sh` — provisions the per-VLAN isolated networks
+  (`172.16.<vlan>.1/24` gateway per VLAN) that `clone-ubuntu.pl` and
+  `preconfig-ubuntu.sh` assume already exist. It does **not** create
+  `xenbr1`, despite the name: it calls only `modprobe`/`ip`/`vconfig`/
+  `iptables`, and the OVS bridge comes from a separate one-time install
+  step (`ovs-vsctl add-br xenbr1`). Running it on a host that never had that
+  step does not establish the analysis network.
 - `run_analysis-ubuntu.sh` — top-level entry point; sources
   `pipeline-ubuntu.env`, pre-flight checks the `.cfg`/profile/saved state,
   creates the per-OS malware directories, brings `xenbr1` up, runs

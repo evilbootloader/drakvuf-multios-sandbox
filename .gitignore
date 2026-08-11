@@ -32,3 +32,21 @@ secrets/
 *.o
 *.so
 *.iso
+
+# Local developer environment and working notes. None of this is part of the
+# lab automation, and two entries are deliberately private rather than merely
+# noisy: prompts/ is denied to Claude Code by .claude/settings.json's deny
+# list, and .claude/settings.local.json holds a per-machine sandbox override.
+#
+# NOTE: this ignores .claude/settings.json too, which is the shared
+# allow/ask/deny permission policy rather than a personal setting. Tracking
+# it would give every checkout the same guardrails; ignored here by choice.
+# Same for .devcontainer/ — it is what makes bash/dash/shellcheck/perl
+# available for the static checks, so an ignored copy means the toolchain is
+# reproduced by hand on each machine (shellcheck is not in the base image).
+.claude/
+.devcontainer/
+
+# Evidence archives dropped in the working tree. Diagnostic captures belong
+# in docs/checklists/ or docs/runbooks/ as text, not as tarballs.
+*.tar.gz

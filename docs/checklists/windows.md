@@ -1,13 +1,21 @@
 # Windows DRAKVUF Automated Analysis — Implementation Checklist and Command Log
 
-> **Status: skeleton only.** No Windows automation work has started as of
-> 2026-08-07. This file intentionally contains no invented commands,
-> configs, or evidence — populate it only from real work, following the
-> same discipline as `android.md` (Existing vs. Candidate, evidence before
-> checking a box). See `docs/roadmap/project-roadmap.md` Milestone M5
-> ("Windows planning spike") for what precedes any implementation here:
-> baseline selection, profile/symbol requirements, and the clone-vs-snapshot
-> VM-lifecycle architecture decision (DRAFT-020).
+> **Status: current target, no execution evidence yet.** Windows is one of
+> the project's three current OS targets alongside Ubuntu and Android — not
+> a deferred planning exercise. No Windows *automation* has been built and
+> no command in this file has been run, so the checklist is still empty; the
+> difference from "skeleton only" is that the track is open and its design
+> constraints are already fixed (see "Inherited contract" below).
+>
+> This file intentionally contains no invented commands, configs, or
+> evidence — populate it only from real work, following the same discipline
+> as `android.md` (Existing vs. Candidate, evidence before checking a box).
+>
+> **DRAFT-034 is the track head.** It supersedes DRAFT-020's design half;
+> the VM-lifecycle question DRAFT-020 existed to answer is closed
+> (clone-per-run, by elimination). Roadmap milestone M5 still names this a
+> "planning spike" — that framing is what changed, and the roadmap now says
+> so.
 
 ---
 
@@ -23,8 +31,8 @@
 | Saved state | TBD |
 | Windows baseline (version/build) | Not yet selected |
 | VM lifecycle model | clone-per-run (current Ubuntu/Android model) — decided by elimination: snapshot-restore (DRAKVUF Sandbox's model) does not work in this nested Xen-inside-Proxmox setup, since `xl save`/`xl restore` leaves the base and cloned disk images read-only; see roadmap "Architecture decisions needing experiments" |
-| Current phase | Not started |
-| Current blocker | M5 planning spike not yet begun |
+| Current phase | Phase 0 — baseline selection (DRAFT-034, unpublished) |
+| Current blocker | DRAFT-034 not yet published; no baseline selected |
 
 ### Inherited contract (issue #6, 2026-08-10)
 
@@ -48,6 +56,14 @@ off a design option that would otherwise look open:
   of a path that satisfies one and silently fails the other.
 - **No in-guest collection.** No Windows equivalent of `logcat`/`dmesg` may
   be introduced; output comes from introspection and the pcap.
+- **`drakvuf -e` being execve-direct is a `[LINUX]` finding — do not
+  inherit it.** Issue #2 established that `-e` invokes no guest shell, so a
+  filename cannot dereference guest-side. `injector --help` qualifies that
+  as `[LINUX] (execproc -> execve(...); 64bit only)`. Windows execution has
+  not been read, and the single-argv rule in
+  `docs/architecture/analysis-pipeline.md` is a security property rather
+  than a convenience, so it must be re-established against the Windows
+  injection method before anything relies on it.
 - **`CLONE_LV_SIZE` is per-OS** and Windows is the reason it exists as a
   variable: `-L64G` is hard-coded today and a Windows golden LV is unlikely
   to want it.
@@ -68,7 +84,12 @@ making it the project's only working TLS-visibility route (DRAFT-023).
 # Phase 0 — Planning spike (M5)
 
 - [ ] Select a specific supported Windows baseline (version/build).
-- [ ] Decide golden-VM lifecycle model (clone-per-run vs. snapshot-restore).
+- [x] Decide golden-VM lifecycle model — **clone-per-run, decided by
+  elimination** (roadmap "Architecture decisions needing experiments" #3;
+  the status table above records the same). Snapshot-restore is not viable
+  in this nested Xen-inside-Proxmox setup at all, so there was never a
+  Windows-specific choice to make. What remains is confirming clone-per-run
+  works against a Windows guest specifically — DRAFT-034, not this item.
 - [ ] Determine profile/symbol requirements for the selected baseline.
 - [ ] Determine injector target and plugin compatibility for Windows guests.
 - [ ] Scope the first Windows sample type (PE executable, per the roadmap's

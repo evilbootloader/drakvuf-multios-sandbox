@@ -69,11 +69,14 @@ execution. None of the checkboxes below represent execution evidence.
   SIGINT then SIGKILL for lingering `injector`/`drakvuf` processes.
 - [x] `automation/tcpdump.sh` exists — captures the clone's VLAN
   sub-interface to a per-sample pcap.
-- [x] `automation/network-setup.sh` exists — provisions the OVS bridge and
-  per-VLAN networks (`172.16.<vlan>.1/24` gateway, `iptables` MASQUERADE +
+- [x] `automation/network-setup.sh` exists — provisions the per-VLAN
+  networks (`172.16.<vlan>.1/24` gateway, `iptables` MASQUERADE +
   inter-VLAN DROP), brings the bridge up with `ip link set xenbr1 up`.
   *(Updated 2026-08-08 to the production copy, which replaced the
-  deprecated `ifconfig xenbr1 up`.)*
+  deprecated `ifconfig xenbr1 up`. Corrected 2026-08-11: this line
+  previously said it "provisions the OVS bridge", which it does not —
+  `xenbr1` is created by a separate install step, `ovs-vsctl add-br
+  xenbr1`. See `docs/architecture/networking.md`.)*
 - [x] `automation/run_analysis-ubuntu.sh` exists — sources
   `pipeline-ubuntu.env`, pre-flight checks the `.cfg`/profile/state,
   creates the per-OS malware directories, brings `xenbr1` up, runs
@@ -255,18 +258,26 @@ Three things the same run surfaced that are **not** fixed:
 - [x] Confirm the `<USER>` bug against real execution (DRAFT-007 / issue #2)
   — done 2026-08-08; premise refuted, production was never affected. See
   Known issues above and `docs/runbooks/verify-user-placeholder.md`.
-- [ ] Reconcile `automation/drakvuf-ubuntu.sh` with the deployed Dom0 copy
-  (the drift this uncovered — `<USER>`, `-a syscalls`, `--memdump_dir`).
-  Needs a decision on which copy is authoritative, so it is *not* a
-  mechanical sync. No draft/issue yet.
+- [x] Reconcile `automation/drakvuf-ubuntu.sh` with the deployed Dom0 copy
+  (the drift this uncovered — `<USER>`, `-a syscalls`, `--memdump_dir`)
+  — done 2026-08-08 as part of issue #2; the production copy was taken as
+  authoritative and `automation/` was synced wholesale. See the Known
+  issues section above for the file-by-file record.
 - [ ] Document current behavior precisely with execution evidence, not just
   source reading (DRAFT-011).
 - [ ] Retrofit structured status output (`status.json`-style, matching the
   shape being defined for `docs/architecture/result-schema.md`) without
   changing existing behavior.
 - [ ] Add `bash -n` / `shellcheck` / `perl -c` CI for `automation/*`
-  (DRAFT-012) — blocked on Bash being non-functional in this dev container
-  as of 2026-08-07; must run on the real host or real CI.
+  (**DRAFT-026a**, the static tier — DRAFT-012 was superseded by it; see
+  `.github/issue-drafts/issue-index.md`). Gated on **DRAFT-031**, which
+  establishes a baseline the scripts actually pass: `shellcheck` currently
+  reports `SC1128` on five of the six, because the licence header sits
+  above the shebang. *(The earlier wording here said this was blocked on
+  Bash being non-functional in this dev container as of 2026-08-07. That
+  blocker is lifted — `bash`, `dash`, `shellcheck` and `perl` were
+  re-confirmed working in-container on 2026-08-08, 2026-08-09 and again on
+  2026-08-11.)*
 - [ ] Parameterize the remaining hard-coded values — `vg-root` and the
   `xenbr1` / `172.16.<vlan>` scheme in `clone-ubuntu.pl` and
   `network-setup.sh` — per `CLAUDE.md`'s "prefer parameterization" rule,
@@ -341,6 +352,16 @@ treated as a redirection — the repository's copy passes the literal string
 Environment note: `bash` 5.3.9, `shellcheck` 0.11.0 and `perl` are all
 functional in the development container as of 2026-08-08, consistent with
 `CONTRIBUTING.md`'s re-verification note (they were not on 2026-08-07).
+
+> **Annotation 2026-08-11 (CONF-12), not a correction of the above.** The
+> statement was true when written; the citation is what went stale.
+> `CONTRIBUTING.md`'s "re-verification note" was collapsed into a standing
+> instruction on 2026-08-09 (audit finding MISS-03), so there is no longer
+> a passage under that name to consult. The fact now lives in
+> `CONTRIBUTING.md`'s TEST section as a standing instruction to re-verify
+> the toolchain rather than as a dated narrative. Re-confirmed working
+> again on 2026-08-11 (`bash -n`, `dash -n`, `shellcheck`, `perl -c` all
+> run in-container).
 
 Superseded by the Dom0 evidence above. What remains open is *not* the
 `<USER>` question but the repo↔host drift it exposed — see

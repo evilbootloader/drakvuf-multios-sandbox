@@ -6,7 +6,11 @@
 > work becoming near-term (CONF-11, section E) — so the old title
 > understated it.
 
-**Status:** Drafted, not published
+**Status:** **Applied 2026-08-11**, without being published as a GitHub
+issue — a documentation-only pass, so `CONTRIBUTING.md`'s Stage 2 gate was
+not triggered and no issue body was edited. Tables A–E below are the record
+of what was found; the resolution note at the end of this file records what
+each item became.
 **Area:** governance / documentation (all OS targets)
 **Milestone:** M0
 **Priority:** P1
@@ -319,3 +323,57 @@ already collapsed on 2026-08-09).
 `git revert`. Nothing depends on the exact wording, and the
 evidence-preservation rule means no information is destroyed even if the
 change is wrong.
+
+---
+
+# Resolution — 2026-08-11
+
+Applied as a documentation-only pass. Per PLAN step 1, every item was
+re-confirmed against current file contents by text match rather than line
+number; the line references above had drifted and are left as written.
+
+**Three items needed no change** — later work had already resolved them:
+
+| ID | Why |
+|---|---|
+| DOC-04 | `docs/checklists/ubuntu.md` already records the hard-coded `/home/user/drakvuf-tools/...` paths as "fixed 2026-08-09 (issue #4)". |
+| CONF-02 | `.github/issue-drafts/README.md:15` already reads "DRAFT-007 (issue #2, closed)". |
+| CONF-04 | The offending sentence had been reworded already; the goal was still framed as an assertion-check rather than drift-prevention, so it was rewritten anyway. |
+
+**Everything else was corrected or annotated**, and the classification in
+PLAN step 2 held: the two deliberate exceptions (DOC-N4 editable inside an
+annotate-only file, CONF-12 annotate-only inside an editable one) were both
+honoured.
+
+Corrections beyond the enumerated list, all in the same class and each
+noted in place:
+
+- `docs/architecture/networking.md` gained the `xenbr1`-is-not-created-here
+  paragraph (the NET-04 fix needed a home in the architecture doc, not only
+  in `CLAUDE.md`/`ubuntu.md`) and the Windows half of the `tlsmon` rescope.
+- `docs/roadmap/project-roadmap.md`'s layout diagram was retitled from
+  "Proposed" to actual and gained `docs/runbooks/`, `docs/workflow-ci.md`,
+  `profiles/` and `state/` — the same omission DOC-07 raised against
+  `README.md`.
+- `README.md`'s Testing section gained `dash -n`, which `CLAUDE.md` requires
+  and `README.md` omitted, plus the current `shellcheck` state.
+- `docs/checklists/android.md` §6.1 gained `dash -n` alongside the TODO-03
+  fix.
+- `.github/issue-drafts/issue-index.md`'s two superseded ordering blocks
+  were **deleted** rather than marked superseded, and replaced with a single
+  "Current order (consolidated 2026-08-11)" section. The load-bearing
+  constraints scattered across three dated addenda were merged into one
+  list there; the duplicated bullets were removed at source.
+
+**Verification.** All ten TEST greps run; every remaining match is either a
+preserved historical record, a dated evidence block, or this pass's own
+quotation of the text it corrected. `git diff --stat docs/runbooks/
+.github/issue-drafts/DRAFT-00*.md` is empty as required. Deletions in
+`docs/checklists/android.md` are confined to the status table (DOC-N5), the
+provenance footer (DOC-N4), §6.1's unticked Candidate command block
+(TODO-03), and one stray `roo` typo.
+
+**Not done, and deliberately out of scope:** the title change was confirmed
+with the project owner first, per PLAN step 3 — both headings are now
+"DRAKVUF Multi-OS Sandbox". Milestones were not renumbered, in either the
+Windows (D) or engine-work (E) case, exactly as the draft directed.
