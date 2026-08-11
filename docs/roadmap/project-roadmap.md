@@ -1,6 +1,6 @@
 # DRAKVUF Multi-OS Sandbox — Project Roadmap
 
-> Last updated: 2026-08-07. This roadmap is a living document — update it as
+> Last updated: 2026-08-11. This roadmap is a living document — update it as
 > milestones close, decisions get made, and new gaps are found. It does not
 > replace the per-OS checklists under `docs/checklists/`; those track
 > execution evidence, this tracks direction and sequencing.
@@ -8,14 +8,16 @@
 ## Context
 
 The project automates a DRAKVUF malware-analysis sandbox on
-`Proxmox/KVM → Xen Dom0 + DRAKVUF/LibVMI → {Ubuntu, Android/BlissOS, Windows(planned)}`.
-Ubuntu automation (`automation/*-ubuntu.sh`, `clone-ubuntu.pl`, orchestrated by
-a modified `dirwatch.c`) mostly works. Android automation has real evidenced
-progress through `docs/checklists/android.md` Phase 1 (golden→sandbox clone,
-injection anchor, saved memory state), but Phase 2 onward — the actual
-Android scripts, sample-type handling, artifact collection, containment,
-testing, reliability hardening — is 100% unstarted "Candidate" content.
-Windows support is planned but has no work started at all.
+`Proxmox/KVM → Xen Dom0 + DRAKVUF/LibVMI → {Ubuntu, Android/BlissOS, Windows}`.
+All three are **current targets**. Ubuntu automation (`automation/*-ubuntu.sh`,
+`clone-ubuntu.pl`, orchestrated by a modified `dirwatch.c`) mostly works.
+Android automation has real evidenced progress through
+`docs/checklists/android.md` Phase 1 (golden→sandbox clone, injection anchor,
+saved memory state), but Phase 2 onward — the actual Android scripts,
+sample-type handling, artifact collection, containment, testing, reliability
+hardening — is 100% unstarted "Candidate" content. Windows has no execution
+evidence yet, but its track is open and its design constraints are already
+fixed by issue #6's conformance checklist; DRAFT-034 is its head.
 
 This roadmap exists because writing more automation directly on top of the
 brainstormed workstream list would have meant redoing work once the shared
@@ -24,18 +26,23 @@ restructures that list into a dependency-ordered set of milestones and
 issues, using a formal `PLAN → CREATE → TEST → DEPLOY` lifecycle (see
 `CONTRIBUTING.md`) with human review gates at every stage.
 
-## Environment & tooling constraints (as of 2026-08-07)
+## Environment & tooling constraints
 
-- `Bash` was non-functional in the Claude Code dev container used to draft
-  this roadmap (`bwrap: No permissions to create a new namespace`).
-  `bash -n`/`shellcheck`/`perl -c` could not be run there — they must run on
-  the real host or in CI. Re-verify this hasn't recurred before assuming
-  static checks can run in-container.
-- No git repository existed at the time this roadmap was drafted. All
-  "evidence" lived only as uncommitted files on disk — see DRAFT-001 in
-  `.github/issue-drafts/`.
-- `gh` availability/auth could not be checked (needs Bash). Verify manually
-  before any GitHub-publication step.
+**All three constraints recorded here on 2026-08-07 are resolved** (updated
+2026-08-11, CONF-06). The section previously listed them as live, which
+contradicted this file's own risk register two screens further down.
+
+| Was | Now |
+|---|---|
+| `Bash` non-functional in the dev container (`bwrap: No permissions to create a new namespace`), so `bash -n`/`shellcheck`/`perl -c` could not run there | Lifted. Re-confirmed working in-container on 2026-08-08, 2026-08-09 and 2026-08-11. Current results: `bash -n` and `dash -n` pass on all six `automation/*.sh`; `perl -c` passes on `clone-ubuntu.pl`; `shellcheck` 0.11.0 reports `SC1128` on five of six (licence header above the shebang — DRAFT-031) |
+| No git repository existed | Closed as DRAFT-001; baseline commit `7764b77`. See risk #1 |
+| `gh` availability/auth unverifiable | Verified — six issues have since been published and closed with it |
+
+The standing instruction that replaces them: **re-verify the toolchain in
+whatever container you are in before assuming static checks can run**, and
+record the result. It has been non-functional before. `dash -n` matters as
+much as `bash -n` here — the scripts execute under `dash` in production
+(see `CLAUDE.md`).
 
 ## Current state (verified 2026-08-07, not assumed)
 
@@ -66,16 +73,26 @@ otherwise-done territory:
 - All four Xen guest configs referenced by checklist evidence are tracked
   under `misc/` (confirmed 2026-08-07): `misc/android_sandbox.cfg`
   (`android_sandbox`), `misc/android.cfg` (golden `android`),
-  `misc/linux_sandbox.cfg` (`ubuntu_sandbox` — the filename is misleading,
-  it does not define a generic "linux" domain), and `misc/linux.cfg`
-  (golden `ubuntu` — same naming caveat). No config file is actually
-  missing; the earlier assumption that these were untracked was wrong.
+  `misc/ubuntu_sandbox.cfg` (`ubuntu_sandbox`) and `misc/ubuntu.cfg`
+  (golden `ubuntu`). No config file is actually missing; the earlier
+  assumption that these were untracked was wrong. *(Updated 2026-08-11: the
+  last two were named `misc/linux_sandbox.cfg` / `misc/linux.cfg` when this
+  paragraph was written, with a caveat here about the misleading "linux"
+  naming. Issue #1 renamed them on 2026-08-08 — repo side in `ced4e77`,
+  Dom0 side the same day — so the caveat no longer applies.)*
 
 Phase 2 through the MVP gate is **100% unstarted** — every item is `[ ]`,
 explicitly labelled "Candidate." The Issue log (`AND-001..003`) and Change
 log are placeholder rows.
 
-**Windows** — no work started.
+**Windows** — a current target, with no execution evidence yet. No golden
+VM, no baseline selected, no scripts. What it does have is a fixed design
+contract rather than an open design space: issue #6's conformance checklist
+(C1–C10 in `docs/architecture/analysis-pipeline.md`) already settles the
+file set, delivery via `injector -m writefile`, the no-in-guest-collection
+rule, and `pipeline-windows.env`'s shape. `docs/checklists/windows.md`
+records those. **DRAFT-034 is the track head** and is drafted but not
+published.
 
 ## Ecosystem research — what to reuse vs. build
 
@@ -87,14 +104,18 @@ for full sourced detail. Condensed:
 | Task/job queue (Flask + RQ + Redis) | Reuse/Adapt | Simple, well-understood; adaptable to drive Xen/LVM/OVS clones instead of snapshot restores. |
 | Analysis state machine | Reference-only | Good conceptual model; this project's clone-per-run, multi-OS shape needs its own state machine. **Defined 2026-08-09** (issue #3) — `docs/architecture/analysis-pipeline.md`. |
 | Network setup (bridge-per-worker + NAT/dnsmasq) | Reference-only | Conceptually close to existing OVS-per-VLAN approach; not a drop-in. |
-| TLSMON (TLS key extraction) | **Not applicable** | Confirmed by direct source read: hooks Windows `ncrypt.dll`/Schannel only. No Linux/Android path exists upstream. |
+| TLSMON (TLS key extraction) | **Windows only — reuse there, not applicable elsewhere** | Confirmed by direct source read: hooks Windows `ncrypt.dll`/Schannel only; no Linux/Android path exists upstream. *(Updated 2026-08-11: this row read "Not applicable" unqualified, which was written when Windows was deferred. With Windows a current target it inverts — `tlsmon` becomes the only working TLS-visibility path the project has. See risk #4.)* |
 | capa post-processing | Reuse/Adapt | Apache-2.0, no licensing friction. capa v7.2.0 added a native DRAKVUF-log feature extractor. |
 | Result/artifact schema | Reference-only / gap | No published JSON Schema found; define this project's own contract. |
 | Web/API architecture | Reference-only | Small Flask MVP is a fine reference; frontend stack unconfirmed. |
 | VM lifecycle (snapshot-restore) | **Not applicable, and ruled out for Windows too** | This project clones per-run via LVM/OVS. Confirmed 2026-08-07: snapshot-restore is not viable in this nested Xen-inside-Proxmox setup at all — `xl save`/`xl restore` leaves the base and cloned disk images read-only — so the Windows track will also use clone-per-run, not just Ubuntu/Android. |
 | Config presets (`[preset.x]` TOML) | Reuse/Adapt | Low-risk pattern, directly portable to per-OS presets. |
 
-## Proposed repository layout
+## Repository layout
+
+*(Was "Proposed" — this is the layout as built. Updated 2026-08-11 to add
+`docs/runbooks/`, `docs/workflow-ci.md`, `profiles/` and `state/`, all of
+which now exist.)*
 
 ```
 docs/
@@ -106,13 +127,17 @@ docs/
 │   ├── result-schema.md
 │   ├── upstream-drakvuf.md
 │   └── licensing.md
-└── checklists/
-    ├── ubuntu.md
-    ├── android.md
-    ├── windows.md
-    └── platform.md
-automation/                          # existing — Ubuntu automation scripts, unchanged
-misc/                                # existing — tracked Xen guest .cfg files, unchanged
+├── checklists/
+│   ├── ubuntu.md
+│   ├── android.md
+│   ├── windows.md
+│   └── platform.md
+├── runbooks/                        # dated execution transcripts (append-only)
+└── workflow-ci.md                   # CI design (DRAFT-026a/b)
+automation/                          # Ubuntu automation scripts + pipeline-ubuntu.env
+misc/                                # tracked Xen guest .cfg files
+profiles/                            # LibVMI/DRAKVUF kernel profiles — NOT git-tracked
+state/                               # xl save memory images — NOT git-tracked
 CONTRIBUTING.md
 README.md
 .gitignore
@@ -143,7 +168,8 @@ governance (git init, README, LICENSE clarity)
    │                                                                                        ▼
    ├──> observability/CI/resource-limits hardening (after ≥2 OS pipelines exist) ──> web platform MVP ──> public security hardening + legal gate
    │
-   └──> upstream DRAKVUF engine work (deliberately last; depends on ≥1 stable OS pipeline + repo-strategy decision)
+   └──> upstream DRAKVUF *contribution* (last; depends on ≥1 stable OS pipeline + repo-strategy decision)
+        note: modifying the engine is near-term, NOT gated here — see CONF-11
 ```
 
 Anti-evasion work attaches after each per-OS pipeline is functional — it's a
@@ -158,11 +184,11 @@ per-OS quality track, not a gate for anything else.
 | M2 | Containment closure | Finish Android §1.3 network isolation verification; decide shared-vs-per-OS script boundaries | Requires Xen Dom0 for the isolation tests |
 | M3 | Android MVP | Resume checklist Phase 2 → MVP gate using the now-defined job model | Bulk of the existing "Candidate" checklist content gets executed here |
 | M4 | Artifact schema + enrichment | Result schema, capa integration | After M1/M3 produce real logs to validate against |
-| M5 | Windows planning spike | Baseline selection, profile/symbol requirements (VM-lifecycle model already settled: clone-per-run) | Design only |
+| M5 | Windows track | Baseline selection, profile/symbol requirements, then the pipeline itself against issue #6's C1–C10 contract (VM-lifecycle model already settled: clone-per-run). **DRAFT-034 is the head** | *(Reframed 2026-08-11: was "Windows planning spike … Design only". Windows is a current target, not a design exercise. Milestones are deliberately **not** renumbered here — Windows arguably reorders M2–M5, and DRAFT-034 owns proposing that, so this stays a correction rather than a replan)* |
 | M6 | Ops hardening | Observability, CI expansion, resource limits/abuse resistance | After ≥2 OS pipelines exist |
 | M7 | Web platform MVP | Job submission API, queue, minimal UI — built on the state model's presentation projection (`display_phase`, the per-state artifact/cancellable/retryable contract) rather than a UI-specific status vocabulary | Only after M0–M6 and the licensing decision are resolved |
 | M8 | Public hardening + legal gate | AuthN/Z, rate limiting, tenant isolation, formal legal review | Before any external/paying users |
-| M9 | Upstream DRAKVUF contribution | Only after a stable OS pipeline + resolved repo strategy | Deliberately last |
+| M9 | Upstream DRAKVUF contribution | Contributing changes *back* to upstream still belongs here. **Modifying the engine does not** — that is near-term intended work as of 2026-08-11 (CONF-11) | *(Corrected 2026-08-11: this row read "Only after a stable OS pipeline + resolved repo strategy — Deliberately last", which would have an agent decline engine work while citing M9 correctly. Consequences for DRAFT-024 and DRAFT-010 are recorded in `docs/architecture/upstream-drakvuf.md`. Milestones not renumbered)* |
 
 ## Issue index
 
@@ -177,14 +203,15 @@ for the fully specified first batch (DRAFT-001 through DRAFT-008).
 | 1 | ~~No git repository existed as of 2026-08-07~~ — resolved 2026-08-07: baseline commit `bb8ad14` created | None — closed | DRAFT-001 complete; `git log`/`git status`/`git show --stat` evidence recorded in DRAFT-001.md |
 | 2 | Dev-container `Bash` was non-functional (bwrap error) | `bash -n`/`shellcheck`/`perl -c` couldn't run there | Must run on real host/CI; documented in CONTRIBUTING.md's TEST section |
 | 3 | DRAKVUF's GPL-with-exceptions text treats subprocess-orchestration as derivative work; CERT-Polska needed dual consent for proprietary embedding of the closest prior art | Commercial/paywalled web platform (M7+) may not be legally safe as currently envisioned | Real legal consultation needed before M7 business-model decisions; does not block internal lab automation |
-| 4 | `tlsmon` is confirmed Windows-only | No known path to TLS visibility on Ubuntu/Android guests | Original engineering or scope reduction required |
+| 4 | `tlsmon` is confirmed Windows-only | No known path to TLS visibility **on Ubuntu/Android guests**. Not a project-wide gap: with Windows current, `tlsmon` is the one working TLS-visibility path the project has | Original engineering or scope reduction required for Ubuntu/Android; adopt `tlsmon` for Windows. DRAFT-023 is rescoped accordingly *(rescoped 2026-08-11 — the risk was written when Windows was deferred and read as "no TLS visibility anywhere")* |
 | 5 | Android §1.3 network isolation is unverified | Sandbox containment guarantees for Android are currently unproven | Close before any real (non-benign) sample execution with networking enabled |
 | 6 | ~~Missing `.cfg` files~~ — corrected 2026-08-07: all four Xen guest configs are tracked under `misc/` | None — closed | Initial research missed the `misc/` directory; DRAFT-006 repurposed to reconcile `misc/` naming (`linux*.cfg` files define `ubuntu`/`ubuntu_sandbox`, not "linux") rather than recover missing files |
 | 7 | ~~`drakvuf-ubuntu.sh` has an apparent unsubstituted `<USER>` bug vs. working `preconfig-ubuntu.sh`~~ — resolved 2026-08-08 (issue #2): the deployed Dom0 copy is correctly substituted and samples execute; only this repo's copy carries the placeholder | None — closed. "Ubuntu works" is now execution-evidenced | DRAFT-007 complete; transcript in `docs/runbooks/verify-user-placeholder.md` |
 | 11 | ~~`automation/*` had drifted from the deployed Dom0 copies~~ — resolved 2026-08-08: `automation/` synced wholesale from the tested production host (`drakvuf-ubuntu.sh`, `network-setup.sh`, `dirwatch_old.c`; five other files were already byte-identical), and issue #1's host-side `linux_sandbox.cfg` → `ubuntu_sandbox.cfg` rename was completed | None — closed. Repo and host now agree everywhere | Recurrence prevention is the open part: nothing detects drift automatically (see DRAFT-026 CI) |
-| 8 | `lfreijo/drakvuf` `memdump` branch has no upstream PR/merge trail (single-maintainer fork) | Bus-factor risk for Linux plugin support | DRAFT-024 |
+| 8 | `lfreijo/drakvuf` `memdump` branch has no upstream PR/merge trail (single-maintainer fork) | Bus-factor risk for **Linux/Android** plugin support specifically. The Windows track leans on upstream `tklengyel/drakvuf` (~30 Windows-oriented plugins already present), so it is not exposed to this fork — the pinned commit is titled "Add **Linux** support for memdump, filetracer, fileextractor, and syscalls plugins" | DRAFT-024, which must therefore pin **two** upstreams with different bus-factor profiles. Its priority should rise from P2: with engine work near-term (see the M9 note), a pinned revision is the baseline changes are diffed from, not just insurance |
 | 9 | Upstream `dirwatch.c` had a historical timeout/retry bug (issue #140) with the same retry-on-timeout shape this project's copy uses | Possible latent reliability bug | DRAFT-010 |
 | 10 | No secrets-management design exists yet | Relevant once CI/deployment automation appears (M6+) | Not urgent now |
+| 12 | **Nothing links a saved sandbox state to the golden image it came from.** `state/<domain>.bak` records no provenance, and no check compares the two | A golden-VM change silently invalidates the saved state, and the pipeline keeps restoring it. The injection PID is worse than the state itself: it is a property of the `.bak`, so a stale `INJECTION_PID` makes `injector` attach to whatever now holds that PID — or to nothing | **Realised, not hypothetical.** The golden `android` VM was reinstalled on 2026-08-11 (AND-001), invalidating `state/android_sandbox.bak` and anchor PID 5715; `docs/checklists/android.md` §1.5 recorded them as validated and nothing flagged the conflict. DRAFT-037 / [issue #7](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/7) rebuilds the Android side. The generic fix — recording golden-image identity alongside the saved state and checking it at restore — is **unowned** and applies to all three OS targets |
 
 ## Architecture decisions needing experiments
 
@@ -219,7 +246,6 @@ CI pipeline definition; licensing and legal desk research.
 
 **Requires Xen Dom0 / L1** (must be presented for manual execution, per
 `CLAUDE.md`'s infra boundary rule): closing Android §1.3 isolation tests;
-re-deriving and validating the missing `.cfg` files against the real host;
 Windows golden-VM creation; actual execution of
 `clone-android.pl`/`preconfig-android.sh`/`drakvuf-android.sh` against a
 real BlissOS clone; endurance/concurrency tests; any `dirwatch.c` behavior

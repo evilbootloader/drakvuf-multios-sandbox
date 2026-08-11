@@ -14,8 +14,8 @@ Tested build host:
 
 ```text
 Ubuntu Server 26.04
-28 GiB RAM
-24 CPU threads
+24 GiB RAM
+12 CPU threads
 30 GiB swap
 BlissOS manifest branch: universe-x86
 Lunch target: bliss_x86_64-ap2a-userdebug
@@ -139,7 +139,7 @@ repo sync \
     --force-sync \
     --no-tags \
     --no-clone-bundle \
-    -j"$(nproc --all)" \
+    -j8 \
     --optimized-fetch \
     --prune
 ```
@@ -209,18 +209,6 @@ export ANDROID_USE_NDK_TRANSLATION=true
 
 This variable must be exported again in every new build shell.
 
-Optional helper:
-
-```bash
-cat > "$HOME/BlissOS/build-local-env.sh" <<'EOS'
-#!/usr/bin/env bash
-export ANDROID_USE_NDK_TRANSLATION=true
-. build/envsetup.sh
-lunch bliss_x86_64-ap2a-userdebug
-EOS
-
-chmod +x "$HOME/BlissOS/build-local-env.sh"
-```
 
 ---
 
@@ -355,7 +343,8 @@ These reproduce the tested values from the older Android-x86/Qubes setup. The bl
 
 ## 7.2 SELinux debugging settings
 
-Enable (can be that some options are missing):
+Enable (can be that some options are missing): 
+
 
 ```text
 CONFIG_DEFAULT_SECURITY_SELINUX=y
@@ -483,8 +472,6 @@ make iso_img -j"$(nproc --all)"
 If memory is exhausted:
 
 ```bash
-make iso_img -j12
-# or
 make iso_img -j8
 ```
 
@@ -543,7 +530,7 @@ Run on **L1 / Xen Dom0**:
 
 ```bash
 sudo lvcreate \
-    -L64G \
+    -L32G \
     -n android \
     vg-root
 
@@ -612,8 +599,37 @@ Through VNC:
 1. Choose the installation option.
 2. Select `/dev/xvda`.
 3. Create an ext4 partition.
-4. Install GRUB when prompted.
-5. Finish and shut down.
+4. On the **Options** screen (Additional options), go to
+   Graphics -> Hardware Acceleration -> Disable hardware acceleration,
+   which sets `HWACCEL=0`.
+5. Install GRUB when prompted.
+6. Finish and shut down.
+
+Step 4 comes before step 5: options chosen there are written into
+`/boot/grub/android.cfg`, so they apply on every boot. Typed at the GRUB
+prompt instead, they last one boot.
+
+> **`HWACCEL=0` is required, not cosmetic.** Without it the guest renders
+> through Mesa llvmpipe, and SurfaceFlinger dies whenever a window is opened
+> in desktop mode — taking `system_server` into a watchdog loop that
+> presents as a permanent boot animation. Confirmed by BlissOS upstream on
+> 2026-08-11: *"llvmpipe currently is still unstable on Android"*, with
+> `HWACCEL=0` given as the fix.
+
+Verify it took effect on first boot — the option is silent when it does not
+apply:
+
+```bash
+adb shell dumpsys SurfaceFlinger | grep -i 'GLES:'
+```
+
+Anything still reporting `llvmpipe` means the option did not reach the
+kernel line; check `/boot/grub/android.cfg`. Recorded on this build
+**before** the fix, for comparison:
+
+```text
+GLES: Mesa, llvmpipe (LLVM 16.0.0, 256 bits), OpenGL ES 3.2 Mesa 25.0.3
+```
 
 
 Start the installed guest:
@@ -768,7 +784,7 @@ For a quick reboot-loop stop, `on_reboot = "destroy"` is useful, but the domain 
 
 ---
 
-# 17. Record the serial console
+# 17. Record the serial console (if needed debugging)
 
 Start the VM:
 
@@ -786,7 +802,6 @@ sudo script \
     /tmp/bliss-console.log
 ```
 
-
 At the BlissOS GRUB menu:
 
 1. Select the boot entry.
@@ -797,24 +812,21 @@ At the BlissOS GRUB menu:
 6. Append:
 
 ```text
-DEBUG=2 androidboot.selinux=permissive console=tty0 console=ttyS0,115200n8 androidboot.console=ttyS0 androidboot.enable_console=1 loglevel=7 ignore_loglevel
-```
-
-Correct spellings:
-
-```text
-androidboot.console=ttyS0
-ignore_loglevel
-```
-
-Incorrect spellings encountered earlier:
-
-```text
-androidboot,console=ttyS0
-ignore_loglever
+DEBUG=2 androidboot.selinux=permissive console=tty0 console=ttyS0,115200n8 androidboot.console=ttyS0 androidboot.enable_console=1 loglevel=7 ignore_loglevel no_console_suspend
 ```
 
 Boot with `Ctrl+X` or `F10`.
+
+> **This line is for §18–§19, not for logging alone.** `DEBUG=2` stops the
+> boot at two successive initrd shells that each wait for `exit`, so the UI
+> never appears and an unattended guest looks hung. To capture a log of a
+> *normal* boot, drop `DEBUG=2` — and drop `console=tty0` too, which makes
+> fbcon draw kernel messages onto the same framebuffer SurfaceFlinger
+> composites on. Serial alone carries everything.
+>
+> Keep `no_console_suspend` in either case: without it the log stops dead at
+> `Suspending console(s)` and a suspended guest cannot be told apart from a
+> hung one.
 
 ---
 
@@ -837,7 +849,8 @@ tail -n 400
 
 ---
 
-# 18. First `DEBUG=2` shell
+# 18. First `DEBUG=2` shell (if needed debugging)
+
 
 Prompt:
 
@@ -871,7 +884,8 @@ exit
 
 ---
 
-# 19. Second `DEBUG=2` shell
+# 19. Second `DEBUG=2` shell (if needed debugging)
+
 
 Prompt:
 
@@ -896,7 +910,8 @@ After the final root switch, `/android/...` paths become `/system/...`, `/vendor
 
 ---
 
-# 20. Temporary one-boot `update_verifier` bypass
+# 20. Temporary one-boot `update_verifier` bypass (if needed debugging)
+
 
 Use only if the permanent lab patch was not built into the ISO.
 
@@ -934,7 +949,8 @@ The bypass disappears at reboot.
 
 ---
 
-# 21. Android userspace shell
+# 21. Android userspace shell (if needed debugging)
+
 
 Prompt:
 
@@ -990,7 +1006,8 @@ sys.boot_completed=1
 ```
 
 
-# 22. Diagnose an immediate reboot
+# 22. Diagnose an immediate reboot (if needed debugging)
+
 
 On Xen Dom0:
 
@@ -1022,7 +1039,8 @@ sudo xl destroy android
 
 ---
 
-# 23. Diagnose missing Boot Control HAL
+# 23. Diagnose missing Boot Control HAL (if needed debugging)
+
 
 Original failure:
 
@@ -1050,7 +1068,8 @@ Corrective choices:
 
 ---
 
-# 24. Diagnose the thermal VINTF conflict
+# 24. Diagnose the thermal VINTF conflict (if needed debugging)
+
 
 Symptoms:
 

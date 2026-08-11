@@ -17,13 +17,13 @@
 | Android build | BlissOS x86_64 |
 | Golden VM/domain | `android` |
 | Sandbox VM/domain | `android_sandbox` |
-| Android LibVMI profile | `/root/android.json` |
+| Android LibVMI profile | `profiles/android.json` (repo-relative since issue #4; was `/root/android.json`) |
 | Volume group | `vg-root` |
 | Isolated bridge | `xenbr1` |
 | Start date | 2026-08-06 |
-| Last update | 2026-08-06 |
-| Current phase | Android automatic analysis setup|
-| Current blocker | |
+| Last update | 2026-08-11 |
+| Current phase | Phase 1 — rebuilding `android_sandbox` from the reinstalled golden (§1.1–§1.5); Phase 2 scripts not started |
+| Current blocker | Android VM (BlissOS) has been reinstalled and is bug free, no Sandbox is created yet — tracked as [issue #7](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/7) (DRAFT-037) |
 
 ### Status legend
 
@@ -225,6 +225,18 @@ root@drakvuf:/home/user/drakvuf-tools# vmi-process-list android | grep init
 [    1] init (struct addr:ffff9b7701290000)
 [ 1352] init (struct addr:ffff9b7701fae900)
 ```
+
+> **Annotation 2026-08-11 — the evidence above is superseded by a
+> reinstall.** It was captured against the *first* golden `android` install.
+> That image rendered through Mesa llvmpipe and its `surfaceflinger` died on
+> the first window opened in desktop mode (AND-001), so "Confirm
+> `surfaceflinger` is running" was true at the moment sampled and false
+> shortly afterwards — a process list cannot distinguish the two.
+>
+> The golden VM was **reinstalled with `HWACCEL=0` on 2026-08-11**. The
+> remaining unchecked boxes should be re-run against that image, not the one
+> above; `sys.boot_completed=1` is already known to fire on it. Nothing in
+> the block above is edited — it records what was observed on 2026-08-06.
 
 ### Evidence and notes
 
@@ -568,12 +580,36 @@ vmi-process-list -n android_test -j /root/android.json
 ```
 
 ### Evidence and notes
-roo
+
 ```text
 Saved-state checksum: 457fe0d7320085fab1b722ce087d2056d5470562196dcccd0a1183399a32389c  android_sandbox.bak
 Anchor PID/TGID at save: 5715
 Restore result: Correct
 ```
+
+> **Annotation 2026-08-11 — this whole section must be re-run; the artifacts
+> above are historical.** The golden `android` VM was reinstalled on
+> 2026-08-11 to resolve AND-001, and `android_sandbox` is cloned from the
+> golden. Everything recorded here therefore describes an image that no
+> longer exists:
+>
+> - the saved state `457fe0d7…` was captured from the pre-reinstall guest;
+> - anchor PID/TGID `5715` is a property of that `.bak` file, so it does not
+>   survive a re-save either;
+> - the ticked boxes above are evidence for the old image and are **not**
+>   edited — they are left as the record of what was done on 2026-08-06.
+>
+> Phase 1 §1.1–§1.5 are reopened as **DRAFT-037 / [issue #7][i7]**, which
+> also inventories and removes the stale LV and `.bak` before rebuilding.
+> Nothing downstream should treat `state/android_sandbox.bak` as usable
+> until that lands.
+>
+> [i7]: https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/7
+>
+> **The general lesson, recorded because it will recur for Ubuntu and
+> Windows:** nothing links a saved sandbox state to the golden image it was
+> derived from. A golden reinstall silently invalidates the `.bak`, and no
+> check anywhere would have caught it. See roadmap risk #12.
 
 ---
 
@@ -2132,7 +2168,10 @@ Blocked ranges:
 ## 6.1 Script syntax and static checks
 
 - [ ] `bash -n` passes for all shell scripts.
-- [ ] `shellcheck` passes or every suppression is documented.
+- [ ] `dash -n` passes for all shell scripts — they execute under `dash` in
+  production, so `bash -n` alone accepts syntax that fails silently there.
+- [ ] `shellcheck` passes against the DRAFT-031 baseline, or every
+  suppression is documented.
 - [ ] `perl -c` passes for clone scripts.
 - [ ] Scripts are executable with correct owner and permissions.
 - [ ] No remaining `<USER>` or placeholder paths exist.
@@ -2143,19 +2182,31 @@ Blocked ranges:
 ### Commands used
 
 ```bash
-cd ~/drakvuf-tools
+cd /root/sandbox_project/automation   # the Dom0 checkout; ~/drakvuf-tools is retired
 
 for script in *.sh; do
-    bash -n "$script"
+    bash -n "$script" || echo "FAIL bash -n $script"
+    dash -n "$script" || echo "FAIL dash -n $script"
 done
 
 shellcheck *.sh
 perl -c clone-ubuntu.pl
 perl -c clone-android.pl
 
-grep -Rns '<USER>\|TODO\|FIXME' .
-grep -Rns 'ps aux.*grep\|ps .*|.*grep' .
+# Note the inverted exit status: grep returns 0 when it FINDS something, so
+# a clean result here is exit 1. Written as an explicit gate rather than a
+# bare command.
+if grep -Rns '<USER>' .; then echo "FAIL: placeholder remains"; fi
+if grep -Rns 'ps aux.*grep\|ps .*|.*grep' .; then echo "FAIL: ps|grep remains"; fi
 ```
+
+> **Corrected 2026-08-11 (TODO-03).** The gate previously grepped
+> `'<USER>\|TODO\|FIXME'` as a bare command, which had two defects. The exit
+> status inverts the intended meaning — the same defect as CI-02 in
+> `docs/workflow-ci.md` — and the `TODO|FIXME` clause would now fail on two
+> **legitimate** markers: `clone-ubuntu.pl`'s stubdomain TODO and §1.3's own
+> heading. A zero-TODO policy is not this repository's policy, so the clause
+> is dropped and the gate narrowed to `<USER>` and placeholder paths.
 
 ### Evidence and notes
 
@@ -2680,19 +2731,45 @@ Next phase:
 
 | Date | Change | Commands / commit | Result | Author |
 |---|---|---|---|---|
-| | Initial checklist created | | | |
-| | | | | |
-| | | | | |
+| 2026-08-06 | Initial checklist created | | | evilbootloader |
+| 2026-08-11 | Golden `android` VM **reinstalled** with `HWACCEL=0` | BlissOS installer, Options → Graphics → Hardware Acceleration → Disable hardware acceleration; procedure in `docs/android_setup.md` | Golden VM boots to a usable UI; AND-001 resolved | evilbootloader |
+| 2026-08-11 | Issue log populated from the 2026-08-11 diagnostic capture; §0.3 and §1.5 annotated | — | Phase 1 reopened: `android_sandbox` must be rebuilt from the reinstalled golden — DRAFT-037, published as [#7](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/7) | evilbootloader |
 
 ---
 
 # Issue log
 
+Populated 2026-08-11 from a deliberate diagnostic capture of the golden
+`android` domain (serial console, `logcat -b all -v threadtime` with a
+`TRIGGER` marker, `dumpsys`, `lshal`, `getprop`, `/proc/mounts`). The raw
+captures were prepared for BlissOS upstream and are not kept in this
+repository, so **the excerpts below are the record** — reproduced verbatim
+rather than cited.
+
+Environment for every row: BlissOS `Android-x86/Blissful/x86_64:14/AP2A.240905.003/0:user/release-keys`,
+kernel `6.6.129-crimson-xanmod1`, Xen 4.20 HVM domU nested in Proxmox/KVM,
+1 vCPU / 2048 MB, `stdvga` + `bochs-drm` at 800x600, **no GPU passthrough**,
+SELinux permissive.
+
 | ID | Date | Phase/task | Symptom | Diagnostic commands | Resolution | Status |
 |---|---|---|---|---|---|---|
-| AND-001 | | | | | | Open |
-| AND-002 | | | | | | Open |
-| AND-003 | | | | | | Open |
+| AND-001 | 2026-08-11 | §0.3 boot state | `surfaceflinger` SIGSEGVs reproducibly on opening a window in desktop mode, taking `system_server` into a 60-second watchdog loop — presents as a permanent boot animation. The faulting thread is an `llvmpipe-N` rasteriser worker executing JIT-generated shader code: `Fatal signal 11 (SIGSEGV), code 128 (SI_KERNEL), fault addr 0x0 in tid 1913 (llvmpipe-1)`, with `rip 0x7b1f119294a9` inside an anonymous mapping based at `0x7b1f11929000` — offset `0x4a9`, matching the single backtrace frame. An `avc: denied { execmem } for comm="RenderEngine"` precedes it by 2.6 s: the JIT allocating executable pages for the shader permutations the new window requires. With no GPU passthrough, all composition went through a software renderer that JIT-compiles shaders | `adb shell dumpsys SurfaceFlinger \| grep -i 'GLES:'` → `GLES: Mesa, llvmpipe (LLVM 16.0.0, 256 bits), OpenGL ES 3.2 Mesa 25.0.3`, `vulkan_renderengine: false`; `logcat -b all -v threadtime` across the fault | **`HWACCEL=0`**, confirmed by BlissOS upstream 2026-08-11: *"llvmpipe currently is still unstable on Android."* Set on the installer's Options → Graphics screen, which writes it into `/boot/grub/android.cfg` so it applies on every boot — typed at the GRUB prompt it lasts one boot only. Golden VM reinstalled with it the same day. The `execmem` denials went away with it: no llvmpipe JIT, no W^X request | **Resolved on the golden VM.** Not yet inherited by `android_sandbox`, which has not been rebuilt — DRAFT-037 / [issue #7](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/7) |
+| AND-002 | 2026-08-11 | §0.4 / Phase 2 | `android.hardware.thermal.IThermal/default` is declared in VINTF but not installed. `servicemanager` retries the lazy start roughly once per second, indefinitely, three log lines each time — a measurable share of CPU on a 1-vCPU guest, and it floods the log. The same pattern appears for `aidl/activity` and `aidl/sensor_privacy` | `lshal`; `ls /apex /vendor/bin/hw`; `servicemanager: Tried to start aidl service … but was unable to` | **Self-inflicted, root cause known.** This build removes `com.android.hardware.thermal.intel` from `device/generic/common/treble.mk`: it and `com.android.hardware.thermal` both advertise the same `IThermal/default` instance, and the device manifest was rejected with `HAL "android.hardware.thermal" has a conflict`, restart-looping `zygote` and `surfaceflinger`. The kept generic APEX **does not appear in the resulting image** (absent from both `/apex` and `/vendor/bin/hw`), so the build now has a declared HAL with no implementation. Dropping the generic entry instead may be the correct fix if the Intel APEX is the only one that builds for x86. Raised with upstream; no answer yet | **Open.** Log noise and CPU cost only — no functional failure observed |
+| AND-003 | 2026-08-11 | Diagnostics | Two symptoms seen during debugging that are **artifacts of the debug boot line, not defects**: (1) the guest suspending to S3 ~12 s after `boot_completed` with no wake source, and (2) `prng_seeder: Hanging forever because setup failed: Unable to open hwrng /dev/hw_random`. Both were chased as real faults before their cause was identified | Serial console under `DEBUG=2 … console=tty0 console=ttyS0,115200n8 androidboot.console=ttyS0 androidboot.enable_console=1 loglevel=7 ignore_loglevel no_console_suspend` | **Not defects.** Neither reproduces on a normal boot; they appear only under the debugging cmdline above. Recorded so they are not re-diagnosed — the S3 symptom in particular cost real time, because without `no_console_suspend` the serial log stops dead at `Suspending console(s)` and a sleeping guest is indistinguishable from a hung one | **Closed — no action.** Expect both to reappear whenever the debug boot line is used |
+
+## Ruled out — do not re-investigate
+
+Recorded 2026-08-11 alongside the rows above:
+
+- **SELinux enforcement** as a cause of AND-001. Every `avc` line in the
+  captures carries `permissive=1`, so the `execmem` request was *granted*
+  and llvmpipe faulted anyway.
+- **Unmounted partitions** — `/apex` and `/vendor` are both populated.
+- **Kernel GPU faults / OOM** — no `i915`, `drm` error, oops or OOM kill in
+  any `dmesg` capture.
+- **A boot-time UI failure** — `bootanim` exits status 0 and
+  `sys.boot_completed=1` fires. The UI came up; the renderer then died on
+  the first window (AND-001).
 
 ---
 
@@ -2707,4 +2784,4 @@ Next phase:
   - `drakvuf-ubuntu.sh`
   - `run_analysis-ubuntu.sh`
 
-> **2026-08-07 provenance note (added during the docs/ reorganization, not part of the original checklist content above):** `automation/` in this repository also contains `network-setup.sh`, `cleanup.sh`, `tcpdump.sh`, and `dirwatch.c`, which are discussed in checklist sections 2.9/2.10 above but were not listed in the original source inventory. It also inherits DRAKVUF's `LICENSE`. None of these were part of the `drakvuf-tools.zip` inventory recorded when this checklist was first written. Separately, the Xen guest configs referenced throughout this checklist (§1.2, §1.5) — `android_sandbox.cfg` and the golden `android.cfg` — are tracked in this repository under `misc/`, alongside the Ubuntu equivalents `misc/linux.cfg` (golden `ubuntu`) and `misc/linux_sandbox.cfg` (`ubuntu_sandbox`); note the misleading "linux" filenames. The filename `automated_drakvuf_on_xen_nested_within.md` in the original list above has also been corrected to `drakvuf-on-xen-nested-within-proxmox.md`, the actual filename on disk — no other content in this document was altered.
+> **2026-08-07 provenance note (added during the docs/ reorganization, not part of the original checklist content above):** `automation/` in this repository also contains `network-setup.sh`, `cleanup.sh`, `tcpdump.sh`, and `dirwatch.c`, which are discussed in checklist sections 2.9/2.10 above but were not listed in the original source inventory. It also inherits DRAKVUF's `LICENSE`. None of these were part of the `drakvuf-tools.zip` inventory recorded when this checklist was first written. Separately, the Xen guest configs referenced throughout this checklist (§1.2, §1.5) — `android_sandbox.cfg` and the golden `android.cfg` — are tracked in this repository under `misc/`, alongside the Ubuntu equivalents `misc/ubuntu.cfg` (golden `ubuntu`) and `misc/ubuntu_sandbox.cfg` (`ubuntu_sandbox`). *(Corrected 2026-08-11: those two were named `misc/linux.cfg` / `misc/linux_sandbox.cfg` when this note was written on 2026-08-07, and it flagged the misleading "linux" naming; issue #1 renamed them the following day, so the caveat is gone. This footer is editable despite the file-wide annotate-only rule — it is itself an editorial annotation, marked as such below, not recorded evidence.)* The filename `automated_drakvuf_on_xen_nested_within.md` in the original list above has also been corrected to `drakvuf-on-xen-nested-within-proxmox.md`, the actual filename on disk — no other content in this document was altered.

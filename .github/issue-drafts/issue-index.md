@@ -44,27 +44,6 @@ per-OS scripts inherit.
 | DRAFT-033 | Make `clone-ubuntu.pl` fail safely and lock, before it is copied twice | core/ubuntu | ALL (template) | M1 | P1 | Issue #4 | DRAKVUF-05, DRAKVUF-06 |
 | DRAFT-034 | Establish the Windows analysis-guest track (baseline, profile, anchor, configs) | windows | W | M5 → current | P1 | Issue #3, Issue #4, DRAFT-009, DRAFT-027; supersedes DRAFT-020's design half | Focus change; GOV-02, DOC-09 |
 
-### Recommended order for this batch
-
-Interleaved with the existing backlog, per `project-assessment.md`'s
-"Recommended implementation order":
-
-```
-Issue #3 → Issue #4 → DRAFT-009 → DRAFT-031 → DRAFT-026a → DRAFT-032
-        → DRAFT-028 → DRAFT-013 → DRAFT-029 → DRAFT-027 → DRAFT-030
-        → DRAFT-033 → DRAFT-024 → DRAFT-010 → DRAFT-014 → DRAFT-011
-        → DRAFT-034 → DRAFT-015/016/017 → DRAFT-026b
-```
-
-Two ordering constraints are load-bearing rather than preferences:
-
-- **DRAFT-027 before DRAFT-016 and DRAFT-026b.** The sample-delivery
-  mechanism is about to be written for Android and Windows, and the CI
-  base snapshot currently installs Apache (`docs/workflow-ci.md:403`).
-  Deciding delivery afterwards means rewriting both.
-- **DRAFT-028 before DRAFT-013.** Verifying isolation before fixing a rule
-  that may never have installed only records a known-broken state.
-
 ### Recommendations affecting existing entries
 
 Where the recommendations from `project-assessment.md` now live:
@@ -111,6 +90,36 @@ index entry only.**
 |---|---|---|---|---|---|---|---|
 | DRAFT-035 | Implement the job control channel: cancellation, retry guard, per-OS watch-directory admission | core | ALL | M1 | P1 | Issue #3; soft dep. on DRAFT-010 | Issue #3 decisions 1 and 3 |
 | DRAFT-036 | Replace fixed clone slots with a host-global admission controller — VLAN leases, memory reservation, starvation-free queue | core/platform | ALL | M1 | **P0** | Issue #3; blocks concurrent per-OS watchers | Issue #3 decision 4 |
+
+## Fourth batch — DRAFT-037
+
+Added 2026-08-11. Not from a backlog review: the golden Android VM was
+reinstalled that day to fix a reproducible `surfaceflinger` crash, which
+invalidated everything Phase 1 of `docs/checklists/android.md` had
+evidenced.
+
+| Draft ID | Title | Area | OS | Milestone | Priority | Depends on | Origin |
+|---|---|---|---|---|---|---|---|
+| DRAFT-037 | Rebuild the Android sandbox template from the reinstalled golden VM | android/platform | A | M2 → M3 | **P0** | None open; **blocks DRAFT-015/016/017** | AND-001; roadmap risk #12 |
+
+**Drafted in full and published 2026-08-11 — [#7](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/7)** (label `bug`, open). See
+`.github/issue-drafts/DRAFT-037.md`. Published title carries the `[Android]`
+prefix; the body uses the "Draft of record" header block rather than the
+draft's own `# DRAFT-037:` heading, matching issues #3, #4 and #6.
+
+**This is the only open issue.** #1, #2, #3, #4 and #6 are all closed.
+
+`android_sandbox` is a clone of the golden VM, so the reinstall made its LV,
+its saved state (`457fe0d7…`) and its anchor PID (`5715`) all describe an
+image that no longer exists. §1.5 still recorded them as validated. Every
+Android script draft is written against that template, which is why this
+takes P0 ahead of them rather than queueing behind them.
+
+The systemic half is registered separately as **roadmap risk #12** and is
+deliberately not in DRAFT-037's scope: nothing links a saved state to the
+golden image it came from, `.bak` files carry no provenance, and no check
+would have caught this. It applies to Ubuntu and Windows identically and is
+currently unowned.
 
 **DRAFT-035** — a user must be able to stop a running analysis. The
 model's `cancelled` terminal status needs a mechanism: a cancellation
@@ -272,9 +281,13 @@ match this repo's `misc/` location.
 **Resolution (2026-08-08):** Both fixed in commit `ced4e77`, which closed
 issue #1 — `misc/linux.cfg`/`misc/linux_sandbox.cfg` renamed to
 `misc/ubuntu.cfg`/`misc/ubuntu_sandbox.cfg` and every in-repo reference
-updated. The real Dom0 host's copies still need a separate manual rename;
-see the issue #1 thread. DRAFT-025 and DRAFT-026 already treat this as
-settled ("which #1 already settled") and need no further changes.
+updated. The host-side rename was completed the **same day**, so issue #1 is
+closed end to end — recorded at `:111-113` of this file and evidenced with
+the exact `mv` and a re-tested run in `docs/checklists/ubuntu.md`. DRAFT-025
+and DRAFT-026 already treat this as settled ("which #1 already settled") and
+need no further changes. *(Corrected 2026-08-11, CONF-03: this paragraph
+ended "The real Dom0 host's copies still need a separate manual rename; see
+the issue #1 thread", which this same file already contradicted.)*
 
 ## Remaining title-index (DRAFT-009 through DRAFT-024)
 
@@ -297,7 +310,7 @@ Not yet drafted in full — titles only, from `docs/roadmap/project-roadmap.md`:
 | DRAFT-021 | Licensing review write-up | governance | M0 | P1 | — |
 | DRAFT-022 | Legal/compliance research for networked analysis (Spain/EU) | compliance | M2–M7 | P2 | — |
 | DRAFT-023 | TLS-visibility research spike for Linux/Android (tlsmon confirmed N/A) | networking | M2 | P3 | DRAFT-013 |
-| DRAFT-024 | Upstream `lfreijo/drakvuf` fork mirror/backup + pin documentation | governance | M0 | P2 | DRAFT-001 |
+| DRAFT-024 | Pin and mirror **both** DRAKVUF upstreams — `tklengyel/drakvuf` and the `lfreijo` fork — as the baseline engine changes are diffed from | governance | M0 | **P1** *(raised from P2, 2026-08-11)* | DRAFT-001 |
 
 Note: DRAFT-021's content (the licensing review) and DRAFT-020's premise
 (the VM-lifecycle question) were substantially resolved during the same
@@ -344,17 +357,11 @@ Dependency corrections to the table above, once these are drafted:
   handling before routing widens the input surface).
 - **DRAFT-015** gains a dependency on DRAFT-033 (fix the clone template
   before copying it).
-- **DRAFT-016** gains a hard dependency on DRAFT-027 (decide delivery
-  before writing the second implementation of it).
 - **DRAFT-020** is superseded in substance by DRAFT-034.
 - **DRAFT-023** gains a dependency on DRAFT-034 for its Windows half.
 
 Added 2026-08-09 from issue #3:
 
-- **DRAFT-036 before any concurrent per-OS watcher**, and therefore before
-  DRAFT-035's launch arrangement and before DRAFT-015/016 are exercised
-  alongside Ubuntu. It is a correctness prerequisite (VLAN collision), not
-  a tuning task.
 - **DRAFT-014 and DRAFT-017** lose their routing premise and are rescoped
   to identification; see the assessment table above.
 - **DRAFT-011** gains the shared model as its target output — it is the
@@ -369,28 +376,13 @@ Added 2026-08-10, on drafting DRAFT-009:
   not exist — and its original wording predates Windows as a current target.
   Widened to **DRAFT-015/016 and DRAFT-034**, and discharged through
   DRAFT-009's conformance checklist. Annotated in `DRAFT-025.md`.
-- **DRAFT-009 hands ordering constraints to three drafts, but does not
-  perform them.** ~~These are proposed by the draft and become entries in
-  this section when it is executed — not applied in advance.~~ **Applied
-  2026-08-10** as issue #6 executed; see the three entries below.
+- **DRAFT-009 handed ordering constraints to three drafts.** Applied
+  2026-08-10 as issue #6 executed; they now live in "Load-bearing
+  constraints, in one place" at the end of this file.
 - **DRAFT-009 must not pre-empt DRAFT-036.** It may decide *where* a
   host-global value lives; DRAFT-036 decides *who allocates it*. Nor may it
   change `dirwatch`'s callback contract, which is DRAFT-010's. *(Honoured —
   issue #6 changed no contract and designed no allocator.)*
-
-Dependency corrections produced by issue #6, 2026-08-10. These are
-defect-multiplication constraints, not preferences:
-
-- **DRAFT-033 before DRAFT-015.** `clone-ubuntu.pl` is the template
-  `clone-android.pl` is written from, and it checks no exit status. Copying
-  first puts the defect in three files.
-- **DRAFT-030 before DRAFT-016.** Sharpened from the earlier soft
-  dependency: DRAFT-030 now owns the guest-filename normalizer and the
-  staging retrofit, so writing `preconfig-android.sh` first means writing it
-  against SHA-256 staging and rewriting it immediately.
-- **DRAFT-031 before DRAFT-015 or DRAFT-016.** The
-  licence-header-above-shebang layout is inherited by every copy made before
-  it is fixed.
 
 Scope moved by issue #6, same date:
 
@@ -411,8 +403,62 @@ Scope moved by issue #6, same date:
   visibility is reduced as a result, knowingly — see
   `docs/architecture/analysis-pipeline.md`, decision 4.
 
-### Recommended order, revised 2026-08-09
+## Current order (consolidated 2026-08-11)
 
-The order block above predates issue #3. Insert DRAFT-036 immediately after
-issue #4 — it blocks the multi-OS arrangement everything downstream
-assumes — and DRAFT-035 after DRAFT-009. Issue #3 itself is now done.
+The single current sequence. Two earlier order blocks and their scattered
+dated addenda were removed on 2026-08-11 — three stacked revisions patching
+each other by reference had stopped reading as one sequence, which is the
+whole point of having one.
+
+Issues #1, #2, #3, #4 and #6 are closed. **[#7](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/7)
+(DRAFT-037) is open** and is item 1 below. The remaining drafted P0s —
+DRAFT-028, DRAFT-030, DRAFT-031, DRAFT-033, DRAFT-036 — are still
+unpublished.
+
+### Next six
+
+| # | Draft | Why here |
+|---|---|---|
+| 1 | **DRAFT-037** — published as **[#7](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/7)**, the only open issue | P0, and the only item here that unblocks physical work rather than code. `android_sandbox` does not currently exist in usable form, so DRAFT-015/016/017 have nothing to be written against. Everything it needs is already available — the golden VM fix landed 2026-08-11. |
+| 2 | **DRAFT-031** | Cheapest of the blockers and the widest: the licence-header-above-shebang layout is inherited by **every copy made before it is fixed**, so it precedes DRAFT-015 and DRAFT-016. Also gates DRAFT-026a. |
+| 3 | **DRAFT-028** | P0, and now has execution evidence rather than source reasoning — the 2026-08-09 Dom0 run produced `RTNETLINK answers: File exists` on a second launch. Blocks DRAFT-013: verifying isolation before fixing a rule that may never have installed only records a known-broken state. |
+| 4 | **DRAFT-010** | Moved ahead of DRAFT-036 because it gates it. DRAFT-036's PLAN/CREATE wait on DRAFT-010's C-vs-Python decision, which determines whether the fix is a cross-process lease in `dirwatch.c` or an allocator designed into its replacement. CONF-11 raises its value independently: with engine work near-term, this becomes input to that work. |
+| 5 | **DRAFT-036** | P0 **correctness** defect, not tuning: `slots_busy[]` is process-local and the slot index *is* the VLAN, so a second watcher allocates VLAN 1 too and both clones land on `xenbr1.1`. Per-OS watchers cannot run concurrently until this lands — it is a prerequisite of issue #3's OS-selection mechanism, not a follow-up to it. |
+| 6 | **DRAFT-033** | `clone-ubuntu.pl` is the template `clone-android.pl` is written from and it checks no exit status. Copying first puts the defect in three files. Precedes DRAFT-015. |
+
+**DRAFT-032** was first in this list and is now executed — see the note at
+the end of this section.
+
+### Then
+
+```
+DRAFT-013 → DRAFT-029 → DRAFT-030 → DRAFT-026a → DRAFT-015 → DRAFT-016
+         → DRAFT-024 → DRAFT-034 → DRAFT-014 → DRAFT-017 → DRAFT-011
+         → DRAFT-035 → DRAFT-018 → DRAFT-019 → DRAFT-026b
+```
+
+`DRAFT-030` before `DRAFT-016`: DRAFT-030 owns the guest-filename normalizer
+and the Ubuntu staging retrofit, so writing `preconfig-android.sh` first
+means writing it against SHA-256 staging and rewriting it immediately.
+`DRAFT-024` rises to P1 (see its row above). `DRAFT-012` is obsolete — do not
+draft it.
+
+### Load-bearing constraints, in one place
+
+These are defect-multiplication rules, not preferences. Violating one costs
+more than the item it reorders:
+
+- **DRAFT-031, DRAFT-033 and DRAFT-030 all precede DRAFT-015/016.** Each is
+  a defect in the template that gets copied into two more files otherwise.
+- **DRAFT-028 before DRAFT-013.** Fix before measuring.
+- **DRAFT-010 before DRAFT-036.** Publication gate, stated in DRAFT-036.
+- **DRAFT-036 before any concurrent per-OS watcher**, and therefore before
+  DRAFT-035's launch arrangement and before DRAFT-015/016 run alongside
+  Ubuntu.
+
+> **DRAFT-032 status, 2026-08-11.** Applied to the repository without being
+> published as a GitHub issue, as a documentation-only pass. Tables A–E are
+> corrected or annotated; three items (DOC-04, CONF-02, CONF-04) were found
+> already resolved by later work and needed no change. Nothing in
+> `automation/` or `misc/` was touched and no issue body was edited, so
+> `CONTRIBUTING.md`'s Stage 2 gate was not triggered.
