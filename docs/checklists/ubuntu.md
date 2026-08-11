@@ -70,13 +70,15 @@ execution. None of the checkboxes below represent execution evidence.
 - [x] `automation/tcpdump.sh` exists — captures the clone's VLAN
   sub-interface to a per-sample pcap.
 - [x] `automation/network-setup.sh` exists — provisions the per-VLAN
-  networks (`172.16.<vlan>.1/24` gateway, `iptables` MASQUERADE +
-  inter-VLAN DROP), brings the bridge up with `ip link set xenbr1 up`.
+  networks (`172.16.<vlan>.1/24` gateway) and the three `DRAKVUF_*` iptables
+  chains, brings the bridge up with `ip link set xenbr1 up`.
   *(Updated 2026-08-08 to the production copy, which replaced the
   deprecated `ifconfig xenbr1 up`. Corrected 2026-08-11: this line
   previously said it "provisions the OVS bridge", which it does not —
   `xenbr1` is created by a separate install step, `ovs-vsctl add-br
-  xenbr1`. See `docs/architecture/networking.md`.)*
+  xenbr1`. **Rewritten the same day by DRAFT-028**: fails loudly, is
+  idempotent, and narrows clone egress to the Internet only. See
+  `docs/architecture/networking.md`.)*
 - [x] `automation/run_analysis-ubuntu.sh` exists — sources
   `pipeline-ubuntu.env`, pre-flight checks the `.cfg`/profile/state,
   creates the per-OS malware directories, brings `xenbr1` up, runs

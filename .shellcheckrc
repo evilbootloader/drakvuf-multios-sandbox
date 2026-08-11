@@ -66,13 +66,19 @@
 #         xenbr1.10-19 once there are more than 9 clones.
 #         Owner: DRAFT-011.
 #
-# SC2006  Legacy backticks, 1 site in network-setup.sh:145.
-#         Owner: DRAFT-028.
+# SC2006  RETIRED 2026-08-11 by DRAFT-028. Its only site in the repository
+#         was network-setup.sh's `for i in \`seq 1 $1\``, replaced by a
+#         POSIX while-loop. The check is live again for every file.
+#         This is the mechanism working as intended: a suppression named
+#         its owning issue, that issue landed, and the line came out.
 #
-# THE COST, stated because it is not obvious: these are disabled
-# repository-wide, so a genuinely dangerous new unquoted expansion in
-# `preconfig-android.sh` or a future `clone-windows.pl` wrapper will NOT
-# be caught until DRAFT-030/011/028 land and these lines come out. That is
-# an argument for landing DRAFT-030 sooner rather than a reason to accept
-# the disables indefinitely.
-disable=SC1091,SC2086,SC2009,SC2006
+# THE COST, stated because it is not obvious: the remaining two are
+# disabled repository-wide, so a genuinely dangerous new unquoted expansion
+# in `preconfig-android.sh` or a future `clone-windows.pl` wrapper will NOT
+# be caught until DRAFT-030/011 land and these lines come out. That is an
+# argument for landing DRAFT-030 sooner rather than a reason to accept the
+# disables indefinitely.
+#
+# For reference, `shellcheck --norc automation/network-setup.sh` is clean
+# as of DRAFT-028 -- that file needs none of the exemptions below.
+disable=SC1091,SC2086,SC2009
