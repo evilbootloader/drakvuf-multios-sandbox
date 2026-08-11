@@ -22,8 +22,8 @@
 | Isolated bridge | `xenbr1` |
 | Start date | 2026-08-06 |
 | Last update | 2026-08-11 |
-| Current phase | Phase 1 — rebuilding `android_sandbox` from the reinstalled golden (§1.1–§1.5); Phase 2 scripts not started |
-| Current blocker | Android VM (BlissOS) has been reinstalled and is bug free, no Sandbox is created yet — tracked as [issue #7](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/7) (DRAFT-037) |
+| Current phase | Phase 2 — Android automation scripts (not started). Phase 1 complete: template rebuilt and restore-validated 2026-08-11, issue #7 |
+| Current blocker | **§1.3 sandbox network isolation is unverified** — the six-row isolation table is unfilled, so Android containment is unproven rather than merely undone. The 2026-08-11 template was saved with §1.5's `[ ] Confirm network isolation is active` still unticked. Roadmap risk #5; DRAFT-013, itself gated on DRAFT-028. Close before any non-benign sample runs with networking enabled |
 
 ### Status legend
 
@@ -338,6 +338,26 @@ Source size:
 Destination size:
 ```
 
+> **Re-run 2026-08-11 (issue #7) against the reinstalled golden VM.** The
+> block above is the 2026-08-06 record and is left as-is. The LV was
+> recreated from scratch; the golden LV is 32 GiB, not the `-L64G` the
+> command block above uses.
+>
+> ```text
+> lvcreate -L32G -n android_sandbox vg-root
+> dd if=/dev/vg-root/android of=/dev/vg-root/android_sandbox \
+>    bs=64M iflag=fullblock conv=fsync status=progress
+>
+> Source size:      34359738368  (/dev/vg-root/android)
+> Destination size: 34359738368  (/dev/vg-root/android_sandbox)
+> vg-root free before: <606,00g of <1022,00g
+> Golden VM shut down for the duration: yes (`xl list` showed Domain-0 only)
+> ```
+>
+> No previous `android_sandbox` LV existed at the time of this run, so the
+> create-alongside rollback in the runbook was not needed.
+> Full transcript: `docs/runbooks/rebuild-android-sandbox.md`.
+
 ---
 
 ## 1.2 Create `android_sandbox.cfg`
@@ -491,7 +511,47 @@ sudo vmi-process-list android_sandbox | grep -i drakvuf
 
 | Android PID | LibVMI PID/TGID | Runtime stable | Notes |
 |---:|---:|---:|---|
-| 5715 |  5715  | Yes | |
+| 5715 |  5715  | Yes | Pre-reinstall image; superseded — see below |
+| 3163 |  3163  | Yes | **Current.** 2026-08-11 rebuild (issue #7); exactly one match |
+
+> **Re-run 2026-08-11 (issue #7). Two things above no longer describe the
+> template**, and both are deliberate rather than drift. The block above is
+> the 2026-08-06 record and is left as-is.
+>
+> **1. The anchor is a backgrounded `nano`, not `drakvuf-anchor`.** Chosen
+> so the string `drakvuf` appears nowhere in the guest — a sample that
+> enumerates processes should not find the analysis infrastructure named for
+> what it is. That is an anti-evasion decision and it conflicts with the
+> ticked item "Prefer a dedicated 64-bit native process with a unique
+> process name", which is now **not** satisfied. `init.svc.drakvuf_anchor`
+> does not exist on this image either.
+>
+> The conflict is real but narrow, because **the pipeline never resolves the
+> anchor by name** — `INJECTION_PID` is a number captured at save time and
+> passed to `injector`. The name matters only to a human verifying by hand.
+> The constraint that follows:
+>
+> > **Do not build anchor auto-discovery on a process-name grep.** §7.2's
+> > "Resolve the injection anchor PID/TGID automatically / Reject zero or
+> > multiple matching anchors" must key on something other than the name, or
+> > a guest that happens to run a second `nano` gets the wrong process
+> > injected — and `injector` does not warn.
+>
+> **2. The DNS DNAT was NOT re-applied.** `iptables -t nat -L OUTPUT` was
+> empty on the reinstalled image and nothing was added, so the redirect to
+> `172.16.10.1:53` in the command block above is **not** present in this
+> template. Nothing has ever listened at that address: `network-setup.sh`
+> sets `ip_forward` and MASQUERADE but starts no resolver and installs no
+> DNAT, so queries there reach Dom0's INPUT chain and get ICMP
+> port-unreachable. Ubuntu carried the identical defect until issue #4.
+>
+> No resolver is configured in the image at all, which is the intended
+> outcome: per-clone resolver configuration belongs to
+> `preconfig-android.sh` at analysis time, the way `preconfig-ubuntu.sh`
+> applies `GUEST_NAMESERVER`. Baking one in would put a
+> containment-relevant value where no per-OS config could override it.
+> DRAFT-016 owns writing it. **This closes the Android half of the
+> `CLAUDE.md` known issue** that recorded the dead DNAT as still unfixed.
 
 
 ### Evidence and notes
@@ -587,29 +647,58 @@ Anchor PID/TGID at save: 5715
 Restore result: Correct
 ```
 
-> **Annotation 2026-08-11 — this whole section must be re-run; the artifacts
-> above are historical.** The golden `android` VM was reinstalled on
-> 2026-08-11 to resolve AND-001, and `android_sandbox` is cloned from the
-> golden. Everything recorded here therefore describes an image that no
-> longer exists:
+> **Annotation 2026-08-11 — superseded and re-run; artifacts above are
+> historical.** The golden `android` VM was reinstalled on 2026-08-11 to
+> resolve AND-001, and `android_sandbox` is a copy of the golden, so the
+> saved state `457fe0d7…` and anchor PID `5715` both describe an image that
+> no longer exists. The ticked boxes above are **not** edited — they are the
+> record of what was done on 2026-08-06.
 >
-> - the saved state `457fe0d7…` was captured from the pre-reinstall guest;
-> - anchor PID/TGID `5715` is a property of that `.bak` file, so it does not
->   survive a re-save either;
-> - the ticked boxes above are evidence for the old image and are **not**
->   edited — they are left as the record of what was done on 2026-08-06.
+> **Re-run completed the same day** under **DRAFT-037 / [issue #7][i7]**.
+> Full transcript: `docs/runbooks/rebuild-android-sandbox.md`.
 >
-> Phase 1 §1.1–§1.5 are reopened as **DRAFT-037 / [issue #7][i7]**, which
-> also inventories and removes the stale LV and `.bak` before rebuilding.
-> Nothing downstream should treat `state/android_sandbox.bak` as usable
-> until that lands.
+> ```text
+> Operator / date:       evilbootloader, 2026-08-11 (L1 / Xen Dom0)
+> Saved-state path:      /root/sandbox_project/state/android_sandbox.bak
+> Saved-state checksum:  1844fc0a1653300c5c1b48ec8280b738397d7a93cfff9a0e0070e48223f269cf
+> Saved-state size:      2139603376
+> Anchor PID/TGID:       3163  (backgrounded `nano` — see §1.4 annotation)
+> sys.boot_completed:    1
+> Domain destroyed after xl save: yes
+>
+> Restore validation (disposable snapshot, golden and template untouched):
+>   lvcreate -s -n android_sandbox-1-clone -L32G /dev/vg-root/android_sandbox
+>   xl restore -p -e android_test.cfg .../state/android_sandbox.bak
+>   xl unpause android_test
+>   vmi-process-list -n android_test -j .../profiles/android.json | grep -i nano
+>   -> Restore result: Correct.  Anchor present: yes.
+>
+> AND-001 regression check: application opened in desktop mode over VNC,
+>   renderer survived 60 s. (Tombstone/dropbox check not run — the runbook
+>   named it but supplied no command, and adb is unavailable on this build.)
+>
+> Golden LV size before / after: 34359738368 / 34359738368 — unmodified.
+> ```
+>
+> **Still not ticked, and unchanged by this run:** `[ ] Confirm network
+> isolation is active`. This template was saved with containment unverified,
+> exactly as the previous one was. DRAFT-013 owns it, and no non-benign
+> sample may run against clones of this template with networking enabled
+> until it closes.
+>
+> **The new anchor PID must reach `pipeline-android.env`** when DRAFT-015
+> creates it. §1.5 is currently the only place the value exists.
 >
 > [i7]: https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/7
 >
-> **The general lesson, recorded because it will recur for Ubuntu and
-> Windows:** nothing links a saved sandbox state to the golden image it was
-> derived from. A golden reinstall silently invalidates the `.bak`, and no
-> check anywhere would have caught it. See roadmap risk #12.
+> **One thing this run showed about the checklist itself.** At the start of
+> the rebuild the `.bak` on disk hashed `e5ef1ef4…`, not the `457fe0d7…`
+> recorded above. The cause was benign — the operator rebuilt the template
+> several times while testing, and each re-save moved the checksum without
+> the checklist being updated. Nothing was lost. What it does show is that
+> **nothing forces this record to keep up with the artifact it describes**;
+> the value went stale through ordinary iteration and no mechanism noticed.
+> That is the half of roadmap risk #12 this run actually evidences.
 
 ---
 
@@ -2734,6 +2823,7 @@ Next phase:
 | 2026-08-06 | Initial checklist created | | | evilbootloader |
 | 2026-08-11 | Golden `android` VM **reinstalled** with `HWACCEL=0` | BlissOS installer, Options → Graphics → Hardware Acceleration → Disable hardware acceleration; procedure in `docs/android_setup.md` | Golden VM boots to a usable UI; AND-001 resolved | evilbootloader |
 | 2026-08-11 | Issue log populated from the 2026-08-11 diagnostic capture; §0.3 and §1.5 annotated | — | Phase 1 reopened: `android_sandbox` must be rebuilt from the reinstalled golden — DRAFT-037, published as [#7](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/7) | evilbootloader |
+| 2026-08-11 | **`android_sandbox` rebuilt and restore-validated** from the reinstalled golden. New saved state `1844fc0a…`, anchor PID 3163. DNS DNAT deliberately not re-applied; anchor renamed to `nano` for anti-evasion | `docs/runbooks/rebuild-android-sandbox.md` | Phase 1 complete; issue #7 closed. §1.3 isolation still open | evilbootloader |
 
 ---
 
@@ -2753,7 +2843,7 @@ SELinux permissive.
 
 | ID | Date | Phase/task | Symptom | Diagnostic commands | Resolution | Status |
 |---|---|---|---|---|---|---|
-| AND-001 | 2026-08-11 | §0.3 boot state | `surfaceflinger` SIGSEGVs reproducibly on opening a window in desktop mode, taking `system_server` into a 60-second watchdog loop — presents as a permanent boot animation. The faulting thread is an `llvmpipe-N` rasteriser worker executing JIT-generated shader code: `Fatal signal 11 (SIGSEGV), code 128 (SI_KERNEL), fault addr 0x0 in tid 1913 (llvmpipe-1)`, with `rip 0x7b1f119294a9` inside an anonymous mapping based at `0x7b1f11929000` — offset `0x4a9`, matching the single backtrace frame. An `avc: denied { execmem } for comm="RenderEngine"` precedes it by 2.6 s: the JIT allocating executable pages for the shader permutations the new window requires. With no GPU passthrough, all composition went through a software renderer that JIT-compiles shaders | `adb shell dumpsys SurfaceFlinger \| grep -i 'GLES:'` → `GLES: Mesa, llvmpipe (LLVM 16.0.0, 256 bits), OpenGL ES 3.2 Mesa 25.0.3`, `vulkan_renderengine: false`; `logcat -b all -v threadtime` across the fault | **`HWACCEL=0`**, confirmed by BlissOS upstream 2026-08-11: *"llvmpipe currently is still unstable on Android."* Set on the installer's Options → Graphics screen, which writes it into `/boot/grub/android.cfg` so it applies on every boot — typed at the GRUB prompt it lasts one boot only. Golden VM reinstalled with it the same day. The `execmem` denials went away with it: no llvmpipe JIT, no W^X request | **Resolved on the golden VM.** Not yet inherited by `android_sandbox`, which has not been rebuilt — DRAFT-037 / [issue #7](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/7) |
+| AND-001 | 2026-08-11 | §0.3 boot state | `surfaceflinger` SIGSEGVs reproducibly on opening a window in desktop mode, taking `system_server` into a 60-second watchdog loop — presents as a permanent boot animation. The faulting thread is an `llvmpipe-N` rasteriser worker executing JIT-generated shader code: `Fatal signal 11 (SIGSEGV), code 128 (SI_KERNEL), fault addr 0x0 in tid 1913 (llvmpipe-1)`, with `rip 0x7b1f119294a9` inside an anonymous mapping based at `0x7b1f11929000` — offset `0x4a9`, matching the single backtrace frame. An `avc: denied { execmem } for comm="RenderEngine"` precedes it by 2.6 s: the JIT allocating executable pages for the shader permutations the new window requires. With no GPU passthrough, all composition went through a software renderer that JIT-compiles shaders | `adb shell dumpsys SurfaceFlinger \| grep -i 'GLES:'` → `GLES: Mesa, llvmpipe (LLVM 16.0.0, 256 bits), OpenGL ES 3.2 Mesa 25.0.3`, `vulkan_renderengine: false`; `logcat -b all -v threadtime` across the fault | **`HWACCEL=0`**, confirmed by BlissOS upstream 2026-08-11: *"llvmpipe currently is still unstable on Android."* Set on the installer's Options → Graphics screen, which writes it into `/boot/grub/android.cfg` so it applies on every boot — typed at the GRUB prompt it lasts one boot only. Golden VM reinstalled with it the same day. The `execmem` denials went away with it: no llvmpipe JIT, no W^X request | **Closed 2026-08-11.** Fixed on the golden VM and inherited by the rebuilt `android_sandbox` (issue #7). Regression-checked after `xl restore`: an application opened in desktop mode over VNC and the renderer survived 60 s |
 | AND-002 | 2026-08-11 | §0.4 / Phase 2 | `android.hardware.thermal.IThermal/default` is declared in VINTF but not installed. `servicemanager` retries the lazy start roughly once per second, indefinitely, three log lines each time — a measurable share of CPU on a 1-vCPU guest, and it floods the log. The same pattern appears for `aidl/activity` and `aidl/sensor_privacy` | `lshal`; `ls /apex /vendor/bin/hw`; `servicemanager: Tried to start aidl service … but was unable to` | **Self-inflicted, root cause known.** This build removes `com.android.hardware.thermal.intel` from `device/generic/common/treble.mk`: it and `com.android.hardware.thermal` both advertise the same `IThermal/default` instance, and the device manifest was rejected with `HAL "android.hardware.thermal" has a conflict`, restart-looping `zygote` and `surfaceflinger`. The kept generic APEX **does not appear in the resulting image** (absent from both `/apex` and `/vendor/bin/hw`), so the build now has a declared HAL with no implementation. Dropping the generic entry instead may be the correct fix if the Intel APEX is the only one that builds for x86. Raised with upstream; no answer yet | **Open.** Log noise and CPU cost only — no functional failure observed |
 | AND-003 | 2026-08-11 | Diagnostics | Two symptoms seen during debugging that are **artifacts of the debug boot line, not defects**: (1) the guest suspending to S3 ~12 s after `boot_completed` with no wake source, and (2) `prng_seeder: Hanging forever because setup failed: Unable to open hwrng /dev/hw_random`. Both were chased as real faults before their cause was identified | Serial console under `DEBUG=2 … console=tty0 console=ttyS0,115200n8 androidboot.console=ttyS0 androidboot.enable_console=1 loglevel=7 ignore_loglevel no_console_suspend` | **Not defects.** Neither reproduces on a normal boot; they appear only under the debugging cmdline above. Recorded so they are not re-diagnosed — the S3 symptom in particular cost real time, because without `no_console_suspend` the serial log stops dead at `Suspending console(s)` and a sleeping guest is indistinguishable from a hung one | **Closed — no action.** Expect both to reappear whenever the debug boot line is used |
 

@@ -1,6 +1,6 @@
 # DRAFT-037: Rebuild the Android sandbox template from the reinstalled golden VM
 
-**Status:** **Published 2026-08-11 — [#7](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/7)**, label `bug`. Open.
+**Status:** **Closed 2026-08-11 — [#7](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/7)**, published and completed the same day. Execution transcript: `docs/runbooks/rebuild-android-sandbox.md`.
 **Area:** android / platform
 **Milestone:** M2 → M3 (gates the Android MVP)
 **Priority:** P0
@@ -265,3 +265,45 @@ which is why the inventory in PLAN step 1 is written down first.
 The golden VM is the true recovery path: `android_sandbox` is rebuildable
 from it at any time, which is precisely why `misc/android_sandbox.cfg` sets
 `on_crash = "destroy"` while `misc/android.cfg` sets `preserve`.
+
+---
+
+# Resolution — 2026-08-11
+
+Executed and closed the same day it was published. Transcript:
+`docs/runbooks/rebuild-android-sandbox.md`.
+
+| | |
+|---|---|
+| New saved state | `1844fc0a1653300c5c1b48ec8280b738397d7a93cfff9a0e0070e48223f269cf`, 2,139,603,376 B |
+| New anchor PID/TGID | 3163 |
+| AND-001 regression | Renderer survived 60 s with an application open in desktop mode |
+| Golden LV | `34359738368` before and after — unmodified |
+
+**All acceptance criteria met except one**, and the exception is recorded
+rather than waived: the tombstone / `system_server_watchdog` dropbox check
+was not run. The runbook named it but supplied no command, and `adb` is
+unavailable on this build. The 60-second visual observation over VNC stands
+as the AND-001 evidence. For future runs the check is
+`ls -la /data/system/dropbox/ | grep -i watchdog` and `ls -la /data/tombstones/`
+in the guest console.
+
+Two things landed that this draft did not anticipate, both worth carrying
+forward:
+
+- **The DNS DNAT was retired rather than reproduced.** D1 in the runbook
+  turned out to be free: `iptables -t nat -L OUTPUT` was empty on the
+  reinstalled image, so not re-applying it cost nothing. The Android half of
+  `CLAUDE.md`'s dead-DNAT known issue is now closed, and the template
+  carries no resolver at all — correctly, since that belongs to
+  `preconfig-android.sh` (DRAFT-016).
+- **The anchor is a backgrounded `nano`**, chosen so the string `drakvuf`
+  appears nowhere in the guest. This conflicts with §1.4's "unique process
+  name" requirement, and the resolution is a constraint on DRAFT-015/016:
+  **anchor auto-discovery must not key on a process-name grep.**
+  `INJECTION_PID` is a number and always was; the name only ever mattered to
+  a human. See the §1.4 annotation.
+
+**Not closed, and unchanged:** §1.3 network isolation. This template was
+saved with containment unverified, exactly as its predecessor was. DRAFT-013
+owns it and remains gated on DRAFT-028.

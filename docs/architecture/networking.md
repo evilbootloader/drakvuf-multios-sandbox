@@ -63,10 +63,22 @@ It costs no visibility. `tcpdump.sh` captures the clone's entire
 `xenbr1.<vlan>` sub-interface and DNS is plaintext UDP/53, so every query
 and answer is in the per-sample pcap whichever resolver serves it.
 
-Android carries the same dead assumption one layer deeper, baked into the
-golden image: `docs/checklists/android.md:466-469` DNATs all in-guest DNS
-to `172.16.10.1:53`, where nothing listens either. That redirect must be
-removed or repointed before Android analysis can resolve names.
+Android carried the same dead assumption one layer deeper, baked into the
+golden image: §1.4 of `docs/checklists/android.md` DNATs all in-guest DNS to
+`172.16.10.1:53`, where nothing listens either.
+
+**Fixed 2026-08-11 (issue #7).** The Android golden VM was reinstalled and
+`android_sandbox` rebuilt from it; `iptables -t nat -L OUTPUT` was empty on
+the new image and the DNAT was deliberately not re-applied. The template now
+carries **no resolver configuration at all**, which is the intended end
+state rather than a gap: per-clone resolver configuration belongs to
+`preconfig-android.sh` at analysis time, exactly as `preconfig-ubuntu.sh`
+applies `GUEST_NAMESERVER`. Baking a resolver into a saved image would put a
+containment-relevant value where no per-OS config could override it.
+DRAFT-016 owns writing that step.
+
+The §1.4 command block is annotated in place rather than edited — it is
+dated evidence of what was done on 2026-08-06.
 
 ### Why `1.1.1.1` is expected to survive the simulated modes
 

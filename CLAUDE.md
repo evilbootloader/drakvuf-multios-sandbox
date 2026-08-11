@@ -191,8 +191,12 @@ confirm before changing):
   `pipeline-ubuntu.env`. Open M1 work, gated on DRAFT-009.
 - Guest DNS pointed at the clone's gateway, where nothing listens, so name
   resolution failed on every run before 2026-08-09. Now `GUEST_NAMESERVER`
-  (default `1.1.1.1`). Android's golden image has the same dead assumption
-  baked in as an in-guest DNAT to `172.16.10.1:53` — still unfixed.
+  (default `1.1.1.1`). ~~Android's golden image has the same dead assumption
+  baked in as an in-guest DNAT to `172.16.10.1:53`~~ — **fixed 2026-08-11
+  (issue #7)**: the Android golden VM was reinstalled and the template
+  rebuilt from it, and the DNAT was deliberately not re-applied. No resolver
+  is baked into the image at all; per-clone configuration belongs to
+  `preconfig-android.sh` at analysis time, as it does for Ubuntu.
   See `docs/architecture/networking.md`.
 
 Do not modify the Ubuntu behavior unless required and explicitly requested.

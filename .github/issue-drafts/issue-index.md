@@ -102,12 +102,19 @@ evidenced.
 |---|---|---|---|---|---|---|---|
 | DRAFT-037 | Rebuild the Android sandbox template from the reinstalled golden VM | android/platform | A | M2 → M3 | **P0** | None open; **blocks DRAFT-015/016/017** | AND-001; roadmap risk #12 |
 
-**Drafted in full and published 2026-08-11 — [#7](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/7)** (label `bug`, open). See
-`.github/issue-drafts/DRAFT-037.md`. Published title carries the `[Android]`
-prefix; the body uses the "Draft of record" header block rather than the
-draft's own `# DRAFT-037:` heading, matching issues #3, #4 and #6.
+**Published and closed 2026-08-11 — [#7](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/7)** (label `bug`). Drafted,
+published and executed the same day. Transcript:
+`docs/runbooks/rebuild-android-sandbox.md`; resolution in
+`.github/issue-drafts/DRAFT-037.md`.
 
-**This is the only open issue.** #1, #2, #3, #4 and #6 are all closed.
+New saved state `1844fc0a…`, anchor PID 3163, golden LV unmodified, AND-001
+regression-checked after restore. Two outcomes beyond the draft's scope: the
+dead DNS DNAT was retired rather than reproduced (closing the Android half
+of `CLAUDE.md`'s known issue), and the anchor is now a backgrounded `nano`
+for anti-evasion — which makes **"anchor auto-discovery must not key on a
+process-name grep"** a constraint on DRAFT-015/016.
+
+**All seven issues are now closed.** Nothing is open.
 
 `android_sandbox` is a clone of the golden VM, so the reinstall made its LV,
 its saved state (`457fe0d7…`) and its anchor PID (`5715`) all describe an
@@ -410,21 +417,26 @@ dated addenda were removed on 2026-08-11 — three stacked revisions patching
 each other by reference had stopped reading as one sequence, which is the
 whole point of having one.
 
-Issues #1, #2, #3, #4 and #6 are closed. **[#7](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/7)
-(DRAFT-037) is open** and is item 1 below. The remaining drafted P0s —
-DRAFT-028, DRAFT-030, DRAFT-031, DRAFT-033, DRAFT-036 — are still
-unpublished.
+**All seven published issues are closed** — #1, #2, #3, #4, #6 and #7.
+DRAFT-037/#7 was drafted, published and executed on 2026-08-11 and has been
+struck from the sequence below. The remaining drafted P0s — DRAFT-028,
+DRAFT-030, DRAFT-031, DRAFT-033, DRAFT-036 — are all still unpublished, and
+DRAFT-031 is now first.
 
 ### Next six
 
 | # | Draft | Why here |
 |---|---|---|
-| 1 | **DRAFT-037** — published as **[#7](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/7)**, the only open issue | P0, and the only item here that unblocks physical work rather than code. `android_sandbox` does not currently exist in usable form, so DRAFT-015/016/017 have nothing to be written against. Everything it needs is already available — the golden VM fix landed 2026-08-11. |
-| 2 | **DRAFT-031** | Cheapest of the blockers and the widest: the licence-header-above-shebang layout is inherited by **every copy made before it is fixed**, so it precedes DRAFT-015 and DRAFT-016. Also gates DRAFT-026a. |
-| 3 | **DRAFT-028** | P0, and now has execution evidence rather than source reasoning — the 2026-08-09 Dom0 run produced `RTNETLINK answers: File exists` on a second launch. Blocks DRAFT-013: verifying isolation before fixing a rule that may never have installed only records a known-broken state. |
+| 1 | **DRAFT-031** | Cheapest of the blockers and the widest: the licence-header-above-shebang layout is inherited by **every copy made before it is fixed**, so it precedes DRAFT-015 and DRAFT-016. Also gates DRAFT-026a. |
+| 2 | **DRAFT-028** | P0, and now has execution evidence rather than source reasoning — the 2026-08-09 Dom0 run produced `RTNETLINK answers: File exists` on a second launch. Blocks DRAFT-013: verifying isolation before fixing a rule that may never have installed only records a known-broken state. |
+| 3 | **DRAFT-013** | Rises now that Phase 1 is complete. It is the Android checklist's `Current blocker` and the only thing standing between this template and real samples — clones have unrestricted NAT egress by default, and §1.3's six-row isolation table has never been filled. Still gated on DRAFT-028. |
 | 4 | **DRAFT-010** | Moved ahead of DRAFT-036 because it gates it. DRAFT-036's PLAN/CREATE wait on DRAFT-010's C-vs-Python decision, which determines whether the fix is a cross-process lease in `dirwatch.c` or an allocator designed into its replacement. CONF-11 raises its value independently: with engine work near-term, this becomes input to that work. |
 | 5 | **DRAFT-036** | P0 **correctness** defect, not tuning: `slots_busy[]` is process-local and the slot index *is* the VLAN, so a second watcher allocates VLAN 1 too and both clones land on `xenbr1.1`. Per-OS watchers cannot run concurrently until this lands — it is a prerequisite of issue #3's OS-selection mechanism, not a follow-up to it. |
 | 6 | **DRAFT-033** | `clone-ubuntu.pl` is the template `clone-android.pl` is written from and it checks no exit status. Copying first puts the defect in three files. Precedes DRAFT-015. |
+
+**DRAFT-037/#7 was item 1 and is done** (2026-08-11), which is what promotes
+DRAFT-013: with a working Android template in hand, unverified containment
+is now the nearest thing to a real risk rather than a distant one.
 
 **DRAFT-032** was first in this list and is now executed — see the note at
 the end of this section.
@@ -450,6 +462,13 @@ more than the item it reorders:
 
 - **DRAFT-031, DRAFT-033 and DRAFT-030 all precede DRAFT-015/016.** Each is
   a defect in the template that gets copied into two more files otherwise.
+- **Anchor auto-discovery must not key on a process-name grep** (added
+  2026-08-11 by issue #7). The Android anchor is a backgrounded `nano`,
+  chosen so the string `drakvuf` appears nowhere in the guest. A generic
+  name makes `grep` ambiguous and `injector` does not warn, so §7.2's
+  "Resolve the injection anchor PID/TGID automatically / Reject zero or
+  multiple matching anchors" must key on something else. `INJECTION_PID` is
+  a number and always was; only human verification used the name.
 - **DRAFT-028 before DRAFT-013.** Fix before measuring.
 - **DRAFT-010 before DRAFT-036.** Publication gate, stated in DRAFT-036.
 - **DRAFT-036 before any concurrent per-OS watcher**, and therefore before
