@@ -1,3 +1,4 @@
+#!/bin/sh
 #********************IMPORTANT DRAKVUF LICENSE TERMS*********************#
 #                                                                        #
 # DRAKVUF (C) 2014-2024 Tamas K Lengyel.                                 #
@@ -101,7 +102,6 @@
 # https://github.com/tklengyel/drakvuf/COPYING)                          #
 #                                                                        #
 #************************************************************************#
-#!/bin/bash
 #
 # Runs the DRAKVUF trace against a clone that preconfig-ubuntu.sh has
 # already staged. Called by dirwatch with the same fixed 7-argument list.
@@ -114,6 +114,7 @@ SCRIPT_DIR="$(
     pwd
 )"
 
+# shellcheck disable=SC2034  # read by the sourced pipeline-ubuntu.env, not here
 REPO_ROOT="$(
     cd -- "$SCRIPT_DIR/.." &&
     pwd

@@ -268,16 +268,51 @@ Three things the same run surfaced that are **not** fixed:
 - [ ] Retrofit structured status output (`status.json`-style, matching the
   shape being defined for `docs/architecture/result-schema.md`) without
   changing existing behavior.
-- [ ] Add `bash -n` / `shellcheck` / `perl -c` CI for `automation/*`
-  (**DRAFT-026a**, the static tier — DRAFT-012 was superseded by it; see
-  `.github/issue-drafts/issue-index.md`). Gated on **DRAFT-031**, which
-  establishes a baseline the scripts actually pass: `shellcheck` currently
-  reports `SC1128` on five of the six, because the licence header sits
-  above the shebang. *(The earlier wording here said this was blocked on
-  Bash being non-functional in this dev container as of 2026-08-07. That
-  blocker is lifted — `bash`, `dash`, `shellcheck` and `perl` were
-  re-confirmed working in-container on 2026-08-08, 2026-08-09 and again on
-  2026-08-11.)*
+- [ ] Add `bash -n` / `dash -n` / `shellcheck` / `perl -c` CI for
+  `automation/*` (**DRAFT-026a**, the static tier — DRAFT-012 was superseded
+  by it; see `.github/issue-drafts/issue-index.md`). **No longer gated:
+  DRAFT-031 landed 2026-08-11** and `shellcheck automation/*.sh` now exits 0.
+  *(The earlier wording here said this was blocked on Bash being
+  non-functional in this dev container as of 2026-08-07. That blocker is
+  lifted — `bash`, `dash`, `shellcheck` and `perl` were re-confirmed working
+  in-container on 2026-08-08, 2026-08-09 and again on 2026-08-11.)*
+
+### Static-check gate — what passing actually covers (DRAFT-031, 2026-08-11)
+
+A green check with an undocumented baseline is worse than a red one, so
+this records what the gate does and does not enforce.
+
+| Check | Result |
+|---|---|
+| `shellcheck automation/*.sh` | **exit 0**, bare, reading `.shellcheckrc` |
+| `bash -n`, `dash -n` on all six | pass |
+| `perl -c automation/clone-ubuntu.pl` | pass |
+
+**What changed to get there.** `SC1128` ("the shebang must be on the first
+line") was an *error*-severity finding on five of the six scripts, which
+carried the 103-line DRAKVUF licence header above `#!/bin/bash` at line 104.
+The shebang moved to line 1 as **`#!/bin/sh`**, header immediately below —
+one line moved per file, no licence text touched. `#!/bin/sh` rather than
+`#!/bin/bash` because `/bin/sh` is what has always interpreted them: the
+line-104 shebang was invisible to the kernel and GLib fell back to
+`/bin/sh`. Declaring bash would have switched five root-run scripts to a
+different interpreter under cover of a lint fix.
+
+Two `SC2034` false positives (`REPO_ROOT` set here, read by the sourced
+`pipeline-ubuntu.env`) carry inline `# shellcheck disable` directives with
+reasons.
+
+**What it does not cover.** Four codes are disabled repository-wide in
+`.shellcheckrc`, each with an owning issue: `SC2086` (33 unquoted
+expansions → DRAFT-030/011), `SC2009` (4 `ps aux | grep` sites →
+DRAFT-011), `SC2006` (1 backtick → DRAFT-028), `SC1091` (unfollowable
+runtime source — correct behaviour, no owner needed). None was fixed here:
+changing expansion or process-discovery behaviour in scripts that run
+malware analysis as root is a behaviour change, not a lint cleanup.
+
+`severity=warning` would have been the better expression of this policy and
+is **not used because shellcheck 0.11.0 silently ignores `severity=` in
+`.shellcheckrc`** — measured, not assumed. Re-test on upgrade.
 - [ ] Parameterize the remaining hard-coded values — `vg-root` and the
   `xenbr1` / `172.16.<vlan>` scheme in `clone-ubuntu.pl` and
   `network-setup.sh` — per `CLAUDE.md`'s "prefer parameterization" rule,

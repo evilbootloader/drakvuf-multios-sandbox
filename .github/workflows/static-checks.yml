@@ -1,0 +1,124 @@
+# Level 1 static checks — DRAFT-026a.
+#
+# Design: docs/workflow-ci.md, "GitHub-hosted workflows (Level 1)".
+# Unblocked by DRAFT-031, which made `shellcheck automation/*.sh` exit 0
+# against the .shellcheckrc baseline. Before that this workflow would have
+# been red on every run against unmodified working code.
+#
+# This tier runs with no privileged access and no Xen. It deliberately does
+# NOT compile dirwatch.c: that file #includes <config.h> and
+# ../xen_helper/xen_helper.h and only builds inside a real DRAKVUF source
+# tree with Xen dev headers. That compile is Level 2's job.
+#
+# It also cannot prove the automation scripts still *execute* correctly —
+# only that they parse. The Dom0 benign-analysis run remains the execution
+# evidence, and no CI tier substitutes for it.
+
+name: static checks
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  static:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install the toolchain
+        # Installed explicitly rather than relying on what the runner image
+        # happens to ship. Two reasons: the GitHub-hosted image contents
+        # change without notice, and Level 2 will run on a self-hosted Dom0
+        # runner whose image is ours — this step is what makes the two
+        # tiers agree on what "the static checks" means.
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends shellcheck dash perl
+
+      - name: Record toolchain versions
+        # Recorded rather than pinned. The .shellcheckrc baseline was
+        # established against shellcheck 0.11.0, and shellcheck's finding
+        # set genuinely differs between releases — a newer one can emit a
+        # code the baseline does not disable and turn this job red on
+        # unmodified code. When that happens, this output is what makes it
+        # diagnosable instead of mysterious: compare the version here
+        # against the one recorded in docs/checklists/ubuntu.md's
+        # "Static-check gate" section.
+        run: |
+          shellcheck --version
+          bash --version | head -1
+          perl --version | sed -n 2p
+          ls -l /bin/sh
+
+      - name: Syntax — bash -n and dash -n
+        # dash -n is not redundant. The automation/ worker scripts declare
+        # #!/bin/sh and are interpreted by dash in production, so bash -n
+        # alone accepts bashisms that fail silently there rather than
+        # erroring — the defect issue #4 hit with ${BASH_SOURCE[0]}
+        # evaluating to empty and turning SCRIPT_DIR into $PWD.
+        run: |
+          rc=0
+          for f in automation/*.sh; do
+            bash -n "$f" || { echo "FAIL bash -n $f"; rc=1; }
+            dash -n "$f" || { echo "FAIL dash -n $f"; rc=1; }
+          done
+          exit $rc
+
+      - name: shellcheck
+        # Bare, with no severity flag: .shellcheckrc is read automatically
+        # and is the single reviewable record of what the gate enforces.
+        # Passing a flag here would diverge from what CONTRIBUTING.md tells
+        # a developer to run locally, and `severity=` in that file is
+        # silently ignored by shellcheck 0.11.0 anyway.
+        run: shellcheck automation/*.sh
+
+      - name: perl -c
+        run: perl -c automation/clone-ubuntu.pl
+
+      - name: Shebang layout convention
+        # CONTRIBUTING.md, "Script layout convention": line 1 is the
+        # shebang, licence header below it. shellcheck's SC1128 already
+        # catches this and is NOT disabled in .shellcheckrc, but it is
+        # asserted separately so the intent survives a future baseline
+        # change that suppresses SC1128 by accident.
+        run: |
+          rc=0
+          for f in automation/*.sh; do
+            case "$(head -1 "$f")" in
+              '#!'*) ;;
+              *) echo "FAIL $f: line 1 is not a shebang"; rc=1 ;;
+            esac
+          done
+          exit $rc
+
+      - name: Regression guard — no <USER> placeholder
+        # Issue #2: automation/ had silently diverged from the deployed Dom0
+        # copies, and this repo's drakvuf-ubuntu.sh carried an unsubstituted
+        # <USER>. Resolved 2026-08-08 by syncing from the tested host. This
+        # guards against a half-substituted copy being committed again.
+        #
+        # Note the inverted exit status: grep returns 0 when it FINDS
+        # something, so the failure case is a match. Written as an explicit
+        # if-block rather than a bare command for exactly that reason — the
+        # same defect the Android checklist's §6.1 gate carried.
+        run: |
+          if grep -Rns '<USER>' automation/; then
+            echo "FAIL: unsubstituted <USER> placeholder found"
+            exit 1
+          fi
+          echo "OK: no <USER> placeholder"
+
+      - name: Inventory — ps|grep process discovery
+        # Informational, NOT a gate. These sites exist today and are owned
+        # by DRAFT-011; failing on them would make this workflow red on
+        # unmodified working code, which is the thing DRAFT-031 existed to
+        # prevent. Turn this into a gate when DRAFT-011 lands.
+        continue-on-error: true
+        run: |
+          echo "Known ps|grep sites (DRAFT-011 owns replacing these):"
+          grep -Rns 'ps aux.*grep' automation/ || echo "none found"

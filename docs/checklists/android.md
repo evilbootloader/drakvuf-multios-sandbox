@@ -2260,7 +2260,12 @@ Blocked ranges:
 - [ ] `dash -n` passes for all shell scripts — they execute under `dash` in
   production, so `bash -n` alone accepts syntax that fails silently there.
 - [ ] `shellcheck` passes against the DRAFT-031 baseline, or every
-  suppression is documented.
+  suppression is documented. *(The baseline now exists — landed 2026-08-11,
+  recorded in `.shellcheckrc` and in `docs/checklists/ubuntu.md`'s
+  "Static-check gate" section. This gate is therefore achievable rather
+  than aspirational. New Android scripts follow `CONTRIBUTING.md`'s
+  "Script layout convention": `#!/bin/sh` on line 1, licence header below
+  it, every suppression naming its owning issue.)*
 - [ ] `perl -c` passes for clone scripts.
 - [ ] Scripts are executable with correct owner and permissions.
 - [ ] No remaining `<USER>` or placeholder paths exist.

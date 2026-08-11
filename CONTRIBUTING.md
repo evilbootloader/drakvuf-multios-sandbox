@@ -51,11 +51,40 @@ Distinguish between:
 - tests that must run on L1 Xen Dom0;
 - tests that execute inside L2 analysis guests.
 
-Static checks (`bash -n`, `shellcheck`, `perl -c`) run in the development
-container. If it ever loses the ability to spawn processes, defer them to
-the real host or CI rather than skipping them.
+Static checks (`bash -n`, `dash -n`, `shellcheck`, `perl -c`) run in the
+development container. If it ever loses the ability to spawn processes,
+defer them to the real host or CI rather than skipping them.
+
+`dash -n` is not optional alongside `bash -n`: the `automation/` worker
+scripts are interpreted by `/bin/sh`, and `bash -n` alone accepts bashisms
+that fail silently there rather than erroring.
 
 Do not claim a task is complete without evidence.
+
+### Script layout convention
+
+Every new shell script under `automation/` — the Android and Windows
+per-OS scripts included — follows the layout DRAFT-031 established, so the
+`shellcheck` gate stays green as the pipeline count grows:
+
+1. **Shebang on line 1.** Not below the licence header. A shebang the
+   kernel cannot see is not a shebang; it only worked before because
+   GLib's `g_spawn_*` falls back to `/bin/sh` on `ENOEXEC`.
+2. **`#!/bin/sh` for anything `dirwatch` invokes**, and write POSIX. These
+   run under `dash`. Reach for `#!/bin/bash` only for a script an operator
+   runs directly, as `run_analysis-ubuntu.sh` is.
+3. **DRAKVUF licence header immediately below the shebang**, for files
+   derived from upstream `tools/`. It is a licence obligation, not
+   boilerplate — never delete, truncate, reword or relocate it. A file
+   that is this project's own work does not carry one.
+4. **Every `shellcheck` suppression names the issue that removes it.** A
+   suppression with no owner is an untracked defect. Repository-wide
+   exceptions live in `.shellcheckrc` with their owners; one-off ones use
+   an inline `# shellcheck disable=SCnnnn  # reason` directive.
+
+`shellcheck automation/*.sh` must exit 0 before a change is proposed. It
+reads `.shellcheckrc` automatically, so run it bare rather than with a
+severity flag — that is the command CI runs.
 
 ## Human review / commit gate
 

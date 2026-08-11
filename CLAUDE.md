@@ -120,15 +120,29 @@ subfolders):
   `network-setup.sh`, then launches `dirwatch` with the arguments above.
 
 **Scripts in `automation/` execute under `dash`, not `bash`.** Five of the
-six carry the DRAKVUF license header *above* the shebang, so `#!/bin/bash`
-sits on line 104 where the kernel never sees it; `execv` fails `ENOEXEC`
-and GLib's `g_spawn_*` (how `dirwatch` invokes them) falls back to
-`/bin/sh`. Write POSIX for these files. A bash-only construct does not
-fail loudly — `${BASH_SOURCE[0]}` evaluates to empty under dash and the
-script carries on, which in issue #4 silently turned `SCRIPT_DIR` into
-`$PWD`. Use `$0`. `run_analysis-ubuntu.sh` is the exception (line-1
-shebang), but uses `$0` too so the idiom is uniform. Check with
+six now declare `#!/bin/sh` on line 1, with the DRAKVUF license header
+immediately below it (DRAFT-031, 2026-08-11). Write POSIX for these files.
+
+*Until DRAFT-031 the shebang was `#!/bin/bash` on line **104**, below the
+licence header, where the kernel never saw it: `execv` failed `ENOEXEC` and
+GLib's `g_spawn_*` (how `dirwatch` invokes them) fell back to `/bin/sh`.
+The interpreter is unchanged — `/bin/sh` is `dash` — which is exactly why
+`#!/bin/sh` was chosen over `#!/bin/bash` when the line moved. Declaring
+bash would have switched five root-run analysis scripts to a different
+interpreter under cover of a lint fix.*
+
+A bash-only construct does not fail loudly — `${BASH_SOURCE[0]}` evaluates
+to empty under dash and the script carries on, which in issue #4 silently
+turned `SCRIPT_DIR` into `$PWD`. Use `$0`. `run_analysis-ubuntu.sh` is the
+exception and genuinely runs under bash: it is this project's own launcher,
+invoked directly by an operator rather than by `dirwatch`, and it keeps
+`#!/bin/bash`. It uses `$0` too, so the idiom stays uniform. Check with
 `dash -n SCRIPT` as well as `bash -n SCRIPT`.
+
+`shellcheck automation/*.sh` exits 0 as of DRAFT-031, against the baseline
+in `.shellcheckrc` — which disables four codes repository-wide, each named
+with the issue that owns removing it. Read that file before assuming a
+clean run means clean code.
 
 The Xen guest `.cfg` files these scripts reference are tracked under
 `misc/`, not `automation/`: `misc/ubuntu.cfg` (golden `ubuntu`),

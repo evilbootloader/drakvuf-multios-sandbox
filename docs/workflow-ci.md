@@ -138,11 +138,20 @@ lower.
 ## GitHub-hosted workflows (Level 1)
 
 Runs on `ubuntu-latest`, needs no privileged access, safe on
-`pull_request` including from forks:
+`pull_request` including from forks.
+
+**This tier is no longer blocked.** DRAFT-031 landed 2026-08-11 and
+`shellcheck automation/*.sh` now exits 0 against the `.shellcheckrc`
+baseline, so the gate is green on unmodified working code rather than red
+from its first run. Run it **bare** — `.shellcheckrc` is read
+automatically, and `severity=` in that file is silently ignored by
+shellcheck 0.11.0, so a `-S` flag here would diverge from what developers
+run locally. `dash -n` is added alongside `bash -n` because the worker
+scripts are interpreted by `/bin/sh`.
 
 ```bash
-for f in automation/*.sh; do bash -n "$f"; done
-shellcheck automation/*.sh
+for f in automation/*.sh; do bash -n "$f"; dash -n "$f"; done
+shellcheck automation/*.sh          # bare: reads .shellcheckrc, exits 0
 perl -c automation/clone-ubuntu.pl
 
 # Anti-pattern checks, same acceptance gates docs/checklists/android.md

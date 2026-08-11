@@ -1,6 +1,10 @@
 # DRAFT-031: Establish a `shellcheck` baseline that `automation/` actually passes
 
-**Status:** Drafted, not published
+**Status:** **Implemented 2026-08-11.** Repo change and static verification
+complete; the Dom0 pull and one benign analysis run remain outstanding (see
+DEPLOY). Verified in CI rather than by a Dom0 runbook, at the maintainer's
+direction — `.github/workflows/static-checks.yml` was implemented alongside
+this issue, which also discharges **DRAFT-026a**.
 **Area:** testing (shared — sets the house style for Ubuntu, Android and
 Windows scripts)
 **Milestone:** M1
@@ -102,11 +106,27 @@ achievable.
    Establish whether moving the shebang *above* the header — leaving the
    header intact, just one line lower — satisfies that, which it plainly
    should, since nothing is removed.
-2. Choose between the three options:
-   - **(a) Move `#!/bin/bash` to line 1**, header immediately after.
-     One-line change per file, zero behaviour change, SC1128 disappears,
-     and it makes the scripts directly executable rather than relying on
-     `ENOEXEC` fallback. **Recommended.**
+2. Choose between the options:
+   - **(a) Move the shebang to line 1**, header immediately after. One line
+     per file, SC1128 disappears, and the scripts become directly
+     executable rather than relying on the `ENOEXEC` fallback.
+     **Recommended — but as `#!/bin/sh`, not `#!/bin/bash`.**
+
+     > **Correction, 2026-08-11.** This step originally read "(a) Move
+     > `#!/bin/bash` to line 1 … zero behaviour change". **That was wrong,
+     > and it mattered.** Those five scripts run under `dash` today: the
+     > line-104 shebang is invisible to the kernel, `dirwatch` spawns them
+     > via `g_spawn_command_line_sync()`, GLib's `g_execute()` gets
+     > `ENOEXEC` and falls back to `/bin/sh` — which is `dash`. Putting
+     > `#!/bin/bash` on line 1 makes the kernel honour it and switches five
+     > scripts that run malware analysis as root to a different
+     > interpreter, under cover of a lint fix. `#!/bin/sh` preserves the
+     > current interpreter exactly and keeps `CLAUDE.md`'s "write POSIX for
+     > these files" rule true.
+     >
+     > Measured before choosing: shellcheck reports the **identical** 43
+     > findings under either shebang, so no bashisms surface under `sh`,
+     > and `dash -n` passes on all five rewritten files.
    - **(b) Keep the layout, add `# shellcheck disable=SC1128`.** Cheap,
      but shellcheck's directive must itself precede the shebang to apply,
      which reproduces the same ordering awkwardness.
@@ -160,29 +180,54 @@ git diff --stat automation/          # expect: 1 insertion + 1 deletion per file
 git diff automation/ | grep -c '^-#'  # expect: 0 removed comment lines
 ```
 
-Requires Xen Dom0 — present for manual execution:
+**The same checks run in CI**, which is where this change was verified —
+`.github/workflows/static-checks.yml`, DRAFT-026a's Level 1 tier,
+implemented alongside this issue rather than after it. That workflow is the
+durable form of the checks above: it installs the toolchain explicitly,
+records the `shellcheck` version, and gates every push and pull request.
+
+> **Verification approach changed 2026-08-11**, at the maintainer's
+> direction: implement CI and test there, rather than writing a Dom0
+> runbook for a behaviourally inert change. This is sound for what CI can
+> see, and the limit needs stating — **CI proves the scripts parse, not
+> that they execute.** No GitHub-hosted tier can spawn `dirwatch`.
+
+Requires Xen Dom0 — present for manual execution, still outstanding:
 
 ```bash
-# PLAN step 3: apply the identical change to the deployed copies and
-# re-verify the repo<->host sync that issue #2 established:
-sha256sum /home/user/drakvuf-tools/*.sh
-sha256sum automation/*.sh
-# then one benign end-to-end analysis run, to confirm the scripts still
-# execute correctly when invoked by dirwatch.
+# Deployment is a pull, not a copy (issue #4). Never while an analysis is
+# in flight -- dirwatch re-reads the worker scripts per sample.
+git -C /root/sandbox_project pull
+git -C /root/sandbox_project status --porcelain    # expect empty
+head -1 /root/sandbox_project/automation/cleanup.sh   # expect #!/bin/sh
+ls -l /bin/sh    # confirms the premise: /bin/sh is dash on Dom0
+
+# Then one benign end-to-end analysis run.
 ```
+
+> **Stale-path correction, 2026-08-11.** This section previously compared
+> `sha256sum /home/user/drakvuf-tools/*.sh` against `sha256sum
+> automation/*.sh`. That path is retired: issue #4 replaced hand-copying
+> with a git checkout at `/root/sandbox_project`, and the old directory is
+> now `…​.retired-issue4`. Parity is a `git status`, not a checksum
+> comparison.
 
 # DEPLOY
 
 Requires manual Dom0 coordination — present, do not execute:
 
-1. Apply the same one-line change to the five deployed copies under
-   `/home/user/drakvuf-tools/`, in the same maintenance window as the repo
-   change. Repo and host must not diverge (issue #2's whole lesson).
-2. Run one benign analysis and confirm normal completion.
-3. Record the matching `sha256sum` output on both sides as the sync
-   evidence.
-4. Rollback: revert the commit and restore the host copies from the
-   pre-change checksums. Behaviourally inert either way.
+1. Push, then `git -C /root/sandbox_project pull`. **Do not edit the
+   deployed scripts in place** — that is how the drift issue #2 diagnosed
+   happened.
+2. Confirm `git status --porcelain` is empty and line 1 of each worker
+   script is `#!/bin/sh`.
+3. Run one benign analysis and confirm normal completion. **This is the
+   only step that produces execution evidence**, and it is what CI cannot
+   replace: the kernel now honours the shebang rather than failing
+   `ENOEXEC` into `/bin/sh`, so the path by which the interpreter is
+   selected has changed even though the interpreter has not.
+4. Rollback: revert the commit, push, pull again. Behaviourally inert
+   either way — `dash` before and after.
 
 # Acceptance criteria
 

@@ -1,0 +1,78 @@
+# shellcheck baseline for automation/
+#
+# Established by DRAFT-031. The point of this file is that the *bare*
+# command exits 0 against unmodified working code:
+#
+#     shellcheck automation/*.sh          # picks this file up automatically
+#
+# Bare, because that is what `CLAUDE.md`, `README.md` and
+# `docs/workflow-ci.md` all tell a developer and the CI tier (DRAFT-026a)
+# to run. A gate that is red by default gets ignored, and one that only
+# passes with flags nobody remembers is the same gate.
+#
+# Nothing here is suppressed without naming the issue that removes it.
+# A suppression with no owner is not an exception, it is an untracked
+# defect. When an owning issue lands, delete its line.
+
+# --- Why `disable=` and not a severity floor ----------------------------
+#
+# The natural expression of this policy is `severity=warning`: every
+# finding below is `info` or `style`, and `shellcheck -S warning
+# automation/*.sh` does exit 0 today. It is not used because
+# **`severity=` in this file is silently ignored by shellcheck 0.11.0** --
+# measured, not assumed: an rc containing only `severity=warning` changes
+# neither the output nor the exit status, while `disable=` in the same
+# file works. Only the CLI `-S` flag applies a floor.
+#
+# So the choice was between a bare command that passes (this file) and a
+# documented flag that everyone must remember (`-S warning`). This file
+# wins, at a cost stated plainly below.
+#
+# Re-test `severity=` when shellcheck is upgraded. If it starts working it
+# is strictly better than the blanket disables here, because it keeps the
+# checks live for code written after this baseline.
+
+# --- Dialect ------------------------------------------------------------
+#
+# No `shell=` override, deliberately. Each file's own shebang is the
+# authority, so a new per-OS script cannot be silently checked as a dialect
+# it does not run under.
+#
+# The five DRAKVUF-derived worker scripts declare `#!/bin/sh` and are
+# checked as POSIX sh, which is what actually interprets them: `dirwatch`
+# spawns them via `g_spawn_command_line_sync()` and `/bin/sh` is `dash` on
+# the Dom0 host. `run_analysis-ubuntu.sh` declares `#!/bin/bash` and is
+# checked as bash, because it is this project's own launcher, invoked
+# directly by an operator rather than by `dirwatch`.
+
+# --- Accepted findings --------------------------------------------------
+#
+# SC1091  Not following: pipeline-ubuntu.env was not specified as input.
+#         Correct behaviour, not a defect: the config is sourced at runtime
+#         from a path built at runtime. The `# shellcheck source=`
+#         directives in the scripts record where it lives.
+#         Owner: none needed.
+#
+# SC2086  Unquoted expansions, 33 sites across cleanup.sh,
+#         drakvuf-ubuntu.sh, network-setup.sh, tcpdump.sh.
+#         Owner: DRAFT-030 (guest-filename normalizer) and DRAFT-011.
+#         NOT fixed here on purpose -- changing expansion behaviour in
+#         scripts that run malware analysis as root is a behaviour change
+#         and goes through its own review, not a lint cleanup.
+#
+# SC2009  `ps aux | grep` process discovery, 4 sites. Three are in shared
+#         cleanup.sh. The `"tcpdump -i xenbr1.$VLAN"` match is unanchored
+#         with `.` as a regex wildcard, so VLAN 1 also matches
+#         xenbr1.10-19 once there are more than 9 clones.
+#         Owner: DRAFT-011.
+#
+# SC2006  Legacy backticks, 1 site in network-setup.sh:145.
+#         Owner: DRAFT-028.
+#
+# THE COST, stated because it is not obvious: these are disabled
+# repository-wide, so a genuinely dangerous new unquoted expansion in
+# `preconfig-android.sh` or a future `clone-windows.pl` wrapper will NOT
+# be caught until DRAFT-030/011/028 land and these lines come out. That is
+# an argument for landing DRAFT-030 sooner rather than a reason to accept
+# the disables indefinitely.
+disable=SC1091,SC2086,SC2009,SC2006

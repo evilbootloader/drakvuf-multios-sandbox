@@ -1,3 +1,4 @@
+#!/bin/sh
 #********************IMPORTANT DRAKVUF LICENSE TERMS*********************#
 #                                                                        #
 # DRAKVUF (C) 2014-2024 Tamas K Lengyel.                                 #
@@ -101,7 +102,6 @@
 # https://github.com/tklengyel/drakvuf/COPYING)                          #
 #                                                                        #
 #************************************************************************#
-#!/bin/bash
 
 ARGC=$#
 if [ $ARGC -le 3 ]; then

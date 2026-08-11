@@ -90,10 +90,15 @@ shellcheck SCRIPT
 perl -c SCRIPT       # Perl scripts
 ```
 
-`shellcheck` does not pass cleanly today: five of the six `automation/*.sh`
-report `SC1128`, because the DRAKVUF licence header sits above the shebang.
-Establishing a baseline the scripts actually pass is DRAFT-031, and it gates
-the static CI tier.
+`shellcheck` exits 0 as of DRAFT-031 (2026-08-11) — run it bare, without a
+severity flag, since it reads `.shellcheckrc` automatically and that is the
+command CI runs. The baseline disables four codes repository-wide, each
+recorded in `.shellcheckrc` with the issue that owns removing it, so a clean
+run does not mean the scripts are free of findings. Read that file first.
+
+`dash -n` matters as much as `bash -n`: the worker scripts declare
+`#!/bin/sh` and are interpreted by `dash` in production, so `bash -n` alone
+accepts bashisms that fail silently there.
 
 ## Infrastructure boundary
 
