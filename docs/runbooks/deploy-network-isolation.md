@@ -7,12 +7,16 @@
 > This file is the execution transcript and is now **append-only** —
 > annotate, never edit.
 >
-> **Headline results.** The NET-01 question is answered: `iptables -S
-> FORWARD` showed `-P FORWARD ACCEPT` and nothing else, so the old
-> `-o !xenbr0` rule had **never installed** and no analysis run before
-> today had any inter-clone isolation. Step 8's nine-row matrix passed.
-> Step 8b proved the IPv6 gap was live rather than theoretical, with a
+> **Headline results.** Step 8's nine-row connectivity matrix passed. Step
+> 8b proved the IPv6 gap was live rather than theoretical, with a
 > `DRAKVUF_INPUT6` counter of 20 packets to show the rule fired.
+>
+> **NET-01 is confirmed, by a mechanism the draft did not anticipate.** The
+> old `-o !xenbr0` rule was never rejected — it installed cleanly and
+> stored `!xenbr0` as a literal interface name, so it matched nothing.
+> **Inter-clone isolation has never worked in this project.** See the
+> correction in step 2: the first reading of that step was wrong, and the
+> answer came from a separate test.
 
 ## Read this before you start
 
@@ -144,6 +148,67 @@ Full `iptables -t nat -S POSTROUTING` output:
 root@drakvuf:~/sandbox_project# iptables -t nat -S POSTROUTING
 -P POSTROUTING ACCEPT
 ```
+
+> **Correction and resolution, 2026-08-11. Read both halves — the first
+> reading of this step was wrong, and the eventual answer is worse than
+> the draft predicted.**
+>
+> **The output above does not answer NET-01.** The empty `FORWARD` chain
+> looks like proof the old rule was rejected. It is not: **`POSTROUTING`
+> was empty too**, and `MASQUERADE` is valid syntax that would have
+> installed without complaint. Its absence means only that
+> `network-setup.sh` had not run since the host last booted — iptables
+> rules are runtime state and nothing in this project persists them. The
+> missing DROP rules are explained entirely by the script not having run.
+>
+> **Answered separately, the same day.** Two attempts were needed:
+>
+> ```text
+> # First attempt, interactively in bash:
+> $ sudo iptables -A FORWARD -i xenbr1.1 -o !xenbr0 -j DROP
+> bash: !xenbr0: event not found
+> ```
+>
+> That is bash history expansion consuming the `!` before iptables sees
+> it — an interactive-shell behaviour. `network-setup.sh` runs under
+> `/bin/sh` (dash), which has no history expansion, so reproducing the
+> production path means going through `sh`:
+>
+> ```text
+> $ sudo sh -c 'iptables -A FORWARD -i xenbr1.1 -o !xenbr0 -j DROP' ; echo "rc=$?"
+> rc=0
+> $ sudo iptables -S FORWARD | grep xenbr1
+> -A FORWARD -i xenbr1.1 -o !xenbr0 -j DROP
+> ```
+>
+> **The rule was accepted, not rejected — and that is the bad outcome.**
+> Compare the rendering against the replacement installed in step 5:
+>
+> ```text
+> old:  -A FORWARD -i xenbr1.1 -o !xenbr0 -j DROP
+> new:  -A DRAKVUF_ISOLATION -i xenbr1.+ ! -o xenbr0 -j DROP
+> ```
+>
+> `iptables -S` normalises genuine negation to `! -o xenbr0`. The old rule
+> printed `-o !xenbr0`, so `!xenbr0` was stored as a **literal interface
+> name** — an interface that has never existed on this host. The rule
+> matched nothing, ever.
+>
+> **NET-01 verdict: confirmed, by a mechanism the draft did not
+> anticipate.** DRAFT-028 hypothesised the rule would be *rejected*, and
+> reasoned that the missing exit-status check (NET-05) was what let the
+> failure pass unnoticed. Reality is worse: the command **succeeded**, the
+> rule appears in `iptables -S`, and it is semantically inert. No
+> exit-status check would ever have caught it, because there was no error
+> to catch. Only a packet counter or a live connectivity test would have —
+> which is exactly what step 8 is, and why "fix before measuring" was the
+> right order.
+>
+> **Consequence for the historical record: inter-clone isolation has never
+> worked in this project.** Every analysis run before 2026-08-11 had the
+> rule present and doing nothing. This must be reflected in
+> `docs/checklists/android.md` §1.3 and the roadmap risk register, not
+> quietly superseded by the fix.
 
 ## Step 3 — Check out the branch under test
 
