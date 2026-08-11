@@ -2290,8 +2290,14 @@ perl -c clone-android.pl
 # Note the inverted exit status: grep returns 0 when it FINDS something, so
 # a clean result here is exit 1. Written as an explicit gate rather than a
 # bare command.
-if grep -Rns '<USER>' .; then echo "FAIL: placeholder remains"; fi
-if grep -Rns 'ps aux.*grep\|ps .*|.*grep' .; then echo "FAIL: ps|grep remains"; fi
+# Comment lines excluded: a comment explaining the issue #2 placeholder
+# necessarily quotes it, and a guard that forbids describing a bug is a
+# guard against documentation. Requires the first non-whitespace character
+# of the line to not be `#`.
+if grep -REn '^[[:space:]]*[^#[:space:]].*<USER>' .; then
+    echo "FAIL: placeholder remains in code"
+fi
+if grep -Rns 'ps aux.*grep' .; then echo "NOTE: ps|grep sites remain (DRAFT-011)"; fi
 ```
 
 > **Corrected 2026-08-11 (TODO-03).** The gate previously grepped

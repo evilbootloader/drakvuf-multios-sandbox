@@ -156,9 +156,20 @@ perl -c automation/clone-ubuntu.pl
 
 # Anti-pattern checks, same acceptance gates docs/checklists/android.md
 # §6.1 already defines for the (not yet written) Android scripts, applied
-# here to the existing Ubuntu scripts too:
-grep -Rns '<USER>' automation/ && exit 1   # regression guard, see issue #2
-grep -Rns 'ps aux.*grep\|ps .*|.*grep' automation/
+# here to the existing Ubuntu scripts too.
+#
+# The <USER> guard excludes comment lines. The first implementation did
+# not, and failed immediately on drakvuf-ubuntu.sh:145 -- a comment
+# explaining issue #2, which necessarily quotes the placeholder it is
+# about. Requiring the first non-whitespace character to not be `#` keeps
+# the guard while allowing the history to be written down.
+if grep -REn '^[[:space:]]*[^#[:space:]].*<USER>' automation/; then
+    echo "FAIL: unsubstituted <USER> placeholder found in code"
+    exit 1
+fi
+
+# Informational, not a gate: these sites exist and DRAFT-011 owns them.
+grep -Rns 'ps aux.*grep' automation/ || true
 ```
 
 `dirwatch.c` is **not** compiled at this tier — it `#include`s

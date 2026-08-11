@@ -106,12 +106,21 @@ jobs:
         # something, so the failure case is a match. Written as an explicit
         # if-block rather than a bare command for exactly that reason — the
         # same defect the Android checklist's §6.1 gate carried.
+        #
+        # COMMENT LINES ARE EXCLUDED, and that is not a loophole. The first
+        # run of this workflow failed on drakvuf-ubuntu.sh:145 — a comment
+        # explaining what issue #2 found, which necessarily quotes the
+        # placeholder it is about. A guard that forbids describing a bug is
+        # a guard against documentation, and `CLAUDE.md` requires exactly
+        # that kind of "why" comment. The pattern below requires the first
+        # non-whitespace character of the line to not be `#`, so a real
+        # placeholder in an assignment is still caught.
         run: |
-          if grep -Rns '<USER>' automation/; then
-            echo "FAIL: unsubstituted <USER> placeholder found"
+          if grep -REn '^[[:space:]]*[^#[:space:]].*<USER>' automation/; then
+            echo "FAIL: unsubstituted <USER> placeholder found in code"
             exit 1
           fi
-          echo "OK: no <USER> placeholder"
+          echo "OK: no <USER> placeholder outside comments"
 
       - name: Inventory — ps|grep process discovery
         # Informational, NOT a gate. These sites exist today and are owned
