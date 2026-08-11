@@ -23,7 +23,7 @@
 | Start date | 2026-08-06 |
 | Last update | 2026-08-11 |
 | Current phase | Phase 2 — Android automation scripts (not started). Phase 1 complete: template rebuilt and restore-validated 2026-08-11, issue #7 |
-| Current blocker | **§1.3 sandbox network isolation is unverified** — the six-row isolation table is unfilled, so Android containment is unproven rather than merely undone. The 2026-08-11 template was saved with §1.5's `[ ] Confirm network isolation is active` still unticked. Roadmap risk #5; DRAFT-013, itself gated on DRAFT-028. Close before any non-benign sample runs with networking enabled |
+| Current blocker | **Android's reaction to the new isolation rules is untested.** §1.3's table is filled as of 2026-08-11 (DRAFT-028) and the mechanism is fixed and measured — but on *Ubuntu* clones. The rules match on interface so they apply identically, yet Android does connectivity probing and may mark a network unvalidated when it cannot reach its gateway, which Ubuntu never checks. First boot of an Android clone after this lands is the case to watch (DRAFT-013). Separately, clones retain deliberate NAT egress, so no non-benign sample should run with networking enabled until the `offline`/`simulated` modes exist |
 
 ### Status legend
 
@@ -423,15 +423,24 @@ Boot result: Successful
 
 ---
 
-## 1.3 Verify sandbox network isolation TODO
+## 1.3 Verify sandbox network isolation
 
 - [x] Confirm `xenbr1` exists.
 - [x] Confirm `xenbr1` is up.
 - [x] Confirm the sandbox VIF is attached to the expected bridge or OVS VLAN port.
-- [ ] Confirm there is no route from the analysis network to the management network.
-- [ ] Confirm there is no Internet access by default.
-- [ ] Confirm IPv6 is either isolated or disabled.
-- [ ] Record the intended per-clone VLAN design.
+- [x] Confirm there is no route from the analysis network to the management
+  network. *(2026-08-11, DRAFT-028. Measured on Ubuntu clones — the
+  mechanism is shared and matches on interface, not on guest OS.)*
+- [ ] ~~Confirm there is no Internet access by default.~~ **Premise
+  conflicts with the decided policy** — clones have deliberate NAT egress.
+  Needs re-scoping against the network modes in
+  `docs/architecture/networking.md`; see note 2 below. Not a failed test.
+- [x] Confirm IPv6 is either isolated or disabled. *(2026-08-11: isolated.
+  Blanket DROP in `DRAKVUF_ISOLATION6`/`DRAKVUF_INPUT6`, counter-confirmed.
+  It was previously neither — no v6 rules existed at all.)*
+- [x] Record the intended per-clone VLAN design. *(One `xenbr1.<vlan>`
+  sub-interface per clone slot, `172.16.<vlan>.1/24` gateway on Dom0,
+  clone at `.2`. `docs/architecture/networking.md`.)*
 
 
 ### Commands used
@@ -461,18 +470,105 @@ getprop | grep -iE 'dns|net\.'
 
 | Test | Expected | Actual | Passed |
 |---|---|---|---:|
-| Reach Xen Dom0 analysis gateway | Only intended service ports | | [ ] |
-| Reach Xen Dom0 management IP | Blocked | | [ ] |
-| Reach Proxmox management IP | Blocked | | [ ] |
-| Reach another LAN host | Blocked | | [ ] |
-| Reach Internet IPv4 | Blocked | | [ ] |
-| Reach Internet IPv6 | Blocked | | [ ] |
+| Reach Xen Dom0 analysis gateway | Only intended service ports | Blocked entirely — see note 1 | [x] |
+| Reach Xen Dom0 management IP | Blocked | Blocked | [x] |
+| Reach Proxmox management IP | Blocked | Blocked by the RFC1918 rules — not separately addressed, see note 3 | [x] |
+| Reach another LAN host | Blocked | Blocked | [x] |
+| Reach Internet IPv4 | Blocked | **ALLOWED, by design** — see note 2 | [ ] |
+| Reach Internet IPv6 | Blocked | Blocked | [x] |
 
 ### Evidence and notes
 
-```text
+**Filled 2026-08-11 from the DRAFT-028 deployment**, transcript in
+`docs/runbooks/deploy-network-isolation.md` steps 8 and 8b.
 
+> **Read the provenance before relying on this table.** The measurements
+> were taken from **Ubuntu** analysis clones, not Android ones. That is
+> sound for the rows above because the mechanism is
+> `automation/network-setup.sh`, one of the four shared scripts: its rules
+> match on interface (`-i xenbr1.+`), never on anything guest-specific, so
+> a clone of any OS on an analysis VLAN is filtered identically. What it
+> does **not** establish is Android-specific behaviour — see "Still open
+> for Android" below.
+
+Measured from a clone on `172.16.1.2`, with per-rule packet counters
+confirming the rules fired rather than the traffic simply never existing:
+
+```text
+clone -> other clone (172.16.2.2)     blocked
+clone -> gateway 172.16.1.1 (ping)    blocked
+clone -> gateway 172.16.1.1 (HTTP)    blocked
+clone -> router 192.168.1.1 (ping)    blocked
+clone -> router 192.168.1.1 :80       blocked
+clone -> router 192.168.1.1 :443      blocked
+clone -> LAN host                     blocked
+clone -> 1.1.1.1 (HTTPS)              WORKS   -- deliberate, see note 2
+clone -> DNS via 1.1.1.1              WORKS   -- deliberate, see note 2
+Dom0  -> clone (ping)                 works   -- ESTABLISHED,RELATED exception
+
+DRAKVUF_ISOLATION counters:  3 pkts on the clone-to-clone DROP
+                            14 pkts on the 192.168.0.0/16 DROP
+DRAKVUF_INPUT6 counter:     20 pkts (2397 bytes)
 ```
+
+**Note 1 — the gateway is now fully blocked, not port-restricted.** The
+original expectation ("only intended service ports") assumed the clone
+needed something from Dom0. It needs nothing: ARP is L2 and unfiltered,
+addresses are static so no DHCP, the resolver is `1.1.1.1` and therefore
+forwarded rather than local, and sample delivery and tracing are VMI
+operations with no network path at all. So the row is satisfied more
+strictly than it asked.
+
+**Note 2 — "no Internet access by default" is NOT the lab's policy, and
+this row is left unticked deliberately.** `network-setup.sh` MASQUERADEs
+every clone to the uplink; that is the current deliberate default, stated
+in the script and in `docs/architecture/networking.md`. The row records an
+expectation that predates the decision and conflicts with it. It is **not**
+a failed test — it is a checklist item that needs re-scoping against the
+`offline` / `simulated` / `controlled-internet` modes proposed in the
+networking doc, none of which exist yet. Do not "fix" it by blocking
+egress without deciding that question first.
+
+**Note 3 — the Proxmox management IP was not addressed directly.** It is
+covered by the `10.0.0.0/8`, `172.16.0.0/12` and `192.168.0.0/16`
+destination DROPs, so it is blocked whichever of those ranges it sits in.
+Ticked on that basis rather than on a targeted probe; if the L0 host is
+reachable at a public address, this row is not covered and needs re-testing.
+
+**IPv6 was a live hole, not a latent one.** Before DRAFT-028 there were no
+`ip6tables` rules at all (`-P INPUT ACCEPT`, `-P FORWARD ACCEPT`) and
+`net.ipv6.conf.all.disable_ipv6 = 0`. Dom0's own VLAN gateway interface
+carries an `fe80::` address, and a clone that runs
+`ip link set eth0 down; ip link set eth0 up` regenerates its link-local —
+confirmed on 2026-08-11. The clone then sent 20 packets at Dom0's
+link-local and `DRAKVUF_INPUT6` dropped every one. Before the change those
+packets would have arrived.
+
+**The mechanism these rows test never worked until 2026-08-11.** The
+previous inter-clone rule was `-o !xenbr0`, which current iptables accepts
+while storing `!xenbr0` as a *literal interface name* — one that has never
+existed. It installed cleanly, appeared in `iptables -S`, and matched
+nothing. Every analysis run before that date, Ubuntu and Android alike, had
+the rule present and inert. See `docs/runbooks/deploy-network-isolation.md`
+step 2 and roadmap risk #5.
+
+### Still open for Android specifically
+
+The rules are OS-independent; the guest's reaction to them is not. None of
+the following is established, and DRAFT-013 should carry them:
+
+- **Whether an Android clone tolerates an unreachable gateway.** Android
+  does connectivity probing and may mark the network unvalidated when it
+  cannot reach its gateway. Ubuntu does not care; Android might. First boot
+  of a clone after this lands is the case to watch.
+- **Whether Android attempts IPv6 and how it behaves when dropped.** The
+  v6 rules are blanket DROP with no ICMPv6 exception, so neighbour
+  discovery is dropped too.
+- **Whether Android's own DNS path honours the injected resolver.** The
+  golden image previously carried an in-guest DNAT to `172.16.10.1:53`;
+  that was not re-applied when the template was rebuilt (§1.4 annotation),
+  so per-clone resolver configuration is `preconfig-android.sh`'s to write
+  and does not exist yet (DRAFT-016).
 
 ---
 

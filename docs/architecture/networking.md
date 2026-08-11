@@ -8,31 +8,110 @@
 ## Current implementation: `automation/network-setup.sh`
 
 Provisions the isolated per-clone networking that `clone-ubuntu.pl` and
-`preconfig-ubuntu.sh` assume already exists:
+`preconfig-ubuntu.sh` assume already exists. **Rewritten by DRAFT-028
+(2026-08-11)**; the shape below is current.
 
 - `modprobe 8021q` — VLAN kernel module.
 - `echo 1 > /proc/sys/net/ipv4/ip_forward` — enables IP forwarding.
-- `iptables -t nat -A POSTROUTING -o xenbr0 -j MASQUERADE` — NATs outbound
-  traffic via the uplink bridge `xenbr0`.
-- `ip link set xenbr1 up`.
-- For each VLAN `1..N` (`N` = clone count argument): `vconfig add xenbr1 $i`,
-  gateway `172.16.$i.1/24` on `xenbr1.$i`, and
-  `iptables -A FORWARD -i xenbr1.$i -o !xenbr0 -j DROP` (blocks inter-VLAN
-  traffic).
+- `ip link set xenbr1 up`, after checking the bridge exists at all.
+- For each VLAN `1..N` (`N` = clone count argument):
+  `ip link add link xenbr1 name xenbr1.$i type vlan id $i` and gateway
+  `172.16.$i.1/24`, both guarded so a re-run is not an error.
+
+The filtering lives in **three dedicated chains**, flushed and rebuilt on
+every run:
+
+| Chain | Table | Contents |
+|---|---|---|
+| `DRAKVUF_NAT` | `nat`, from `POSTROUTING` | `-o xenbr0 -j MASQUERADE` |
+| `DRAKVUF_ISOLATION` | `filter`, inserted at head of `FORWARD` | clone-to-clone DROP, plus RFC1918 and link-local destination DROPs |
+| `DRAKVUF_INPUT` | `filter`, inserted at head of `INPUT` | `ESTABLISHED,RELATED` ACCEPT, then DROP everything from `xenbr1.+` |
+| `DRAKVUF_ISOLATION6` | `filter6`, head of `FORWARD` | DROP everything from `xenbr1.+` |
+| `DRAKVUF_INPUT6` | `filter6`, head of `INPUT` | DROP everything from `xenbr1.+` |
+
+The resulting posture:
+
+```text
+clone -> clone            DROP    (two independent rules)
+clone -> LAN / RFC1918    DROP    (incl. the router's admin interface)
+clone -> link-local       DROP    (incl. 169.254.169.254 metadata)
+clone -> Dom0 itself      DROP    (replies to Dom0-initiated traffic allowed)
+clone -> Internet         ALLOW   (MASQUERADE out the uplink)
+clone -> anything, IPv6   DROP    (FORWARD and INPUT, no exceptions)
+```
+
+### Why IPv6 is dropped outright
+
+Everything except the last row is `iptables`, and `iptables` is IPv4 only.
+Without the v6 chains the entire posture is bypassable — and not
+theoretically. Dom0's own VLAN gateway interface carries an IPv6
+link-local address:
+
+```text
+xenbr1.1@xenbr1  UP  172.16.1.1/24  fe80::f4f1:81ff:febf:3b4a/64
+```
+
+So a sample that re-enables IPv6 on its interface — `ip link set eth0
+down; ip link set eth0 up` regenerates a link-local — reaches Dom0 over v6
+with nothing filtering it. `DRAKVUF_INPUT` would never see the packet.
+
+Measured on an analysis clone on 2026-08-11: IPv6 was unreachable
+(`::1 dev lo` the sole route, `ping6: Network is unreachable`) **only
+because `preconfig-ubuntu.sh`'s `ip addr flush dev eth0` had wiped the
+link-local**. That is an accident of configuration order, not a control,
+and a sample can undo it.
+
+Blanket DROP rather than mirroring the IPv4 rules: the guests have no IPv6
+uplink to preserve, and the v6 equivalents of the RFC1918 blocks
+(`fc00::/7`, `fe80::/10`, `2000::/3`) add up to everything anyway. No
+`ESTABLISHED,RELATED` exception either — unlike IPv4, nothing needs to
+reach a clone from Dom0 over v6.
+
+If `ip6tables` is unavailable, `network-setup.sh` **fails** rather than
+proceeding, unless IPv6 is disabled kernel-wide — in which case there is
+nothing to filter and it warns instead. Silently having no v6 filtering is
+the defect the section exists to prevent.
+
+Blocking RFC1918 costs no Internet access: a clone's default route points
+at its own gateway on the analysis VLAN, and Dom0 resolves the next hop
+from its own routing table, so the clone never addresses the LAN gateway.
+`172.16.0.0/12` covers the analysis subnets too, so clone-to-clone is
+denied by destination as well as by interface.
+
+Blocking Dom0 costs the pipeline nothing either — ARP is L2 and unfiltered,
+addresses are static so no DHCP is needed, the resolver is `1.1.1.1` and
+therefore forwarded rather than local, and both sample delivery and tracing
+are VMI operations with no network path (issue #4 removed the last one when
+it replaced Apache/HTTP delivery with `injector -m writefile`).
+
+Chains rather than loose rules for three reasons: flush-and-rebuild makes
+re-running idempotent by construction, `iptables -S DRAKVUF_ISOLATION`
+shows the whole containment posture as a unit, and undoing it is three
+flushes rather than a hunt through chains other tools also write to.
 
 This is the source of the `172.16.<VLAN>.1` gateway value used by
 `preconfig-ubuntu.sh`, and of the `xenbr1.<vlan>` interface name
 `clone-ubuntu.pl` attaches clones to and `tcpdump.sh` captures on.
 
 **It does not create `xenbr1`, despite being the file named
-`network-setup.sh`.** It calls only `modprobe`, `ip`, `vconfig` and
-`iptables`; the OVS bridge itself comes from a separate one-time install
-step, `ovs-vsctl add-br xenbr1`
-(`docs/drakvuf-on-xen-nested-within-proxmox.md`). Running
-`network-setup.sh` on a host that has never had that step performed
-therefore does not establish the analysis network — it configures VLAN
-sub-interfaces on a bridge that does not exist. Part of why **DRAFT-028**
-(fail loudly, install correct rules, be idempotent) exists.
+`network-setup.sh`.** It calls only `modprobe`, `ip` and `iptables`; the
+OVS bridge itself comes from a separate one-time install step,
+`ovs-vsctl add-br xenbr1`
+(`docs/drakvuf-on-xen-nested-within-proxmox.md`). It now checks for the
+bridge and fails with a message naming that step, rather than configuring
+VLAN sub-interfaces on a bridge that does not exist.
+
+### What DRAFT-028 did not close
+
+- **No terminal policy is set on `FORWARD` or `INPUT` themselves.** The
+  chains fall through to whatever policy the host already has. Setting it
+  is DRAFT-029.
+- **Containment is still unverified by a live test.** No two-clone
+  experiment has been run. DRAFT-013 owns it, and the rules above are what
+  it should now be measuring — the point of fixing before measuring.
+- **`DROP` everywhere means a clone sees timeouts**, where a real host on a
+  real network would answer with RST or ICMP unreachable. A black-holing
+  firewall is itself a sandbox signal; revisit under the anti-evasion work.
 
 ## Confirmed defect: guest DNS never resolved (fixed 2026-08-09)
 

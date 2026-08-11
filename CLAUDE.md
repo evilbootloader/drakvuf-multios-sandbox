@@ -110,10 +110,17 @@ subfolders):
 - `network-setup.sh` — provisions the per-VLAN isolated networks
   (`172.16.<vlan>.1/24` gateway per VLAN) that `clone-ubuntu.pl` and
   `preconfig-ubuntu.sh` assume already exist. It does **not** create
-  `xenbr1`, despite the name: it calls only `modprobe`/`ip`/`vconfig`/
-  `iptables`, and the OVS bridge comes from a separate one-time install
-  step (`ovs-vsctl add-br xenbr1`). Running it on a host that never had that
-  step does not establish the analysis network.
+  `xenbr1`, despite the name: it calls only `modprobe`/`ip`/`iptables`, and
+  the OVS bridge comes from a separate one-time install step
+  (`ovs-vsctl add-br xenbr1`). Since DRAFT-028 it checks for the bridge and
+  fails with a message naming that step. Also since DRAFT-028: `set -eu`
+  and an EXIT trap, so a rejected rule aborts instead of half-provisioning
+  a network that looks like it works; three dedicated chains
+  (`DRAKVUF_NAT`, `DRAKVUF_ISOLATION`, `DRAKVUF_INPUT`) flushed and rebuilt
+  each run, so repeated launches converge instead of appending; and
+  clone egress narrowed to the Internet only — RFC1918, link-local and
+  Dom0 itself are all dropped. `run_analysis-ubuntu.sh` aborts if it fails.
+  See `docs/architecture/networking.md` for the full posture.
 - `run_analysis-ubuntu.sh` — top-level entry point; sources
   `pipeline-ubuntu.env`, pre-flight checks the `.cfg`/profile/saved state,
   creates the per-OS malware directories, brings `xenbr1` up, runs

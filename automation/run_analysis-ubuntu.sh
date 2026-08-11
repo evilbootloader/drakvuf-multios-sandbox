@@ -53,7 +53,18 @@ ip link set "$ANALYSIS_BRIDGE" up
 # number of xenbr1.<n> sub-interfaces that must already exist on the other.
 # Raise one without the other and clones are handed a VLAN with no gateway.
 # Both now come from MAX_CLONES so they cannot be raised independently.
-"$SCRIPT_DIR/network-setup.sh" "$MAX_CLONES"
+#
+# The exit status is checked as of DRAFT-028. It was previously discarded,
+# which mattered because network-setup.sh could not fail: it had no
+# `set -e` and checked nothing, so a rejected iptables rule left the
+# analysis network half-provisioned and the pipeline started anyway. A
+# half-provisioned analysis network is worse than none, because it looks
+# like a working one -- clones would run with no inter-clone isolation, no
+# LAN block and no Dom0 protection, and nothing would say so.
+if ! "$SCRIPT_DIR/network-setup.sh" "$MAX_CLONES"; then
+    echo "run_analysis-ubuntu.sh: network provisioning failed; refusing to start dirwatch" >&2
+    exit 1
+fi
 
 # dirwatch takes 14 positional arguments in a fixed order and validates
 # only the count -- `argc != 15` at automation/dirwatch.c:453, which counts
