@@ -427,8 +427,9 @@ DRAFT-031 is now first.
 
 | # | Draft | Why here |
 |---|---|---|
-| 1 | **DRAFT-028** | P0, and now has execution evidence rather than source reasoning — the 2026-08-09 Dom0 run produced `RTNETLINK answers: File exists` on a second launch. Blocks DRAFT-013: verifying isolation before fixing a rule that may never have installed only records a known-broken state. |
-| 2 | **DRAFT-013** | Rises now that Phase 1 is complete. It is the Android checklist's `Current blocker` and the only thing standing between this template and real samples — clones have unrestricted NAT egress by default, and §1.3's six-row isolation table has never been filled. Still gated on DRAFT-028. |
+| 1 | **DRAFT-013** — **re-scope before working it** | **Shrank to Android-only.** DRAFT-028's deployment already produced the nine-row connectivity matrix with per-rule packet counters, and because `network-setup.sh` matches on interface (`-i xenbr1.+`) rather than anything guest-specific, that result transfers to any OS. What does *not* transfer is the guest's reaction: Android does connectivity probing and may mark a network unvalidated when it cannot reach its gateway, which Ubuntu never checks. Remaining scope is one Android clone boot. |
+| 2 | **DRAFT-029** — **re-scope before working it** | **Shrank.** Its Dom0-service half (NET-02, the `INPUT`-chain gap) landed inside DRAFT-028 at the maintainer's request. What remains is the terminal policy on `FORWARD` and `INPUT` themselves, which the `DRAKVUF_*` chains currently fall through to. |
+| 3 | **DRAFT-030** | Restores `SC2086` coverage, which `.shellcheckrc` currently disables repository-wide — so it should precede the six Android and Windows scripts, not follow them. Also owns the guest-filename normalizer. |
 | 4 | **DRAFT-010** | Moved ahead of DRAFT-036 because it gates it. DRAFT-036's PLAN/CREATE wait on DRAFT-010's C-vs-Python decision, which determines whether the fix is a cross-process lease in `dirwatch.c` or an allocator designed into its replacement. CONF-11 raises its value independently: with engine work near-term, this becomes input to that work. |
 | 5 | **DRAFT-036** | P0 **correctness** defect, not tuning: `slots_busy[]` is process-local and the slot index *is* the VLAN, so a second watcher allocates VLAN 1 too and both clones land on `xenbr1.1`. Per-OS watchers cannot run concurrently until this lands — it is a prerequisite of issue #3's OS-selection mechanism, not a follow-up to it. |
 | 6 | **DRAFT-033** | `clone-ubuntu.pl` is the template `clone-android.pl` is written from and it checks no exit status. Copying first puts the defect in three files. Precedes DRAFT-015. |
@@ -449,6 +450,39 @@ SC2009 and SC2006 repository-wide, so those checks are **not** protecting
 new Android or Windows scripts. Each names its owning issue, and landing
 **DRAFT-030** is what restores SC2086 coverage before six more scripts are
 written against it.
+
+### Considered and deliberately not taken (2026-08-11)
+
+**In-guest command observability.** `preconfig-ubuntu.sh` configures the
+clone's network with a single `&&` chain injected through
+`injector -m execproc`. `injector` reports `STATUS:SUCCESS` when it
+successfully *starts* the shell, and the script's `exit $?` propagates that
+rather than the chain's status — so a failure inside the guest is invisible
+to `dirwatch`, to `preconfig.log` and to the operator.
+
+Established the same day, and worth keeping: **the chain is correct.**
+Verified in-guest — `ip route replace` returns 0, `getent hosts google.com`
+resolves, `dig @1.1.1.1` answers. Issue #4's `GUEST_NAMESERVER` fix does
+work, and `docs/checklists/ubuntu.md`'s `[x] Guest DNS resolves` is now
+evidenced rather than inferred, which it was not before.
+
+A draft was prepared to close the observability gap — sentinel file plus
+`injector -m readfile`, the documented inverse already used for issue #4's
+integrity check — and **the maintainer declined it for now: not a change
+wanted in this architecture at this stage.** Recorded here so it is not
+re-proposed as a new finding, and so the reasoning survives if it is
+revisited:
+
+- The gap is real but currently costs nothing, because the chain works.
+- It would matter most for a *false negative* — a clone with no resolver
+  produces an analysis that looks complete and observed nothing.
+- One latent fragility sits behind it: `/etc/resolv.conf` in the golden
+  image is a symlink into `/run/systemd/resolve/`, and `systemd-resolved`
+  is active. The write currently sticks, but that file is owned by a
+  running service.
+- If revisited, it should precede **DRAFT-016** — `preconfig-android.sh` is
+  written from this file, and `CLAUDE.md`'s rule is that a template defect
+  is fixed before the copy is made.
 
 **DRAFT-032** was first in this list and is now executed — see the note at
 the end of this section.
