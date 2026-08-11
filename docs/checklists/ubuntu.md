@@ -288,6 +288,28 @@ this records what the gate does and does not enforce.
 | `bash -n`, `dash -n` on all six | pass |
 | `perl -c automation/clone-ubuntu.pl` | pass |
 
+**Verified in CI, not just locally.** `.github/workflows/static-checks.yml`
+(DRAFT-026a) runs all of the above on every push and pull request. First
+green run: [`31505320234`](https://github.com/evilbootloader/drakvuf-multios-sandbox/actions/runs/31505320234),
+2026-08-11.
+
+Two things that run recorded which local testing could not:
+
+- **The baseline is version-robust.** The runner had `shellcheck` **0.9.0**;
+  the development container has **0.11.0**. Both exit 0 against the same
+  `.shellcheckrc`. That was an open risk when the baseline was written —
+  `disable=` is stable across those releases even though `severity=`
+  behaviour is not.
+- **`/bin/sh` is `dash` on the runner too**, so `dash -n` is checking the
+  same interpreter the Dom0 host uses.
+
+The **first** CI run failed, and correctly: the `<USER>` regression guard
+matched `drakvuf-ubuntu.sh:145`, a comment explaining what issue #2 found,
+which necessarily quotes the placeholder it is about. The guard now
+excludes comment lines. Recorded because it is the third instance of the
+same defect class today (CI-02, TODO-03, this) — a grep-shaped gate that
+fires on legitimate content.
+
 **What changed to get there.** `SC1128` ("the shebang must be on the first
 line") was an *error*-severity finding on five of the six scripts, which
 carried the 103-line DRAKVUF licence header above `#!/bin/bash` at line 104.

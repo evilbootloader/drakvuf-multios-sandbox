@@ -1,6 +1,10 @@
 # DRAFT-026: Implement GitHub Actions and self-hosted Xen integration runner
 
-**Status:** Drafted, not published
+**Status:** **026a (static tier) implemented 2026-08-11** —
+`.github/workflows/static-checks.yml`, green on run
+[`31505320234`](https://github.com/evilbootloader/drakvuf-multios-sandbox/actions/runs/31505320234).
+Built alongside DRAFT-031, which unblocked it by making `shellcheck` exit 0.
+**026b (self-hosted Xen integration tier) remains drafted, not published.**
 **Area:** ci
 **Milestone:** M1 (static tier can start now); heavy tier is effectively a new M1½ — it needs a working Ubuntu pipeline to validate against, but doesn't need to wait for M6 ("CI expansion, after ≥2 OS pipelines exist") since it's designed around Ubuntu today and Android as it lands
 **Priority:** P1

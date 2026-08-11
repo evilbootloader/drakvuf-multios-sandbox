@@ -427,16 +427,28 @@ DRAFT-031 is now first.
 
 | # | Draft | Why here |
 |---|---|---|
-| 1 | **DRAFT-031** | Cheapest of the blockers and the widest: the licence-header-above-shebang layout is inherited by **every copy made before it is fixed**, so it precedes DRAFT-015 and DRAFT-016. Also gates DRAFT-026a. |
-| 2 | **DRAFT-028** | P0, and now has execution evidence rather than source reasoning — the 2026-08-09 Dom0 run produced `RTNETLINK answers: File exists` on a second launch. Blocks DRAFT-013: verifying isolation before fixing a rule that may never have installed only records a known-broken state. |
-| 3 | **DRAFT-013** | Rises now that Phase 1 is complete. It is the Android checklist's `Current blocker` and the only thing standing between this template and real samples — clones have unrestricted NAT egress by default, and §1.3's six-row isolation table has never been filled. Still gated on DRAFT-028. |
+| 1 | **DRAFT-028** | P0, and now has execution evidence rather than source reasoning — the 2026-08-09 Dom0 run produced `RTNETLINK answers: File exists` on a second launch. Blocks DRAFT-013: verifying isolation before fixing a rule that may never have installed only records a known-broken state. |
+| 2 | **DRAFT-013** | Rises now that Phase 1 is complete. It is the Android checklist's `Current blocker` and the only thing standing between this template and real samples — clones have unrestricted NAT egress by default, and §1.3's six-row isolation table has never been filled. Still gated on DRAFT-028. |
 | 4 | **DRAFT-010** | Moved ahead of DRAFT-036 because it gates it. DRAFT-036's PLAN/CREATE wait on DRAFT-010's C-vs-Python decision, which determines whether the fix is a cross-process lease in `dirwatch.c` or an allocator designed into its replacement. CONF-11 raises its value independently: with engine work near-term, this becomes input to that work. |
 | 5 | **DRAFT-036** | P0 **correctness** defect, not tuning: `slots_busy[]` is process-local and the slot index *is* the VLAN, so a second watcher allocates VLAN 1 too and both clones land on `xenbr1.1`. Per-OS watchers cannot run concurrently until this lands — it is a prerequisite of issue #3's OS-selection mechanism, not a follow-up to it. |
 | 6 | **DRAFT-033** | `clone-ubuntu.pl` is the template `clone-android.pl` is written from and it checks no exit status. Copying first puts the defect in three files. Precedes DRAFT-015. |
 
-**DRAFT-037/#7 was item 1 and is done** (2026-08-11), which is what promotes
-DRAFT-013: with a working Android template in hand, unverified containment
-is now the nearest thing to a real risk rather than a distant one.
+**Three items came off this list on 2026-08-11**, all executed the same day:
+
+- **DRAFT-037 / #7** — Android template rebuilt. This is what promotes
+  DRAFT-013: with a working template in hand, unverified containment is the
+  nearest thing to a real risk rather than a distant one.
+- **DRAFT-031** — `shellcheck automation/*.sh` exits 0 against the
+  `.shellcheckrc` baseline. Repo side done; the Dom0 pull and one benign
+  analysis run are still outstanding, and CI cannot supply them.
+- **DRAFT-026a** — the static CI tier exists and is green. **026b, the
+  self-hosted Xen integration tier, is untouched** and still drafted.
+
+DRAFT-031 also left a standing constraint: `.shellcheckrc` disables SC2086,
+SC2009 and SC2006 repository-wide, so those checks are **not** protecting
+new Android or Windows scripts. Each names its owning issue, and landing
+**DRAFT-030** is what restores SC2086 coverage before six more scripts are
+written against it.
 
 **DRAFT-032** was first in this list and is now executed — see the note at
 the end of this section.
