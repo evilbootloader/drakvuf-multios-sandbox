@@ -26,6 +26,8 @@ every run:
 | `DRAKVUF_NAT` | `nat`, from `POSTROUTING` | `-o xenbr0 -j MASQUERADE` |
 | `DRAKVUF_ISOLATION` | `filter`, inserted at head of `FORWARD` | clone-to-clone DROP, plus RFC1918 and link-local destination DROPs |
 | `DRAKVUF_INPUT` | `filter`, inserted at head of `INPUT` | `ESTABLISHED,RELATED` ACCEPT, then DROP everything from `xenbr1.+` |
+| `DRAKVUF_ISOLATION6` | `filter6`, head of `FORWARD` | DROP everything from `xenbr1.+` |
+| `DRAKVUF_INPUT6` | `filter6`, head of `INPUT` | DROP everything from `xenbr1.+` |
 
 The resulting posture:
 
@@ -35,7 +37,40 @@ clone -> LAN / RFC1918    DROP    (incl. the router's admin interface)
 clone -> link-local       DROP    (incl. 169.254.169.254 metadata)
 clone -> Dom0 itself      DROP    (replies to Dom0-initiated traffic allowed)
 clone -> Internet         ALLOW   (MASQUERADE out the uplink)
+clone -> anything, IPv6   DROP    (FORWARD and INPUT, no exceptions)
 ```
+
+### Why IPv6 is dropped outright
+
+Everything except the last row is `iptables`, and `iptables` is IPv4 only.
+Without the v6 chains the entire posture is bypassable — and not
+theoretically. Dom0's own VLAN gateway interface carries an IPv6
+link-local address:
+
+```text
+xenbr1.1@xenbr1  UP  172.16.1.1/24  fe80::f4f1:81ff:febf:3b4a/64
+```
+
+So a sample that re-enables IPv6 on its interface — `ip link set eth0
+down; ip link set eth0 up` regenerates a link-local — reaches Dom0 over v6
+with nothing filtering it. `DRAKVUF_INPUT` would never see the packet.
+
+Measured on an analysis clone on 2026-08-11: IPv6 was unreachable
+(`::1 dev lo` the sole route, `ping6: Network is unreachable`) **only
+because `preconfig-ubuntu.sh`'s `ip addr flush dev eth0` had wiped the
+link-local**. That is an accident of configuration order, not a control,
+and a sample can undo it.
+
+Blanket DROP rather than mirroring the IPv4 rules: the guests have no IPv6
+uplink to preserve, and the v6 equivalents of the RFC1918 blocks
+(`fc00::/7`, `fe80::/10`, `2000::/3`) add up to everything anyway. No
+`ESTABLISHED,RELATED` exception either — unlike IPv4, nothing needs to
+reach a clone from Dom0 over v6.
+
+If `ip6tables` is unavailable, `network-setup.sh` **fails** rather than
+proceeding, unless IPv6 is disabled kernel-wide — in which case there is
+nothing to filter and it warns instead. Silently having no v6 filtering is
+the defect the section exists to prevent.
 
 Blocking RFC1918 costs no Internet access: a clone's default route points
 at its own gateway on the analysis VLAN, and Dom0 resolves the next hop

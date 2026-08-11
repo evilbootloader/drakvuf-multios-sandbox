@@ -126,10 +126,12 @@
 #   clone -> Dom0 itself      DROP  (INPUT chain; replies to Dom0-initiated
 #                                    traffic still allowed)
 #   clone -> Internet         ALLOW (MASQUERADE out the uplink)
+#   clone -> anything, IPv6   DROP  (FORWARD and INPUT, no exceptions)
 #
-# All of it lives in three dedicated chains -- DRAKVUF_NAT, DRAKVUF_ISOLATION
-# and DRAKVUF_INPUT -- so the whole posture is readable as a unit with
-# `iptables -S DRAKVUF_ISOLATION` and removable in three flushes.
+# All of it lives in five dedicated chains -- DRAKVUF_NAT,
+# DRAKVUF_ISOLATION and DRAKVUF_INPUT for IPv4, plus DRAKVUF_ISOLATION6
+# and DRAKVUF_INPUT6 for IPv6 -- so the whole posture is readable as a unit
+# with `iptables -S DRAKVUF_ISOLATION` and removable in five flushes.
 #
 # Idempotent: the chains are flushed and rebuilt on every run, so repeated
 # invocations converge instead of appending. run_analysis-ubuntu.sh calls
@@ -400,6 +402,65 @@ iptables -A "$INPUT_CHAIN" -i "$ANALYSIS_BRIDGE.+" \
 # to decide whether the network is up may conclude it is down. Android's
 # first boot after this lands is the case to check.
 iptables -A "$INPUT_CHAIN" -i "$ANALYSIS_BRIDGE.+" -j DROP
+
+# --- Section 8: IPv6 ----------------------------------------------------
+
+# Everything above is iptables, and iptables is IPv4 only. Without this
+# section the whole posture is bypassable over IPv6, and not theoretically:
+# Dom0's own VLAN gateway interface carries an IPv6 link-local address
+# (`ip -br addr show` reports xenbr1.<n> with both 172.16.<n>.1/24 and an
+# fe80::/64), so a sample that re-enables IPv6 on its interface -- an
+# `ip link set eth0 down; ip link set eth0 up` is enough to regenerate a
+# link-local -- can reach Dom0 over v6 with nothing filtering it.
+#
+# Measured on the analysis clone 2026-08-11: IPv6 was unreachable only
+# because preconfig-ubuntu.sh's `ip addr flush dev eth0` had wiped the
+# link-local, leaving `::1 dev lo` as the sole route. That is an accident
+# of the configuration order, not a control.
+#
+# Blanket DROP rather than a mirror of the IPv4 rules. The guests have no
+# IPv6 uplink to preserve, and the v6 equivalents of the RFC1918 blocks
+# (fc00::/7, fe80::/10, 2000::/3) would add up to "everything" anyway. No
+# ESTABLISHED,RELATED exception either: unlike IPv4, nothing needs to reach
+# a clone from Dom0 over v6, and a rule that accepts nothing cannot be
+# reasoned around later.
+
+step="checking IPv6 filtering is available"
+
+if command -v ip6tables >/dev/null 2>&1 && ip6tables -S >/dev/null 2>&1; then
+    ISOLATION_CHAIN6="${ISOLATION_CHAIN}6"
+    INPUT_CHAIN6="${INPUT_CHAIN}6"
+
+    step="rebuilding $ISOLATION_CHAIN6"
+    ip6tables -N "$ISOLATION_CHAIN6" 2>/dev/null || true
+    ip6tables -F "$ISOLATION_CHAIN6"
+    ip6tables -C FORWARD -j "$ISOLATION_CHAIN6" 2>/dev/null ||
+        ip6tables -I FORWARD 1 -j "$ISOLATION_CHAIN6"
+    ip6tables -A "$ISOLATION_CHAIN6" -i "$ANALYSIS_BRIDGE.+" -j DROP
+
+    # FORWARD alone would miss the actual hole -- the link-local path to
+    # Dom0 itself traverses INPUT.
+    step="rebuilding $INPUT_CHAIN6"
+    ip6tables -N "$INPUT_CHAIN6" 2>/dev/null || true
+    ip6tables -F "$INPUT_CHAIN6"
+    ip6tables -C INPUT -j "$INPUT_CHAIN6" 2>/dev/null ||
+        ip6tables -I INPUT 1 -j "$INPUT_CHAIN6"
+    ip6tables -A "$INPUT_CHAIN6" -i "$ANALYSIS_BRIDGE.+" -j DROP
+
+elif [ "$(cat /proc/sys/net/ipv6/conf/all/disable_ipv6 2>/dev/null)" = "1" ]; then
+    # Nothing to filter. Warn rather than fail: this host was never
+    # exposed, so aborting would create an outage without closing a gap.
+    echo "network-setup.sh: ip6tables unavailable, but IPv6 is disabled kernel-wide -- no v6 filtering needed" >&2
+
+else
+    # Silently having no IPv6 filtering is the exact defect this section
+    # exists to fix, so this is fatal rather than a warning. Both remedies
+    # are named so the message is actionable.
+    fail "ip6tables is unavailable and IPv6 is not disabled kernel-wide.
+Clones would have unfiltered IPv6 access to Dom0 over link-local.
+Install iptables' IPv6 support, or disable IPv6 with
+  sysctl -w net.ipv6.conf.all.disable_ipv6=1"
+fi
 
 step=""
 echo "network-setup.sh: provisioned $CLONES VLAN sub-interface(s) on $ANALYSIS_BRIDGE"
