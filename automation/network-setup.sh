@@ -233,6 +233,31 @@ case "$1" in
     '' | *[!0-9]*) fail "clone count must be a positive integer, got: '$1'" ;;
 esac
 [ "$1" -ge 1 ] || fail "clone count must be at least 1, got: $1"
+
+# Upper bound comes from the addressing scheme, not from 802.1Q -- which
+# would allow 4094. The slot index is the third octet of 172.16.<slot>.0/24
+# (section 5), so 256 is the first value that cannot be expressed at all.
+#
+# The limit is set at 254 rather than 255: one slot of deliberate margin,
+# free because the documented working maximum is 128. To be precise about
+# what is NOT the reason -- 172.16.255.1/24 is a perfectly valid host
+# address, network 172.16.255.0/24, broadcast 172.16.255.255. Slot 255
+# would work. It is excluded by choice, not by arithmetic.
+#
+# Without any bound the failure is silent until far too late, and does not
+# clean up after itself. Evidenced on Dom0 2026-08-12 while testing the
+# fail-closed trap: `network-setup.sh 999999` created 255 VLAN
+# sub-interfaces and addressed them before `ip addr add 172.16.256.1/24`
+# was rejected. The trap secured the firewall chain; the interfaces stayed
+# until the next reboot, because nothing removes them.
+#
+# KNOWN GAP (DRAFT-029 follow-up): interfaces created before ANY mid-loop
+# failure are still not cleaned up. This check removes the reachable cause,
+# not the consequence.
+[ "$1" -le 254 ] || fail \
+    "clone count must be at most 254 -- the slot index is the third octet of
+  172.16.<slot>.0/24, so 256 and above cannot be addressed. Got: $1"
+
 CLONES="$1"
 
 # --- Section 2: preconditions -------------------------------------------
