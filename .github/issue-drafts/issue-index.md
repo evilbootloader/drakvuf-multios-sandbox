@@ -309,7 +309,7 @@ Not yet drafted in full — titles only, from `docs/roadmap/project-roadmap.md`:
 | ~~DRAFT-010~~ | **Now drafted in full — see `.github/issue-drafts/DRAFT-010.md`.** Retitled "Document `dirwatch.c`'s interface and resolve the two-source ambiguity"; priority raised to P1 | core | M0 | P1 | — |
 | DRAFT-011 | Retrofit Ubuntu pipeline with structured status output (no behavior change) | ubuntu | M1 | P1 | ~~DRAFT-007~~ (closed 2026-08-08), DRAFT-008 |
 | DRAFT-012 | ~~Add static CI (`bash -n`, `shellcheck`, `perl -c`) for `automation/*`~~ — superseded by DRAFT-026 | testing | M1 | P1 | DRAFT-001 |
-| ~~DRAFT-013~~ | **Drafted in full 2026-08-12 — see `.github/issue-drafts/DRAFT-013.md`.** Retitled "Confirm an Android clone tolerates the isolation rules"; scope is now one Android clone boot | android/security | M2 | P0 | DRAFT-028, DRAFT-029, DRAFT-037 — all landed |
+| ~~DRAFT-013~~ | **Drafted in full and published 2026-08-12 — [#13](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/13).** Retitled "Confirm an Android clone tolerates the isolation rules, **and establish connectivity parity with Ubuntu**" — the parity half was added on drafting and is the larger one | android/security | M2 | P0 | DRAFT-028, DRAFT-029, DRAFT-037 — all landed |
 | DRAFT-014 | Decide sample OS auto-detection contract (magic/MIME/PE/ELF/APK) | core | M2 | P1 | DRAFT-008 |
 | DRAFT-015 | Implement `clone-android.pl` per checklist §2.5 | android | M3 | P1 | DRAFT-009, DRAFT-013 |
 | DRAFT-016 | Implement `preconfig-android.sh` / `drakvuf-android.sh` per checklist §2.7–2.8 | android | M3 | P1 | DRAFT-015 |
@@ -466,12 +466,14 @@ each other by reference had stopped reading as one sequence, which is the
 whole point of having one.
 
 **#1, #2, #3, #4, #6, #7 and #9 are all closed** — #9 (DRAFT-029) was
-published, merged as `aed37af` and deployed on 2026-08-12. **Two issues are
-open**, both spawned by that deployment:
-**[#11](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/11)**
-(DRAFT-038) and
-**[#12](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/12)**
-(DRAFT-039).
+published, merged as `aed37af` and deployed on 2026-08-12. **Three issues
+are open:**
+
+| # | Draft | Priority | State |
+|---|---|---|---|
+| [#13](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/13) | DRAFT-013 | P0 | Runbook written (`docs/runbooks/verify-android-isolation.md`), awaiting execution on Dom0 |
+| [#11](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/11) | DRAFT-038 | P1 | Spawned by DRAFT-029's deployment (F1, F2′) |
+| [#12](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/12) | DRAFT-039 | P2 | Spawned by DRAFT-029's deployment (F4) |
 DRAFT-037/#7 was drafted, published and executed on 2026-08-11 and has been
 struck from the sequence below. The remaining drafted P0s — DRAFT-028,
 DRAFT-030, DRAFT-031, DRAFT-033, DRAFT-036 — are all still unpublished, and

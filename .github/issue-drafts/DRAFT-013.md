@@ -1,6 +1,8 @@
 # DRAFT-013: Confirm an Android clone tolerates the isolation rules
 
-**Status:** Drafted, not published
+**Status:** **Published 2026-08-12 —
+[#13](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/13)**
+(label `enhancement`)
 **Area:** android / security
 **Milestone:** M2 (containment closure)
 **Priority:** P0 — the last containment unknown before Android automation
@@ -22,7 +24,92 @@ exist before it.
 # Objective
 
 Boot one Android clone on an isolated analysis VLAN under the current
-rules, and record whether Android considers the network usable.
+rules, and record two things:
+
+1. whether Android considers the network usable;
+2. **the exact steps that give an Android clone the same connectivity an
+   Ubuntu clone gets** — so `preconfig-android.sh` (DRAFT-016) is written
+   from a measured procedure rather than by translating the Ubuntu script
+   and hoping.
+
+The second was added 2026-08-12 at the maintainer's request, and it is the
+larger half.
+
+# Connectivity parity with Ubuntu — the real deliverable
+
+`preconfig-ubuntu.sh:206` configures a clone's network with one chain,
+injected through `injector -m execproc`:
+
+```sh
+sudo ip addr flush dev eth0 &&
+sudo ip addr add 172.16.$VLAN.2/24 dev eth0 &&
+sudo ip route replace default via 172.16.$VLAN.1 dev eth0 &&
+echo 'nameserver $GUEST_NAMESERVER' | sudo tee /etc/resolv.conf
+```
+
+Four steps. Establish each one's Android equivalent, by hand, and record it:
+
+| # | Ubuntu | Android equivalent | Confidence |
+|---|---|---|---|
+| 1 | `ip addr flush dev eth0` | Same tool — BlissOS ships `ip` via toybox | Likely identical; the interface name needs confirming |
+| 2 | `ip addr add 172.16.<vlan>.2/24 dev eth0` | Same | Likely identical |
+| 3 | `ip route replace default via 172.16.<vlan>.1 dev eth0` | Same | Likely identical |
+| 4 | `echo 'nameserver …' > /etc/resolv.conf` | **No equivalent exists** | **Unknown — this is the one to solve** |
+
+**Step 4 is why this issue is worth more than a boot test.** Android's
+framework resolver does not read `/etc/resolv.conf`; DNS is per-network
+state owned by `netd`, populated from DHCP or from a static IP
+configuration, and reached through `ConnectivityService` rather than a file.
+Writing that file in an Android guest is very likely a no-op, and a
+`preconfig-android.sh` that copies the Ubuntu line would produce a clone
+that looks configured and cannot resolve anything.
+
+There is direct evidence the lab already hit this. `docs/checklists/android.md`
+§1.4 baked an in-guest DNAT into the golden image, redirecting all DNS to
+`172.16.10.1:53` — which is what you write when you cannot set the resolver
+and redirect the traffic instead. Issue #7 removed it deliberately, on the
+grounds that per-clone resolver configuration belongs to analysis time. That
+was the right call and it leaves this question open and unanswered.
+
+Candidate mechanisms, **all unvalidated — establish which works**:
+
+- Static IP configuration through the Settings UI, which has explicit DNS
+  fields. Certainly works; the question is whether it can be driven
+  non-interactively, since `preconfig-android.sh` cannot click.
+- `ndc resolver setnetdns <netid> "" 1.1.1.1` — the `netd` client. Needs the
+  netid, obtainable from `dumpsys connectivity` or `ndc network list`.
+- `setprop net.dns1 1.1.1.1` — worked before Android 5, widely believed
+  obsolete. Cheap to try; do not assume it does anything without checking.
+- Leaving DNS to Android and confirming what it does with no DHCP at all.
+
+Whatever works becomes DRAFT-016's implementation, and whatever does not is
+worth recording just as much — a list of three things that look right and
+are not is exactly what stops the next person repeating them.
+
+## Also establish, because Ubuntu never had to
+
+- **`sudo` — settled 2026-08-12, and it is not a question.** The anchor
+  `nano` is launched from the root console (`androidboot.enable_console=1`),
+  so anything injected against it already runs as root, and BlissOS ships no
+  `sudo` binary at all. **Every one of the four `sudo` invocations in the
+  Ubuntu chain must be dropped, not translated.** This is the first concrete
+  instance of `CLAUDE.md`'s rule that a per-OS script is written against the
+  conformance checklist rather than copied from the Ubuntu file — a copy
+  would fail on line one with "sudo: not found", and under
+  `injector -m execproc` that failure is invisible, because `injector`
+  reports success when it starts the process rather than when the process
+  succeeds (see the declined observability change, `issue-index.md`).
+- **Which shell?** `injector -m execproc` is execve-direct with no guest
+  shell (settled in issue #2), so a `&&` chain needs an explicit
+  interpreter. Ubuntu's works because `/bin/sh` is there. Record BlissOS's
+  path — `/system/bin/sh`, mksh — and confirm it.
+- **Interface name.** `eth0` on Ubuntu. Confirm, do not assume.
+- **IPv6 / Neighbour Solicitation.** `DRAKVUF_ISOLATION6` and
+  `DRAKVUF_INPUT6` drop all IPv6, so Android's NDP — router solicitations,
+  neighbour solicitations, SLAAC — goes nowhere. Android is far more
+  IPv6-forward than Ubuntu, so record whether failed v6 provisioning
+  affects its verdict on the network. This is the second reading of "NS"
+  and it is worth measuring alongside the first.
 
 # Context
 
@@ -156,8 +243,19 @@ No code. The deliverables are evidence and documentation:
 
 1. `docs/runbooks/verify-android-isolation.md` — the transcript.
 2. `docs/checklists/android.md` — replace the "Current blocker" row with the
-   result, and record the manual network-configuration steps from PLAN step
-   5 as the input to DRAFT-016.
+   result, and add the **parity matrix** below as a new subsection, filled.
+   That table is what DRAFT-016 is written from:
+
+   | Step | Ubuntu (`preconfig-ubuntu.sh:206`) | Android — measured | Same? |
+   |---|---|---|---|
+   | privilege | `sudo` prefix on each command | none needed; already root, no `sudo` binary | **No** |
+   | interface | `eth0` | | |
+   | flush | `ip addr flush dev eth0` | | |
+   | address | `ip addr add 172.16.<vlan>.2/24 dev eth0` | | |
+   | route | `ip route replace default via 172.16.<vlan>.1 dev eth0` | | |
+   | resolver | `echo 'nameserver 1.1.1.1' > /etc/resolv.conf` | | **expected No** |
+   | shell for the chain | `/bin/sh` | | |
+   | verification | `getent hosts google.com` | | |
 3. `docs/architecture/networking.md` — add Android's observed reaction to
    the containment posture section.
 4. Roadmap risk #5 — its remaining open half is exactly this; close or
@@ -199,20 +297,51 @@ sudo iptables -Z DRAKVUF_INPUT
 sudo xl unpause android_isolation_test
 ```
 
-Inside the guest, over VNC — no `adb` is available on this build:
+Inside the guest, over VNC — no `adb` on this build, root console available:
+
+```sh
+# --- Establish the environment first. No sudo exists; this is already root.
+id
+ls -l /system/bin/sh; command -v sh mksh toybox ip ndc getprop
+ip -br link                       # confirm the interface name
+
+# --- Steps 1-3: the Ubuntu chain minus sudo. Record each exit status.
+ip addr flush dev eth0
+ip addr add 172.16.1.2/24 dev eth0
+ip route replace default via 172.16.1.1 dev eth0
+ip -br addr show dev eth0; ip route
+
+# --- Step 4: the resolver. Try in this order, checking after EACH.
+cat /etc/resolv.conf 2>/dev/null            # does it even exist?
+echo 'nameserver 1.1.1.1' > /etc/resolv.conf
+getent hosts google.com                     # expect: fails -- prove the no-op
+
+setprop net.dns1 1.1.1.1
+getprop net.dns1
+getent hosts google.com
+
+ndc network list                            # find the netid
+ndc resolver setnetdns <netid> "" 1.1.1.1
+getent hosts google.com
+
+# --- Whatever worked, verify it the way Ubuntu was verified:
+ping -c2 1.1.1.1                            # Internet by IP
+getent hosts google.com                     # name resolution
+ping -c2 172.16.1.1                         # gateway -- expect FAIL, by design
+ping -c2 <a LAN host>                       # expect FAIL, by design
+```
+
+Then record from the UI, verbatim:
 
 ```text
-Settings -> Network & Internet -> Ethernet -> static
-    address   172.16.1.2/24
-    gateway   172.16.1.1
-    DNS       1.1.1.1
-
-Then record, verbatim:
   - the connectivity status Android reports for the network
   - whether a browser loads a public page
   - whether any "no internet" / "sign in to network" notification appears
   - how long after configuration the verdict settles
 ```
+
+**Record the failures as carefully as the success.** Which resolver
+mechanisms were no-ops is worth as much to DRAFT-016 as the one that worked.
 
 Back on Dom0, after five minutes of settling:
 
@@ -253,8 +382,24 @@ snapshot are created and destroyed within the test.
       `DRAKVUF_INPUT` counter agrees with it.
 - [ ] ARP/NUD to the gateway is confirmed working — the mechanism the
       prediction rests on.
-- [ ] The manual network-configuration steps are recorded in enough detail
-      to be the specification for `preconfig-android.sh`.
+
+**Connectivity parity — the DRAFT-016 deliverable:**
+
+- [ ] Each of the four Ubuntu chain steps has a recorded Android
+      equivalent, or a recorded statement that it has none.
+- [ ] **The resolver mechanism is established and demonstrated**, not
+      inferred: a name resolves in the guest, and the pcap shows the query
+      leaving for `1.1.1.1`.
+- [ ] Candidate resolver mechanisms that did **not** work are recorded too,
+      with what they did instead.
+- [ ] The interface name, shell path and root/`sudo` situation are
+      confirmed by observation.
+- [ ] The parity matrix below is filled for both OS families, so a reader
+      can see where Android and Ubuntu differ rather than inferring it.
+- [ ] IPv6 provisioning behaviour is recorded, including whether its failure
+      affects Android's verdict.
+- [ ] The result is written as a procedure `preconfig-android.sh` can
+      implement — a command sequence with expected outputs, not prose.
 - [ ] `docs/checklists/android.md`'s "Current blocker" is replaced with the
       result.
 - [ ] Roadmap risk #5 is closed or rescoped.
