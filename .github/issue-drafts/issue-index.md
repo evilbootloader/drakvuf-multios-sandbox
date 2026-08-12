@@ -115,9 +115,9 @@ for anti-evasion — which makes **"anchor auto-discovery must not key on a
 process-name grep"** a constraint on DRAFT-015/016.
 
 **All seven issues are now closed.** Nothing is open. *(Superseded
-2026-08-12: DRAFT-029 was published as
-[#9](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/9)
-and is open.)*
+2026-08-12: #9 published and closed the same day; #11 and #12 published and
+open. Current state is at the end of this file — do not read this line as
+live.)*
 
 `android_sandbox` is a clone of the golden VM, so the reinstall made its LV,
 its saved state (`457fe0d7…`) and its anchor PID (`5715`) all describe an
@@ -413,6 +413,51 @@ Scope moved by issue #6, same date:
   visibility is reduced as a result, knowingly — see
   `docs/architecture/analysis-pipeline.md`, decision 4.
 
+## Fifth batch — DRAFT-038, DRAFT-039
+
+Added 2026-08-12, produced by DRAFT-029's deployment rather than a backlog
+review. Both are findings recorded in
+`docs/runbooks/deploy-terminal-chains.md`; neither is a defect in what
+DRAFT-029 changed.
+
+| Draft ID | Title | Area | OS | Milestone | Priority | Depends on | Origin |
+|---|---|---|---|---|---|---|---|
+| DRAFT-038 | Verify the installed firewall posture, and settle which netfilter backend this project owns | platform/security | ALL | M2 | P1 | DRAFT-028, DRAFT-029 (both landed) | Findings F1, F2′ |
+| DRAFT-039 | Clean up the VLAN interfaces a failed `network-setup.sh` run leaves behind | platform | ALL | M2 | P2 | DRAFT-029 (landed); must not pre-empt DRAFT-036 | Finding F4 |
+
+**Both published 2026-08-12** —
+[#11](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/11)
+(`enhancement`) and
+[#12](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/12)
+(`bug`).
+
+**DRAFT-038** is the third step in a sequence: DRAFT-028 made provisioning
+fail loudly on a *rejected* rule, DRAFT-029 made the chains terminal, and
+neither checks that what reached the kernel is what was intended. Two
+findings show the gap is not theoretical. **F1** — this host runs two
+iptables backends, so every containment assertion is a statement about one
+of two independently-evaluated rulesets, and `iptables-save` silently omits
+the other, which means *the rollback captures in every runbook here are
+partial*. **F2′** — `iptables -S` reports a nonexistent chain and an
+unreadable one with the same message, so the total absence of containment
+presents as a confusing error. That is not hypothetical either: the
+DRAFT-029 runbook was written up asserting filtering was still live at a
+moment when there were no rules, no chains and no VLAN interfaces, and it
+took the maintainer to catch it.
+
+**F2 was withdrawn** the same day it was recorded. It claimed an
+unexplained readback failure that "cleared on reboot"; a one-command test
+showed there had never been a failure. The withdrawal is annotated in the
+runbook rather than edited out, because the reasoning error is the most
+instructive thing in that file.
+
+**DRAFT-039** is P2 and explicitly closes no security gap — stray
+interfaces are covered by the same `xenbr1.+` rules as live ones. It is
+listed because the naive fix is wrong: the provisioning loop is idempotent
+by *reuse*, so a trap deleting every `xenbr1.*` would remove interfaces
+belonging to a running clone. Cleanup must distinguish what this run
+created from what it found, which is why it is an issue rather than a patch.
+
 ## Current order (consolidated 2026-08-11)
 
 The single current sequence. Two earlier order blocks and their scattered
@@ -420,9 +465,13 @@ dated addenda were removed on 2026-08-11 — three stacked revisions patching
 each other by reference had stopped reading as one sequence, which is the
 whole point of having one.
 
-**#1, #2, #3, #4, #6 and #7 are all closed.** One issue is open:
-**[#9](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/9)**,
-DRAFT-029, published 2026-08-12.
+**#1, #2, #3, #4, #6, #7 and #9 are all closed** — #9 (DRAFT-029) was
+published, merged as `aed37af` and deployed on 2026-08-12. **Two issues are
+open**, both spawned by that deployment:
+**[#11](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/11)**
+(DRAFT-038) and
+**[#12](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/12)**
+(DRAFT-039).
 DRAFT-037/#7 was drafted, published and executed on 2026-08-11 and has been
 struck from the sequence below. The remaining drafted P0s — DRAFT-028,
 DRAFT-030, DRAFT-031, DRAFT-033, DRAFT-036 — are all still unpublished, and
@@ -433,7 +482,7 @@ DRAFT-031 is now first.
 | # | Draft | Why here |
 |---|---|---|
 | 1 | **DRAFT-013** — **re-scope before working it** | **Shrank to Android-only.** DRAFT-028's deployment already produced the nine-row connectivity matrix with per-rule packet counters, and because `network-setup.sh` matches on interface (`-i xenbr1.+`) rather than anything guest-specific, that result transfers to any OS. What does *not* transfer is the guest's reaction: Android does connectivity probing and may mark a network unvalidated when it cannot reach its gateway, which Ubuntu never checks. Remaining scope is one Android clone boot. |
-| 2 | **DRAFT-029** — **published 2026-08-12 as [#9](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/9)**; re-scoped and swept the same day | Its Dom0-service half (NET-02, the `INPUT`-chain gap) landed inside DRAFT-028 at the maintainer's request. `DRAFT-029.md` is now rewritten to match, and the remaining scope **inverted** in the process: `DRAKVUF_INPUT` is already terminal, so setting `-P INPUT`/`-P FORWARD` buys nothing for containment and risks locking the operator out — the fix is to make `DRAKVUF_ISOLATION` terminal instead, and set no policies at all. Retitled accordingly. Also absorbs a fail-open window found while sweeping: the chain is flushed at `network-setup.sh:272` and not repopulated until `:342`, with the whole VLAN loop in between, so any `ip` failure exits leaving it empty behind `-P FORWARD ACCEPT`. |
+| 2 | ~~**DRAFT-029**~~ — **DONE 2026-08-12.** [#9](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/9) closed, [PR #10](https://github.com/evilbootloader/drakvuf-multios-sandbox/pull/10) merged as `aed37af`, deployed and tested on Dom0 (`docs/runbooks/deploy-terminal-chains.md`, steps 0–8). Spawned DRAFT-038 and DRAFT-039 | Its Dom0-service half (NET-02, the `INPUT`-chain gap) landed inside DRAFT-028 at the maintainer's request. `DRAFT-029.md` is now rewritten to match, and the remaining scope **inverted** in the process: `DRAKVUF_INPUT` is already terminal, so setting `-P INPUT`/`-P FORWARD` buys nothing for containment and risks locking the operator out — the fix is to make `DRAKVUF_ISOLATION` terminal instead, and set no policies at all. Retitled accordingly. Also absorbs a fail-open window found while sweeping: the chain is flushed at `network-setup.sh:272` and not repopulated until `:342`, with the whole VLAN loop in between, so any `ip` failure exits leaving it empty behind `-P FORWARD ACCEPT`. |
 | 3 | **DRAFT-030** | Restores `SC2086` coverage, which `.shellcheckrc` currently disables repository-wide — so it should precede the six Android and Windows scripts, not follow them. Also owns the guest-filename normalizer. |
 | 4 | **DRAFT-010** | Moved ahead of DRAFT-036 because it gates it. DRAFT-036's PLAN/CREATE wait on DRAFT-010's C-vs-Python decision, which determines whether the fix is a cross-process lease in `dirwatch.c` or an allocator designed into its replacement. CONF-11 raises its value independently: with engine work near-term, this becomes input to that work. |
 | 5 | **DRAFT-036** | P0 **correctness** defect, not tuning: `slots_busy[]` is process-local and the slot index *is* the VLAN, so a second watcher allocates VLAN 1 too and both clones land on `xenbr1.1`. Per-OS watchers cannot run concurrently until this lands — it is a prerequisite of issue #3's OS-selection mechanism, not a follow-up to it. |

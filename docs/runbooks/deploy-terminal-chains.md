@@ -17,9 +17,14 @@
 > clone's Internet access away (step 2c). Containment no longer depends on
 > a policy nothing in `automation/` sets or checks.
 >
-> **The 2026-08-12 `iptables-nft` readback failure did not reproduce** after
-> the reboot, on chains rebuilt from nothing by the same script. Its cause
-> is unknown and no root cause is claimed — findings F1 and F2.
+> **The 2026-08-12 `iptables-nft` "readback failure" was never a failure.**
+> Established later the same day: `iptables -S` reports any nonexistent
+> chain as "incompatible" on this host, and the chains did not exist because
+> the host had rebooted. Steps 0b and 2b were built to diagnose a phantom,
+> and the write-up asserted that filtering was still live when in fact there
+> was none. Both are corrected in annotations below — F2 withdrawn, F2′
+> recorded in its place. F1, two live iptables backends, stands and is
+> independent.
 >
 > **One code change was added mid-run**, from step 7: `network-setup.sh` had
 > no upper bound on the clone count, so `999999` built 255 VLAN interfaces
@@ -82,6 +87,53 @@ rest of this file:
 
 The same commands worked on 2026-08-11 (`deploy-network-isolation.md`,
 step 5), so something changed on the host in between.
+
+> ## ANNOTATION 2026-08-12 — the two numbered claims above are WRONG
+>
+> *Appended, not edited: the text above is the record of what was believed
+> at the time, and the error in it is the most instructive thing in this
+> runbook.*
+>
+> **There was no readback failure.** On this host `iptables -S` reports any
+> chain that does not exist as "incompatible". Tested directly, with the
+> `ip filter` table present and populated:
+>
+> ```text
+> root@drakvuf:~/sandbox_project# sudo iptables -S NO_SUCH_CHAIN_12345
+> # Warning: iptables-legacy tables present, use iptables-legacy to see them
+> iptables v1.8.7 (nf_tables): chain `NO_SUCH_CHAIN_12345' in table `filter' is incompatible, use 'nft' tool.
+> ```
+>
+> So the 2026-08-12 message meant one thing only: **the chains did not
+> exist**, because the host had been rebooted and `network-setup.sh` had not
+> been run since. Nothing changed on the host between the 11th and the 12th.
+> The maintainer raised this possibility; it had not been tested before
+> being written up, and it should have been.
+>
+> Correcting each claim:
+>
+> 1. **"Filtering has not stopped" was false, and dangerously so.** Filtering
+>    had stopped completely — there were no rules, no chains and no VLAN
+>    interfaces. The sentence asserted a security property with no evidence
+>    and offered reassurance where the true answer was "containment is
+>    currently absent".
+> 2. **"Those commands ran against the deployed DRAFT-028 chains" was false.**
+>    They ran post-reboot against nothing. This was inferred from the order
+>    of messages in a conversation, not from any timestamp.
+>
+> **The real finding is sharper than the one it replaces.** On this host,
+> "chain absent" and "chain unreadable" are indistinguishable from the error
+> text — and *absent means containment is entirely off*. The failure mode is
+> a human reading that message as a tooling quirk and proceeding. That is
+> exactly what happened here, in writing, and it took the maintainer to
+> catch it. Carried into DRAFT-038 as **F2′**, which is why that issue's
+> first verification property is "the chain exists and holds the expected
+> rules" rather than "the chain is readable".
+>
+> Steps 0b and 2b were therefore chasing a phantom. They are left in place
+> because what they *did* establish is real and independently useful: F1
+> (two live iptables backends), and the first hard evidence that the `-C`
+> guards work and jumps do not accumulate.
 
 ### The host was then rebooted (2026-08-12)
 
@@ -680,6 +732,18 @@ inventing one would be worse than recording the gap. What is known: it
 persisted across at least one day of normal operation, `iptables -S` was
 the only thing that noticed, and nothing in the pipeline would have. If it
 returns, `nft list chain` is the readback that works.
+
+> **SUPERSEDED 2026-08-12 — F2 as written above is wrong.** It was not
+> unexplained and it did not "clear on reboot". `iptables -S` reports any
+> nonexistent chain as "incompatible" on this host; the chains simply did
+> not exist yet. See the annotation under "Reading the chains on this host"
+> for the test that settles it.
+>
+> **F2′ replaces it, and is a real finding.** "Chain absent" and "chain
+> unreadable" produce the same error text here, and *absent* means
+> containment is entirely off. Nothing in the pipeline distinguishes the
+> two, and a human reading that message as a tooling quirk will proceed
+> with no isolation at all. Owned by DRAFT-038.
 
 **Cosmetic, noticed in passing:** `iptables -C` on the nft backend prints
 the matched rule to *stdout*, and the script's `2>/dev/null` only silences
@@ -1307,7 +1371,59 @@ sudo iptables -S DRAKVUF_ISOLATION       # expect: back to 5 rules
 ```
 
 ```text
-PASTE OUTPUT HERE
+root@drakvuf:~/sandbox_project# cd /root/sandbox_project
+root@drakvuf:~/sandbox_project# git fetch origin
+\u00e7remote: Enumerating objects: 18, done.
+remote: Counting objects: 100% (18/18), done.
+remote: Compressing objects: 100% (3/3), done.
+remote: Total 8 (delta 5), reused 7 (delta 5), pack-reused 0 (from 0)
+Unpacking objects: 100% (8/8), 20.57 KiB | 236.00 KiB/s, done.
+From github.com:evilbootloader/drakvuf-multios-sandbox
+   e794045..c6abace  draft-029-terminal-chains -> origin/draft-029-terminal-chains
+   229f7be..aed37af  master                    -> origin/master
+root@drakvuf:~/sandbox_project# git checkout master
+Switched to branch 'master'
+Your branch is behind 'origin/master' by 5 commits, and can be fast-forwarded.
+  (use "git pull" to update your local branch)
+root@drakvuf:~/sandbox_project# git pull
+\u00e7Updating bc199db..aed37af
+Fast-forward
+ .github/issue-drafts/DRAFT-022.md         |   87 +++++++++--
+ .github/issue-drafts/DRAFT-029.md         |  476 ++++++++++++++++++++++++++++++++++---------------------
+ .github/issue-drafts/issue-index.md       |   49 +++++-
+ automation/network-setup.sh               |  149 ++++++++++++++++--
+ docs/architecture/networking.md           |  116 ++++++++++++--
+ docs/roadmap/project-roadmap.md           |    1 +
+ docs/runbooks/deploy-network-isolation.md |   12 +-
+ docs/runbooks/deploy-terminal-chains.md   | 1370 +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+ 8 files changed, 2037 insertions(+), 223 deletions(-)
+ create mode 100644 docs/runbooks/deploy-terminal-chains.md
+root@drakvuf:~/sandbox_project# git branch -d draft-029-terminal-chains
+Deleted branch draft-029-terminal-chains (was e794045).
+root@drakvuf:~/sandbox_project# git log -1 --oneline                          # should contain the DRAFT-029 commit
+aed37af (HEAD -> master, origin/master, origin/HEAD) Merge pull request #10 from evilbootloader/draft-029-terminal-chains
+root@drakvuf:~/sandbox_project# grep -c 'j ACCEPT' automation/network-setup.sh   # expect > 0, now from master
+4
+root@drakvuf:~/sandbox_project# sudo iptables-restore  < /root/iptables-pre-DRAFT-029.rules
+root@drakvuf:~/sandbox_project# sudo ip6tables-restore < /root/ip6tables-pre-DRAFT-029.rules
+root@drakvuf:~/sandbox_project# sudo /root/sandbox_project/automation/network-setup.sh 2
+DRAKVUF_NAT  all opt -- in * out *  0.0.0.0/0  -> 0.0.0.0/0  
+DRAKVUF_ISOLATION6  all opt    in * out *  ::/0  -> ::/0  
+DRAKVUF_INPUT6  all opt    in * out *  ::/0  -> ::/0  
+network-setup.sh: provisioned 2 VLAN sub-interface(s) on xenbr1
+root@drakvuf:~/sandbox_project# sudo iptables -S DRAKVUF_ISOLATION       # expect: back to 5 rules
+# Warning: iptables-legacy tables present, use iptables-legacy to see them
+-N DRAKVUF_ISOLATION
+-A DRAKVUF_ISOLATION -i xenbr1.+ ! -o xenbr0 -j DROP
+-A DRAKVUF_ISOLATION -d 10.0.0.0/8 -i xenbr1.+ -j DROP
+-A DRAKVUF_ISOLATION -d 172.16.0.0/12 -i xenbr1.+ -j DROP
+-A DRAKVUF_ISOLATION -d 192.168.0.0/16 -i xenbr1.+ -j DROP
+-A DRAKVUF_ISOLATION -d 169.254.0.0/16 -i xenbr1.+ -j DROP
+-A DRAKVUF_ISOLATION -i xenbr1.+ -o xenbr0 -j ACCEPT
+-A DRAKVUF_ISOLATION -o xenbr1.+ -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
+-A DRAKVUF_ISOLATION -o xenbr1.+ -j DROP
+-A DRAKVUF_ISOLATION -i xenbr1.+ -j DROP
+root@drakvuf:~/sandbox_project# 
 ```
 
 ---
@@ -1368,3 +1484,16 @@ its own firewall chains with the tool that wrote them — and the last time
 this repository had a rule it could not verify, the rule had never worked
 (NET-01). Do not assume the rules are live because they were live
 yesterday; read them with `nft` and confirm.
+
+> **Revised later the same day.** The premise is wrong — the project *could*
+> read its chains; there were no chains to read. But the closing instruction
+> survives its own reasoning and is worth more than the paragraph it ends:
+> **do not assume the rules are live because they were live yesterday.** In
+> the actual sequence a reboot removed every rule, the tool said something
+> confusing, and the write-up concluded filtering was fine. Reading the
+> chains and confirming is exactly what was skipped.
+>
+> The durable lesson is narrower and harsher than "verify after changes":
+> **the absence of containment presents as an error message, and error
+> messages get rationalised.** DRAFT-038 exists to make that a machine's
+> job rather than a reader's.
