@@ -18,15 +18,15 @@ Provisions the isolated per-clone networking that `clone-ubuntu.pl` and
   `ip link add link xenbr1 name xenbr1.$i type vlan id $i` and gateway
   `172.16.$i.1/24`, both guarded so a re-run is not an error.
 
-The filtering lives in **three dedicated chains**, flushed and rebuilt on
+The filtering lives in **five dedicated chains**, flushed and rebuilt on
 every run:
 
 | Chain | Table | Contents |
 |---|---|---|
 | `DRAKVUF_NAT` | `nat`, from `POSTROUTING` | `-o xenbr0 -j MASQUERADE` |
-| `DRAKVUF_ISOLATION` | `filter`, inserted at head of `FORWARD` | clone-to-clone DROP, plus RFC1918 and link-local destination DROPs |
+| `DRAKVUF_ISOLATION` | `filter`, inserted at head of `FORWARD` | clone-to-clone DROP, RFC1918 and link-local destination DROPs, then the terminal pair: uplink ACCEPT + `ESTABLISHED,RELATED` return ACCEPT, closed by DROPs in both directions |
 | `DRAKVUF_INPUT` | `filter`, inserted at head of `INPUT` | `ESTABLISHED,RELATED` ACCEPT, then DROP everything from `xenbr1.+` |
-| `DRAKVUF_ISOLATION6` | `filter6`, head of `FORWARD` | DROP everything from `xenbr1.+` |
+| `DRAKVUF_ISOLATION6` | `filter6`, head of `FORWARD` | DROP everything to or from `xenbr1.+` |
 | `DRAKVUF_INPUT6` | `filter6`, head of `INPUT` | DROP everything from `xenbr1.+` |
 
 The resulting posture:
@@ -38,7 +38,68 @@ clone -> link-local       DROP    (incl. 169.254.169.254 metadata)
 clone -> Dom0 itself      DROP    (replies to Dom0-initiated traffic allowed)
 clone -> Internet         ALLOW   (MASQUERADE out the uplink)
 clone -> anything, IPv6   DROP    (FORWARD and INPUT, no exceptions)
+Internet -> clone         DROP    (except replies to what the clone opened)
 ```
+
+### Why the chains are terminal (DRAFT-029, 2026-08-12)
+
+No packet with `xenbr1.<n>` as its input or output interface reaches
+`FORWARD`'s or `INPUT`'s default policy, in either address family. The
+posture above therefore holds **whatever those policies are set to**, and
+`network-setup.sh` sets none of them.
+
+That is a deliberate choice of instrument. Until 2026-08-12 the
+`clone -> Internet` permit was inherited rather than stated: the packet
+fell through `DRAKVUF_ISOLATION` to `-P FORWARD`, which is `ACCEPT` on this
+host. Nothing in `automation/` set that, asserted it, or would have noticed
+it change — anything flipping it to `DROP` (a firewall package, Docker,
+libvirt, an administrator) would have killed every clone's network
+silently, and the only symptom would have been analyses that observed
+nothing.
+
+The obvious alternative — `-P FORWARD DROP` plus explicit permits — was
+rejected for three reasons:
+
+- It buys nothing on `INPUT`. `DRAKVUF_INPUT` already ends in an
+  unconditional drop, so clone traffic to Dom0 is decided inside the chain.
+  `-P INPUT DROP` would govern only *non-clone* traffic, which is Dom0 host
+  hardening rather than analysis-network containment — and it is the most
+  effective way there is to lock an operator out of a headless L1 guest.
+- `-P FORWARD DROP` applies to every forwarding path on the host, not just
+  the analysis network. That is a policy decision about Dom0, made by a
+  script whose job is provisioning one bridge.
+- A terminal chain gives the identical guarantee with a blast radius of
+  exactly the interfaces it names, and keeps the property the chains were
+  built for: the whole posture stays readable with
+  `iptables -S DRAKVUF_ISOLATION` and removable in a flush.
+
+Traffic touching no analysis VLAN matches nothing and `RETURN`s to
+`FORWARD` untouched.
+
+**Rule order is load-bearing.** The uplink `ACCEPT` sits *below* the four
+RFC1918 and link-local `DROP`s. A LAN destination leaves via `xenbr0` like
+any other, so an `-o xenbr0 -j ACCEPT` placed above them would accept
+exactly the traffic they exist to block.
+
+### An aborted run leaves the chain denying, not empty
+
+`DRAKVUF_ISOLATION` is flushed and rebuilt, and the jump from `FORWARD`
+stays installed throughout. Exiting between the two would therefore permit
+everything the chain exists to deny — worse than the state before the run,
+because a populated chain has been replaced by an inert one. That is
+NET-01's shape a second time: a rule present, visible in `iptables -S`, and
+matching nothing.
+
+Two changes close it. The flush was moved to sit immediately above the
+rules that replace it — it previously sat far enough above them that
+`ip link set` and the entire per-clone VLAN loop ran inside the gap, every
+command of which is fatal under `set -eu`. And the `EXIT` trap now fails
+**closed**: on a non-zero exit it flushes the chain and installs a bare
+deny in both directions.
+
+Failing closed cuts the network of any clone mid-analysis. That is the
+intended trade — a half-provisioned network that looks like it works is the
+failure mode this script was rewritten to stop having.
 
 ### Why IPv6 is dropped outright
 
@@ -103,12 +164,20 @@ VLAN sub-interfaces on a bridge that does not exist.
 
 ### What DRAFT-028 did not close
 
-- **No terminal policy is set on `FORWARD` or `INPUT` themselves.** The
-  chains fall through to whatever policy the host already has. Setting it
-  is DRAFT-029.
-- **Containment is still unverified by a live test.** No two-clone
-  experiment has been run. DRAFT-013 owns it, and the rules above are what
-  it should now be measuring — the point of fixing before measuring.
+- ~~**No terminal policy is set on `FORWARD` or `INPUT` themselves.**~~
+  **Closed 2026-08-12 by DRAFT-029** — and by making the chains terminal
+  rather than by setting a policy, which is a different answer to the same
+  question. See "Why the chains are terminal" above.
+- ~~**Containment is still unverified by a live test.**~~ **Largely closed
+  2026-08-11 by DRAFT-028's own deployment**, which produced the nine-row
+  connectivity matrix with per-rule packet counters
+  (`docs/checklists/android.md` §1.3, transcript in
+  `docs/runbooks/deploy-network-isolation.md`). Measured on Ubuntu clones,
+  which transfers — the rules match on interface, not on anything
+  guest-specific. What does not transfer is the guest's *reaction*: Android
+  probes connectivity and may mark the network unvalidated when it cannot
+  reach its gateway, which Ubuntu never checks. That single Android clone
+  boot is all DRAFT-013 still is.
 - **`DROP` everywhere means a clone sees timeouts**, where a real host on a
   real network would answer with RST or ICMP unreachable. A black-holing
   firewall is itself a sandbox signal; revisit under the anti-evasion work.
@@ -196,15 +265,28 @@ no VLAN, no `vif-openvswitch` script); sandbox VMs use `xenbr1` with the OVS
 vif script (see `misc/ubuntu_sandbox.cfg`, `misc/android_sandbox.cfg` —
 `bridge=xenbr1`).
 
-## Known gap: Android network isolation is unverified
+## Known gap: Android's reaction to the isolation rules is untested
 
-`docs/checklists/android.md` §1.3 ("Verify sandbox network isolation TODO")
-is explicitly incomplete — the 6-row isolation test table (Dom0 analysis
-gateway, Dom0 management IP, Proxmox management IP, another LAN host,
-Internet IPv4, Internet IPv6) has no "Actual"/"Passed" values recorded. This
-means Android sandbox containment is **unverified, not just undone** —
-tracked as DRAFT-013, gating any real (non-benign) sample execution with
-networking enabled for Android.
+*(Corrected 2026-08-12. This section previously read "Android network
+isolation is unverified" and stated that §1.3's table had no
+"Actual"/"Passed" values recorded. That stopped being true on 2026-08-11,
+when DRAFT-028's deployment filled it.)*
+
+`docs/checklists/android.md` §1.3's isolation table is **complete** — nine
+rows with measured results and per-rule packet counters, transcript in
+`docs/runbooks/deploy-network-isolation.md`. The mechanism is verified, and
+it verifies for all three OS families at once: `network-setup.sh` matches on
+interface (`-i`/`-o xenbr1.+`), not on anything guest-specific.
+
+What remains is narrower and is the whole of DRAFT-013. The measurements
+were taken on **Ubuntu** clones. Android performs connectivity probing and
+may mark a network unvalidated when it cannot reach its gateway — which it
+now cannot, since `DRAKVUF_INPUT` drops clone traffic to Dom0 and the
+gateway is deliberately not pingable. Ubuntu never checks. One Android
+clone boot answers it.
+
+Non-benign sample execution with networking remains gated, but on
+DRAFT-022 rather than on this — see roadmap risk #13.
 
 ## Proposed containment design (not yet implemented)
 
