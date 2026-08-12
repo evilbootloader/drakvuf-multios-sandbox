@@ -1,237 +1,357 @@
-# DRAFT-029: Restrict analysis-clone access to Dom0 host services
+# DRAFT-029: Make the DRAKVUF chains terminal, so containment does not depend on Dom0's default policies
 
-**Status:** Drafted, not published
+**Status:** **Published 2026-08-12 —
+[#9](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/9)**
+(label `bug`)
 **Area:** platform / security (shared by Ubuntu, Android, Windows)
 **Milestone:** M2 (containment closure)
 **Priority:** P0
-**Depends on:** DRAFT-028 (correct and idempotent rule installation) and
-DRAFT-013 (measured evidence of what is currently reachable). Strongly
-benefits from DRAFT-027 landing first, which removes the single service
-the pipeline currently *requires* a clone to reach.
-**Origin:** `project-assessment.md` → Findings → NET-02 (with NET-03,
-DRAKVUF-01)
+**Depends on:** DRAFT-028 — **landed 2026-08-11**. Nothing else open.
+**Origin:** `project-assessment.md` → Findings → NET-02, plus one finding
+made while sweeping this draft on 2026-08-12 (see "The fail-open window").
+
+> **Swept 2026-08-12.** More than half of what this draft originally
+> specified is already implemented. The NET-02 Dom0-service half — an
+> `INPUT`-chain policy, which no version of `automation/` had ever had —
+> was moved into DRAFT-028 at the maintainer's request and deployed on
+> 2026-08-11 as the `DRAKVUF_INPUT` chain
+> (`automation/network-setup.sh:365-404`; transcript in
+> `docs/runbooks/deploy-network-isolation.md`). `issue-index.md` recorded
+> that re-scope on 2026-08-11; this file did not, and was still presenting
+> the closed half as open. The original text is in git history.
 
 # Objective
 
-Add an explicit `INPUT`-chain policy so analysis clones can reach only the
-Dom0 services the pipeline actually requires — closing a gap that the
-existing `FORWARD`-chain isolation rule cannot cover by construction.
+Make every packet entering or leaving an analysis VLAN reach a terminal
+verdict **inside the `DRAKVUF_*` chains**, so the containment posture no
+longer depends on what `-P FORWARD` and `-P INPUT` happen to be set to on
+the Dom0 host — and so that an aborted `network-setup.sh` run fails closed
+instead of open.
 
 # Context
 
-`automation/network-setup.sh:129` is the project's only isolation rule:
+DRAFT-028 built the posture into five dedicated chains and left one thing
+open, which it said so explicitly
+(`docs/runbooks/deploy-network-isolation.md:764`):
 
-```bash
-iptables -A FORWARD -i xenbr1.$i -o !xenbr0 -j DROP
+> What this deployment does **not** establish, and must not be read as
+> establishing: no terminal policy is set on `FORWARD` or `INPUT`
+> themselves, so the chains fall through to whatever the host already has.
+> That is DRAFT-029.
+
+What the host already has, measured during that deployment
+(`docs/runbooks/deploy-network-isolation.md:349-354,600-602`):
+
+```
+-P INPUT ACCEPT
+-P FORWARD ACCEPT
+-P OUTPUT ACCEPT          # and the same three for ip6tables
 ```
 
-It is a `FORWARD`-chain rule, so it governs traffic being *routed through*
-Dom0. Packets a clone sends **to a Dom0 address itself** traverse `INPUT`,
-not `FORWARD`, and are therefore unaffected — regardless of whether the
-rule's syntax is correct (that is DRAFT-028's separate problem). No
-`INPUT` policy is set anywhere in `automation/`.
+## `INPUT` is already terminal — the exposure is `FORWARD` only
 
-The consequence: every analysis clone — Ubuntu, Android, and any future
-Windows clone, since `network-setup.sh` is shared — can reach **every
-service listening on every Dom0 address**. Two concrete cases:
+This is the part the original draft could not have known, because the
+chain it asks for did not exist yet. `DRAKVUF_INPUT` ends with an
+unconditional drop:
 
-1. **The Apache instance serving `/malware_processing`.** Its
-   `DocumentRoot` is the in-flight sample directory
-   (`docs/drakvuf-on-xen-nested-within-proxmox.md:635-644`). A clone can
-   therefore fetch *other analyses' samples* by filename. Today this
-   service is not merely reachable but **required**, because
-   `preconfig-ubuntu.sh:122` delivers the sample through it — which is why
-   DRAFT-027 should land first.
-2. **Anything else Dom0 listens on**, including management access on
-   whatever addresses Dom0 holds. This is precisely what
-   `docs/checklists/android.md:429-436` asks about and leaves unanswered:
+```
+-A DRAKVUF_INPUT -i xenbr1.+ -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
+-A DRAKVUF_INPUT -i xenbr1.+ -j DROP
+```
 
-   | Test | Expected | Actual | Passed |
-   |---|---|---|---:|
-   | Reach Xen Dom0 analysis gateway | Only intended service ports | | [ ] |
-   | Reach Xen Dom0 management IP | Blocked | | [ ] |
+Every packet from a clone to any Dom0 address is therefore decided within
+the chain. **`-P INPUT` is irrelevant to clone containment**, and the same
+holds for `DRAKVUF_INPUT6` and `DRAKVUF_ISOLATION6`, which drop
+unconditionally.
 
-   On the current implementation, neither row can pass — there is no
-   mechanism that would make them pass.
+`DRAKVUF_ISOLATION` is the exception. It ends after its four RFC1918 /
+link-local drops with no terminal rule — deliberately, and flagged in the
+source at `automation/network-setup.sh:358-360`:
 
-This is a containment gap in a malware-analysis sandbox, and it is
-OS-independent: it is a property of the Dom0 firewall, not of any guest.
+```
+# No terminal ACCEPT or RETURN follows, deliberately: the chain falls
+# through to FORWARD's existing policy. Setting that policy is DRAFT-029's,
+# not this issue's.
+```
+
+So **clone→Internet is permitted by inheritance.** It works because
+`-P FORWARD` is `ACCEPT`; nothing in `automation/` sets that, asserts it,
+or would notice it changing. The return path is inherited the same way —
+`DRAKVUF_ISOLATION` matches only `-i xenbr1.+`, so Internet→clone replies
+fall through to the policy untouched. Anything that flips `-P FORWARD` to
+`DROP` (a firewall package, Docker, libvirt, an administrator) silently
+kills every analysis clone's network, and the pipeline's only symptom is
+samples that observe nothing.
+
+## The design inversion this draft makes
+
+The original text asked for a default-deny policy on the built-in chains.
+**That is the wrong instrument**, for three reasons that only became clear
+once `DRAKVUF_INPUT` existed:
+
+1. **It buys nothing for `INPUT`.** Clone traffic is already terminally
+   dropped. `-P INPUT DROP` would govern only non-clone traffic — which is
+   Dom0 host hardening, explicitly out of scope below, and the single most
+   effective way to lock an operator out of a headless L1 guest.
+2. **`-P FORWARD DROP` is over-broad.** It applies to every forwarding path
+   on the host, not just the analysis network. That is a policy decision
+   about Dom0, made by a script whose job is provisioning one bridge.
+3. **A terminal chain gives the identical guarantee with local blast
+   radius**, and preserves what DRAFT-028 built the chains for: the whole
+   posture stays readable with `iptables -S DRAKVUF_ISOLATION` and
+   removable in a flush.
+
+**Set no policies. Make the chain decide.**
+
+## The fail-open window (found 2026-08-12, while sweeping this draft)
+
+`DRAKVUF_ISOLATION` is flushed at `network-setup.sh:272` and its first rule
+is not re-added until `:342`. Between those two lines sit
+`ip link set xenbr1 up` (`:285`) and the entire per-clone VLAN loop
+(`:292-319`) — `ip link add`, `ip addr add`, `ip link set up`, once per
+slot. Under `set -eu` every one of those is fatal.
+
+An abort anywhere in that span exits with the chain **empty, still jumped
+to from `FORWARD`, behind `-P FORWARD ACCEPT`** — which is materially worse
+than the state before the run, because a populated chain has been replaced
+by an inert one. The EXIT trap reports the failing step and restores
+nothing.
+
+This is NET-01's shape a second time: a rule that is present, visible in
+`iptables -S`, and matches nothing. It is in scope here because it is the
+same question — what decides when our chain does not — and because a
+terminal chain that can be emptied by a failed `ip addr add` is not
+terminal.
+
+Two things bound how bad it is today, and neither survives contact with the
+roadmap. `run_analysis-ubuntu.sh` aborts when `network-setup.sh` fails, so
+no *new* analysis starts; and today only one pipeline runs, so the script
+is not re-run while clones are live. DRAFT-036's concurrent per-OS watchers
+end both: launching the Android pipeline re-runs this script while Ubuntu
+clones are mid-analysis, putting the flush window underneath running
+samples.
+
+The other two chains are not exposed — `DRAKVUF_INPUT` (`:382-404`) and
+both IPv6 chains (`:434-448`) create, flush, jump and populate in
+contiguous blocks with no `ip` commands between.
 
 # Dependencies
 
-- **DRAFT-028** — rules must install correctly and idempotently before new
-  ones are layered on. Adding policy to a script that silently drops
-  rejected rules would produce a policy that is believed active and is
-  not.
-- **DRAFT-013** — supplies the measured "Actual" column. Write the policy
-  against measurements, not assumptions about what Dom0 listens on.
-- **DRAFT-027** (strongly recommended first) — while HTTP delivery exists,
-  the pipeline *needs* clone→Dom0:80 to work, so the tightest correct
-  policy still has a hole in it. After DRAFT-027 there may be no required
-  clone→Dom0 service at all, which makes default-deny straightforward.
+- **DRAFT-028** — landed 2026-08-11. This builds directly on its chain
+  structure.
+- ~~DRAFT-013~~ — no longer a dependency. The original draft needed it to
+  supply a measured inventory of what clones could reach; DRAFT-028's
+  deployment produced that (the nine-row matrix with per-rule packet
+  counters), and DRAFT-013 has since shrunk to one Android clone boot.
+- ~~DRAFT-027~~ — landed inside issue #4 on 2026-08-09. The Apache
+  dependency it was waiting on is gone; sample delivery is
+  `injector -m writefile`, a VMI operation with no network path.
+- **Blocks** nothing. **Does not block** DRAFT-013 — the two are
+  independent, and either order works.
 
 # Out of scope
 
-- Egress/internet policy (NET-03). Whether clones reach the internet is a
-  separate decision belonging to the `offline`/`simulated`/
-  `controlled-internet` mode design in `docs/architecture/networking.md`.
-  This issue is strictly about **Dom0 as a destination**.
-- Clone-to-clone isolation — that is the `FORWARD` rule, owned by
-  DRAFT-028.
-- IPv6 policy beyond confirming its state. `docs/checklists/android.md:401`
-  ("Confirm IPv6 is either isolated or disabled") should be answered by
-  DRAFT-013's measurement; implementing an IPv6 ruleset is follow-on work
-  if measurement shows it is reachable.
-- Hardening Dom0's services themselves (Apache configuration, SSH
-  configuration). This issue controls *reachability from the analysis
-  network*, not service configuration.
-- Any change to `/malware_incoming`, `/malware_processing`,
-  `/malware_finished` ownership or permissions.
+- **Setting `-P INPUT`, `-P FORWARD` or `-P OUTPUT` at all**, in either
+  address family. See the design inversion above — this draft's position is
+  that `network-setup.sh` must not touch the built-in policies, and that
+  position is the deliverable rather than a deferral.
+- Dom0 host hardening: which services listen, how Apache and SSH are
+  configured, management-interface exposure. This controls reachability
+  *from the analysis network* only.
+- The `offline` / `simulated` / `controlled-internet` modes. Whether clones
+  should reach the Internet **at all** is DRAFT-022's decision and is now
+  live (roadmap risk #13: personal operation, residential uplink). This
+  draft makes the current deliberate egress *explicit* rather than
+  inherited; it does not change it. Wiring `offline` becomes a one-rule
+  change once this lands, which is an argument for landing it first.
+- Clone-to-clone isolation and the RFC1918 blocks — DRAFT-028's, already
+  deployed and counter-verified.
+- `automation/platform.env`. `issue-index.md:403-406` proposes that
+  DRAFT-028 create it and wire `network-setup.sh`; DRAFT-028 shipped
+  without it, and inventing it here would be a second unreviewed decision
+  in a security change. Flag, do not implement.
 
 # PLAN
 
-1. Take DRAFT-013's inventory as input: which Dom0 addresses exist, which
-   services listen on them, and which are currently reachable from a
-   clone. Do not design against an assumed list.
-2. Establish the *required* set. After DRAFT-027, the candidate answer is
-   **none** — the clone needs a gateway for routing (NET-03's separate
-   question) but no Dom0-hosted service. Confirm this rather than assume
-   it; DNS is the likely exception, since `preconfig-ubuntu.sh:122` sets
-   `nameserver 172.16.$VLAN.1`, pointing resolution at Dom0.
-3. Resolve the DNS question explicitly. If Dom0 runs a resolver for the
-   analysis network, it is a required service and must be allowed
-   narrowly (UDP/TCP 53 from the analysis VLANs only). If it does not,
-   `preconfig-ubuntu.sh`'s `resolv.conf` line is pointing at nothing and
-   that is a separate finding worth recording.
-4. Decide the enforcement point: a dedicated chain jumped to from `INPUT`
-   for traffic arriving on `xenbr1.*`, consistent with DRAFT-028's
-   dedicated-chain recommendation, so the pipeline's policy stays
-   inspectable and removable as a unit.
-5. Decide the default. Recommendation: default-deny for traffic from
-   `xenbr1.*` to any Dom0 address, with an explicit allow-list from step
-   2/3 — matching `docs/checklists/android.md:1844-1846` ("Default to no
-   Internet access. Allow only explicitly required Dom0 analysis
-   services").
-6. Confirm the policy cannot lock the operator out. Rules must be scoped
-   to the analysis VLAN interfaces (`-i xenbr1.*`), never to management
-   interfaces.
+1. Confirm the three policies are still `ACCEPT` on the current Dom0 before
+   changing anything — the design rests on not needing them to be, but a
+   host that has already been changed is worth knowing about.
+2. Add the terminal rules to `DRAKVUF_ISOLATION`, after the existing
+   RFC1918 drops. Order is load-bearing: a LAN destination leaves via
+   `xenbr0`, so an `-o xenbr0 ACCEPT` placed above the RFC1918 drops would
+   accept exactly the traffic those rules exist to block.
+3. Close the fail-open window, in two parts:
+   - move the flush so it is adjacent to the rule installation, leaving no
+     `ip` command inside the gap;
+   - make the EXIT trap fail **closed** — on a non-zero exit, flush the
+     chain and install a bare deny in both directions, so an aborted run
+     denies rather than permits.
+4. Confirm the trap cannot itself fail. It runs on every exit path,
+   including argument validation before the chain exists, and a trap that
+   errors under `set -eu` replaces one silent failure with another.
+5. Verify on Dom0 that clone egress still works and that the new rules
+   carry non-zero packet counters — an ACCEPT that never matches means the
+   ordering is wrong.
 
 # CREATE
 
-1. Add the `INPUT`-chain policy to `automation/network-setup.sh`, using
-   the chain structure DRAFT-028 establishes.
-2. Scope every rule to the analysis VLAN interfaces explicitly.
-3. Add the allow-list entries from PLAN steps 2–3, each with a comment
-   naming *why* that service is required, so a future reader can tell
-   which entries are load-bearing.
-4. Add the same default-deny for IPv6 if DRAFT-013's measurement shows the
-   analysis network has IPv6 reachability to Dom0.
-5. Record the resulting policy in `docs/architecture/networking.md` as the
-   containment baseline all three OS pipelines inherit.
+`automation/network-setup.sh`, one file:
+
+1. Append to `DRAKVUF_ISOLATION`, after the RFC1918 loop:
+
+   ```sh
+   # The intended egress, stated rather than inherited from -P FORWARD.
+   iptables -A "$ISOLATION_CHAIN" -i "$ANALYSIS_BRIDGE.+" -o "$UPLINK_BRIDGE" -j ACCEPT
+
+   # The return path. Without it, egress still depends on the policy.
+   iptables -A "$ISOLATION_CHAIN" -o "$ANALYSIS_BRIDGE.+" \
+       -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+
+   # Nothing may open a connection TO a clone.
+   iptables -A "$ISOLATION_CHAIN" -o "$ANALYSIS_BRIDGE.+" -j DROP
+
+   # Catch-all for clone-originated traffic. Redundant against the first
+   # rule in the chain today; it is what makes the chain terminal by
+   # construction rather than by the reader checking the rules above.
+   iptables -A "$ISOLATION_CHAIN" -i "$ANALYSIS_BRIDGE.+" -j DROP
+   ```
+
+2. Relocate `iptables -F "$ISOLATION_CHAIN"` from Section 4 to the head of
+   Section 6, immediately above the first `-A`. Chain creation and the
+   `FORWARD` jump stay in Section 4 — neither is destructive.
+3. Extend `on_exit()` to fail closed, guarded so it is a no-op before the
+   chain exists and cannot itself abort.
+4. Rewrite the Section 6 comment block: `:358-360` currently states the
+   fall-through as deliberate and names this draft as the owner. Leaving it
+   is a defect in this change (`CONTRIBUTING.md`, "Comments and historical
+   context", rule 2). Same for the header block at `:140-142`, which lists
+   the terminal policy as open.
+5. Update `docs/architecture/networking.md` with the final posture, and fix
+   its stale "Known gap: Android network isolation is unverified" section
+   at `:200-207` — it still says §1.3's table has no Actual/Passed values,
+   which stopped being true on 2026-08-11.
 
 # TEST
 
-Runs in the development container:
+In the development container:
 
 ```bash
 bash -n automation/network-setup.sh
+dash -n automation/network-setup.sh
 shellcheck automation/network-setup.sh
 ```
 
-Requires Xen Dom0 and two live sandbox clones — present for manual
-execution, never run from the development container:
+On Dom0 — present for manual execution, never run from the container:
 
 ```bash
-# Before: what does Dom0 actually listen on, and on which addresses?
-ss -tulpn
-ip -br addr
+# 1. Preconditions, per PLAN step 1.
+sudo iptables -S | head -3
+sudo ip6tables -S | head -3
 
-# From inside a benign sandbox clone, per docs/checklists/android.md §1.3:
-#   -> Dom0 analysis gateway 172.16.<vlan>.1, allowed ports    expect: reachable
-#   -> Dom0 analysis gateway, any other port                   expect: blocked
-#   -> Dom0 management IP, any port                            expect: blocked
-#   -> Proxmox (L0) management IP                              expect: blocked
-#   -> another LAN host                                        expect: blocked
+# 2. Provision, then read the chain back. Expect the four new rules last,
+#    with both ACCEPTs below all four RFC1918 DROPs.
+sudo ./network-setup.sh 2
+sudo iptables -S DRAKVUF_ISOLATION
 
-# Specifically confirm the cross-sample exposure is closed:
-#   -> http://172.16.<vlan>.1/<another analysis's filename>     expect: blocked
+# 3. The regression that matters: egress must still work.
+#    Boot one benign clone, then from inside it:
+#      ping -c1 1.1.1.1                 expect: reply
+#      getent hosts google.com          expect: resolves
+#      ping -c1 <a LAN host>            expect: no reply
+#      ping -c1 172.16.<vlan>.1         expect: no reply (DRAKVUF_INPUT)
 
-# Confirm the operator is not locked out: management access to Dom0 from
-# the management network must be unaffected.
+# 4. Prove the rules are the reason, not the policy. This is the whole
+#    point of the change, and it is the one step that actually tests it.
+sudo iptables -P FORWARD DROP
+#      re-run the four probes above     expect: identical results
+sudo iptables -P FORWARD ACCEPT
+
+# 5. Counters non-zero on both new ACCEPTs -- a rule that never matches
+#    means the ordering is wrong.
+sudo iptables -vnL DRAKVUF_ISOLATION
+
+# 6. Fail-closed check. Force a failure inside the flush window and
+#    confirm the chain denies rather than empties:
+sudo ./network-setup.sh 999999   # exhausts VLAN ids / fails in the loop
+sudo iptables -S DRAKVUF_ISOLATION   # expect: two DROP rules, not empty
+sudo ./network-setup.sh 2            # expect: converges back, exit 0
 ```
 
-Fill in `docs/checklists/android.md:429-436`'s table from these results —
-that table is this issue's natural evidence record, and it is OS-shared
-despite living in the Android checklist (see DRAFT-013's recommended
-retitle).
+Step 4 is the acceptance test. If the probes change behaviour when the
+policy changes, the chain is not terminal and the change has not worked.
 
 # DEPLOY
 
-Requires manual Dom0 coordination — present, do not execute:
+Lower risk than this draft originally assumed, because the design inversion
+removed the lockout mechanism: every new rule is scoped to
+`-i`/`-o xenbr1.+`, and no built-in policy is touched. Management
+interfaces cannot be matched by any of them.
 
 1. Capture `iptables-save` and `ip6tables-save` beforehand.
-2. **Have out-of-band access available** (Proxmox console to the L1 VM)
-   before applying `INPUT`-chain changes. A mistake here can sever
-   management access to Dom0; the console is the recovery path.
-3. Apply in a no-analysis window.
-4. Verify operator access still works *before* leaving the console.
-5. Rollback: `iptables-restore` from the pre-change capture.
+2. Apply in a no-analysis window — the script flushes and rebuilds.
+3. Keep the Proxmox console to the L1 guest available. Not because this
+   change can sever management access, but because TEST step 4 deliberately
+   sets `-P FORWARD DROP` on a live host.
+4. Rollback: `iptables-restore` from the pre-change capture.
 
 # Acceptance criteria
 
-- [ ] The set of Dom0 services that analysis clones are *required* to
-      reach is determined and recorded, with the DNS question explicitly
-      answered (PLAN step 3).
-- [ ] Traffic from `xenbr1.*` to Dom0 addresses is default-deny, with a
-      documented allow-list whose entries each state why they exist.
-- [ ] A clone cannot reach the Dom0 management address on any port.
-- [ ] A clone cannot retrieve another analysis's sample from
-      `/malware_processing` over HTTP.
-- [ ] `docs/checklists/android.md:429-436`'s isolation table has real
-      Actual/Passed values for every row.
-- [ ] Operator/management access to Dom0 is confirmed unaffected, with
-      evidence.
-- [ ] The policy is expressed in the shared `network-setup.sh`, so it
-      applies to Ubuntu, Android and Windows clones without per-OS work.
-- [ ] `shellcheck automation/network-setup.sh` is clean.
+- [ ] No packet in either direction on an analysis VLAN reaches
+      `FORWARD`'s policy: `DRAKVUF_ISOLATION` decides `-i xenbr1.+` and
+      `-o xenbr1.+` terminally.
+- [ ] Clone egress, DNS and blocked-destination behaviour are **identical**
+      with `-P FORWARD ACCEPT` and `-P FORWARD DROP` (TEST step 4).
+- [ ] `network-setup.sh` sets no built-in chain policy, in either address
+      family.
+- [ ] An abort anywhere in the script leaves `DRAKVUF_ISOLATION` denying,
+      never empty.
+- [ ] Re-running after a failed run converges to the full ruleset and
+      exits 0 — the idempotence DRAFT-028 established is not regressed.
+- [ ] Both new ACCEPT rules show non-zero packet counters after a benign
+      analysis run.
+- [ ] The comments at `network-setup.sh:140-142` and `:358-360` describe
+      the posture that now holds, and `docs/architecture/networking.md`'s
+      stale §1.3 gap section is corrected.
+- [ ] `bash -n`, `dash -n` and `shellcheck` are clean.
 
 # Evidence required
 
-- `ss -tulpn` and `ip -br addr` from Dom0.
-- The completed §1.3 isolation table.
-- `iptables -S` before and after.
-- Transcript of the cross-sample-exposure test.
-- Confirmation of continued operator access.
+- `iptables -S DRAKVUF_ISOLATION` after provisioning.
+- `iptables -vnL DRAKVUF_ISOLATION` after a benign run, showing counters.
+- The TEST step 4 transcript with both policy settings — this is the
+  issue's central evidence, not a supporting detail.
+- The TEST step 6 transcript showing the chain denying after a forced
+  failure.
+- Confirmation that operator access to Dom0 was unaffected throughout.
 
 # Security considerations
 
-- This issue exists to close a containment gap, and it is the kind of
-  change that can fail closed on the *operator* rather than the guest.
-  Out-of-band console access before applying (DEPLOY step 2) is not
-  optional.
-- Until this lands, treat every analysis run as having Dom0 services
-  reachable from the guest. That is a material caveat on any claim that
-  the sandbox is contained, and it should be stated in the roadmap risk
-  register rather than left implicit.
-- The cross-sample exposure (one analysis reading another's sample) is a
-  contamination risk for analysis integrity as well as a containment one —
-  a sample that can read the queue can behave differently when it detects
-  it is being analysed alongside others.
-- Do not test with real malware. Benign fixtures, sandbox clones only,
+- **The change makes current behaviour explicit; it does not make the lab
+  safer to detonate real samples in.** Clones still have deliberate
+  unrestricted Internet egress. That question is DRAFT-022's, and roadmap
+  risk #13 now records why it is live: personal operation over a
+  residential line. Landing this draft must not be read as closing it.
+- Until this lands, every containment claim carries an unstated premise —
+  `-P FORWARD ACCEPT`. That premise is currently true and nothing checks
+  it.
+- The fail-open window is the more urgent half. It is reachable today by
+  any transient `ip` failure, and it becomes routine under DRAFT-036's
+  concurrent watchers.
+- Do not test with real malware. Benign fixtures and sandbox clones only;
   golden LVs untouched.
 
 # Documentation changes
 
-`docs/architecture/networking.md` (the containment baseline and its
-allow-list), `docs/checklists/android.md` §1.3 (fill in the table — this
-is evidence being *added*, not existing evidence rewritten),
-`docs/roadmap/project-roadmap.md` risk register (risk #5 can be closed or
-rescoped once the table is complete), `docs/checklists/ubuntu.md` (record
-that the same policy governs the Ubuntu pipeline).
+`docs/architecture/networking.md` — the terminal posture, and the stale
+§1.3 gap section at `:200-207`. `docs/checklists/android.md` §1.3 and
+`docs/checklists/ubuntu.md` — record that the measured results now hold
+independently of host policy. `docs/roadmap/project-roadmap.md` risk #5 —
+its "two things remain open" note loses one of them.
 
 # Recovery / rollback
 
-Pre-change `iptables-save`/`ip6tables-save` captures restore the previous
-state in one command. Out-of-band Proxmox console access is the recovery
-path if management connectivity is lost. No guest, LVM or Xen state is
-modified.
+Pre-change `iptables-save` / `ip6tables-save` captures restore the previous
+state in one command. No guest, LVM or Xen state is modified. If the new
+rules prove wrong, `iptables -F DRAKVUF_ISOLATION` returns the host to
+inherited-policy behaviour immediately — which is the pre-change state, not
+an outage.

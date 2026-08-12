@@ -764,3 +764,13 @@ What this deployment does **not** establish, and must not be read as
 establishing: no terminal policy is set on `FORWARD` or `INPUT`
 themselves, so the chains fall through to whatever the host already has.
 That is DRAFT-029.
+
+> *Annotation appended 2026-08-12 — the record above is unchanged.*
+> DRAFT-029 has since been implemented, and answered this differently than
+> the sentence anticipates: the built-in policies are still not set, and
+> deliberately never will be by `network-setup.sh`. Instead the
+> `DRAKVUF_*` chains were made terminal, so nothing falls through in the
+> first place. See `docs/architecture/networking.md`, "Why the chains are
+> terminal". This deployment's measurements are unaffected — they were
+> taken with `-P FORWARD ACCEPT`, and the change makes that irrelevant
+> rather than untrue.

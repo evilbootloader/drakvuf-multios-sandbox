@@ -37,7 +37,7 @@ per-OS scripts inherit.
 |---|---|---|---|---|---|---|---|
 | DRAFT-027 | Replace HTTP/Apache sample delivery with direct guest injection | core/platform | ALL | M1 → M2/M3 | P0 | Issue #4; blocks DRAFT-016, DRAFT-026b | DRAKVUF-01 — **implemented for Ubuntu 2026-08-09 inside issue #4**, never published separately |
 | DRAFT-028 | Make `network-setup.sh` fail loudly, install correct rules, and be idempotent | platform/networking | ALL | M2 | P0 | — (blocks DRAFT-013) | NET-01, NET-04, NET-05 |
-| DRAFT-029 | Restrict analysis-clone access to Dom0 host services | platform/security | ALL | M2 | P0 | DRAFT-028, DRAFT-013; benefits from DRAFT-027 | NET-02 |
+| DRAFT-029 | ~~Restrict analysis-clone access to Dom0 host services~~ — retitled 2026-08-12 to "Make the DRAKVUF chains terminal, so containment does not depend on Dom0's default policies" | platform/security | ALL | M2 | P0 | DRAFT-028 (landed); ~~DRAFT-013~~, ~~DRAFT-027~~ both dropped — see `DRAFT-029.md` | NET-02, plus the fail-open window found 2026-08-12 |
 | DRAFT-030 | Stop passing untrusted sample filenames through shell-parsed command lines | core | ALL | M1 | P1 | — (should precede DRAFT-014) | DRAKVUF-03, DRAKVUF-02 |
 | DRAFT-031 | Establish a `shellcheck` baseline that `automation/` actually passes | testing | ALL | M1 | P1 | — (blocks DRAFT-026a) | CI-01 |
 | DRAFT-032 | Reconcile documentation with current project direction and closed issues #1/#2 | governance/docs | ALL | M0 | P1 | — | DOC-01…DOC-09, NET-04, GOV-02; extended 2026-08-09 by the comment audit (CONF-02/03/04/06/07/08/11/12, DOC-N4/N5/N6, TODO-03) |
@@ -114,7 +114,10 @@ of `CLAUDE.md`'s known issue), and the anchor is now a backgrounded `nano`
 for anti-evasion — which makes **"anchor auto-discovery must not key on a
 process-name grep"** a constraint on DRAFT-015/016.
 
-**All seven issues are now closed.** Nothing is open.
+**All seven issues are now closed.** Nothing is open. *(Superseded
+2026-08-12: DRAFT-029 was published as
+[#9](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/9)
+and is open.)*
 
 `android_sandbox` is a clone of the golden VM, so the reinstall made its LV,
 its saved state (`457fe0d7…`) and its anchor PID (`5715`) all describe an
@@ -417,7 +420,9 @@ dated addenda were removed on 2026-08-11 — three stacked revisions patching
 each other by reference had stopped reading as one sequence, which is the
 whole point of having one.
 
-**All seven published issues are closed** — #1, #2, #3, #4, #6 and #7.
+**#1, #2, #3, #4, #6 and #7 are all closed.** One issue is open:
+**[#9](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/9)**,
+DRAFT-029, published 2026-08-12.
 DRAFT-037/#7 was drafted, published and executed on 2026-08-11 and has been
 struck from the sequence below. The remaining drafted P0s — DRAFT-028,
 DRAFT-030, DRAFT-031, DRAFT-033, DRAFT-036 — are all still unpublished, and
@@ -428,7 +433,7 @@ DRAFT-031 is now first.
 | # | Draft | Why here |
 |---|---|---|
 | 1 | **DRAFT-013** — **re-scope before working it** | **Shrank to Android-only.** DRAFT-028's deployment already produced the nine-row connectivity matrix with per-rule packet counters, and because `network-setup.sh` matches on interface (`-i xenbr1.+`) rather than anything guest-specific, that result transfers to any OS. What does *not* transfer is the guest's reaction: Android does connectivity probing and may mark a network unvalidated when it cannot reach its gateway, which Ubuntu never checks. Remaining scope is one Android clone boot. |
-| 2 | **DRAFT-029** — **re-scope before working it** | **Shrank.** Its Dom0-service half (NET-02, the `INPUT`-chain gap) landed inside DRAFT-028 at the maintainer's request. What remains is the terminal policy on `FORWARD` and `INPUT` themselves, which the `DRAKVUF_*` chains currently fall through to. |
+| 2 | **DRAFT-029** — **published 2026-08-12 as [#9](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/9)**; re-scoped and swept the same day | Its Dom0-service half (NET-02, the `INPUT`-chain gap) landed inside DRAFT-028 at the maintainer's request. `DRAFT-029.md` is now rewritten to match, and the remaining scope **inverted** in the process: `DRAKVUF_INPUT` is already terminal, so setting `-P INPUT`/`-P FORWARD` buys nothing for containment and risks locking the operator out — the fix is to make `DRAKVUF_ISOLATION` terminal instead, and set no policies at all. Retitled accordingly. Also absorbs a fail-open window found while sweeping: the chain is flushed at `network-setup.sh:272` and not repopulated until `:342`, with the whole VLAN loop in between, so any `ip` failure exits leaving it empty behind `-P FORWARD ACCEPT`. |
 | 3 | **DRAFT-030** | Restores `SC2086` coverage, which `.shellcheckrc` currently disables repository-wide — so it should precede the six Android and Windows scripts, not follow them. Also owns the guest-filename normalizer. |
 | 4 | **DRAFT-010** | Moved ahead of DRAFT-036 because it gates it. DRAFT-036's PLAN/CREATE wait on DRAFT-010's C-vs-Python decision, which determines whether the fix is a cross-process lease in `dirwatch.c` or an allocator designed into its replacement. CONF-11 raises its value independently: with engine work near-term, this becomes input to that work. |
 | 5 | **DRAFT-036** | P0 **correctness** defect, not tuning: `slots_busy[]` is process-local and the slot index *is* the VLAN, so a second watcher allocates VLAN 1 too and both clones land on `xenbr1.1`. Per-OS watchers cannot run concurrently until this lands — it is a prerequisite of issue #3's OS-selection mechanism, not a follow-up to it. |

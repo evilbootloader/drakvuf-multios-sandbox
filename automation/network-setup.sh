@@ -133,13 +133,23 @@
 # and DRAKVUF_INPUT6 for IPv6 -- so the whole posture is readable as a unit
 # with `iptables -S DRAKVUF_ISOLATION` and removable in five flushes.
 #
+# Every one of those chains is TERMINAL for analysis-VLAN traffic as of
+# DRAFT-029 (2026-08-12): no packet with xenbr1.<n> as its input or output
+# interface reaches FORWARD's or INPUT's default policy, in either address
+# family. The posture above therefore holds whatever `-P FORWARD` and
+# `-P INPUT` are set to. This script sets neither, deliberately -- see
+# section 6.
+#
 # Idempotent: the chains are flushed and rebuilt on every run, so repeated
 # invocations converge instead of appending. run_analysis-ubuntu.sh calls
-# this on every launch, and now aborts if it fails.
+# this on every launch, and now aborts if it fails. An aborted run leaves
+# DRAKVUF_ISOLATION denying rather than empty; that is the on_exit trap
+# below, and it will cut the network of any clone already running.
 #
-# NOT covered, and still open: no terminal policy is set on FORWARD or
-# INPUT themselves (DRAFT-029), and clone containment has never been
-# verified by a live two-clone test (DRAFT-013).
+# NOT covered, and still open: Android's reaction to an unreachable gateway
+# is untested (DRAFT-013 -- it does connectivity probing and may mark the
+# network unvalidated, which Ubuntu never checks), and clones retain
+# deliberate unrestricted Internet egress (DRAFT-022, roadmap risk #13).
 #
 # Usage: ./network-setup.sh <number of clone slots>
 
@@ -172,7 +182,40 @@ step="startup"
 # quoted trap argument and reports SC2154 on it.
 on_exit() {
     rc=$?
-    [ "$rc" -eq 0 ] || echo "network-setup.sh: FAILED during: $step (exit $rc)" >&2
+    if [ "$rc" -eq 0 ]; then
+        return 0
+    fi
+    echo "network-setup.sh: FAILED during: $step (exit $rc)" >&2
+
+    # Fail closed. Section 6 flushes DRAKVUF_ISOLATION and repopulates it;
+    # the jump from FORWARD stays installed throughout, and FORWARD's policy
+    # on this host is ACCEPT. Exiting with the chain empty would therefore
+    # permit everything the chain exists to deny -- strictly worse than the
+    # state before the run, because a populated chain has been replaced by
+    # an inert one. That is NET-01's shape a second time: a rule present,
+    # visible in `iptables -S`, and matching nothing.
+    #
+    # Denying instead cuts the network of any clone mid-analysis. That is
+    # the intended trade: a half-provisioned network that looks like it
+    # works is the failure mode this script was rewritten to stop having.
+    #
+    # `set +e` is required, not tidiness: this handler runs with -e still
+    # in effect, so a failing recovery command would abort the handler and
+    # leave exactly the state it exists to prevent.
+    set +e
+
+    # Both names are assigned below this point, so under `set -u` a bare
+    # expansion would itself fail here on any early exit -- an argument
+    # error, or a missing bridge. Before section 4 there is no chain to
+    # secure and nothing to do.
+    chain="${ISOLATION_CHAIN:-}"
+    iface="${ANALYSIS_BRIDGE:-}"
+    if [ -n "$chain" ] && [ -n "$iface" ] && iptables -S "$chain" >/dev/null 2>&1; then
+        iptables -F "$chain"
+        iptables -A "$chain" -i "$iface.+" -j DROP
+        iptables -A "$chain" -o "$iface.+" -j DROP
+        echo "network-setup.sh: $chain left DENYING all analysis-VLAN traffic; re-run to restore" >&2
+    fi
 }
 trap on_exit EXIT
 
@@ -266,10 +309,19 @@ iptables -t nat -A "$NAT_CHAIN" -o "$UPLINK_BRIDGE" -j MASQUERADE
 
 ISOLATION_CHAIN=DRAKVUF_ISOLATION
 
-step="rebuilding $ISOLATION_CHAIN"
+step="creating $ISOLATION_CHAIN"
 
 iptables -N "$ISOLATION_CHAIN" 2>/dev/null || true
-iptables -F "$ISOLATION_CHAIN"
+
+# The flush deliberately does NOT live here, unlike the other four chains.
+# It used to, and the gap between it and the first rule in section 6 spanned
+# `ip link set` plus the whole per-clone VLAN loop -- every command of which
+# is fatal under `set -eu`, and each one an exit with this chain emptied and
+# still jumped to from FORWARD. It is flushed immediately above the rules
+# that replace it instead, leaving no window a failure can land in.
+#
+# Creating the chain and installing the jump are safe here: neither is
+# destructive, and both are idempotent.
 
 # Inserted at the HEAD of FORWARD, not appended: a DROP appended below a
 # broader ACCEPT never fires.
@@ -324,14 +376,19 @@ done
 # "zero or more characters", so this matches xenbr1.1, xenbr1.2 and so on
 # but not the bridge xenbr1 itself -- which is correct, since clones attach
 # to the sub-interfaces. Matching the wildcard once keeps this chain a
-# fixed five rules whatever MAX_CLONES is; the per-VLAN form would be five
-# rules per slot, or 640 at the documented maximum of 128.
+# fixed nine rules whatever MAX_CLONES is; the per-VLAN form would be nine
+# rules per slot, or 1152 at the documented maximum of 128.
 #
 # The trade-off, recorded because DRAFT-013 may want it back: per-VLAN
 # rules would give per-VLAN packet counters, showing WHICH clone attempted
 # a blocked connection. The wildcard form gives one counter for all.
 
 step="installing isolation rules"
+
+# Flushed here rather than in section 4, immediately above the rules that
+# replace it, so no failure can exit with the chain empty. See the note
+# there and the on_exit trap.
+iptables -F "$ISOLATION_CHAIN"
 
 # Deny clone-to-clone traffic: anything arriving from an analysis VLAN and
 # not leaving via the uplink. This is the rule NET-01 was about -- it was
@@ -355,12 +412,50 @@ iptables -A "$ISOLATION_CHAIN" -i "$ANALYSIS_BRIDGE.+" ! -o "$UPLINK_BRIDGE" -j 
 # mechanisms rather than one. 169.254.0.0/16 includes 169.254.169.254, the
 # cloud metadata address malware routinely probes.
 #
-# No terminal ACCEPT or RETURN follows, deliberately: the chain falls
-# through to FORWARD's existing policy. Setting that policy is DRAFT-029's,
-# not this issue's.
+# These four must precede the ACCEPT below. A LAN destination leaves via
+# the uplink like any other, so an `-o xenbr0 -j ACCEPT` placed above them
+# would accept exactly the traffic they exist to block.
 for net in 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 169.254.0.0/16; do
     iptables -A "$ISOLATION_CHAIN" -i "$ANALYSIS_BRIDGE.+" -d "$net" -j DROP
 done
+
+# The four rules below make the chain terminal (DRAFT-029). Until 2026-08-12
+# it ended here, and clone egress was permitted by INHERITANCE: the packet
+# fell through to FORWARD's policy, which is ACCEPT on this host. Nothing in
+# automation/ set that, asserted it, or would have noticed it change --
+# anything flipping it to DROP would have killed every clone's network
+# silently, and the only symptom would be analyses that observed nothing.
+#
+# What is DELIBERATE here is stating the posture, not changing it. The
+# permit below is the same unrestricted egress the lab has always had; see
+# DRAKVUF_NAT above and roadmap risk #13 for why that is a live question.
+
+# The intended egress, stated rather than inherited.
+iptables -A "$ISOLATION_CHAIN" -i "$ANALYSIS_BRIDGE.+" -o "$UPLINK_BRIDGE" -j ACCEPT
+
+# The return path. Without it, egress still depends on FORWARD's policy,
+# because every rule above matches on the INPUT interface only and a reply
+# arrives on the uplink.
+iptables -A "$ISOLATION_CHAIN" -o "$ANALYSIS_BRIDGE.+" \
+    -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+
+# Nothing may OPEN a connection to a clone. No DNAT exists that would let
+# the Internet reach one today, so this denies a path rather than closing an
+# open one -- but it is what stops the previous rule being the only thing
+# standing between an inbound packet and the policy.
+iptables -A "$ISOLATION_CHAIN" -o "$ANALYSIS_BRIDGE.+" -j DROP
+
+# Catch-all for clone-originated traffic. Redundant today -- the chain's
+# first rule drops everything from a VLAN not leaving via the uplink, and
+# the ACCEPT above takes what does -- so it fires only if one of those is
+# ever narrowed. That is the point: terminality is a property of the chain,
+# not a conclusion a reader has to re-derive from the rules above it.
+iptables -A "$ISOLATION_CHAIN" -i "$ANALYSIS_BRIDGE.+" -j DROP
+
+# Traffic touching no analysis VLAN matches nothing here and RETURNs to
+# FORWARD untouched -- Dom0's other forwarding paths, if any, are not this
+# script's to govern. That is the whole reason this is a terminal CHAIN and
+# not a `-P FORWARD DROP`, which would apply to all of them.
 
 # --- Section 7: what a clone may reach ON Dom0 --------------------------
 
@@ -437,6 +532,11 @@ if command -v ip6tables >/dev/null 2>&1 && ip6tables -S >/dev/null 2>&1; then
     ip6tables -C FORWARD -j "$ISOLATION_CHAIN6" 2>/dev/null ||
         ip6tables -I FORWARD 1 -j "$ISOLATION_CHAIN6"
     ip6tables -A "$ISOLATION_CHAIN6" -i "$ANALYSIS_BRIDGE.+" -j DROP
+
+    # Both directions, for the same reason the IPv4 chain ends in a pair:
+    # matching the input interface alone leaves anything addressed TO a
+    # clone falling through to FORWARD's policy, which is ACCEPT here too.
+    ip6tables -A "$ISOLATION_CHAIN6" -o "$ANALYSIS_BRIDGE.+" -j DROP
 
     # FORWARD alone would miss the actual hole -- the link-local path to
     # Dom0 itself traverses INPUT.
