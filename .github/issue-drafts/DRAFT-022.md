@@ -40,6 +40,53 @@ and `docs/architecture/networking.md`'s `offline` / `simulated` /
 policy. That contradiction is currently resolved in the checklist by a note
 saying the row needs re-scoping. It actually needs this issue.
 
+## Answered 2026-08-12 — the operating entity and the uplink
+
+PLAN steps 1 and 2 below are the inputs to every other question here, not
+outputs of it. Both are now answered by the maintainer:
+
+- **Operating entity: personal.** No company, university, CERT or other
+  institution stands behind this lab.
+- **Uplink: a residential line.** `xenbr0` reaches the Internet through a
+  domestic consumer connection.
+
+Neither answer is neutral, and together they move where the risk actually
+sits.
+
+**The controlling constraint is contractual, not criminal.** The research
+below concludes that holding and executing samples does not engage
+Art. 264 ter CP, and that conclusion is unchanged. But a residential ISP
+contract is the one instrument in this picture that (a) almost certainly
+prohibits this outright, (b) needs no prosecutor, court or complainant to
+be enforced, and (c) is enforced by a party that already knows exactly who
+the subscriber is. The realistic failure mode is an abuse report followed
+by disconnection — of a household's line, not of a lab's.
+
+**Personal operation removes the shields.** Art. 264 quater CP's corporate
+liability is irrelevant with no legal person involved. That sounds
+favourable and is not: it means civil negligence exposure under `Código
+Civil` art. 1902 lands on an individual, with no corporate veil, no
+institutional insurance and no employer's legal department. It also weakens
+the Recital 49 framing — the «providers of security technologies and
+services» legitimate interest is still arguable, but it is being argued by
+a private individual rather than by a CSIRT, and counsel should be asked
+whether that distinction bites.
+
+**What this does to Objective question 2.** "Under what conditions may a
+sample be detonated with live Internet access?" now has a defensible
+provisional answer that does not need counsel: **not on this uplink.** That
+is a contractual and practical finding rather than a legal opinion, and it
+does not discharge this issue — but it is actionable today, and it is the
+position the project should operate under until counsel says otherwise.
+The consequence for engineering is that the `offline` network mode stops
+being M2 design work and becomes the prerequisite for the first non-benign
+sample; see the Dependencies section.
+
+Still open, and needing the actual document rather than the generic prior:
+**what this specific contract says.** "Residential lines usually prohibit
+this" is an assumption until the subscriber's own terms are read.
+Acceptance criterion 2 stays open until they are.
+
 ## What the research found (2026-08-11)
 
 ### Possession and analysis of malware — the favourable finding
@@ -133,7 +180,10 @@ Not law, but the risk that most reliably materialises:
 
 - **ISP acceptable-use terms.** Residential and most business connections
   prohibit this outright. The realistic failure is an abuse report followed
-  by disconnection, not a prosecution.
+  by disconnection, not a prosecution. *(Confirmed applicable 2026-08-12:
+  the uplink **is** a residential line — see "Answered 2026-08-12" above.
+  This bullet was written as one exposure among several; it is now the
+  binding one.)*
 - **Blocklisting** of the lab's address.
 - **Cloud provider AUPs** forbid live malware execution — relevant if the
   L0 host ever moves off-premises.
@@ -144,6 +194,16 @@ Not law, but the risk that most reliably materialises:
 - **Blocks** any non-benign sample execution with networking enabled.
 - Informs DRAFT-013 (containment verification) and the network-mode work in
   `docs/architecture/networking.md`.
+- **Added 2026-08-12:** the `offline` mode in
+  `docs/architecture/networking.md`'s "Proposed containment design" is
+  currently listed as undecided M2 design work and is **unowned — no draft
+  implements it**. On a residential uplink it is the mechanism that makes
+  the first non-benign run possible at all, so it needs an owner
+  independently of this issue's legal answer. It is also the smallest of
+  the three proposed modes: `network-setup.sh` already isolates the whole
+  posture in dedicated chains, and `offline` is the `MASQUERADE` in
+  `DRAKVUF_NAT` not being installed. `simulated` and `controlled-internet`
+  need FakeNet-NG and stay design work.
 - Interacts with DRAFT-018 (result schema) — retention and access control
   are schema-adjacent decisions.
 
@@ -157,14 +217,18 @@ Not law, but the risk that most reliably materialises:
 
 # PLAN
 
-1. **Decide the operating entity before consulting anyone.** Personal
-   operation, a company, or affiliation with a university or CERT changes
-   liability, insurance and how an abuse report is handled. This is the
-   input to every other question, not an output.
-2. **Establish the connection's status.** Which line does `xenbr0` reach the
-   Internet through, and what do its terms say? A residential contract makes
-   most of the rest moot until it changes.
+1. ~~**Decide the operating entity before consulting anyone.**~~
+   **Answered 2026-08-12: personal operation.** See "Answered 2026-08-12"
+   above for what that changes — principally that civil exposure has no
+   corporate or institutional shield behind it.
+2. ~~**Establish the connection's status.**~~ **Half-answered 2026-08-12:
+   it is a residential line.** The remaining half — what that contract's
+   terms actually say — is unread, and is the one piece of evidence this
+   issue can gather without a lawyer. Obtain the subscriber terms and quote
+   the relevant clause verbatim, as the legal provisions above are quoted.
 3. Prepare a written brief for Spanish counsel from the findings above.
+   The brief now leads with the entity and uplink facts rather than asking
+   about them.
 4. Engage counsel with competence in `derecho penal informático` **and**
    data protection — they are frequently not the same person.
 5. Record the answers as a decision document, not as advice-in-an-inbox.
@@ -204,8 +268,11 @@ implementing change is separate work with its own review.
 
 # Acceptance criteria
 
-- [ ] The operating entity is decided and recorded.
-- [ ] The uplink's contractual position is established in writing.
+- [x] The operating entity is decided and recorded — **personal operation,
+      2026-08-12**.
+- [ ] The uplink's contractual position is established in writing. *(Line
+      type established 2026-08-12: residential. The terms themselves are
+      still unread, which is what this criterion asks for.)*
 - [ ] Spanish counsel has reviewed and responded, in writing.
 - [ ] `docs/architecture/legal-compliance.md` exists and covers all five
       CREATE items.
