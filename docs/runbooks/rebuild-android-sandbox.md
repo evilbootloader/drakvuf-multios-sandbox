@@ -279,6 +279,57 @@ Renderer survived 60s after opening an app? Yes
 Tombstones / system_server_watchdog entries: Not checked
 ```
 
+> ### ANNOTATION 2026-08-14 (DRAFT-013) — two things about step 7
+>
+> Not edits. The transcript above stands; these are defects in the
+> *procedure* that DRAFT-013 found while building on it.
+>
+> **1. `android_test.cfg` attaches to the bare bridge, so no isolation
+> applies.** The config is described as "same as `android_sandbox.cfg` but
+> `name` and `disk`" — which means it inherits `bridge=xenbr1`.
+>
+> The isolation rules match the `xenbr1.+` wildcard. That matches
+> `xenbr1.1`, `xenbr1.2` and so on, and **deliberately does not match
+> `xenbr1` itself** (`automation/network-setup.sh:369-372`). A guest on the
+> bare bridge is therefore covered by **no isolation rule at all**.
+>
+> Consequence for the 2026-08-11 run: harmless. It was a boot and anchor
+> check, no sample was involved, and the golden LV was untouched. Recorded
+> because anyone repeating the procedure falls into the same trap, and
+> because it is a concrete instance of the gap DRAFT-038 exists to close —
+> nothing checked the attachment, and nothing would have.
+>
+> **Next time, specify the VLAN explicitly and confirm before unpausing:**
+>
+> ```bash
+> # in android_test.cfg
+> vif = [ 'type=ioemu,model=e1000,script=vif-openvswitch,bridge=xenbr1.1' ]
+>
+> sudo ovs-vsctl show      # the vif must show `tag: 1`, not a bare port
+> ```
+>
+> `clone-ubuntu.pl:229` rewrites the vif exactly this way, and
+> `clone-android.pl` will inherit the pattern — but this *manual* procedure
+> does not.
+>
+> **2. The saved template carries the golden VM's LAN identity.** Every clone
+> restored from `android_sandbox.bak` boots believing it is `192.168.1.122`,
+> the address the golden VM held on `xenbr0`, and ARPs for a residential
+> gateway for its first ~45 seconds on the analysis VLAN. Measured in
+> `docs/runbooks/verify-android-isolation.md`, finding F4.
+>
+> It is captured into the **memory image** at `xl save` time, not into a
+> file — `/data/misc/ethernet/ipconfig.txt` is not written — so it cannot be
+> fixed by editing the golden's filesystem. **The place to fix it is here:**
+> clear or neutralise the guest's network configuration before step 6's
+> `xl save`, so the template starts from no network rather than from the
+> wrong one.
+>
+> Not done in this run, and not urgent — `preconfig-android.sh` overwrites
+> it and containment held throughout. Worth doing at the next rebuild, and
+> worth a line in the result schema either way so the ARP noise is not
+> mistaken for sample behaviour.
+
 ## Step 8 — Confirm the golden VM is untouched
 
 ```bash

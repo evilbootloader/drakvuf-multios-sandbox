@@ -21,9 +21,9 @@
 | Volume group | `vg-root` |
 | Isolated bridge | `xenbr1` |
 | Start date | 2026-08-06 |
-| Last update | 2026-08-11 |
-| Current phase | Phase 2 — Android automation scripts (not started). Phase 1 complete: template rebuilt and restore-validated 2026-08-11, issue #7 |
-| Current blocker | **Android's reaction to the new isolation rules is untested.** §1.3's table is filled as of 2026-08-11 (DRAFT-028) and the mechanism is fixed and measured — but on *Ubuntu* clones. The rules match on interface so they apply identically, yet Android does connectivity probing and may mark a network unvalidated when it cannot reach its gateway, which Ubuntu never checks. First boot of an Android clone after this lands is the case to watch (DRAFT-013). Separately, clones retain deliberate NAT egress, so no non-benign sample should run with networking enabled until the `offline`/`simulated` modes exist |
+| Last update | 2026-08-14 |
+| Current phase | Phase 2 — Android automation scripts (not started, **now unblocked**). Phase 1 complete: template rebuilt and restore-validated 2026-08-11 (issue #7), ROM rebuilt with EthernetConfig and re-validated 2026-08-14 (DRAFT-013) |
+| Current blocker | **None for containment — cleared 2026-08-14 (DRAFT-013, `docs/runbooks/verify-android-isolation.md`).** An Android clone booted on `xenbr1.1` under the current rules, probed its gateway with ICMP, had 10 packets dropped by `DRAKVUF_INPUT`, and validated the network anyway — the posture is robust rather than lucky, and no ICMP exemption is needed. Failed IPv6 provisioning did not change its verdict. Connectivity parity was established in the same run and is in §1.6. **Two constraints still bind Phase 2:** `preconfig-android.sh` must set `private_dns_mode off` or the pcap records DoT instead of DNS queries (§1.6), and clones retain deliberate NAT egress, so no non-benign sample should run with networking enabled until the `offline`/`simulated` modes exist (DRAFT-022) |
 
 ### Status legend
 
@@ -430,14 +430,27 @@ Boot result: Successful
 - [x] Confirm the sandbox VIF is attached to the expected bridge or OVS VLAN port.
 - [x] Confirm there is no route from the analysis network to the management
   network. *(2026-08-11, DRAFT-028. Measured on Ubuntu clones — the
-  mechanism is shared and matches on interface, not on guest OS.)*
+  mechanism is shared and matches on interface, not on guest OS.
+  **Re-measured on an Android clone 2026-08-14, DRAFT-013:** the LAN probe
+  was dropped by `DRAKVUF_ISOLATION` rule 4 — `192.168.0.0/16`, 2 packets —
+  and `ping` to a LAN host returned 100% loss from inside the guest.)*
+- [x] **Confirm Android tolerates the rules.** *(2026-08-14, DRAFT-013 —
+  `docs/runbooks/verify-android-isolation.md`. It probed the gateway with
+  ICMP, `DRAKVUF_INPUT` dropped 10 packets, and it reported "Internet
+  through Ethernet" regardless. This is the row §1.3 could not fill while
+  every measurement came from Ubuntu.)*
 - [ ] ~~Confirm there is no Internet access by default.~~ **Premise
   conflicts with the decided policy** — clones have deliberate NAT egress.
   Needs re-scoping against the network modes in
   `docs/architecture/networking.md`; see note 2 below. Not a failed test.
 - [x] Confirm IPv6 is either isolated or disabled. *(2026-08-11: isolated.
   Blanket DROP in `DRAKVUF_ISOLATION6`/`DRAKVUF_INPUT6`, counter-confirmed.
-  It was previously neither — no v6 rules existed at all.)*
+  It was previously neither — no v6 rules existed at all. **2026-08-14: and
+  Android does not mind.** It sent router solicitations to `ff02::2` from
+  16:14 to 16:31, all 8 dropped by `DRAKVUF_INPUT6`, obtained no v6 address,
+  and still validated the network with no visible complaint. `ISOLATION6`
+  stayed at 0, correctly — RS is link-local multicast to Dom0, so it is
+  `INPUT`, not `FORWARD`.)*
 - [x] Record the intended per-clone VLAN design. *(One `xenbr1.<vlan>`
   sub-interface per clone slot, `172.16.<vlan>.1/24` gateway on Dom0,
   clone at `.2`. `docs/architecture/networking.md`.)*
@@ -795,6 +808,86 @@ Restore result: Correct
 > **nothing forces this record to keep up with the artifact it describes**;
 > the value went stale through ordinary iteration and no mechanism noticed.
 > That is the half of roadmap risk #12 this run actually evidences.
+
+---
+
+## 1.6 Connectivity parity with Ubuntu — the DRAFT-016 specification
+
+**Measured 2026-08-14 on an Android clone.** Full transcript and evidence in
+`docs/runbooks/verify-android-isolation.md`. This section is what
+`preconfig-android.sh` is written from; it is a specification, not a summary.
+
+### The result: one framework call replaces the whole `ip` chain
+
+On the pre-EthernetConfig image, five commands were needed — including
+`ip route replace … table eth0`, Android's per-network policy routing, which
+nothing in the Ubuntu implementation hints at and which a translated script
+would never have produced. The ROM was rebuilt with **Bliss-Bass
+EthernetConfig** as a platform-signed privileged app
+(`docs/android_setup_good.md`), and that entire chain is now subsumed.
+
+| Step | Ubuntu (`preconfig-ubuntu.sh:206`) | Android — measured | Still needed? |
+|---|---|---|---|
+| privilege | `sudo` on each command | already root; no `sudo` binary, and upstream's `su -c` is dropped too | **n/a** |
+| interface | `eth0` | `eth0` | confirmed |
+| **prerequisite** | *(none)* | **import `/data/system/environ/classpath`** — without it `app_process64` aborts with exit 134 before `main()` | **YES** |
+| link up | *(implicit)* | done by the framework | No |
+| flush | `ip addr flush dev eth0` | not needed | No |
+| address | `ip addr add 172.16.<vlan>.2/24 dev eth0` | helper's `STATIC` args | No |
+| route | `ip route replace default via 172.16.<vlan>.1 dev eth0` | helper's `STATIC` args | No |
+| **route (2nd)** | *(none)* | `table eth0` populated by the framework | No — the old trap is gone |
+| resolver | `echo 'nameserver …' > /etc/resolv.conf` | helper's `STATIC` args; **no file equivalent exists on Android** | No |
+| persistence | *(n/a)* | `/data/misc/ethernet/ipconfig.txt` **not** written — configured live, not persisted | Correct for a disposable clone |
+| **private DNS** | *(n/a)* | `settings put global private_dns_mode off` — **not** handled by EthernetConfig | **YES** |
+| shell for the chain | `/bin/sh` | `/system/bin/sh` | confirmed |
+| verification | `getent hosts google.com` | `ping -c2 google.com` — `getent` absent, bionic ships no such tool | confirmed |
+
+### The sequence
+
+```sh
+# 1. ART classpath. Measured NOT already present on this image, so required.
+while IFS=' ' read -r action name value; do
+    [ "$action" = "export" ] && export "$name=$value"
+done < /data/system/environ/classpath
+
+# 2. Address, prefix, gateway AND resolver in one framework call.
+#    Note app_process64, not app_process.
+APK="$(pm path com.example.ethernetconfig | sed 's/^package://')"
+CLASSPATH="$APK" /system/bin/app_process64 / \
+    com.example.ethernetconfig.network.EthernetConfigurator \
+    STATIC eth0 172.16.<vlan>.2 24 172.16.<vlan>.1 "$GUEST_NAMESERVER" none
+
+# 3. Force plaintext DNS. Not optional -- see below.
+settings put global private_dns_mode off
+```
+
+Expected: `SUCCESS` from (2), exit 0. Verified from Dom0 rather than inferred
+from the guest — the pcap shows `A? connectivitycheck.gstatic.com` leaving
+for `1.1.1.1` and being answered.
+
+> **`private_dns_mode off` is a required step, not a tuning knob.** Android
+> defaults to `opportunistic` DoT and `1.1.1.1` supports it, so a clone left
+> alone resolves over TLS to port 853 and the per-sample pcap records an
+> encrypted stream instead of the domains a sample looked up — silently,
+> with nothing failing. Evidence and the Dom0-side alternative are in
+> `docs/architecture/networking.md`.
+
+> **The single-argv form is untested.** `injector -m execproc` is
+> execve-direct with no guest shell (issue #2), and the classpath import is a
+> `while` loop, so all three commands must go to `/system/bin/sh -c '…'` as
+> one argument. The three are evidenced individually from the console;
+> collapsing them is DRAFT-016's work and the quoting is the risk.
+
+### What `preconfig-android.sh` must not assume
+
+- **That the clone starts from a clean network state.** It does not. A
+  restored clone holds the *golden* VM's LAN identity (`192.168.1.122`) until
+  this runs, and spends its first seconds ARPing for a residential gateway.
+  Containment held — the traffic reached nothing — but anything reading the
+  interface before configuration sees the wrong network, and the ARP is noise
+  in every Android pcap. Runbook finding F4.
+- **That the classpath import can be dropped.** Keep it unconditionally; it
+  is idempotent and costs nothing.
 
 ---
 
