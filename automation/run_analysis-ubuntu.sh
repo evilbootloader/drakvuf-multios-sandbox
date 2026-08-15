@@ -24,6 +24,13 @@ REPO_ROOT="$(
     pwd
 )"
 
+# Host-global values first, per-OS second, so a pipeline-<os>.env that
+# wrongly redefines one of them would at least be visibly last-wins rather
+# than silently first-wins. C4 forbids it defining any of them at all;
+# this ordering is a backstop, not the check.
+# shellcheck source=automation/platform.env
+. "$SCRIPT_DIR/platform.env"
+
 # shellcheck source=automation/pipeline-ubuntu.env
 . "$SCRIPT_DIR/pipeline-ubuntu.env"
 

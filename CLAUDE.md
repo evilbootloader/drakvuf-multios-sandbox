@@ -79,13 +79,25 @@ subfolders):
   `cleanup.sh`, with `tcpdump.sh` started on a side thread. The preconfig
   phase is guarded by a 60s timeout and the drakvuf-trace phase by a 180s
   timeout; either timeout triggers `cleanup.sh` and a fresh clone retry.
-- `pipeline-ubuntu.env` — sourced config holding every per-OS value the
+- `platform.env` — sourced config holding the **host-global** values:
+  `ANALYSIS_BRIDGE`, `UPLINK_BRIDGE`, `SUBNET_PREFIX`, `VG_NAME`. One Dom0
+  has one of each, so these are deliberately *not* per-OS: three pipeline
+  files free to disagree about the bridge is not a loud misconfiguration,
+  it is a clone attached to a bridge with no isolation rules. Added by
+  DRAFT-028b (2026-08-15); sourced by `network-setup.sh` and
+  `run_analysis-<os>.sh`. C4 forbids `pipeline-<os>.env` from redefining
+  any of these, and the check is a grep — see the file's own header.
+  Wiring `cleanup.sh` and `tcpdump.sh` to it is still open (DRAFT-011),
+  and the `misc/*.cfg` bridge literals stay literal because a Xen config
+  cannot source shell.
+- `pipeline-ubuntu.env` — sourced config holding every **per-OS** value the
   scripts below need (sandbox domain, `.cfg`, profile, saved state,
   injection PID, clone count, malware directories, guest user and staging
-  dir, resolver). Added in issue #4. Each entry is `${NAME:-default}`, so
-  the environment wins — that is how CI overrides paths without patching
-  files. A second OS pipeline is a copy of this one file plus its own
-  `run_analysis-<os>.sh`.
+  dir, resolver, `CLONE_LV_SIZE`). Added in issue #4. Each entry is
+  `${NAME:-default}`, so the environment wins — that is how CI overrides
+  paths without patching files. A second OS pipeline is a copy of this one
+  file plus its own `run_analysis-<os>.sh`. `ANALYSIS_BRIDGE` used to live
+  here and moved to `platform.env` in DRAFT-028b; do not restore it.
 - `clone.pl` — **shared by all three OS pipelines**, not per-OS. LVM
   copy-on-write snapshot + `xl restore` of the sandbox template's saved
   memory image, producing a disposable clone. The restore path is derived

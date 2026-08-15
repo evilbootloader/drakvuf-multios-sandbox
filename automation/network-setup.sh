@@ -262,14 +262,36 @@ CLONES="$1"
 
 # --- Section 2: preconditions -------------------------------------------
 
-# Named once here rather than repeated. This is deliberately LOCAL to this
-# script and is not the parameterization DRAFT-009 owns: xenbr1 is still
-# hard-coded across clone.pl, preconfig-ubuntu.sh, tcpdump.sh,
-# drakvuf-ubuntu.sh, cleanup.sh and all four misc/*.cfg, and
-# ANALYSIS_BRIDGE in pipeline-ubuntu.env has exactly one consumer.
-# Changing the value here renames nothing elsewhere.
-UPLINK_BRIDGE=xenbr0
-ANALYSIS_BRIDGE=xenbr1
+# Sourced from automation/platform.env as of DRAFT-028b, replacing the two
+# literals that used to sit here. These are host-global: one Dom0 has one
+# analysis bridge and one uplink, and two OS pipelines disagreeing about
+# either is not a loud misconfiguration -- it is a clone on a bridge with
+# no isolation rules, which looks like a working analysis.
+#
+# Still true, and the reason this is only half a fix: xenbr1 remains a
+# literal in all four misc/*.cfg files. Those are Xen configs and cannot
+# source shell, so changing ANALYSIS_BRIDGE alone does not move a clone's
+# vif -- clone.pl rewrites that line at clone time regardless of what the
+# .cfg said, which is what makes the divergence harmless rather than fixed.
+#
+# Sourced with $0, not ${BASH_SOURCE[0]}: this script runs under dash, and
+# the bash-only form evaluates empty WITHOUT failing, which in issue #4
+# silently turned a script directory into $PWD.
+SETUP_DIR="$(cd -- "$(dirname -- "$0")" && pwd)"
+
+# Guarded rather than sourced blind: `set -u` is in effect, so a missing
+# file would otherwise surface as an unbound-variable error several
+# sections later, naming the wrong problem.
+[ -r "$SETUP_DIR/platform.env" ] || fail \
+    "cannot read $SETUP_DIR/platform.env -- the host-global config this
+  script has needed since DRAFT-028b. A checkout is missing a file."
+# shellcheck source=automation/platform.env
+. "$SETUP_DIR/platform.env"
+
+for required in ANALYSIS_BRIDGE UPLINK_BRIDGE SUBNET_PREFIX; do
+    eval "value=\${$required:-}"
+    [ -n "$value" ] || fail "platform.env defines no $required"
+done
 
 step="checking $ANALYSIS_BRIDGE exists"
 
@@ -384,10 +406,16 @@ while [ "$i" -le "$CLONES" ]; do
     # `set -e` would now abort the whole script on a normal re-run.
     #
     # The spaces around the pattern and the escaped dots stop
-    # 172.16.1.1/24 matching inside 172.16.11.1/24.
+    # 172.16.1.1/24 matching inside 172.16.11.1/24. The dots are escaped
+    # by substitution rather than written out, because SUBNET_PREFIX is
+    # configurable as of DRAFT-028b and an unescaped `.` in a grep pattern
+    # is a wildcard -- which would make the guard match addresses that are
+    # not this one and skip an `ip addr add` that was needed.
     step="addressing $vlan_if"
-    ip addr show dev "$vlan_if" | grep -q " 172\.16\.$i\.1/24 " ||
-        ip addr add "172.16.$i.1/24" dev "$vlan_if"
+    vlan_addr="$SUBNET_PREFIX.$i.1/24"
+    vlan_addr_re="$(printf '%s' "$vlan_addr" | sed 's/\./\\./g')"
+    ip addr show dev "$vlan_if" | grep -q " $vlan_addr_re " ||
+        ip addr add "$vlan_addr" dev "$vlan_if"
 
     step="bringing $vlan_if up"
     ip link set "$vlan_if" up

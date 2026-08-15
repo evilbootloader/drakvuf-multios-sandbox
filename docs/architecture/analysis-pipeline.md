@@ -550,14 +550,25 @@ ignored:
 - **DRAFT-036 before any two watchers run at once** — unchanged, and a
   correctness prerequisite rather than tuning.
 
-> **Open: who creates `platform.env`.** Decision 2 is a code change, and
-> issue #6 does not make code changes. Proposed, on the principle that each
-> file's existing owner does its own wiring: **DRAFT-028** creates
-> `platform.env` and wires `network-setup.sh` (it is already rewriting that
-> file); **DRAFT-033** wires `clone-*.pl`, whose acceptance criteria already
-> require parameterizing the snapshot size; **DRAFT-011** wires `cleanup.sh`
-> and `tcpdump.sh`, where it is already fixing the `ps | grep` matches. Needs
-> confirming before it is treated as assigned.
+> **~~Open:~~ Settled — who creates `platform.env`.** Decision 2 is a code
+> change, and issue #6 does not make code changes. Each file's existing
+> owner does its own wiring: **DRAFT-028b** creates `platform.env` and wires
+> `network-setup.sh`; **DRAFT-033** wires `clone.pl`, whose acceptance
+> criteria already require parameterizing the snapshot size; **DRAFT-011**
+> wires `cleanup.sh` and `tcpdump.sh`, where it is already fixing the
+> `ps | grep` matches.
+>
+> **Confirmed 2026-08-15, and the first part is done.**
+> `automation/platform.env` exists and holds `ANALYSIS_BRIDGE`,
+> `UPLINK_BRIDGE`, `SUBNET_PREFIX` and `VG_NAME`; `network-setup.sh` and
+> `run_analysis-ubuntu.sh` source it, and `ANALYSIS_BRIDGE` has left
+> `pipeline-ubuntu.env`. The other two wirings are still open.
+>
+> The "b" is not cosmetic: the proposal above justified DRAFT-028 on the
+> grounds that it *"is already rewriting that file"*, which stopped being
+> true when DRAFT-028 deployed on 2026-08-11. Scope added to landed work
+> does not land, so this went to a follow-on numbered on the DRAFT-026a/b
+> precedent.
 
 ## Decided: OS-independent job/result state model (issue #3, 2026-08-09)
 
