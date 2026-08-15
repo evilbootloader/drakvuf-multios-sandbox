@@ -63,6 +63,34 @@ for asset in "$DOMAIN_CONFIG" "$KERNEL_PROFILE" "$SAVED_STATE"; do
     fi
 done
 
+# --- Concurrency guard --------------------------------------------------
+#
+# KNOWN GAP (DRAFT-036), enforced rather than documented and hoped for.
+# dirwatch derives each clone's VLAN from its worker-slot index and the
+# slot array is process-local, so a second dirwatch allocates VLANs
+# 1..MAX_CLONES exactly as the first one did. Two pipelines then share
+# gateway addresses, VLAN sub-interfaces and isolation rules, and the only
+# symptom is analyses interfering with each other.
+#
+# THIS CHECK MUST EXIST IN EVERY LAUNCHER OR IT PROTECTS NOTHING. Added to
+# Ubuntu's at the same time as Android's (DRAFT-015): a guard only in the
+# newer launcher would still let Ubuntu be started second, into the same
+# collision, which is the case an operator is most likely to hit.
+#
+# A pgrep is a weak check -- it races, and it cannot see a watcher on
+# another host -- but the failure it prevents is silent cross-contamination
+# between two malware analyses. It matches on the shared clone.pl path,
+# which every launcher passes to dirwatch. Remove it when DRAFT-036 lands a
+# host-global VLAN allocator, not before.
+if pgrep -f "[d]irwatch .* $REPO_ROOT/automation/clone.pl" >/dev/null 2>&1; then
+    echo "run_analysis-ubuntu.sh: another dirwatch is already running from" >&2
+    echo "  this checkout. Its clones use VLANs 1..MAX_CLONES and so would" >&2
+    echo "  these -- they would collide on gateway addresses and isolation" >&2
+    echo "  rules, and nothing would report it (DRAFT-036)." >&2
+    echo "  Stop the running launcher first." >&2
+    exit 1
+fi
+
 # Runtime data directories, one level per target OS. Created here so a
 # fresh Dom0 needs no manual mkdir beyond the three top-level
 # /malware_* directories from the setup guide. Not repo-relative and

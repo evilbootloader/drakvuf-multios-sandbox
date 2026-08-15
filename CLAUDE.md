@@ -192,9 +192,26 @@ these files as missing entirely; that was wrong — `misc/` had simply not
 been checked. Always check for a `misc/` directory before concluding a
 referenced file doesn't exist anywhere in this repo.
 
-Android equivalents (`clone-android.pl`, `preconfig-android.sh`,
-`drakvuf-android.sh`, `run_analysis-android.sh`) do not exist yet — this is
-the Phase 2 gap the checklist tracks. Do not assume they are present.
+Android's own files, as of 2026-08-15:
+
+- `pipeline-android.env` and `run_analysis-android.sh` — **exist**
+  (DRAFT-015). `CLONE_LV_SIZE=32G`, `GUEST_STAGING_DIR=/data/local/tmp`,
+  `INJECTION_PID=3164`.
+- `preconfig-android.sh` and `drakvuf-android.sh` — **do not exist yet**
+  (DRAFT-016). `run_analysis-android.sh` refuses to start without them
+  rather than launching a `dirwatch` that fails once per sample forever.
+- `clone-android.pl` — **will never exist.** The clone step is the shared
+  `clone.pl`; see its entry above and C1/C2.
+
+Nothing Android has been executed on Dom0. The launcher and its config are
+written but unrun, so treat them as untested code rather than as a working
+pipeline.
+
+**Neither launcher may run while the other does** — `dirwatch` derives each
+clone's VLAN from a process-local worker-slot index, so two watchers
+allocate the same VLANs and share gateway addresses and isolation rules
+with no symptom but interference. Both launchers now refuse to start if
+another is running (DRAFT-036 owns the real fix, a host-global allocator).
 
 **`automation/` now mirrors the working Dom0 host** as of 2026-08-08: the
 tested production scripts were copied in wholesale, resolving the repo↔host
