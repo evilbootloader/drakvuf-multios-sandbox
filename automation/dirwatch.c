@@ -666,6 +666,36 @@ restart:
     {
         printf("[%i] Finished processing %s\n", start->threadid, start->input);
 
+        /*
+         * Destroy the clone on the SUCCESS path too.
+         *
+         * cleanup() used to be called only in the timeout branch below, so
+         * an analysis that completed normally left its clone RUNNING. It
+         * was torn down lazily instead -- by clone.pl, on the next sample
+         * that happened to take the same VLAN slot, which does `xl domid`
+         * and then `xl destroy` before reusing the name. That made the leak
+         * invisible on a busy queue and permanent on a quiet one.
+         *
+         * It is a containment defect rather than untidiness: between the
+         * end of the trace and the arrival of the next sample for this
+         * slot, the malware keeps executing in a clone that still has
+         * NAT'd egress to the Internet (network-setup.sh's DRAKVUF_NAT).
+         * On shutdown, every clone stays up.
+         *
+         * Both dirwatch.c and dirwatch_old.c had this, so it is inherited
+         * from the upstream tool rather than introduced by this project.
+         *
+         * BEFORE release_thread(), not after: the slot index IS the VLAN
+         * and the clone name, so releasing first would let another worker
+         * claim the slot and start cloning `<origin>-<vlan>-clone` while
+         * this domain is still being destroyed.
+         *
+         * cleanup.sh is idempotent -- `xl pause`/`xl destroy` on a gone
+         * domain and `kill` on an empty PID both discard their errors -- so
+         * the timeout branch below is unaffected and a double call is safe.
+         */
+        cleanup(start->cloneID, start->threadid+1);
+
         release_thread(start->threadid);
 
         g_mutex_clear(&start->timer_lock);

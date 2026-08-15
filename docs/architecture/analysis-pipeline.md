@@ -122,6 +122,22 @@ worker scripts in order —
 preconfig phase and a 180s timeout guards the drakvuf-trace phase; either
 timeout triggers `cleanup_script` and a fresh clone retry.
 
+`cleanup_script` also runs when the analysis **succeeds** — corrected
+2026-08-15. Until then it ran only on the timeout path, so a normally
+completed analysis left its clone running: the domain was torn down lazily
+by `clone.pl`, on the next sample that happened to claim the same VLAN
+slot. Invisible on a busy queue and permanent on a quiet one, and a
+containment defect rather than untidiness, because a finished sample kept
+executing with NAT'd egress until something displaced it. Both `dirwatch.c`
+and `dirwatch_old.c` carried it, so it came from the upstream tool.
+
+> **`cleanup.sh` still does not remove the clone's LV**, on either path —
+> it pauses and destroys the domain only. `clone.pl` removes a stale
+> snapshot when it next reuses that name, so the count is bounded by
+> `MAX_CLONES` rather than growing without limit, but one snapshot per slot
+> persists between runs. That is the state `lvs` shows on an idle Dom0
+> (`docs/runbooks/verify-android-isolation.md:975`).
+
 **Every callback is spawned as an argv vector, never as a command string**
 (DRAFT-030, 2026-08-15). The five call sites used to build
 `g_strdup_printf()` templates and pass them to
