@@ -197,11 +197,25 @@ Android's own files, as of 2026-08-15:
 - `pipeline-android.env` and `run_analysis-android.sh` — **exist**
   (DRAFT-015). `CLONE_LV_SIZE=32G`, `GUEST_STAGING_DIR=/data/local/tmp`,
   `INJECTION_PID=3164`.
-- `preconfig-android.sh` and `drakvuf-android.sh` — **do not exist yet**
-  (DRAFT-016). `run_analysis-android.sh` refuses to start without them
-  rather than launching a `dirwatch` that fails once per sample forever.
+- `preconfig-android.sh` and `drakvuf-android.sh` — **exist**
+  (DRAFT-016). The network half is one Bliss-Bass EthernetConfig call
+  rather than Ubuntu's `ip` chain, measured by DRAFT-013 and recorded as
+  `docs/checklists/android.md` §1.6. `drakvuf-android.sh` has **two
+  execution paths**, selected from the sample's own bytes: an APK
+  (ZIP containing `AndroidManifest.xml`) is `pm install`ed and launched
+  through `/system/bin/sh -c`; a native ELF is `execve`d directly, the
+  Ubuntu shape; anything else is `unsupported_type` and is not executed.
+  The selector is a structural test, deliberately **not** the state
+  model's advisory `detected_type`.
 - `clone-android.pl` — **will never exist.** The clone step is the shared
   `clone.pl`; see its entry above and C1/C2.
+
+> **No `injector` or `drakvuf` operation has ever run against an Android
+> guest.** Every Android injection in this repository — including the two
+> scripts above — is built from `--help` captured on Dom0 against
+> **Ubuntu**, or from commands run by hand at a guest console. The first
+> Dom0 step for Android is a single `writefile` of a benign file verified
+> with `readfile`, not an analysis run.
 
 Nothing Android has been executed on Dom0. The launcher and its config are
 written but unrun, so treat them as untested code rather than as a working
