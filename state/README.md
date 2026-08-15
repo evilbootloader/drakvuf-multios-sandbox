@@ -15,7 +15,7 @@ fresh checkout has somewhere to put them.
 
 ## Who reads them
 
-`automation/clone-ubuntu.pl` derives the path from its own location and
+`automation/clone.pl` derives the path from its own location and
 its `<origin domain>` argument:
 
 ```perl

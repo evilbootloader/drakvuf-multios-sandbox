@@ -111,7 +111,7 @@
 # fails with a clear message if it is missing.
 #
 # xenbr0 (uplink) and xenbr1 (analysis bridge) are project-wide fixed
-# names, hard-coded across clone-ubuntu.pl, preconfig-ubuntu.sh,
+# names, hard-coded across clone.pl, preconfig-ubuntu.sh,
 # tcpdump.sh, all four misc/*.cfg and CLAUDE.md's naming tables.
 # Renaming them here alone is not enough.
 #
@@ -264,7 +264,7 @@ CLONES="$1"
 
 # Named once here rather than repeated. This is deliberately LOCAL to this
 # script and is not the parameterization DRAFT-009 owns: xenbr1 is still
-# hard-coded across clone-ubuntu.pl, preconfig-ubuntu.sh, tcpdump.sh,
+# hard-coded across clone.pl, preconfig-ubuntu.sh, tcpdump.sh,
 # drakvuf-ubuntu.sh, cleanup.sh and all four misc/*.cfg, and
 # ANALYSIS_BRIDGE in pipeline-ubuntu.env has exactly one consumer.
 # Changing the value here renames nothing elsewhere.

@@ -75,7 +75,7 @@ subfolders):
   *is* the VLAN, and the slot array is process-local, so two instances
   would collide). See `docs/architecture/analysis-pipeline.md`.
   For each sample it calls back into the worker scripts below, in
-  order: `clone-ubuntu.pl` → `preconfig-ubuntu.sh` → `drakvuf-ubuntu.sh` →
+  order: `clone.pl` → `preconfig-ubuntu.sh` → `drakvuf-ubuntu.sh` →
   `cleanup.sh`, with `tcpdump.sh` started on a side thread. The preconfig
   phase is guarded by a 60s timeout and the drakvuf-trace phase by a 180s
   timeout; either timeout triggers `cleanup.sh` and a fresh clone retry.
@@ -86,12 +86,22 @@ subfolders):
   the environment wins — that is how CI overrides paths without patching
   files. A second OS pipeline is a copy of this one file plus its own
   `run_analysis-<os>.sh`.
-- `clone-ubuntu.pl` — LVM copy-on-write snapshot + `xl restore` of the
-  sandbox template's saved memory image, producing a disposable clone. The
-  restore path is derived via `FindBin` as `<repo root>/state/<origin>.bak`,
-  so the disk snapshot and the memory image cannot name different domains.
-  It does **not** read `pipeline-ubuntu.env` — it is Perl, invoked by
-  `dirwatch` with a fixed 3-argument contract.
+- `clone.pl` — **shared by all three OS pipelines**, not per-OS. LVM
+  copy-on-write snapshot + `xl restore` of the sandbox template's saved
+  memory image, producing a disposable clone. The restore path is derived
+  via `FindBin` as `<repo root>/state/<origin>.bak`, so the disk snapshot
+  and the memory image cannot name different domains. It does **not** read
+  `pipeline-<os>.env` — it is Perl, invoked by `dirwatch` with a fixed
+  3-argument contract — but it does read `CLONE_LV_SIZE` from the
+  environment, which `run_analysis-<os>.sh` exports from that file.
+
+  *Named `clone-ubuntu.pl` until DRAFT-015 (2026-08-15). It was renamed
+  rather than copied to `clone-android.pl` because it holds no OS-specific
+  value: everything that varies arrives on the 3-argument contract, is
+  derived from it, or comes from the environment. This amends C1/C2 in
+  `docs/architecture/analysis-pipeline.md` to "four per-OS files plus the
+  shared clone script". Do not add an OS branch to this file — add a
+  variable.*
 - `preconfig-ubuntu.sh` — stages the sample into the guest via
   `injector -m writefile` (`-B` Dom0 source, `-e` guest destination), then
   configures the clone's network. Two separate injections; delivery
@@ -108,7 +118,7 @@ subfolders):
 - `tcpdump.sh` — captures traffic on the clone's VLAN sub-interface to a
   per-sample pcap.
 - `network-setup.sh` — provisions the per-VLAN isolated networks
-  (`172.16.<vlan>.1/24` gateway per VLAN) that `clone-ubuntu.pl` and
+  (`172.16.<vlan>.1/24` gateway per VLAN) that `clone.pl` and
   `preconfig-ubuntu.sh` assume already exist. It does **not** create
   `xenbr1`, despite the name: it calls only `modprobe`/`ip`/`iptables`, and
   the OVS bridge comes from a separate one-time install step
@@ -207,9 +217,14 @@ confirm before changing):
   username `carlos`~~ — moved to `GUEST_USER` in `pipeline-ubuntu.env` in
   issue #4. Still a fixed value rather than one discovered from the guest;
   that remains open M1 work.
-- `clone-ubuntu.pl` still hard-codes `vg-root` and `xenbr1`, and
-  `network-setup.sh` the `172.16.<vlan>.0/24` scheme. Neither reads
-  `pipeline-ubuntu.env`. Open M1 work, gated on DRAFT-009.
+- `clone.pl` still hard-codes `vg-root` and `xenbr1`, and
+  `network-setup.sh` the `172.16.<vlan>.0/24` scheme. Open M1 work, gated
+  on DRAFT-009. ~~Neither reads `pipeline-ubuntu.env`.~~ — partly closed
+  2026-08-15 (DRAFT-015): `clone.pl` still reads no config *file*, but it
+  now takes `CLONE_LV_SIZE` from the environment, which
+  `run_analysis-<os>.sh` exports. `vg-root` and `xenbr1` are host-global
+  (C4) and belong in `platform.env`, so they go the same way via DRAFT-033
+  once DRAFT-028b creates that file — not into `pipeline-<os>.env`.
 - Guest DNS pointed at the clone's gateway, where nothing listens, so name
   resolution failed on every run before 2026-08-09. Now `GUEST_NAMESERVER`
   (default `1.1.1.1`). ~~Android's golden image has the same dead assumption
@@ -233,7 +248,7 @@ Do not modify the Ubuntu behavior unless required and explicitly requested.
   (C1–C10) in `docs/architecture/analysis-pipeline.md`, "Shared and per-OS
   code boundary" — not copying the Ubuntu file and editing it.** The Ubuntu
   implementation is the reference for *shape*, and it still carries known
-  defects (no exit-status checks in `clone-ubuntu.pl`, SHA-256 as the guest
+  defects (no exit-status checks in `clone.pl`, SHA-256 as the guest
   leaf name, the licence header above the shebang). Copying it copies those.
   A defect known in the template is fixed in the template before the copy is
   made.

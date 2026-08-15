@@ -968,7 +968,31 @@ Baseline commit:
 > memory into an Android clone. That one is flagged in the script's own
 > header comment.
 
-- [ ] Create `clone-android.pl` from `clone-ubuntu.pl`.
+> **Annotation 2026-08-15 (DRAFT-015) — the clone copy is cancelled, and
+> the saved-state warning above is obsolete.**
+>
+> **There is no `clone-android.pl`.** The file was renamed
+> `automation/clone.pl` and is now shared by all three pipelines: it held
+> exactly one OS-specific value, `-L64G`, which is now `CLONE_LV_SIZE` in
+> `pipeline-<os>.env`. C1/C2 in `analysis-pipeline.md` are amended to
+> match. Handed `android_sandbox 1 misc/android_sandbox.cfg`, it reproduces
+> byte-for-byte the config `verify-android-isolation.md` step 2 wrote by
+> hand — verified 2026-08-15 before the rename was made.
+>
+> The saved-state paragraph above describes behaviour issue #4 removed on
+> 2026-08-09: the path has been derived from the origin argument as
+> `<repo root>/state/<origin>.bak` since then, so a naive copy could not
+> have restored Ubuntu memory into an Android clone. Left in place as the
+> 2026-08-09 record; do not act on it.
+>
+> DRAFT-033 has **not** landed, and its constraint above still stands for
+> the remaining copies. It now applies to `clone.pl`, which makes it more
+> pressing rather than less — one file with no exit-status checks now
+> serves three pipelines.
+
+- [x] ~~Create `clone-android.pl` from `clone-ubuntu.pl`.~~ Cancelled
+      2026-08-15 — `automation/clone.pl` is shared instead. See the
+      annotation above.
 - [ ] Create `preconfig-android.sh` from `preconfig-ubuntu.sh`.
 - [ ] Create `drakvuf-android.sh` from `drakvuf-ubuntu.sh`.
 - [ ] Create `run_analysis-android.sh` from `run_analysis-ubuntu.sh`.
@@ -980,12 +1004,13 @@ Baseline commit:
 
 ```bash
 cd ~/drakvuf-tools
-cp -a clone-ubuntu.pl clone-android.pl
+# NOT run: clone-android.pl is cancelled -- automation/clone.pl is shared.
+# cp -a clone-ubuntu.pl clone-android.pl
 cp -a preconfig-ubuntu.sh preconfig-android.sh
 cp -a drakvuf-ubuntu.sh drakvuf-android.sh
 cp -a run_analysis-ubuntu.sh run_analysis-android.sh
 
-chmod 0755 clone-android.pl preconfig-android.sh drakvuf-android.sh run_analysis-android.sh
+chmod 0755 preconfig-android.sh drakvuf-android.sh run_analysis-android.sh
 ls -l *-android.*
 ```
 
@@ -1195,7 +1220,40 @@ Startup log:
 
 ---
 
-## 2.5 Implement `clone-android.pl`
+## 2.5 ~~Implement `clone-android.pl`~~ — superseded 2026-08-15
+
+> **This section no longer describes work that will be done.** DRAFT-015
+> established that the clone script holds no OS-specific value and renamed
+> `clone-ubuntu.pl` to the shared `automation/clone.pl` rather than
+> creating an Android copy. C1/C2 in `analysis-pipeline.md` are amended.
+>
+> Disposition of the eighteen "required Android changes" below, worked
+> through in `.github/issue-drafts/DRAFT-015.md`:
+>
+> - **1 was already done** — "change the saved-state path to
+>   `android_sandbox.bak`". Derived from the origin argument since issue #4
+>   (2026-08-09); passing `android_sandbox` already yields it.
+> - **1 landed with the rename** — the snapshot size, now
+>   `$ENV{CLONE_LV_SIZE}` (`clone.pl:185`), `32G` for Android against
+>   Ubuntu's `64G`, measured from the 32,00g `android_sandbox` LV.
+> - **2 are answered by evidence, not code** — "preserve disk
+>   frontend/options" and "do not blindly assume `hda`".
+>   `misc/android_sandbox.cfg:59` and `misc/ubuntu_sandbox.cfg:54` are the
+>   same line but for the LV name, and the manual clone in
+>   `verify-android-isolation.md` restored, ran 99 s and passed eleven
+>   isolation steps on `hda`.
+> - **12 belong to DRAFT-033**, which has not landed: locking, the four
+>   exit-status checks, snapshot removal on failure, the restore timeout,
+>   stdout-only-on-success, stderr diagnostics, config-path validation, and
+>   the VLAN/name validation. They apply to `clone.pl` now.
+> - **1 is owned by nobody** — "remove the temporary config after success
+>   or failure". `clone.pl:190` writes `/tmp/$clone.config` and never
+>   unlinks it. Recommended for DRAFT-033; not yet assigned.
+> - **1 was already true** — keeping the origin parameterized.
+>
+> The "manual clone test" and "clone test evidence" blocks below are still
+> the right test; run them against `clone.pl`, per DRAFT-015's TEST
+> section.
 
 ### Existing Ubuntu behavior to review
 
@@ -2473,8 +2531,8 @@ for script in *.sh; do
 done
 
 shellcheck *.sh
-perl -c clone-ubuntu.pl
-perl -c clone-android.pl
+# One shared clone script since DRAFT-015 -- there is no clone-android.pl.
+perl -c clone.pl
 
 # Note the inverted exit status: grep returns 0 when it FINDS something, so
 # a clean result here is exit 1. Written as an explicit gate rather than a

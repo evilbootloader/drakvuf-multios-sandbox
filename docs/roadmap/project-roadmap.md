@@ -10,7 +10,7 @@
 The project automates a DRAKVUF malware-analysis sandbox on
 `Proxmox/KVM → Xen Dom0 + DRAKVUF/LibVMI → {Ubuntu, Android/BlissOS, Windows}`.
 All three are **current targets**. Ubuntu automation (`automation/*-ubuntu.sh`,
-`clone-ubuntu.pl`, orchestrated by a modified `dirwatch.c`) mostly works.
+`clone.pl`, orchestrated by a modified `dirwatch.c`) mostly works.
 Android automation has real evidenced progress through
 `docs/checklists/android.md` Phase 1 (golden→sandbox clone, injection anchor,
 saved memory state), but Phase 2 onward — the actual Android scripts,
@@ -34,7 +34,7 @@ contradicted this file's own risk register two screens further down.
 
 | Was | Now |
 |---|---|
-| `Bash` non-functional in the dev container (`bwrap: No permissions to create a new namespace`), so `bash -n`/`shellcheck`/`perl -c` could not run there | Lifted. Re-confirmed working in-container on 2026-08-08, 2026-08-09 and 2026-08-11. Current results: `bash -n` and `dash -n` pass on all six `automation/*.sh`; `perl -c` passes on `clone-ubuntu.pl`; `shellcheck` 0.11.0 reports `SC1128` on five of six (licence header above the shebang — DRAFT-031) |
+| `Bash` non-functional in the dev container (`bwrap: No permissions to create a new namespace`), so `bash -n`/`shellcheck`/`perl -c` could not run there | Lifted. Re-confirmed working in-container on 2026-08-08, 2026-08-09 and 2026-08-11. Current results: `bash -n` and `dash -n` pass on all six `automation/*.sh`; `perl -c` passes on `clone.pl` (named `clone-ubuntu.pl` when those runs were made); `shellcheck` 0.11.0 reports `SC1128` on five of six (licence header above the shebang — DRAFT-031) |
 | No git repository existed | Closed as DRAFT-001; baseline commit `7764b77`. See risk #1 |
 | `gh` availability/auth unverifiable | Verified — six issues have since been published and closed with it |
 
@@ -47,11 +47,11 @@ much as `bash -n` here — the scripts execute under `dash` in production
 ## Current state (verified 2026-08-07, not assumed)
 
 **Ubuntu** — `automation/` (flat, no subfolders) contains
-`dirwatch.c, clone-ubuntu.pl, preconfig-ubuntu.sh, drakvuf-ubuntu.sh,
+`dirwatch.c, clone.pl, preconfig-ubuntu.sh, drakvuf-ubuntu.sh,
 cleanup.sh, tcpdump.sh, network-setup.sh, run_analysis-ubuntu.sh`.
 Architecture: `dirwatch.c` (GThreadPool + inotify, 15-arg CLI contract,
 60s/180s per-phase timeouts) calls
-`clone-ubuntu.pl → preconfig-ubuntu.sh → drakvuf-ubuntu.sh → cleanup.sh`
+`clone.pl → preconfig-ubuntu.sh → drakvuf-ubuntu.sh → cleanup.sh`
 plus `tcpdump.sh` on a side thread. **"Ubuntu works" is now
 execution-evidenced** (2026-08-08, issue #2): a recorded Dom0 run shows
 `ExecProc Status:Success` on `/home/carlos/Desktop/test` followed by ~359k

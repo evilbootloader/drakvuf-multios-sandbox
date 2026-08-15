@@ -7,7 +7,7 @@
 
 ## Current implementation: `automation/network-setup.sh`
 
-Provisions the isolated per-clone networking that `clone-ubuntu.pl` and
+Provisions the isolated per-clone networking that `clone.pl` and
 `preconfig-ubuntu.sh` assume already exists. **Rewritten by DRAFT-028
 (2026-08-11)**; the shape below is current.
 
@@ -152,7 +152,7 @@ flushes rather than a hunt through chains other tools also write to.
 
 This is the source of the `172.16.<VLAN>.1` gateway value used by
 `preconfig-ubuntu.sh`, and of the `xenbr1.<vlan>` interface name
-`clone-ubuntu.pl` attaches clones to and `tcpdump.sh` captures on.
+`clone.pl` attaches clones to and `tcpdump.sh` captures on.
 
 **It does not create `xenbr1`, despite being the file named
 `network-setup.sh`.** It calls only `modprobe`, `ip` and `iptables`; the

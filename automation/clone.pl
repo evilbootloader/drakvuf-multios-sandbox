@@ -110,6 +110,19 @@
 #   2. `xl restore` of the origin's previously saved memory image,
 # into a rewritten Xen config (own name, own per-VLAN vif, own disk).
 #
+# SHARED BY ALL THREE OS PIPELINES. This file was clone-ubuntu.pl until
+# DRAFT-015 (2026-08-15) and contains no OS-specific value: everything
+# that varies between Ubuntu, Android and Windows arrives either on the
+# 3-argument contract (origin, vlan, config), is derived from those, or
+# comes from the environment. That is not an accident to be worked around
+# -- it is the property that lets one file serve three pipelines. If you
+# are about to add an `if ($origin eq ...)`, add a variable instead.
+#
+# Verified against Android before the rename: handed
+# `android_sandbox 1 misc/android_sandbox.cfg`, the rewrites below produce
+# byte-for-byte what docs/runbooks/verify-android-isolation.md steps 2-3
+# wrote out by hand on 2026-08-14.
+#
 # The origin is passed as an argument (e.g. ubuntu_sandbox, not the golden
 # ubuntu) and its LVM volume must share that name. The saved memory image
 # is produced out-of-band, once per sandbox template -- see
@@ -139,7 +152,40 @@ use FindBin;
 ## Settings
 #
 # The LVM volume group
+#
+# KNOWN GAP (DRAFT-033): still hard-coded. It is host-global (C4), belongs
+# in platform.env, and reaches this file the same way CLONE_LV_SIZE below
+# already does. Left alone here because DRAFT-033 owns wiring it together
+# with the exit-status checks, and platform.env does not exist yet
+# (DRAFT-028b).
 our $lvm_vg = "vg-root";
+
+# Size of the LVM copy-on-write snapshot -- the exception store, i.e. how
+# much divergence from the origin a clone may accumulate before the
+# snapshot is invalidated. That is a function of how much the guest writes
+# during an analysis, so it is a property of the OS image and is per-OS
+# (C3): 64G for Ubuntu, 32G for Android, Windows likely more.
+#
+# Read from the environment rather than passed, because dirwatch's
+# CLONE_CMD is a fixed 3-argument contract this may not change (C9).
+# run_analysis-<os>.sh sources pipeline-<os>.env and exports this;
+# dirwatch spawns every callback with envp = NULL (dirwatch.c:178), which
+# inherits the parent environment.
+#
+# The default reproduces the literal this replaced, so an unset variable
+# behaves exactly as before the value was parameterized. Note that this
+# makes a lost value INVISIBLE rather than fatal: an Android clone built
+# at 64G works, and merely over-allocates. Check `lvs` reports the size
+# you expect rather than inferring it from a clone that came up.
+#
+# Empty is treated as unset, matching the ${NAME:-default} idiom every
+# pipeline-<os>.env entry uses. Not cosmetic: `//` alone is defined-or, so
+# an exported-but-empty value would interpolate to `-L` with no argument
+# and lvcreate would take the device path as its size operand.
+our $clone_lv_size =
+    (defined $ENV{CLONE_LV_SIZE} && length $ENV{CLONE_LV_SIZE})
+        ? $ENV{CLONE_LV_SIZE}
+        : "64G";
 
 # Clone network bridge name
 our $clone_bridge = "xenbr1";
@@ -277,7 +323,7 @@ sub clone {
         `$lvremove -f /dev/$lvm_vg/$clone 2>&1`;
     }
 
-    `$lvcreate -s -n $clone -L64G /dev/$lvm_vg/$origin 2>&1`;
+    `$lvcreate -s -n $clone -L$clone_lv_size /dev/$lvm_vg/$origin 2>&1`;
 
 
     my $saved_state = "$FindBin::RealBin/../state/$origin.bak";

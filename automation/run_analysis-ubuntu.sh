@@ -27,6 +27,18 @@ REPO_ROOT="$(
 # shellcheck source=automation/pipeline-ubuntu.env
 . "$SCRIPT_DIR/pipeline-ubuntu.env"
 
+# clone.pl is Perl and reads no config file: it takes its 3 arguments from
+# dirwatch's fixed CLONE_CMD contract and everything else from the
+# environment. Sourcing the file above makes CLONE_LV_SIZE a shell
+# variable in THIS process only -- it has to be exported to reach a child
+# (DRAFT-015).
+#
+# Nothing fails loudly if this line is deleted. clone.pl falls back to its
+# own 64G default, which is correct for Ubuntu and silently wrong for
+# every other pipeline, so the regression would first appear as an
+# over-sized Android snapshot rather than as an error.
+export CLONE_LV_SIZE
+
 # Fail before starting anything rather than after a clone is already
 # running. A missing profile or saved state used to surface as an opaque
 # `xl restore` error several steps into a per-sample run; the launcher is
@@ -81,7 +93,7 @@ dirwatch "$WATCH_MODE" \
     "$SERVE_FOLDER" \
     "$OUTPUT_FOLDER" \
     "$MAX_CLONES" \
-    "$SCRIPT_DIR/clone-ubuntu.pl" \
+    "$SCRIPT_DIR/clone.pl" \
     "$SCRIPT_DIR/preconfig-ubuntu.sh" \
     "$SCRIPT_DIR/drakvuf-ubuntu.sh" \
     "$SCRIPT_DIR/cleanup.sh" \
@@ -94,7 +106,7 @@ dirwatch "$WATCH_MODE" \
 #       golden ubuntu. dirwatch hard-codes one origin per invocation, so a
 #       second OS pipeline means a second dirwatch process, launched from
 #       its own run_analysis-<os>.sh and its own pipeline-<os>.env.
-#   3   Xen config for that origin, used by clone-ubuntu.pl
+#   3   Xen config for that origin, used by clone.pl
 #   4   LibVMI kernel profile, passed straight through to drakvuf/injector
 #       as -r. Clone domains have no /etc/libvmi.conf stanza, so this
 #       argument is the only way the profile is ever resolved.
