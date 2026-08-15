@@ -40,11 +40,15 @@ REPO_ROOT="$(
 # variable in THIS process only -- it has to be exported to reach a child
 # (DRAFT-015).
 #
-# Nothing fails loudly if this line is deleted. clone.pl falls back to its
-# own 64G default, which is correct for Ubuntu and silently wrong for
-# every other pipeline, so the regression would first appear as an
-# over-sized Android snapshot rather than as an error.
-export CLONE_LV_SIZE
+# Nothing fails loudly if these are deleted. clone.pl falls back to its own
+# defaults, which are correct for Ubuntu and silently wrong for every other
+# pipeline, so the regression would first appear as an over-sized Android
+# snapshot rather than as an error.
+#
+# VG_NAME and ANALYSIS_BRIDGE come from platform.env and are host-global;
+# CLONE_LV_SIZE comes from pipeline-ubuntu.env and is per-OS. All three are
+# exported together because clone.pl reads all three the same way.
+export CLONE_LV_SIZE VG_NAME ANALYSIS_BRIDGE
 
 # Fail before starting anything rather than after a clone is already
 # running. A missing profile or saved state used to surface as an opaque

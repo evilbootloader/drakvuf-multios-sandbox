@@ -149,16 +149,86 @@ use warnings;
 # real checkout, not to whatever alias invoked this script.
 use FindBin;
 
+# For the per-clone lock (DRAFT-033). Fcntl also gives O_* for sysopen.
+use Fcntl qw(:flock O_RDWR O_CREAT);
+
+## --- Failure handling (DRAFT-033) --------------------------------------
+#
+# THE STDOUT CONTRACT IS THE ONLY FAILURE CHANNEL THAT REACHES dirwatch.
+#
+# dirwatch runs this script with
+#   g_spawn_command_line_sync(command, &output, NULL, NULL, NULL)
+# (dirwatch.c:178) -- the exit-status argument is NULL. It cannot see a
+# non-zero exit at all. It parses stdout for a domain ID and retries when
+# it does not get one (prepare(), dirwatch.c:206-232).
+#
+# So: print the clone ID to stdout on success and NOTHING to stdout on any
+# failure. Every diagnostic goes to stderr. The exit codes below exist for
+# humans and for a future dirwatch that reads them; they are deliberately
+# distinct so a Dom0 operator running this by hand can tell a transient
+# failure from a futile one, but nothing consumes them today.
+our $EXIT_USAGE     = 2;   # bad arguments -- retry is futile
+our $EXIT_PRECHECK  = 3;   # missing binary, LV, config or saved state
+our $EXIT_LOCKED    = 4;   # another process holds this clone's lock
+our $EXIT_LVM       = 5;   # lvremove/lvcreate failed
+our $EXIT_RESTORE   = 6;   # xl restore failed, or produced no domain
+
+# Files to remove if we exit before handing a working clone back. The END
+# block below runs on die() as well as on a normal exit, so a partially
+# created snapshot does not survive to block the next run for this VLAN --
+# which is exactly the stale-/dev/<vg>/<clone> failure DRAFT-033 names.
+our @cleanup_files;
+our $clone_lv_to_remove;
+our $succeeded = 0;
+
+sub fail {
+    my ($code, @msg) = @_;
+    print STDERR "clone.pl: $_\n" for @msg;
+    exit $code;
+}
+
+# Empty is treated as unset, matching the ${NAME:-default} idiom every
+# pipeline-<os>.env entry uses. Not cosmetic: Perl's `//` is defined-or,
+# so an exported-but-empty CLONE_LV_SIZE would interpolate to `-L` with no
+# argument and lvcreate would take the device path as its size operand.
+sub env_or {
+    my ($name, $default) = @_;
+    return (defined $ENV{$name} && length $ENV{$name})
+        ? $ENV{$name}
+        : $default;
+}
+
+# Runs a command, captures stdout+stderr, and returns (ok, output).
+# Backticks are kept rather than moving to system() with a list, because
+# every caller here wants the output for a diagnostic. None of the
+# interpolated values is attacker-controlled: the origin, vlan and config
+# path all come from dirwatch's own argv, never from a sample filename
+# (that separation is DRAFT-030's).
+sub run {
+    my ($what, @argv) = @_;
+    my $cmd = join(' ', @argv);
+    my $out = `$cmd 2>&1`;
+    my $rc  = $?;
+
+    return (1, $out) if $rc == 0;
+
+    my $how = $rc == -1            ? "failed to execute: $!"
+            : ($rc & 127)          ? sprintf("died with signal %d", $rc & 127)
+            :                        sprintf("exited %d", $rc >> 8);
+    chomp $out;
+    return (0, "$what $how\n  command: $cmd\n  output: "
+               . (length $out ? $out : "(none)"));
+}
+
 ## Settings
 #
 # The LVM volume group
 #
-# KNOWN GAP (DRAFT-033): still hard-coded. It is host-global (C4), belongs
-# in platform.env, and reaches this file the same way CLONE_LV_SIZE below
-# already does. Left alone here because DRAFT-033 owns wiring it together
-# with the exit-status checks, and platform.env does not exist yet
-# (DRAFT-028b).
-our $lvm_vg = "vg-root";
+# Host-global (C4), so it comes from automation/platform.env by way of the
+# environment, not from pipeline-<os>.env. run_analysis-<os>.sh sources
+# platform.env and exports this; the default matches the literal it
+# replaced, so an unset variable behaves exactly as before.
+our $lvm_vg = env_or("VG_NAME", "vg-root");
 
 # Size of the LVM copy-on-write snapshot -- the exception store, i.e. how
 # much divergence from the origin a clone may accumulate before the
@@ -182,13 +252,10 @@ our $lvm_vg = "vg-root";
 # pipeline-<os>.env entry uses. Not cosmetic: `//` alone is defined-or, so
 # an exported-but-empty value would interpolate to `-L` with no argument
 # and lvcreate would take the device path as its size operand.
-our $clone_lv_size =
-    (defined $ENV{CLONE_LV_SIZE} && length $ENV{CLONE_LV_SIZE})
-        ? $ENV{CLONE_LV_SIZE}
-        : "64G";
+our $clone_lv_size = env_or("CLONE_LV_SIZE", "64G");
 
-# Clone network bridge name
-our $clone_bridge = "xenbr1";
+# Clone network bridge name. Host-global (C4) -- see $lvm_vg above.
+our $clone_bridge = env_or("ANALYSIS_BRIDGE", "xenbr1");
 
 # vif options merged into the clone's Xen config. Any bridge=, script= or
 # backend= inherited from the origin's config is stripped first (see the
@@ -199,42 +266,180 @@ our $vif_script = "script=vif-openvswitch";
 
 ############################################################
 
-our $lvcreate  = `which lvcreate`;
-our $lvremove  = `which lvremove`;
-our $lvdisplay = `which lvdisplay`;
-our $xl        = `which xl`;
-our $mkfifo    = `which mkfifo`;
+# `2>/dev/null` is load-bearing, not tidiness. Without it a `which` that
+# finds nothing produced two kinds of noise on stderr before any useful
+# diagnostic: the shell's own "which: no lvcreate in ..." lines, and --
+# because Perl optimizes a single bare command to a direct exec with no
+# shell -- a "Can't exec which" warning if `which` itself is absent.
+# The redirect forces the shell path and swallows both.
+our $lvcreate  = `which lvcreate 2>/dev/null`;
+our $lvremove  = `which lvremove 2>/dev/null`;
+our $lvdisplay = `which lvdisplay 2>/dev/null`;
+our $xl        = `which xl 2>/dev/null`;
+our $mkfifo    = `which mkfifo 2>/dev/null`;
 
-$lvcreate  =~ s/\015?\012?$//;
-$lvremove  =~ s/\015?\012?$//;
-$lvdisplay =~ s/\015?\012?$//;
-$xl        =~ s/\015?\012?$//;
-$mkfifo    =~ s/\015?\012?$//;
+# Undef when the command failed to run at all, so the chomp below would
+# otherwise warn five times. check_tools() reports the empty string.
+for ($lvcreate, $lvremove, $lvdisplay, $xl, $mkfifo) {
+    $_ = "" unless defined;
+    s/\015?\012?$//;
+}
+
+# A missing binary used to produce an empty string here, so `$lvdisplay
+# /dev/...` ran as a bare redirect, returned nothing, and the tr/// count
+# below operated on undef -- a warning, then a silent fall-through into an
+# lvcreate that was also empty. Naming the missing tool is the whole point
+# of DRAFT-033: fail where the cause is, not three steps later.
+#
+# mkfifo is deliberately not checked. It is a leftover from the upstream
+# clone.pl this was derived from and is referenced nowhere else in the
+# file; requiring it would fail hosts that do not need it.
+sub check_tools {
+    my @missing;
+    push @missing, "lvcreate"  unless length $lvcreate;
+    push @missing, "lvremove"  unless length $lvremove;
+    push @missing, "lvdisplay" unless length $lvdisplay;
+    push @missing, "xl"        unless length $xl;
+
+    return unless @missing;
+    fail($EXIT_PRECHECK,
+         "required command(s) not found in PATH: " . join(', ', @missing),
+         "  This script runs on Xen Dom0 and needs LVM and the Xen CLI.",
+         "  PATH=" . (defined $ENV{PATH} ? $ENV{PATH} : "(unset)"));
+}
 
 sub clone {
     if (@ARGV != 3) {
-        die "Insufficient number of arguments!\n"
-          . "Usage: ./clone.pl <domain name> <vlan> <path/to/domain.cfg>\n";
+        fail($EXIT_USAGE,
+             "expected 3 arguments, got " . scalar(@ARGV),
+             "Usage: clone.pl <origin domain> <vlan> <path/to/domain.cfg>");
     }
 
     my $origin = $_[0];
     my $vlan   = $_[1];
     my $config = $_[2];
-    my $clone  = "$origin-$vlan-clone";
 
-    my $clone_test = `$xl domid $clone 2>/dev/null`;
-    if (length $clone_test) {
-        `$xl destroy $clone`;
+    # Validated because both go straight into a device path and a domain
+    # name. Not an injection defence -- these come from dirwatch's own
+    # argv, never from a sample filename -- but a typo'd origin otherwise
+    # surfaces as an opaque lvcreate error naming a device nobody meant.
+    fail($EXIT_USAGE, "vlan must be a positive integer, got: '$vlan'")
+        unless $vlan =~ /\A[0-9]+\z/ && $vlan >= 1;
+
+    # 254 for the reason network-setup.sh caps there: the vlan is the third
+    # octet of <prefix>.<vlan>.0/24, so above it there is no gateway.
+    fail($EXIT_USAGE, "vlan must be at most 254 (it is the third octet of "
+                    . "the gateway address), got: $vlan")
+        if $vlan > 254;
+
+    fail($EXIT_USAGE, "origin domain name may contain only "
+                    . "[A-Za-z0-9._-], got: '$origin'")
+        unless $origin =~ /\A[A-Za-z0-9._-]+\z/;
+
+    my $clone = "$origin-$vlan-clone";
+
+    check_tools();
+
+    # --- Lock, per CLONE NAME rather than per origin ---------------------
+    #
+    # DRAFT-033's PLAN step 2 asks which scope. Per-origin is wrong here
+    # and would be worse than no lock: dirwatch runs MAX_CLONES workers
+    # against the SAME origin concurrently, so a per-origin lock would
+    # serialize the whole pipeline to one analysis at a time -- a
+    # throughput bug dressed as a safety fix.
+    #
+    # The hazard that actually exists is narrower. Clone names are
+    # <origin>-<vlan>-clone and dirwatch claims thread slots with an atomic
+    # compare-and-exchange, so two workers in ONE process can never
+    # generate the same name. Two dirwatch PROCESSES against the same
+    # origin can -- one command away, and likelier once the Android and
+    # Windows launchers exist. A lock keyed on the clone name catches
+    # exactly that and serializes nothing else.
+    #
+    # (The per-origin lock in the removed scaffolding came from upstream's
+    # clone.pl, which live-snapshots the origin domain. This version never
+    # touches the origin domain at all. Git history: 7764b77.)
+    #
+    # Non-blocking with bounded retry, never a blocking LOCK_EX: dirwatch's
+    # 60s preconfig timer does not cover the clone step, so a blocking
+    # acquire has no external timeout and would hang a worker forever.
+    my $lock_path = "/run/lock/drakvuf-clone-$clone.lock";
+    my $lock_fh;
+    unless (sysopen($lock_fh, $lock_path, O_RDWR | O_CREAT, 0600)) {
+        # A read-only or absent /run/lock must not stop a clone: the lock
+        # guards a rare cross-process case, and refusing to work without it
+        # would be a worse failure than the one it prevents.
+        print STDERR "clone.pl: cannot open $lock_path ($!); "
+                   . "proceeding without the cross-process lock\n";
+    }
+    else {
+        my $got = 0;
+        for (1 .. 30) {
+            if (flock($lock_fh, LOCK_EX | LOCK_NB)) { $got = 1; last }
+            sleep 1;
+        }
+        fail($EXIT_LOCKED,
+             "another process is already cloning '$clone' "
+           . "(held $lock_path for >30s)",
+             "  Two dirwatch instances against origin '$origin' collide on "
+           . "clone names. Run one launcher per origin domain.")
+            unless $got;
     }
 
-    unless (-e $config) {
-        die "0";
+    # Exit status checked as of DRAFT-033. A destroy that fails leaves the
+    # LV open, which makes the lvremove below fail too -- previously both
+    # passed silently and `xl restore` then landed on the PREVIOUS sample's
+    # snapshot. That is cross-sample contamination, not a crash, so nothing
+    # reported it.
+    my $clone_test = `$xl domid $clone 2>/dev/null`;
+    if (length $clone_test) {
+        my ($ok, $out) = run("xl destroy of the stale clone '$clone'",
+                             $xl, "destroy", $clone);
+        fail($EXIT_RESTORE, $out) unless $ok;
+
+        # `xl destroy` returns before the block device is released --
+        # measured on Dom0 2026-08-14, where lvremove reported "Logical
+        # volume in use" and succeeded on a retry
+        # (docs/runbooks/verify-android-isolation.md:965, annotated :996).
+        # Waiting here is what makes the lvremove below reliable.
+        for (1 .. 10) {
+            last unless length `$xl domid $clone 2>/dev/null`;
+            sleep 1;
+        }
+    }
+
+    fail($EXIT_PRECHECK, "domain config not found: $config")
+        unless -e $config;
+    fail($EXIT_PRECHECK, "domain config not readable: $config")
+        unless -r $config;
+
+    # Checked before anything is created, so a wrong origin costs nothing
+    # and names itself.
+    my ($origin_ok) = run("lvdisplay of the origin LV",
+                          $lvdisplay, "/dev/$lvm_vg/$origin");
+    fail($EXIT_PRECHECK,
+         "origin logical volume not found: /dev/$lvm_vg/$origin",
+         "  VG_NAME=$lvm_vg. Check `lvs` and the origin domain argument.")
+        unless $origin_ok;
+
+    # Checked here rather than just before `xl restore`, for the same
+    # reason: everything past this point creates state that would then have
+    # to be torn down again.
+    my $saved_state = "$FindBin::RealBin/../state/$origin.bak";
+    unless (-r $saved_state) {
+        fail($EXIT_PRECHECK,
+             "saved memory image not found or unreadable: $saved_state",
+             "  Expected <repo root>/state/<origin domain>.bak -- see "
+           . "docs/runbooks/deploy-repo-relative-paths.md");
     }
 
     my $domconfig = `cat $config`;
 
-    open(my $fh, '>', "/tmp/$clone.config")
-        or die "Could not open file!";
+    my $clone_config = "/tmp/$clone.config";
+    push @cleanup_files, $clone_config;
+
+    open(my $fh, '>', $clone_config)
+        or fail($EXIT_PRECHECK, "cannot write $clone_config: $!");
 
     while ($domconfig =~ /([^\n]+)\n?/g) {
         my $line = $1;
@@ -307,41 +512,87 @@ sub clone {
     # never generate the same clone name. Raising the clone count does not
     # change that.
     #
-    # KNOWN GAP (DRAFT-033), narrower than the old comment implied:
-    #   - Nothing checks the exit status of the destroy/lvremove/lvcreate
-    #     sequence below, so a clone LV still held open by a domain that
-    #     has not finished dying fails silently (DRAFT-033 / DRAKVUF-06).
-    #   - Clone-name uniqueness depends on there being ONE dirwatch per
-    #     origin. dirwatch hard-codes a single origin per invocation, so a
-    #     second dirwatch started against the same origin would collide --
-    #     one command away, and worth locking against before the Android
-    #     and Windows launchers exist.
-    # The disabled flock is in git history at 7764b77.
+    # Both gaps the block above described are closed as of DRAFT-033: the
+    # destroy/lvremove/lvcreate sequence is now checked, and the
+    # cross-process collision is covered by the per-clone-name lock taken
+    # at the top of this function.
 
-    my $test = `$lvdisplay /dev/$lvm_vg/$clone 2>&1`;
-    if (($test =~ tr/\n//) != 1) {
-        `$lvremove -f /dev/$lvm_vg/$clone 2>&1`;
+    # A stale snapshot from a previous run for this VLAN. Removing it is
+    # normal, not exceptional -- nothing else deletes clone LVs, so one
+    # survives every analysis (cleanup.sh destroys the domain only).
+    my ($stale_ok) = run("lvdisplay", $lvdisplay, "/dev/$lvm_vg/$clone");
+    if ($stale_ok) {
+        my ($rm_ok, $rm_out) =
+            run("lvremove of the stale clone LV", $lvremove, "-f",
+                "/dev/$lvm_vg/$clone");
+        fail($EXIT_LVM, $rm_out,
+             "  A clone LV still open means a domain has not finished "
+           . "dying. Check `xl list` and `lvs`.",
+             "  Proceeding would have restored onto the PREVIOUS sample's "
+           . "snapshot.")
+            unless $rm_ok;
     }
 
-    `$lvcreate -s -n $clone -L$clone_lv_size /dev/$lvm_vg/$origin 2>&1`;
+    # From here on a failure leaves a snapshot behind, so register it for
+    # the END block before creating it.
+    $clone_lv_to_remove = "/dev/$lvm_vg/$clone";
 
-
-    my $saved_state = "$FindBin::RealBin/../state/$origin.bak";
-
-    unless (-r $saved_state) {
-        die "Saved memory image not found or unreadable: $saved_state\n"
-          . "Expected <repo root>/state/<origin domain>.bak -- see "
-          . "docs/runbooks/deploy-repo-relative-paths.md\n";
+    my ($lv_ok, $lv_out) =
+        run("lvcreate of the clone snapshot", $lvcreate, "-s", "-n", $clone,
+            "-L$clone_lv_size", "/dev/$lvm_vg/$origin");
+    unless ($lv_ok) {
+        # Nothing was created, so do not let END try to remove it.
+        $clone_lv_to_remove = undef;
+        fail($EXIT_LVM, $lv_out,
+             "  CLONE_LV_SIZE=$clone_lv_size, VG_NAME=$lvm_vg. "
+           . "If the VG is full this is not transient -- check `vgs`.");
     }
 
-    my $error=`$xl restore -p -e /tmp/$clone.config $saved_state 2>&1`;
-    print STDERR $error;
+    my ($restore_ok, $restore_out) =
+        run("xl restore", $xl, "restore", "-p", "-e", $clone_config,
+            $saved_state);
+    fail($EXIT_RESTORE, $restore_out) unless $restore_ok;
 
-    my $cloneID = `$xl domid $clone`;
+    my $cloneID = `$xl domid $clone 2>/dev/null`;
+    chomp($cloneID) if defined $cloneID;
 
-    chomp($cloneID);
+    # STDOUT IS THE ONLY THING dirwatch READS -- see the contract note at
+    # the top of this file. `xl restore` can exit 0 and still leave no
+    # usable domain, and `xl domid` prints its own errors, so the value is
+    # checked rather than trusted. Anything that is not a bare integer is a
+    # diagnostic, not an ID, and must not reach stdout: dirwatch would
+    # parse it as a domain.
+    unless (defined $cloneID && $cloneID =~ /\A[0-9]+\z/) {
+        fail($EXIT_RESTORE,
+             "xl restore reported success but no domain id came back for "
+           . "'$clone'",
+             "  xl domid printed: "
+           . (defined $cloneID && length $cloneID ? "'$cloneID'" : "(nothing)"));
+    }
 
+    # The one and only write to stdout, and the last statement that can
+    # fail: past here the clone exists and is dirwatch's to tear down.
+    $succeeded = 1;
     print "$cloneID";
+}
+
+# Runs on normal exit AND on die(), so a half-built clone does not survive
+# to block the next run for this VLAN. Deliberately silent about the
+# snapshot on success -- the LV is the clone's disk and must persist.
+END {
+    my $status = $?;
+
+    unlink $_ for @cleanup_files;
+
+    if (!$succeeded && defined $clone_lv_to_remove) {
+        print STDERR "clone.pl: removing partial snapshot "
+                   . "$clone_lv_to_remove\n";
+        my ($ok, $out) = run("cleanup lvremove", $lvremove, "-f",
+                             $clone_lv_to_remove);
+        print STDERR "clone.pl: $out\n" unless $ok;
+    }
+
+    $? = $status;
 }
 
 ############################################################
