@@ -69,7 +69,10 @@ subfolders):
   OS-selection mechanism rather than a gap: the target OS is chosen by the
   submitter, via one incoming directory and one `dirwatch` instance per OS.
   File magic is recorded for identification and mismatch-rejection only —
-  it does not route. Two things this still needs before per-OS watchers
+  it does not route. Since DRAFT-030 (2026-08-15) it spawns every callback
+  as an **argv vector**, not a formatted command string, and admits or
+  rejects the sample filename before claiming a worker slot; rejected
+  samples go to `<out_folder>/rejected/`. See `analysis-pipeline.md`. Two things this still needs before per-OS watchers
   can run concurrently are tracked as DRAFT-036: memory-based clone
   admission, and a host-global VLAN allocator (today the thread-slot index
   *is* the VLAN, and the slot array is process-local, so two instances

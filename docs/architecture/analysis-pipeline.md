@@ -114,12 +114,37 @@ A retained fallback would have been an untested code path whose only
 function was to restore that exposure. There are deliberately no
 instructions here for re-enabling it.
 
-Per-sample flow: on a new file, `dirwatch` moves it out of the watch folder,
-then calls back into the worker scripts in order —
+Per-sample flow: on a new file, `dirwatch` **admits or rejects the filename**,
+moves it out of the watch folder with `rename(2)`, then calls back into the
+worker scripts in order —
 `clone_script → config_script → drakvuf_script → cleanup_script`, with
 `tcpdump_script` started on a separate thread. A 60s timeout guards the
 preconfig phase and a 180s timeout guards the drakvuf-trace phase; either
 timeout triggers `cleanup_script` and a fresh clone retry.
+
+**Every callback is spawned as an argv vector, never as a command string**
+(DRAFT-030, 2026-08-15). The five call sites used to build
+`g_strdup_printf()` templates and pass them to
+`g_spawn_command_line_sync()`, which runs no shell but *does* apply
+`g_shell_parse_argv()` — shell word-splitting and quote handling over a
+string containing an attacker-chosen filename. A sample named `a b.exe`
+split into two arguments and shifted every positional after it, so the
+worker scripts silently received `$RUNFILE` and `$OUTPUTFOLDER` misaligned;
+an unbalanced quote failed to parse and left the sample to be retried
+forever. The 15-argument CLI contract and the callback arities are
+unchanged (C9) — only the construction is.
+
+**Filename admission** happens before a worker slot is claimed, so an
+unprocessable name costs nothing. Rejected: empty names, `.`/`..`, path
+separators, control characters, and names over 200 bytes. **Not** rejected:
+a leading `-`, because every consumer prefixes the folder
+(`md5sum -- "$RUNFOLDER/$RUNFILE"`) so the byte is never in option
+position; and Windows reserved device names, which are a guest-side hazard
+that `dirwatch` — not told which OS it serves — cannot judge (DRAFT-034
+owns that). A rejected sample is moved to `<out_folder>/rejected/` under
+the SHA-256 of its own name, because leaving it in the watch folder would
+re-reject and re-log it on every scan. A name that is not safe to path-join
+is logged and left untouched rather than moved.
 
 > **The trace-phase headroom is about 55s, and it has been exceeded.**
 > `drakvuf-ubuntu.sh` does `sleep 5` then `drakvuf ... -t 120`, so a run

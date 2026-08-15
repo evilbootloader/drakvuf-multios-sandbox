@@ -108,7 +108,11 @@
 #include <stdbool.h>
 #include <string.h>
 #include <unistd.h>
+#include <ctype.h>
 #include <glib.h>
+/* g_rename() and g_mkdir_with_parents(), which replaced the `mv`
+ * subprocess and create the rejected-sample directory (DRAFT-030). */
+#include <glib/gstdio.h>
 #include <dirent.h>
 #include <errno.h>
 #include <sys/inotify.h>
@@ -119,17 +123,184 @@
 
 #include "../xen_helper/xen_helper.h"
 
-#define CLONE_CMD       "%s %s %u %s"
-#define DRAKVUF_CMD     "%s %s %u %u %u %s %s %s %lu"
-#define CONFIG_CMD      "%s %s %u %u %u %s %s %s %lu"
-#define CLEANUP_CMD     "%s %u %u"
-#define TCPDUMP_CMD     "%s %u %s %s %s %lu"
-
+/*
+ * The five callback contracts, unchanged in ORDER and ARITY (C9) but no
+ * longer built as command strings -- see spawn_argv() below.
+ *
+ *   clone     <script> <origin> <vlan> <config>
+ *   config    <script> <json> <domid> <injpid> <vlan> <run> <file> <out> <utime>
+ *   drakvuf   <script> <json> <domid> <injpid> <vlan> <run> <file> <out> <utime>
+ *   cleanup   <script> <domid> <vlan>
+ *   tcpdump   <script> <vlan> <run> <file> <out> <utime>
+ *
+ * These used to be g_strdup_printf() templates passed to
+ * g_spawn_command_line_sync(), which does NOT run a shell but does apply
+ * g_shell_parse_argv() -- shell-style word splitting and quote handling
+ * over a string containing an attacker-chosen filename (DRAFT-030).
+ * A sample called "a b.exe" split into two arguments and shifted every
+ * positional after it, so the worker scripts silently received $RUNFILE
+ * and $OUTPUTFOLDER misaligned. An unbalanced quote failed to parse at
+ * all. Building argv directly removes the parsing step, and with it the
+ * whole class.
+ */
 #define UNUSED(x) (void)(x)
+
+/*
+ * Longest sample filename accepted. Not a security boundary on its own --
+ * admission below rejects the dangerous shapes -- but a bound is needed
+ * because <in_folder>/<name> must stay inside PATH_MAX and because an
+ * absurd name in a log line is its own problem.
+ */
+#define MAX_SAMPLE_NAME 200
 
 static gboolean valid_threadid(int threadid);
 
 static inline void release_thread(int threadid);
+
+/*
+ * Spawns argv directly, with no string-parsing step anywhere in the path.
+ * Replaces g_spawn_command_line_sync() at every call site that
+ * interpolated a sample filename (DRAFT-030).
+ *
+ * stdout/stderr are inherited, exactly as before -- the workers' output
+ * belongs on dirwatch's console. The one caller that wants stdout is
+ * make_clone(), which passes a non-NULL output.
+ *
+ * Returns TRUE if the child ran and we have its status in *exit_rc.
+ */
+static gboolean spawn_argv(gchar** argv, gchar** output, gint* exit_rc)
+{
+    GError* error = NULL;
+    gchar* captured = NULL;
+    gint status = -1;
+
+    /*
+     * G_SPAWN_SEARCH_PATH preserves the previous behaviour exactly:
+     * g_spawn_command_line_sync() searched PATH, and dropping that would
+     * quietly break any deployment passing a bare script name rather than
+     * an absolute path. run_analysis-*.sh passes absolute paths, so this
+     * is compatibility, not reliance.
+     */
+    gboolean ok = g_spawn_sync(NULL,               /* inherit cwd      */
+                               argv,
+                               NULL,               /* inherit environ  */
+                               G_SPAWN_SEARCH_PATH,
+                               NULL, NULL,
+                               output ? &captured : NULL,
+                               NULL,               /* stderr inherited */
+                               &status,
+                               &error);
+
+    if (!ok)
+    {
+        fprintf(stderr, "** SPAWN FAILED: %s: %s\n",
+                argv[0] ? argv[0] : "(null)",
+                error ? error->message : "(no detail)");
+        if (error)
+            g_error_free(error);
+        if (exit_rc)
+            *exit_rc = -1;
+        return FALSE;
+    }
+
+    if (output)
+        *output = captured;
+    if (exit_rc)
+        *exit_rc = status;
+
+    return TRUE;
+}
+
+/* Logs the command about to run, without pretending it is a shell line. */
+static void print_argv(const char* label, gchar** argv)
+{
+    printf("** %s:", label);
+    for (int i = 0; argv[i]; i++)
+        printf(" [%s]", argv[i]);
+    printf("\n");
+}
+
+/*
+ * Admission control at the watch-folder boundary (DRAFT-030, PLAN step 3).
+ *
+ * REJECT rather than silently normalize, so an operator can see why a
+ * sample was not processed. The rules are the Dom0-safety subset of the
+ * guest_filename contract in docs/architecture/analysis-pipeline.md,
+ * "Filenames: two namespaces": a name that survives this check needs no
+ * rewriting, which is what lets the submitted name reach the guest
+ * unchanged (C5) without any Dom0 path ever holding an untrusted shape.
+ *
+ * TWO SHAPES ARE DELIBERATELY ADMITTED, because rejecting them would be a
+ * false positive on names an analyst may legitimately receive:
+ *
+ *   - A LEADING '-'. Every consumer prefixes the folder before the name --
+ *     `md5sum -- "$RUNFOLDER/$RUNFILE"` (preconfig-ubuntu.sh:155,
+ *     drakvuf-ubuntu.sh:138), `injector -B "$RUNFOLDER/$RUNFILE"` -- so the
+ *     argument begins "/malware_processing/..." and the '-' is never in
+ *     option position. The prefix is the escape; no quoting is needed. The
+ *     `mv` subprocess that DID pass a bare name is gone from this file.
+ *   - Windows reserved device names (CON, PRN, trailing dot or space).
+ *     Those are hazards in a Windows GUEST, not on Dom0, and dirwatch is
+ *     not told which OS it serves. DRAFT-034 owns that check where it can
+ *     be applied without rejecting a legitimate Linux sample called
+ *     `con.bin`.
+ *
+ * On rejection, *reason is set to a static string. Never freed.
+ */
+static gboolean sample_name_admissible(const char* name, const char** reason)
+{
+    if (!name || !*name)
+    {
+        *reason = "empty name";
+        return FALSE;
+    }
+
+    /*
+     * "." and ".." are returned by readdir and are not samples. Checked
+     * first so the message is accurate rather than blaming the length or
+     * character rules below.
+     */
+    if (!strcmp(name, ".") || !strcmp(name, ".."))
+    {
+        *reason = "directory entry, not a sample";
+        return FALSE;
+    }
+
+    if (strlen(name) > MAX_SAMPLE_NAME)
+    {
+        *reason = "name longer than " G_STRINGIFY(MAX_SAMPLE_NAME) " bytes";
+        return FALSE;
+    }
+
+    for (const char* p = name; *p; p++)
+    {
+        /*
+         * readdir cannot return a name containing '/' or NUL, so this is
+         * belt-and-braces against a future caller rather than a live
+         * hazard -- said plainly rather than implied, because a reader
+         * checking whether traversal is handled deserves a real answer.
+         */
+        if (*p == '/')
+        {
+            *reason = "name contains a path separator";
+            return FALSE;
+        }
+
+        /*
+         * Control characters break every log line and every downstream
+         * parser, and a newline in particular lets a name forge log
+         * entries. iscntrl over unsigned char: plain char is signed on
+         * x86 and a high byte would otherwise index out of range.
+         */
+        if (iscntrl((unsigned char)*p))
+        {
+            *reason = "name contains a control character";
+            return FALSE;
+        }
+    }
+
+    return TRUE;
+}
 
 struct start_drakvuf
 {
@@ -171,24 +342,57 @@ void close_handler(int signal)
 static void
 make_clone(xen_interface_t* xen, domid_t* cloneID, uint16_t vlan, char** clone_name)
 {
-    char* command;
-    command = g_strdup_printf(CLONE_CMD, clone_script, domain_name, vlan, domain_config);
-    printf("** RUNNING COMMAND: %s\n", command);
+    gchar* vlan_s = g_strdup_printf("%u", vlan);
+    gchar* argv[] = {
+        (gchar*)clone_script,
+        (gchar*)domain_name,
+        vlan_s,
+        (gchar*)domain_config,
+        NULL
+    };
+
+    print_argv("RUNNING CLONE", argv);
+
+    /*
+     * stdout is captured because it carries the clone's domain id and is
+     * the ONLY channel clone.pl has to report success: the exit status is
+     * discarded here (see below) and stderr is inherited, so a failed
+     * clone is signalled by printing no id at all. clone.pl documents the
+     * same contract from its side.
+     *
+     * KNOWN GAP (DRAFT-010): the exit status is still not read. Passing
+     * NULL for exit_rc keeps today's behaviour exactly -- prepare() retries
+     * when no id comes back -- rather than changing the retry semantics
+     * inside a change about argument parsing.
+     */
     char* output = NULL;
-    g_spawn_command_line_sync(command, &output, NULL, NULL, NULL);
-    g_free(command);
-    xen_get_dom_info(xen, output, cloneID, clone_name);
+    if (spawn_argv(argv, &output, NULL))
+        xen_get_dom_info(xen, output, cloneID, clone_name);
+
     g_free(output);
+    g_free(vlan_s);
 }
 
 gpointer tcpdump(gpointer data)
 {
     struct start_drakvuf* start = (struct start_drakvuf*)data;
-    char* command;
-    command = g_strdup_printf(TCPDUMP_CMD, tcpdump_script, start->threadid+1, run_folder, start->input, out_folder, start->utime);
-    printf("** RUNNING COMMAND: %s\n", command);
-    g_spawn_command_line_sync(command, NULL, NULL, NULL, NULL);
-    g_free(command);
+    gchar* vlan_s  = g_strdup_printf("%u", start->threadid + 1);
+    gchar* utime_s = g_strdup_printf("%lu", (unsigned long)start->utime);
+    gchar* argv[] = {
+        (gchar*)tcpdump_script,
+        vlan_s,
+        (gchar*)run_folder,
+        start->input,          /* untrusted, and now its own argv element */
+        (gchar*)out_folder,
+        utime_s,
+        NULL
+    };
+
+    print_argv("RUNNING TCPDUMP", argv);
+    spawn_argv(argv, NULL, NULL);
+
+    g_free(vlan_s);
+    g_free(utime_s);
     return NULL;
 }
 
@@ -210,11 +414,26 @@ static inline int find_thread(void)
 
 static inline void cleanup(domid_t cloneID, int vlan)
 {
-    char* command;
-    command = g_strdup_printf(CLEANUP_CMD, cleanup_script, cloneID, vlan);
-    printf("** RUNNING COMMAND: %s\n", command);
-    g_spawn_command_line_sync(command, NULL, NULL, NULL, NULL);
-    g_free(command);
+    /*
+     * No untrusted input reaches this one -- both values are numeric --
+     * but it is converted with the rest so that no g_spawn_command_line_*
+     * call survives in this file. A single remaining string-parsed spawn
+     * is an invitation to add a %s to it later.
+     */
+    gchar* domid_s = g_strdup_printf("%u", cloneID);
+    gchar* vlan_s  = g_strdup_printf("%u", vlan);
+    gchar* argv[] = {
+        (gchar*)cleanup_script,
+        domid_s,
+        vlan_s,
+        NULL
+    };
+
+    print_argv("RUNNING CLEANUP", argv);
+    spawn_argv(argv, NULL, NULL);
+
+    g_free(domid_s);
+    g_free(vlan_s);
 }
 
 gpointer timer_thread(gpointer data)
@@ -357,17 +576,61 @@ static inline void start(struct start_drakvuf* start, char* sample)
     g_thread_pool_push(pool, start, NULL);
 }
 
+/*
+ * Builds and runs one of the two 8-argument worker callbacks. preconfig
+ * and drakvuf take an identical shape (C9) and read the first seven, so
+ * one builder serves both.
+ *
+ * Everything allocated here is freed before it returns, and that is the
+ * reason this is a function rather than two inline blocks: run_drakvuf()
+ * uses `goto restart` and `goto end`, so anything allocated in its body
+ * would leak on every retry or be jumped over on the timeout path.
+ *
+ * start->input is the untrusted sample name. It is one argv element and
+ * is never concatenated into a string, so a name containing a space or a
+ * quote cannot shift $OUTPUTFOLDER into $RUNFILE's position.
+ */
+static void spawn_worker(const char* label,
+                         const char* script,
+                         struct start_drakvuf* start,
+                         gint* rc)
+{
+    gchar* domid_s  = g_strdup_printf("%u", start->cloneID);
+    gchar* injpid_s = g_strdup_printf("%u", injection_pid);
+    gchar* vlan_s   = g_strdup_printf("%u", start->threadid + 1);
+    gchar* utime_s  = g_strdup_printf("%lu", (unsigned long)start->utime);
+
+    gchar* argv[] = {
+        (gchar*)script,
+        (gchar*)json_kernel_path,
+        domid_s,
+        injpid_s,
+        vlan_s,
+        (gchar*)run_folder,
+        start->input,
+        (gchar*)out_folder,
+        utime_s,
+        NULL
+    };
+
+    print_argv(label, argv);
+    spawn_argv(argv, NULL, rc);
+
+    g_free(domid_s);
+    g_free(injpid_s);
+    g_free(vlan_s);
+    g_free(utime_s);
+}
+
 void run_drakvuf(gpointer data, gpointer user_data)
 {
     UNUSED(user_data);
     struct start_drakvuf* start = data;
-    char* command;
     gint rc;
     GThread* timer;
     GThread* tcpd;
 
 restart:
-    command = NULL;
     rc = 0;
     printf("[%i] Starting %s on domid %u\n", start->threadid, start->input, start->cloneID);
 
@@ -375,11 +638,7 @@ restart:
     g_mutex_lock(&start->timer_lock);
     timer = g_thread_new("timer", timer_thread, start);
 
-    command = g_strdup_printf(CONFIG_CMD, config_script, json_kernel_path, start->cloneID, injection_pid, start->threadid+1, run_folder, start->input, out_folder, start->utime);
-    printf("[%i] ** RUNNING COMMAND: %s\n", start->threadid, command);
-    g_spawn_command_line_sync(command, NULL, NULL, &rc, NULL);
-    
-    g_clear_pointer(&command, g_free);
+    spawn_worker("RUNNING PRECONFIG", config_script, start, &rc);
 
     g_mutex_unlock(&start->timer_lock);
     g_thread_join(timer);
@@ -395,10 +654,7 @@ restart:
     g_mutex_lock(&start->timer_lock);
     timer = g_thread_new("timer", timer_thread, start);
 
-    command = g_strdup_printf(DRAKVUF_CMD, drakvuf_script, json_kernel_path, start->cloneID, injection_pid, start->threadid+1, run_folder, start->input, out_folder, start->utime);
-    printf("[%i] ** RUNNING COMMAND: %s\n", start->threadid, command);
-    g_spawn_command_line_sync(command, NULL, NULL, &rc, NULL);
-    g_free(command);
+    spawn_worker("RUNNING DRAKVUF", drakvuf_script, start, &rc);
 
     g_mutex_unlock(&start->timer_lock);
     g_thread_join(timer);
@@ -516,6 +772,90 @@ int main(int argc, char** argv)
                     continue;
 
                 /*
+                 * Admission BEFORE a worker slot is claimed and before a
+                 * clone is built, so an unprocessable name costs nothing.
+                 *
+                 * A rejected sample is moved aside rather than left where
+                 * it is. Leaving it would spin: the scan re-reads the watch
+                 * folder every cycle, so a name that can never be processed
+                 * would be re-rejected and re-logged forever (DRAFT-030,
+                 * PLAN step 4).
+                 */
+                const char* reject_reason = NULL;
+                if (!sample_name_admissible(ent->d_name, &reject_reason))
+                {
+                    char* shown = g_strescape(ent->d_name, NULL);
+
+                    /*
+                     * A name that is not safe to path-join must not be
+                     * path-joined -- not even to move it out of the way.
+                     * g_build_filename(in_folder, "../../etc/passwd")
+                     * resolves OUTSIDE the watch folder, so the "tidy up"
+                     * below would rename a file the check just refused to
+                     * accept. readdir cannot return such a name, so this
+                     * is unreachable today; it is guarded because the
+                     * consequence if it ever became reachable is renaming
+                     * an arbitrary file as root.
+                     *
+                     * These are logged and left alone. They cannot spin
+                     * the loop the way an admissible-but-broken name
+                     * could, because nothing can create them here.
+                     */
+                    if (strchr(ent->d_name, '/')
+                        || !strcmp(ent->d_name, ".")
+                        || !strcmp(ent->d_name, ".."))
+                    {
+                        fprintf(stderr,
+                                "** REJECTED SAMPLE: \"%s\": %s; left in "
+                                "place -- the name is not safe to path-join "
+                                "and will not be moved\n",
+                                shown ? shown : "(unprintable)",
+                                reject_reason);
+                        g_free(shown);
+                        continue;
+                    }
+
+                    char* src = g_build_filename(in_folder, ent->d_name, NULL);
+                    char* rejected_dir = g_build_filename(out_folder, "rejected", NULL);
+
+                    if (g_mkdir_with_parents(rejected_dir, 0700) != 0)
+                        fprintf(stderr,
+                                "** REJECTED SAMPLE: cannot create %s (%s)\n",
+                                rejected_dir, g_strerror(errno));
+
+                    /*
+                     * The destination leaf is the digest of the REJECTED
+                     * name, not the name itself -- the name is exactly what
+                     * was just judged unfit to appear in a Dom0 path, so
+                     * reusing it here would defeat the check. The log line
+                     * below carries the original, escaped, so an operator
+                     * can still match the two up.
+                     */
+                    char* leaf = g_compute_checksum_for_string(
+                                     G_CHECKSUM_SHA256, ent->d_name, -1);
+                    char* dst = g_build_filename(rejected_dir, leaf, NULL);
+
+                    fprintf(stderr,
+                            "** REJECTED SAMPLE: \"%s\": %s; moved to %s\n",
+                            shown ? shown : "(unprintable)",
+                            reject_reason,
+                            dst);
+
+                    if (g_rename(src, dst) != 0)
+                        fprintf(stderr,
+                                "** REJECTED SAMPLE: could not move it aside "
+                                "(%s); it will be re-reported next scan\n",
+                                g_strerror(errno));
+
+                    g_free(shown);
+                    g_free(dst);
+                    g_free(leaf);
+                    g_free(rejected_dir);
+                    g_free(src);
+                    continue;
+                }
+
+                /*
                  * One worker slot per sample, reserved inside the scan
                  * loop rather than once per directory pass.
                  */
@@ -558,15 +898,39 @@ int main(int argc, char** argv)
                     continue;
                 }
 
-                char* command;
-                gint move_rc = -1;
-                command = g_strdup_printf("mv %s/%s %s/%s", in_folder, ent->d_name, run_folder, ent->d_name);
-                printf("** MOVING FILE FOR PROCESSING: %s\n", command);
-                gboolean move_started = g_spawn_command_line_sync(command, NULL, NULL, &move_rc, NULL);
-                g_clear_pointer(&command, g_free);
+                /*
+                 * Was: g_spawn_command_line_sync("mv %s/%s %s/%s", ...).
+                 * Moving a file does not need a subprocess, and building
+                 * that command put an attacker-chosen name through
+                 * g_shell_parse_argv() -- a space split it into two
+                 * arguments and moved the wrong path; an unbalanced quote
+                 * failed to parse, leaving the sample in the watch folder
+                 * to be retried forever; a leading '-' was read by mv as an
+                 * option. rename(2) has none of those properties
+                 * (DRAFT-030).
+                 *
+                 * in_folder and run_folder are documented as top-level
+                 * siblings (/malware_incoming/<os>, /malware_processing/<os>),
+                 * so this is expected to be a same-filesystem rename. If they
+                 * are ever split across mounts, rename() fails with EXDEV and
+                 * is reported below rather than silently copying.
+                 */
+                char* move_src = g_build_filename(in_folder, ent->d_name, NULL);
+                char* move_dst = g_build_filename(run_folder, ent->d_name, NULL);
 
-                if (!move_started || move_rc != 0)
+                printf("** MOVING FILE FOR PROCESSING: %s -> %s\n",
+                       move_src, move_dst);
+
+                gboolean move_ok = (g_rename(move_src, move_dst) == 0);
+                int move_errno = errno;
+
+                g_free(move_src);
+                g_free(move_dst);
+
+                if (!move_ok)
                 {
+                    fprintf(stderr, "[%i] rename failed: %s\n",
+                            threadid, g_strerror(move_errno));
                     fprintf(stderr,
                             "[%i] Failed to move %s into the processing "
                             "directory; discarding prepared clone %u\n",
