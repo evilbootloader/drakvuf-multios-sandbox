@@ -72,11 +72,12 @@ subfolders):
   it does not route. Since DRAFT-030 (2026-08-15) it spawns every callback
   as an **argv vector**, not a formatted command string, and admits or
   rejects the sample filename before claiming a worker slot; rejected
-  samples go to `<out_folder>/rejected/`. See `analysis-pipeline.md`. Two things this still needs before per-OS watchers
-  can run concurrently are tracked as DRAFT-036: memory-based clone
-  admission, and a host-global VLAN allocator (today the thread-slot index
-  *is* the VLAN, and the slot array is process-local, so two instances
-  would collide). See `docs/architecture/analysis-pipeline.md`.
+  samples go to `<out_folder>/rejected/`.
+  Two things this still needs before per-OS watchers can run concurrently
+  are tracked as DRAFT-036: memory-based clone admission, and a host-global
+  VLAN allocator (today the thread-slot index *is* the VLAN, and the slot
+  array is process-local, so two instances would collide). See
+  `docs/architecture/analysis-pipeline.md`.
   For each sample it calls back into the worker scripts below, in
   order: `clone.pl` → `preconfig-ubuntu.sh` → `drakvuf-ubuntu.sh` →
   `cleanup.sh`, with `tcpdump.sh` started on a side thread. The preconfig
@@ -126,8 +127,11 @@ subfolders):
 - `drakvuf-ubuntu.sh` — runs the DRAKVUF trace (`syscalls`, `filetracer`, `fileextractor`,
   `memdump` 120s timeout, `--memdump-dir`) and kills the per-VLAN `tcpdump`
   process afterward. Executes the staged sample at
-  `$GUEST_STAGING_DIR/<sha256>`, built by the same rule `preconfig-ubuntu.sh`
-  stages to.
+  `$GUEST_STAGING_DIR/<submitted filename>`, built by the same rule
+  `preconfig-ubuntu.sh` stages to. The leaf was the sample's SHA-256 until
+  DRAFT-030 (2026-08-15); it is now the name the sample was submitted
+  with, per C5, because extension dispatch and `argv[0]` self-checks are
+  real evasion surface that a hash-named file exercises none of.
 - `cleanup.sh` — pauses/destroys the clone domain and kills any lingering
   `injector`/`drakvuf` processes for it.
 - `tcpdump.sh` — captures traffic on the clone's VLAN sub-interface to a
@@ -265,9 +269,10 @@ Do not modify the Ubuntu behavior unless required and explicitly requested.
   (C1–C10) in `docs/architecture/analysis-pipeline.md`, "Shared and per-OS
   code boundary" — not copying the Ubuntu file and editing it.** The Ubuntu
   implementation is the reference for *shape*, and it still carries known
-  defects (SHA-256 as the guest leaf name, the licence header above the
-  shebang). Copying it copies those. *(`clone.pl`'s missing exit-status
-  checks were on this list until DRAFT-033 landed, 2026-08-15.)*
+  defects (the licence header above the shebang). Copying it copies those.
+  *(Two entries left this list on 2026-08-15: `clone.pl`'s missing
+  exit-status checks, fixed by DRAFT-033, and the SHA-256 guest leaf name,
+  fixed by DRAFT-030.)*
   A defect known in the template is fixed in the template before the copy is
   made.
 - Prefer parameterization over duplicated hard-coded values.
@@ -364,7 +369,7 @@ Volume group: `vg-root`
 Analysis bridge: `xenbr1`
 Saved state: `state/ubuntu_sandbox.bak`
 Incoming / processing / finished: `/malware_{incoming,processing,finished}/ubuntu`
-Guest staging: `/home/carlos/Desktop/<sha256>`
+Guest staging: `/home/carlos/Desktop/<submitted filename>`
 
 ## Workflow
 

@@ -955,22 +955,42 @@ Two rules make it safe:
 > (`preconfig-ubuntu.sh:172-175`). The stale citation is corrected here
 > rather than left for DRAFT-032 because issue #6 rewrites this subsection.
 >
-> **KNOWN GAP (issue #6) — the rule is decided and unimplemented.** Two
-> things are still missing, and neither is a design question:
+> **~~KNOWN GAP (issue #6)~~ — implemented 2026-08-15 by DRAFT-030.** Both
+> halves are closed, and the first one closed in a way worth reading before
+> writing a new pipeline.
 >
-> 1. **No normalizer exists** anywhere in the repository. The rules above
->    (separators and NUL stripped, length capped, Windows reserved names
->    rejected) are specified and unwritten.
-> 2. **Ubuntu deviates today.** `preconfig-ubuntu.sh:162` stages to
->    `$GUEST_STAGING_DIR/$SHA256` and `drakvuf-ubuntu.sh:150` executes the
->    same, so the guest currently sees a content hash, not a name. That was
->    the correct choice while the name still passed through a guest shell;
->    it is now a deviation from a decided rule rather than a safety measure.
+> 1. **There is no normalizer, by design.** The rule above is achieved by
+>    **admission, not transformation**: `dirwatch` rejects a name rather
+>    than rewriting it (empty, `.`/`..`, path separators, control
+>    characters, over 200 bytes), so every name that reaches a worker
+>    script is already safe and needs no transformation anywhere
+>    downstream. One check at one boundary, which is what "one
+>    implementation, not one per OS" was asking for.
 >
-> Issue #6 decides the contract and does **not** implement it — see "Shared
-> and per-OS code boundary" above for the ownership. Until the retrofit
-> lands, no per-OS pipeline should hard-code the SHA-256 as the guest leaf
-> name on the assumption that it is the convention.
+>    **The consequence to record rather than discover:**
+>    `original_filename` and `guest_filename` are therefore always
+>    **equal**. DRAFT-011 should emit that honestly instead of implying two
+>    fields that can differ.
+>
+>    Two rules from the specification above are deliberately *not* enforced
+>    at this boundary, and both are stated where they are enforced instead:
+>    a leading `-` is admitted, because every consumer path-prefixes the
+>    name so it is never in option position; and Windows reserved device
+>    names are admitted, because they are a guest-side hazard that
+>    `dirwatch` — which is not told which OS it serves — cannot judge.
+>    DRAFT-034 owns the second on the Windows pipeline.
+>
+> 2. **Ubuntu no longer deviates.** `preconfig-ubuntu.sh` stages to
+>    `$GUEST_STAGING_DIR/$RUNFILE` and `drakvuf-ubuntu.sh` executes the
+>    same path, both derived by the same rule from the same two `dirwatch`
+>    arguments. The SHA-256 leaf was correct while the name still passed
+>    through a guest shell and became a deviation once it did not.
+>
+> **A new pipeline should copy this, not work around it.** The safety
+> property it rests on is that the name is never *parsed*: `injector -e`
+> and `drakvuf -e` each take it as a single argv element. That is
+> established for Linux and **must be re-established for Windows** before
+> being relied on — see the `[LINUX]` qualification above.
 
 ### Recovery after interruption
 

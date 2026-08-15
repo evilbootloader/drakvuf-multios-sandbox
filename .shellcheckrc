@@ -53,12 +53,18 @@
 #         directives in the scripts record where it lives.
 #         Owner: none needed.
 #
-# SC2086  Unquoted expansions, 33 sites across cleanup.sh,
-#         drakvuf-ubuntu.sh, network-setup.sh, tcpdump.sh.
-#         Owner: DRAFT-030 (guest-filename normalizer) and DRAFT-011.
-#         NOT fixed here on purpose -- changing expansion behaviour in
+# SC2086  Unquoted expansions. Was 33 sites across cleanup.sh,
+#         drakvuf-ubuntu.sh, network-setup.sh, tcpdump.sh; now 9, all in
+#         cleanup.sh and the one `kill $TCPDUMPPID` in drakvuf-ubuntu.sh.
+#         Owner: DRAFT-011 alone.
+#         DRAFT-030 discharged its half on 2026-08-15: every site carrying
+#         the sample filename is quoted, because dirwatch now admits names
+#         containing spaces and a bare expansion split them. What remains
+#         is the `ps | grep` PID handling, which is the same code SC2009
+#         below is about -- one issue should fix both together.
+#         Still NOT a lint cleanup: changing expansion behaviour in
 #         scripts that run malware analysis as root is a behaviour change
-#         and goes through its own review, not a lint cleanup.
+#         and goes through its own review.
 #
 # SC2009  `ps aux | grep` process discovery, 4 sites. Three are in shared
 #         cleanup.sh. The `"tcpdump -i xenbr1.$VLAN"` match is unanchored
@@ -75,9 +81,11 @@
 # THE COST, stated because it is not obvious: the remaining two are
 # disabled repository-wide, so a genuinely dangerous new unquoted expansion
 # in `preconfig-android.sh` or a future `clone-windows.pl` wrapper will NOT
-# be caught until DRAFT-030/011 land and these lines come out. That is an
-# argument for landing DRAFT-030 sooner rather than a reason to accept the
-# disables indefinitely.
+# be caught until DRAFT-011 lands and these lines come out. That cost is
+# now larger, not smaller: the Android scripts are being written while the
+# check is off. Write them quoted and verify with
+# `shellcheck --norc automation/preconfig-android.sh`, which is clean for
+# network-setup.sh and must stay clean for anything new.
 #
 # For reference, `shellcheck --norc automation/network-setup.sh` is clean
 # as of DRAFT-028 -- that file needs none of the exemptions below.

@@ -112,8 +112,20 @@ VLAN=$1
 RUNFOLDER=$2
 RUNFILE=$3
 OUTPUTFOLDER=$4
-MD5=$(md5sum $RUNFOLDER/$RUNFILE | awk -F" " '{print $1}')
+# Quoted, and `--`, as of DRAFT-030. dirwatch admits sample names
+# containing spaces, so the bare expansion this replaced split the name
+# and handed md5sum two nonexistent paths: MD5 came back EMPTY, and the
+# capture below then wrote to "$OUTPUTFOLDER//tcpdump.pcap" -- one shared
+# file for every such sample, silently overwritten by each run, while the
+# real result directory got no pcap at all.
+MD5=$(md5sum -- "$RUNFOLDER/$RUNFILE" | awk -F" " '{print $1}')
 
-tcpdump -i xenbr1.$VLAN -n -U -w $OUTPUTFOLDER/$MD5/tcpdump.pcap 1>/dev/null 2>&1
+# The result directory is created by preconfig-ubuntu.sh, which dirwatch
+# runs before this thread starts. Guarded anyway: tcpdump exits
+# immediately if the -w path is unwritable, and a missing pcap is the kind
+# of absence that reads as "the sample generated no traffic".
+mkdir -p "$OUTPUTFOLDER/$MD5" 1>/dev/null 2>&1
+
+tcpdump -i "xenbr1.$VLAN" -n -U -w "$OUTPUTFOLDER/$MD5/tcpdump.pcap" 1>/dev/null 2>&1
 
 exit $?;

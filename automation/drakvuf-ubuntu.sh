@@ -139,24 +139,54 @@ MD5=$(md5sum -- "$RUNFOLDER/$RUNFILE" | awk -F" " '{print $1}')
 
 # The staged sample's guest path. Both this script and
 # preconfig-ubuntu.sh build it the same way -- GUEST_STAGING_DIR from
-# pipeline-ubuntu.env plus the sample's own SHA-256 -- from the same two
+# pipeline-ubuntu.env plus the submitted filename -- from the same two
 # dirwatch arguments, so staging and execution cannot name different
 # files. That drift is not hypothetical: it is exactly what issue #2
 # found when this line held a literal `/home/<USER>/Desktop/test` while
 # preconfig staged to `/home/carlos/Desktop/test`.
 #
+# The leaf was the sample's SHA-256 until DRAFT-030 (2026-08-15) and is
+# now the submitted name (C5). See preconfig-ubuntu.sh for the reasoning
+# and for why the name needs no rewriting here -- dirwatch admits or
+# rejects it at the watch-folder boundary.
+#
 # `-e` is execve-direct with no guest shell (issue #2), so this path is
 # resolved Dom0-side and must be exact.
-SHA256=$(sha256sum -- "$RUNFOLDER/$RUNFILE" | awk -F" " '{print $1}')
-CMD="$GUEST_STAGING_DIR/$SHA256"
+CMD="$GUEST_STAGING_DIR/$RUNFILE"
 
 sleep 5 2>&1
-drakvuf -r $REKALL -d $DOMAIN -i $PID -m execproc -e "$CMD" -D $OUTPUTFOLDER/$MD5 -o json -t 120 -a syscalls -a filetracer -a fileextractor -a memdump --memdump-dir $OUTPUTFOLDER/$MD5 1>$OUTPUTFOLDER/$MD5/drakvuf.log 2>&1
+
+# fileextractor's output and memdump's are kept in separate directories so
+# a reader can tell a file the sample touched from a memory region the
+# trace captured. Both plugins write freely into whatever they are given,
+# and pointing them at the same directory as the JSON log put three kinds
+# of artifact in one flat namespace.
+#
+# -p, not a bare mkdir, for two reasons that both bite in normal
+# operation: dirwatch re-runs this script for the SAME sample and the same
+# MD5 after a trace timeout (`goto restart`), so a bare mkdir fails "File
+# exists" on every retry; and if preconfig-ubuntu.sh exited before
+# creating $OUTPUTFOLDER/$MD5, creating a subdirectory of it fails outright.
+mkdir -p "$OUTPUTFOLDER/$MD5/dump" "$OUTPUTFOLDER/$MD5/memdump"
+
+# Quoted as of DRAFT-030. The expansions here were bare, which was
+# survivable only while every value was a hex digest or a configured
+# path. $RUNFILE now reaches the guest path above, and admitted names may
+# contain spaces, so an unquoted expansion would split the sample's own
+# name into two arguments -- exactly the defect this issue removed from
+# dirwatch, reintroduced one hop later.
+drakvuf -r "$REKALL" -d "$DOMAIN" -i "$PID" \
+    -m execproc -e "$CMD" \
+    -o json -t 120 \
+    -a syscalls -a filetracer -a fileextractor -a memdump \
+    -D "$OUTPUTFOLDER/$MD5/dump" \
+    --memdump-dir "$OUTPUTFOLDER/$MD5/memdump" \
+    1>"$OUTPUTFOLDER/$MD5/drakvuf.log" 2>&1
 
 RET=$?
 
 if [ $RET -eq 1 ]; then
-   mv $RUNFOLDER/$RUNFILE $OUTPUTFOLDER/$MD5 1>/dev/null 2>&1
+   mv -- "$RUNFOLDER/$RUNFILE" "$OUTPUTFOLDER/$MD5" 1>/dev/null 2>&1
 fi
 
 TCPDUMPPID=$(ps aux | grep "tcpdump -i xenbr1.$VLAN" | grep -v grep | awk -F" " '{print $2}')
