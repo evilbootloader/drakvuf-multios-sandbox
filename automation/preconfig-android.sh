@@ -318,10 +318,27 @@ fi
 # and a shell is still available for the package-name diff below.
 #
 # The diff is how the package is identified: `pm install` does not report
-# what it installed, and Dom0 cannot read it out of the APK. The result
-# goes to APK_PKG_HANDOFF for drakvuf-android.sh, which reads and removes
-# it before launching -- see that variable's note in pipeline-android.env
-# for why a guest file rather than a readfile back to Dom0.
+# what it installed, and Dom0 cannot read it out of the APK.
+#
+# The LAUNCHER COMPONENT IS RESOLVED HERE TOO, for the same reason the
+# install is here: it is a PackageManager metadata lookup, not sample
+# behaviour, and doing it inside the trace cost a binder round-trip plus a
+# process spawn out of a 120s budget that a launch was already exceeding
+# (2026-08-17: `am` was observed still in flight when the trace ended).
+# What crosses to drakvuf-android.sh is therefore the component, not the
+# package -- so the traced command is one `cat`, one `rm` and `am start`.
+#
+# Rejected alternatives, both faster in isolation and worse overall:
+# fusing resolve into the launch as
+# `am start -a android.intent.action.MAIN -c ... -p "$PKG"` is one binder
+# call instead of two, but an APK declaring several LAUNCHER activities
+# gets a disambiguation chooser rather than a launch; and reading the
+# component out of the APK on Dom0 (`aapt dump badging`) means running a
+# manifest parser on the HOST against live malware, which is host attack
+# surface bought for one string.
+#
+# See APK_PKG_HANDOFF in pipeline-android.env for why a guest file rather
+# than a readfile back to Dom0.
 #
 # `pm` is a two-line wrapper around `cmd package "$@"`; `cmd` is native,
 # so none of this needs the /data/system/environ/classpath import that
@@ -332,7 +349,14 @@ INSTALL_CMD='B=$(pm list packages 2>/dev/null); '
 # shellcheck disable=SC2016
 INSTALL_CMD="${INSTALL_CMD}"'pm install -r -t -g "$1" >/dev/null 2>&1; '
 # shellcheck disable=SC2016
-INSTALL_CMD="${INSTALL_CMD}"'pm list packages 2>/dev/null | while read -r p; do case "$B" in *"$p"*) ;; *) echo "$p";; esac; done | head -1 | sed "s/^package://" > '"$APK_PKG_HANDOFF"
+INSTALL_CMD="${INSTALL_CMD}"'PKG=$(pm list packages 2>/dev/null | while read -r p; do case "$B" in *"$p"*) ;; *) echo "$p";; esac; done | head -1 | sed "s/^package://"); '
+# shellcheck disable=SC2016
+INSTALL_CMD="${INSTALL_CMD}"'[ -n "$PKG" ] || exit 0; '
+# --brief still prints two lines; the component is the last. An APK need
+# not declare a launcher activity at all, in which case this writes a
+# diagnostic and the trace script's */* guard rejects it there.
+# shellcheck disable=SC2016
+INSTALL_CMD="${INSTALL_CMD}"'cmd package resolve-activity --brief -c android.intent.category.LAUNCHER "$PKG" 2>/dev/null | tail -1 > '"$APK_PKG_HANDOFF"
 
 injector -r "$REKALL" -d "$DOMAIN" -i "$PID" -m execproc \
     -e "/system/bin/sh" \

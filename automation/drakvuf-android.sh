@@ -210,7 +210,14 @@ if [ "$SAMPLE_KIND" = unsupported ]; then
     exit 0
 fi
 
-sleep 5 2>&1
+# Settling time before the trace attaches, inherited from
+# drakvuf-ubuntu.sh. The APK path does not need it: preconfig-android.sh
+# has just spent APK_INSTALL_WAIT seconds installing, so the clone is long
+# since settled, and every second here comes out of the trace budget the
+# launch is already short of.
+if [ "$SAMPLE_KIND" = elf ]; then
+    sleep 5 2>&1
+fi
 
 # --- The two invocations ------------------------------------------------
 #
@@ -224,27 +231,33 @@ if [ "$SAMPLE_KIND" = apk ]; then
     # the launch only. See that script for why the install moved out of
     # the traced window (F3: 3s untraced, unfinished after 120s traced).
     #
-    # The package name comes from the diff preconfig-android.sh ran around
-    # the install, left at APK_PKG_HANDOFF. Read it and REMOVE IT FIRST,
-    # before anything is launched: from `am start` onward the sample is
-    # running, and a file in its own staging directory naming its own
-    # package is exactly the sort of thing an evasive application looks
-    # for. Until that point no sample code has executed at all -- an
-    # Android application cannot run during installation and stays in the
-    # stopped state until an explicit launch -- so the file is never
-    # visible to it. See APK_PKG_HANDOFF in pipeline-android.env.
+    # THE TRACED WINDOW IS THE LAUNCH AND NOTHING ELSE. Everything that
+    # can be done before the sample runs has been: preconfig-android.sh
+    # installed it and resolved its launcher component, and left the
+    # component at APK_PKG_HANDOFF. What is left here is one `cat`, one
+    # `rm` and `am start`.
+    #
+    # That ordering is not tidiness. On 2026-08-17 this branch still
+    # resolved the component itself, and the trace ended with `am` caught
+    # mid-flight -- the binder round-trip to PackageManager had eaten the
+    # budget before the launch began. A metadata lookup is not sample
+    # behaviour and does not belong inside the measurement.
+    #
+    # REMOVE THE HANDOFF FIRST, before anything is launched: from
+    # `am start` onward the sample is running, and a file in its own
+    # staging directory naming its own component is exactly what an
+    # evasive application looks for. Until that point no sample code has
+    # executed at all -- an Android application cannot run during
+    # installation and stays in the stopped state until an explicit
+    # launch -- so the file is never visible to it.
     #
     # Only $APK_PKG_HANDOFF expands on Dom0 -- it is configuration, not
-    # sample-derived. Everything else must reach the guest literally.
-    # $PKG and $CMP hold untrusted, sample-chosen text, but they are shell
-    # VARIABLES assigned in the guest and used quoted, never text spliced
-    # into a command string by Dom0, so nothing re-parses them. That
+    # sample-derived. $CMP holds untrusted, sample-chosen text, but it is
+    # a shell VARIABLE assigned in the guest and used quoted, never text
+    # spliced into a command string by Dom0, so nothing re-parses it. That
     # distinction is the whole of docs/checklists/android.md:1430; see
     # preconfig-android.sh's install injection for the other half.
-    # shellcheck disable=SC2016  # $PKG/$CMP must expand in the guest
-    GUEST_CMD='PKG=$(cat '"$APK_PKG_HANDOFF"' 2>/dev/null); rm -f '"$APK_PKG_HANDOFF"'; '
-    # shellcheck disable=SC2016
-    GUEST_CMD="${GUEST_CMD}"'[ -n "$PKG" ] || exit 0; '
+    #
     # `am` is /system/bin/sh's two-line wrapper around `cmd activity`, the
     # same native binary `pm` wraps, so this needs no classpath import.
     # `monkey` would: it reaches app_process64, which aborts with exit 134
@@ -253,18 +266,24 @@ if [ "$SAMPLE_KIND" = apk ]; then
     # with the import, because ActivityManager.isUserAMonkey() reports it
     # to the sample -- the same anti-evasion reasoning that renamed the
     # injection anchor in issue #7.
-    # shellcheck disable=SC2016
-    GUEST_CMD="${GUEST_CMD}"'CMP=$(cmd package resolve-activity --brief -c android.intent.category.LAUNCHER "$PKG" 2>/dev/null | tail -1); '
-    # An APK need not declare a launcher activity, and resolve-activity
-    # then prints a diagnostic rather than a component. The guard is the
-    # difference between launching nothing and running `am start -n` on an
-    # error string.
+    # shellcheck disable=SC2016  # $CMP must expand in the guest
+    GUEST_CMD='CMP=$(cat '"$APK_PKG_HANDOFF"' 2>/dev/null); rm -f '"$APK_PKG_HANDOFF"'; '
+    # An APK need not declare a launcher activity, in which case preconfig
+    # wrote resolve-activity's diagnostic here instead of a component. The
+    # guard is the difference between launching nothing and running
+    # `am start -n` on an error string.
     # shellcheck disable=SC2016
     GUEST_CMD="${GUEST_CMD}"'case "$CMP" in */*) am start -n "$CMP" ;; esac'
 
+    # -t 150, not the ELF path's 120. dirwatch.c:650 arms a 180s timer over
+    # this phase, so 150 plus process startup leaves roughly 20s of
+    # headroom where 120 left 55s unused -- and a launch is heavier than an
+    # execve: zygote fork, ART init and an activity start, all at the
+    # trace's slowdown. Raising it past ~150 means raising dirwatch's timer
+    # too, which needs a recompile and slows every Android run.
     drakvuf -r "$REKALL" -d "$DOMAIN" -i "$PID" \
         -m execproc -e "/system/bin/sh" -f "-c" -f "$GUEST_CMD" \
-        -o json -t 120 \
+        -o json -t 150 \
         -a syscalls -a filetracer -a fileextractor -a memdump \
         -D "$RESULT/dump" \
         --memdump-dir "$RESULT/memdump" \
