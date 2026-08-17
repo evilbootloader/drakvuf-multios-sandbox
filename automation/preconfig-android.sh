@@ -247,5 +247,116 @@ injector -r "$REKALL" -d "$DOMAIN" -i "$PID" -m execproc \
     -f "-c" \
     -f "$NETCFG" \
     1>>"$LOG" 2>&1
+RC=$?
 
-exit $?;
+if [ $RC -ne 0 ]; then
+    echo "preconfig: network configuration failed (rc=$RC)" >>"$LOG"
+    exit $RC
+fi
+
+# 3. Install, if the sample is an APK.
+#
+# WHY THE INSTALL IS HERE AND NOT IN THE TRACE. It used to run inside
+# drakvuf-android.sh's traced command, where it never completed: 3s
+# untraced against not finishing in 120s under
+# `-a syscalls -a filetracer -a fileextractor -a memdump`, a lower bound
+# of 40x (docs/runbooks/verify-android-mvp.md F3). Raising -t is not
+# available either -- dirwatch arms a 180s timer over the trace phase, so
+# a larger -t just moves the failure to a clone/retry loop.
+#
+# Nothing is lost by not tracing it. An Android application cannot execute
+# its own code during installation: since Android 3.1 a newly installed
+# package sits in the stopped state and receives no broadcasts until an
+# explicit launch. `pm install` runs PackageManager and dex2oat -- system
+# code, not sample code. The sample's own behaviour begins at the launch,
+# which IS traced.
+#
+# Last of the three injections, so a network failure short-circuits before
+# the expensive step. Delivery is still first and still one injection with
+# no guest shell before it, so C6 is unaffected.
+
+# The structural test is repeated here rather than shared with
+# drakvuf-android.sh. The two scripts are separate dirwatch callbacks with
+# no channel between them, and the alternatives to repeating it -- a
+# marker file on Dom0, or a type byte carried through the guest -- both
+# add state for a test that is four lines of `dd` over a file both
+# scripts already hold. The two are not textually identical -- this one
+# only needs to know "APK or not", where drakvuf-android.sh also
+# separates ELF from unsupported -- but the APK arm must stay in step. A
+# divergence there means a sample gets installed and then execve'd, or
+# staged and never launched.
+magic=$(dd if="$RUNFOLDER/$RUNFILE" bs=1 count=4 2>/dev/null \
+        | od -An -tx1 | tr -d ' \n')
+
+SAMPLE_KIND=other
+case "$magic" in
+    504b0304)
+        if grep -qa 'AndroidManifest\.xml' -- "$RUNFOLDER/$RUNFILE"; then
+            SAMPLE_KIND=apk
+        fi
+        ;;
+esac
+
+if [ "$SAMPLE_KIND" != apk ]; then
+    exit 0
+fi
+
+# THE SAMPLE PATH IS PASSED AS ARGV, NOT INTERPOLATED INTO THE SCRIPT.
+#
+# `dirwatch`'s sample_name_admissible() rejects only '/' and control
+# characters, so a submitted filename may legitimately contain `"`, `$`,
+# a backtick or `;` -- all of which are live inside a double-quoted guest
+# shell word. Writing `pm install ... \"$GUEST_SAMPLE\"` into the script
+# text would execute a name like `$(reboot).apk` in the guest. That is the
+# hazard docs/checklists/android.md:1430 names ("Never include the
+# untrusted filename directly in a guest shell command"), and it was live
+# in drakvuf-android.sh's APK command until 2026-08-17.
+#
+# The fix is the `sh -c '...' sh "$UNSAFE"` idiom: the path arrives as a
+# separate execve element and the script refers to it as "$1", a variable
+# reference that is never re-parsed. No character in the name is special,
+# and a shell is still available for the package-name diff below.
+#
+# The diff is how the package is identified: `pm install` does not report
+# what it installed, and Dom0 cannot read it out of the APK. The result
+# goes to APK_PKG_HANDOFF for drakvuf-android.sh, which reads and removes
+# it before launching -- see that variable's note in pipeline-android.env
+# for why a guest file rather than a readfile back to Dom0.
+#
+# `pm` is a two-line wrapper around `cmd package "$@"`; `cmd` is native,
+# so none of this needs the /data/system/environ/classpath import that
+# app_process64 does. `pm install -r -t -g <path>` is evidenced on Dom0
+# 2026-08-17: rc=0, "Success", 3 seconds, resolving org.fdroid.fdroid.
+# shellcheck disable=SC2016  # $1/$B/$p must expand in the guest, not here
+INSTALL_CMD='B=$(pm list packages 2>/dev/null); '
+# shellcheck disable=SC2016
+INSTALL_CMD="${INSTALL_CMD}"'pm install -r -t -g "$1" >/dev/null 2>&1; '
+# shellcheck disable=SC2016
+INSTALL_CMD="${INSTALL_CMD}"'pm list packages 2>/dev/null | while read -r p; do case "$B" in *"$p"*) ;; *) echo "$p";; esac; done | head -1 | sed "s/^package://" > '"$APK_PKG_HANDOFF"
+
+injector -r "$REKALL" -d "$DOMAIN" -i "$PID" -m execproc \
+    -e "/system/bin/sh" \
+    -f "-c" \
+    -f "$INSTALL_CMD" \
+    -f "sh" \
+    -f "$GUEST_SAMPLE" \
+    1>>"$LOG" 2>&1
+RC=$?
+
+if [ $RC -ne 0 ]; then
+    echo "preconfig: pm install injection failed (rc=$RC)" >>"$LOG"
+    exit $RC
+fi
+
+# execproc returns at process START, not completion, so this sleep is the
+# only synchronisation Dom0 has. Returning early would hand the still
+# running install to the trace, which is precisely the slowdown this
+# split removes. See APK_INSTALL_WAIT in pipeline-android.env.
+#
+# The install's own success is NOT checked here: reading its exit status
+# back would mean a guest file plus a readfile injection, and the trace
+# reports the outcome anyway -- if the package is absent, the launch
+# resolves nothing and drakvuf.log says so.
+sleep "$APK_INSTALL_WAIT"
+
+exit 0;

@@ -220,30 +220,47 @@ sleep 5 2>&1
 # -m execproc or -m shellexec)", captured at
 # docs/runbooks/verify-user-placeholder.md:104.
 if [ "$SAMPLE_KIND" = apk ]; then
-    # pm install does not report the package it just installed, and Dom0
-    # cannot read it out of the APK either -- AndroidManifest.xml is
-    # binary AXML and there is no parser for it here. So the guest works
-    # it out by diffing the package list around the install.
+    # The sample is ALREADY INSTALLED by preconfig-android.sh; this traces
+    # the launch only. See that script for why the install moved out of
+    # the traced window (F3: 3s untraced, unfinished after 120s traced).
     #
-    # Done entirely in shell VARIABLES, with no temporary file: C7 keeps
-    # the guest filesystem written exactly once, by writefile, and a
-    # scratch file for bookkeeping would be a second write and one more
-    # thing for a sample to notice or tamper with.
+    # The package name comes from the diff preconfig-android.sh ran around
+    # the install, left at APK_PKG_HANDOFF. Read it and REMOVE IT FIRST,
+    # before anything is launched: from `am start` onward the sample is
+    # running, and a file in its own staging directory naming its own
+    # package is exactly the sort of thing an evasive application looks
+    # for. Until that point no sample code has executed at all -- an
+    # Android application cannot run during installation and stays in the
+    # stopped state until an explicit launch -- so the file is never
+    # visible to it. See APK_PKG_HANDOFF in pipeline-android.env.
     #
-    # UNVERIFIED, and this is the line most likely to need changing. The
-    # launch uses monkey with the LAUNCHER category because pm install
-    # does not say which activity to start and an APK need not declare one
-    # at all. Resolving the component from the manifest is the alternative.
-    # DRAFT-016 says to settle this against a real APK rather than on
-    # paper, and that has not happened.
-    # shellcheck disable=SC2016  # $B/$A/$p/$PKG must expand in the guest
-    GUEST_CMD='B=$(pm list packages 2>/dev/null); '
+    # Only $APK_PKG_HANDOFF expands on Dom0 -- it is configuration, not
+    # sample-derived. Everything else must reach the guest literally.
+    # $PKG and $CMP hold untrusted, sample-chosen text, but they are shell
+    # VARIABLES assigned in the guest and used quoted, never text spliced
+    # into a command string by Dom0, so nothing re-parses them. That
+    # distinction is the whole of docs/checklists/android.md:1430; see
+    # preconfig-android.sh's install injection for the other half.
+    # shellcheck disable=SC2016  # $PKG/$CMP must expand in the guest
+    GUEST_CMD='PKG=$(cat '"$APK_PKG_HANDOFF"' 2>/dev/null); rm -f '"$APK_PKG_HANDOFF"'; '
     # shellcheck disable=SC2016
-    GUEST_CMD="${GUEST_CMD}"'pm install -r -t -g "'"$CMD"'" >/dev/null 2>&1; '
+    GUEST_CMD="${GUEST_CMD}"'[ -n "$PKG" ] || exit 0; '
+    # `am` is /system/bin/sh's two-line wrapper around `cmd activity`, the
+    # same native binary `pm` wraps, so this needs no classpath import.
+    # `monkey` would: it reaches app_process64, which aborts with exit 134
+    # before main() without the import (evidenced 2026-08-17, and already
+    # recorded at docs/checklists/android.md:833). monkey is not used even
+    # with the import, because ActivityManager.isUserAMonkey() reports it
+    # to the sample -- the same anti-evasion reasoning that renamed the
+    # injection anchor in issue #7.
     # shellcheck disable=SC2016
-    GUEST_CMD="${GUEST_CMD}"'PKG=$(pm list packages 2>/dev/null | while read -r p; do case "$B" in *"$p"*) ;; *) echo "$p";; esac; done | head -1 | sed "s/^package://"); '
+    GUEST_CMD="${GUEST_CMD}"'CMP=$(cmd package resolve-activity --brief -c android.intent.category.LAUNCHER "$PKG" 2>/dev/null | tail -1); '
+    # An APK need not declare a launcher activity, and resolve-activity
+    # then prints a diagnostic rather than a component. The guard is the
+    # difference between launching nothing and running `am start -n` on an
+    # error string.
     # shellcheck disable=SC2016
-    GUEST_CMD="${GUEST_CMD}"'[ -n "$PKG" ] && monkey -p "$PKG" -c android.intent.category.LAUNCHER 1'
+    GUEST_CMD="${GUEST_CMD}"'case "$CMP" in */*) am start -n "$CMP" ;; esac'
 
     drakvuf -r "$REKALL" -d "$DOMAIN" -i "$PID" \
         -m execproc -e "/system/bin/sh" -f "-c" -f "$GUEST_CMD" \
