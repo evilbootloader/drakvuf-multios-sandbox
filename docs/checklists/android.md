@@ -621,7 +621,9 @@ sudo vmi-process-list android_sandbox | grep -i drakvuf
 | Android PID | LibVMI PID/TGID | Runtime stable | Notes |
 |---:|---:|---:|---|
 | 5715 |  5715  | Yes | Pre-reinstall image; superseded — see below |
-| 3163 |  3163  | Yes | **Current.** 2026-08-11 rebuild (issue #7); exactly one match |
+| 3163 |  3163  | Yes | 2026-08-11 rebuild (issue #7); exactly one match. Superseded — see below |
+| 3164 |  3164  | Yes | Undated re-save before DRAFT-013; saved state `516644e2…`. Superseded |
+| 3174 |  3174  | Yes | **Current.** 2026-08-17 re-save; saved state `465aa4d7…`; backgrounded `ping` |
 
 > **Re-run 2026-08-11 (issue #7). Two things above no longer describe the
 > template**, and both are deliberate rather than drift. The block above is
@@ -645,6 +647,61 @@ sudo vmi-process-list android_sandbox | grep -i drakvuf
 > > multiple matching anchors" must key on something other than the name, or
 > > a guest that happens to run a second `nano` gets the wrong process
 > > injected — and `injector` does not warn.
+
+> **Re-run 2026-08-17. The `nano` anchor was replaced, because it could not
+> be injected into.** The 2026-08-11 block above is left as written.
+>
+> **Why it had to change.** `nano` was backgrounded on a console VT and took
+> `SIGTTIN` on its first tty read, so `xl save` captured it **stopped**.
+> `injector` waits for the target PID to be scheduled onto a vCPU, has no
+> timeout, and prints nothing while waiting — so on every clone restored
+> from that image, every injection hung silently and forever. It was
+> reachable only by switching to the console VT and typing `fg`, one
+> injection per nudge. Full diagnosis and evidence:
+> `docs/runbooks/verify-android-mvp.md` F1.
+>
+> **This invalidates §1.5's "Confirm the injection anchor is running".** A
+> `vmi-process-list` match proves the task *exists*; it says nothing about
+> whether it is ever *scheduled*, which is the property `injector` actually
+> needs. The two are not the same check and the checklist conflated them.
+>
+> **The replacement is a backgrounded `ping` against loopback**, PID 3174,
+> saved state `465aa4d7…`. Self-scheduling — one packet per interval, no
+> tty, no fork — and because the target is `127.0.0.1` **nothing reaches the
+> vif**, so `tcpdump.sh`'s per-sample pcaps stay free of anchor traffic and
+> nothing appears on the analysis VLAN. The anti-evasion constraint above is
+> unchanged: the string `drakvuf` appears nowhere, and the name-grep warning
+> still applies.
+>
+> **Acceptance evidence:** three full analyses completed with no console
+> interaction. That is nine consecutive injections (two per preconfig, one
+> per trace), against zero unattended injections under `nano`.
+>
+> **New requirements this episode adds for any future anchor**, all
+> evidenced rather than assumed:
+>
+> 1. **It must be scheduled on its own.** Existence is not enough. The
+>    acceptance test is three back-to-back `writefile`s on a fresh clone
+>    with the console untouched, or one full unattended analysis.
+> 2. **It must run as root.** `preconfig-android.sh` imports
+>    `/data/system/environ/classpath`, which is `0600 system:system`. A
+>    non-root anchor reads nothing, `app_process64` aborts 134, and the
+>    clone's network configuration fails **silently**
+>    (`verify-android-mvp.md` F5).
+> 3. **It must be 64-bit.** `injector --help`: the Linux `execproc` path is
+>    64-bit only.
+> 4. **It must not put traffic on the analysis VLAN.** The anchor runs for
+>    the whole analysis and `tcpdump.sh` captures the vif throughout, so
+>    anything it emits lands in the primary network evidence for every
+>    sample. Loopback satisfies this; an external ping target would not.
+> 5. **It should not hold a console VT**, so the guest can sit on the
+>    Android GUI rather than a text console (F7).
+>
+> The ticked item "Confirm the anchor creates no unnecessary files, sockets,
+> or recurring logs" is **partially** satisfied rather than fully: `ping`
+> holds a raw socket and wakes on an interval by construction. It writes no
+> files and no logs, and emits nothing observable outside the guest, which
+> is the part that matters for evidence integrity.
 >
 > **2. The DNS DNAT was NOT re-applied.** `iptables -t nat -L OUTPUT` was
 > empty on the reinstalled image and nothing was added, so the redirect to
@@ -3082,6 +3139,8 @@ Next phase:
 | 2026-08-11 | Golden `android` VM **reinstalled** with `HWACCEL=0` | BlissOS installer, Options → Graphics → Hardware Acceleration → Disable hardware acceleration; procedure in `docs/android_setup.md` | Golden VM boots to a usable UI; AND-001 resolved | evilbootloader |
 | 2026-08-11 | Issue log populated from the 2026-08-11 diagnostic capture; §0.3 and §1.5 annotated | — | Phase 1 reopened: `android_sandbox` must be rebuilt from the reinstalled golden — DRAFT-037, published as [#7](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/7) | evilbootloader |
 | 2026-08-11 | **`android_sandbox` rebuilt and restore-validated** from the reinstalled golden. New saved state `1844fc0a…`, anchor PID 3163. DNS DNAT deliberately not re-applied; anchor renamed to `nano` for anti-evasion | `docs/runbooks/rebuild-android-sandbox.md` | Phase 1 complete; issue #7 closed. §1.3 isolation still open | evilbootloader |
+| 2026-08-17 | **Android MVP bring-up run.** `injector` proven against BlissOS (12 MB APK `writefile`/`readfile` byte-exact), clone 32G, network injection, native ELF traced, APK installed and launched. Every injection required a manual `fg` at the guest console — the `nano` anchor is never scheduled | `docs/runbooks/verify-android-mvp.md` (F1–F8) | `monkey` rejected in favour of `am start -n`; APK install exceeds the 120 s trace window | evilbootloader |
+| 2026-08-17 | **`android_sandbox` re-saved to replace the injection anchor.** New saved state `465aa4d7…`, anchor PID **3174**, anchor is a backgrounded `ping` — self-scheduling, which the `nano` anchor was not. `pipeline-android.env` and `CLAUDE.md` updated the same day | §1.4/§1.5 annotations below | Three full unattended analyses completed; F1 closed pending the pcap question in §1.4 | evilbootloader |
 
 ---
 

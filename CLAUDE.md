@@ -192,34 +192,60 @@ these files as missing entirely; that was wrong — `misc/` had simply not
 been checked. Always check for a `misc/` directory before concluding a
 referenced file doesn't exist anywhere in this repo.
 
-Android's own files, as of 2026-08-15:
+Android's own files, as of 2026-08-17:
 
 - `pipeline-android.env` and `run_analysis-android.sh` — **exist**
   (DRAFT-015). `CLONE_LV_SIZE=32G`, `GUEST_STAGING_DIR=/data/local/tmp`,
-  `INJECTION_PID=3164`.
+  `INJECTION_PID=3174`.
 - `preconfig-android.sh` and `drakvuf-android.sh` — **exist**
-  (DRAFT-016). The network half is one Bliss-Bass EthernetConfig call
-  rather than Ubuntu's `ip` chain, measured by DRAFT-013 and recorded as
-  `docs/checklists/android.md` §1.6. `drakvuf-android.sh` has **two
+  (DRAFT-016, reworked 2026-08-17). `preconfig-android.sh` runs up to
+  three injections: `writefile` delivery, one Bliss-Bass EthernetConfig
+  call for the network (measured by DRAFT-013,
+  `docs/checklists/android.md` §1.6, not Ubuntu's `ip` chain), and — for
+  an APK only — `pm install`. `drakvuf-android.sh` then has **two
   execution paths**, selected from the sample's own bytes: an APK
-  (ZIP containing `AndroidManifest.xml`) is `pm install`ed and launched
-  through `/system/bin/sh -c`; a native ELF is `execve`d directly, the
-  Ubuntu shape; anything else is `unsupported_type` and is not executed.
-  The selector is a structural test, deliberately **not** the state
-  model's advisory `detected_type`.
+  (ZIP containing `AndroidManifest.xml`) is **launched**, already
+  installed, via `cmd package resolve-activity` + `am start -n`; a native
+  ELF is `execve`d directly, the Ubuntu shape; anything else is
+  `unsupported_type` and is not executed. The selector is a structural
+  test, deliberately **not** the state model's advisory `detected_type`,
+  and it is repeated in both scripts rather than carried between them —
+  they are separate `dirwatch` callbacks with no channel, and a marker
+  file is state a sample could read.
 - `clone-android.pl` — **will never exist.** The clone step is the shared
   `clone.pl`; see its entry above and C1/C2.
 
-> **No `injector` or `drakvuf` operation has ever run against an Android
-> guest.** Every Android injection in this repository — including the two
-> scripts above — is built from `--help` captured on Dom0 against
-> **Ubuntu**, or from commands run by hand at a guest console. The first
-> Dom0 step for Android is a single `writefile` of a benign file verified
-> with `readfile`, not an analysis run.
+**Why the install is not traced, and why the launch is not `monkey`**
+(both settled on Dom0 2026-08-17, `docs/runbooks/verify-android-mvp.md`
+F2/F3): `pm install` takes 3s untraced and does not finish in 120s under
+the trace, and `-t` cannot be raised past `dirwatch`'s 180s timer. Nothing
+is lost by installing untraced — an Android application cannot run its own
+code during installation. `monkey` was rejected because
+`ActivityManager.isUserAMonkey()` reports it to the sample, and because it
+reaches `app_process64`, which aborts with exit 134 without the
+`/data/system/environ/classpath` import that `am` (a wrapper around the
+native `cmd`) does not need.
 
-Nothing Android has been executed on Dom0. The launcher and its config are
-written but unrun, so treat them as untested code rather than as a working
-pipeline.
+**Untrusted filenames must never be spliced into a guest shell string.**
+`dirwatch`'s `sample_name_admissible()` rejects only `/` and control
+characters, so `"`, `$`, a backtick and `;` are all admissible in a
+submitted name — and all are live inside a double-quoted guest shell word.
+The `pm install` injection therefore uses the `sh -c '…' sh "$UNSAFE"`
+idiom — `-e /system/bin/sh -f -c -f "$INSTALL_CMD" -f sh -f "$GUEST_SAMPLE"`
+— so the path arrives as a separate `execve` element and the script refers
+to it as `"$1"`, a variable reference nothing re-parses. Sample-derived text
+may be held in guest shell *variables* and used quoted, which is what the
+launch does with the package name; what it may not do is reach the guest as
+text Dom0 pasted into a command.
+
+**Android is execution-evidenced end to end as of 2026-08-17**
+(`docs/runbooks/verify-android-mvp.md`): `injector` `writefile`/`readfile`
+round-trips 12 MB byte-exact, the network injection configures the clone,
+a native ELF traces through the execve path, and an APK installs and
+launches. What is **not** yet evidenced is the reworked APK path above —
+install-in-preconfig and `am start` are implemented but have not run on
+Dom0, and no Android step has been re-run since the 2026-08-17 template
+re-save (`465aa4d7…`). Treat the APK path as untested code.
 
 **Neither launcher may run while the other does** — `dirwatch` derives each
 clone's VLAN from a process-local worker-slot index, so two watchers
