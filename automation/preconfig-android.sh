@@ -326,7 +326,11 @@ fi
 # process spawn out of a 120s budget that a launch was already exceeding
 # (2026-08-17: `am` was observed still in flight when the trace ended).
 # What crosses to drakvuf-android.sh is therefore the component, not the
-# package -- so the traced command is one `cat`, one `rm` and `am start`.
+# package -- and it crosses via Dom0, so the traced command needs no shell
+# at all. Measured 2026-08-17: with the component read in-guest, `sh`,
+# `cat` and `rm` cost 1434 + 1546 + 1542 traced syscall events between the
+# trace attaching and `am` starting. Reading it here instead leaves the
+# traced window holding a single `execve` of /system/bin/am.
 #
 # Rejected alternatives, both faster in isolation and worse overall:
 # fusing resolve into the launch as
@@ -336,9 +340,6 @@ fi
 # component out of the APK on Dom0 (`aapt dump badging`) means running a
 # manifest parser on the HOST against live malware, which is host attack
 # surface bought for one string.
-#
-# See APK_PKG_HANDOFF in pipeline-android.env for why a guest file rather
-# than a readfile back to Dom0.
 #
 # `pm` is a two-line wrapper around `cmd package "$@"`; `cmd` is native,
 # so none of this needs the /data/system/environ/classpath import that
@@ -377,10 +378,50 @@ fi
 # running install to the trace, which is precisely the slowdown this
 # split removes. See APK_INSTALL_WAIT in pipeline-android.env.
 #
-# The install's own success is NOT checked here: reading its exit status
-# back would mean a guest file plus a readfile injection, and the trace
-# reports the outcome anyway -- if the package is absent, the launch
-# resolves nothing and drakvuf.log says so.
+# 3 seconds measured for a 12 MB APK on 2026-08-17, network configuration
+# included, so the default leaves a wide margin. The margin is the point:
+# a preconfig timeout is a clone/retry loop, not an error.
 sleep "$APK_INSTALL_WAIT"
+
+# Bring the component to Dom0. It is the LAST thing that happens in the
+# guest before the trace attaches, and it is why the traced command needs
+# no shell: drakvuf-android.sh passes what lands here straight to
+# `am start -n` as an argv element.
+#
+# This also makes the resolved component visible in preconfig.log, which
+# is the diagnostic this pipeline most conspicuously lacked -- an empty
+# handoff previously showed up only as a trace where nothing launched.
+COMPONENT_FILE="$OUTPUTFOLDER/$MD5/launch-component"
+
+injector -r "$REKALL" -d "$DOMAIN" -i "$PID" -m readfile \
+    -B "$COMPONENT_FILE" \
+    -e "$APK_PKG_HANDOFF" \
+    1>>"$LOG" 2>&1
+RC=$?
+
+# Remove the guest copy. From the launch onward the sample is running, and
+# a file in its own staging directory naming its own component is exactly
+# what an evasive application looks for. Nothing of the sample's has run
+# yet -- an Android application cannot execute during installation and
+# stays in the stopped state until an explicit launch -- so removing it
+# here closes the window entirely rather than narrowing it.
+#
+# argv, not a shell: there is no untrusted text in this command, but a
+# guest shell spawned here would be two more processes for the trace to
+# step through if anything about the ordering ever changed.
+injector -r "$REKALL" -d "$DOMAIN" -i "$PID" -m execproc \
+    -e "/system/bin/rm" \
+    -f "-f" \
+    -f "$APK_PKG_HANDOFF" \
+    1>>"$LOG" 2>&1
+
+if [ $RC -ne 0 ] || [ ! -s "$COMPONENT_FILE" ]; then
+    echo "preconfig: no launcher component resolved; the APK installed but" \
+         "nothing will be launched. Check the pm install output above." >>"$LOG"
+    rm -f "$COMPONENT_FILE"
+    exit 0
+fi
+
+echo "preconfig: launcher component = $(cat "$COMPONENT_FILE")" >>"$LOG"
 
 exit 0;

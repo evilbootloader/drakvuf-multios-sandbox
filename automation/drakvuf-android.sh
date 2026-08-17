@@ -231,32 +231,26 @@ if [ "$SAMPLE_KIND" = apk ]; then
     # the launch only. See that script for why the install moved out of
     # the traced window (F3: 3s untraced, unfinished after 120s traced).
     #
-    # THE TRACED WINDOW IS THE LAUNCH AND NOTHING ELSE. Everything that
-    # can be done before the sample runs has been: preconfig-android.sh
-    # installed it and resolved its launcher component, and left the
-    # component at APK_PKG_HANDOFF. What is left here is one `cat`, one
-    # `rm` and `am start`.
+    # THE TRACED WINDOW IS ONE execve AND NOTHING ELSE. Everything that
+    # can happen before the sample runs already has: preconfig-android.sh
+    # installed the APK, resolved its launcher component, read it back to
+    # Dom0 and removed the guest copy. What is traced is `am start -n`.
     #
-    # That ordering is not tidiness. On 2026-08-17 this branch still
-    # resolved the component itself, and the trace ended with `am` caught
-    # mid-flight -- the binder round-trip to PackageManager had eaten the
-    # budget before the launch began. A metadata lookup is not sample
-    # behaviour and does not belong inside the measurement.
+    # That is measured, not tidiness. On 2026-08-17 this branch read the
+    # component in-guest with a shell, and `sh`, `cat` and `rm` cost
+    # 1434 + 1546 + 1542 traced syscall events before `am` even began --
+    # every one of them at the trace's slowdown, out of the same budget
+    # the launch was already failing to fit into. A shell here is three
+    # toybox execs and their dynamic linking; none of it is sample
+    # behaviour.
     #
-    # REMOVE THE HANDOFF FIRST, before anything is launched: from
-    # `am start` onward the sample is running, and a file in its own
-    # staging directory naming its own component is exactly what an
-    # evasive application looks for. Until that point no sample code has
-    # executed at all -- an Android application cannot run during
-    # installation and stays in the stopped state until an explicit
-    # launch -- so the file is never visible to it.
-    #
-    # Only $APK_PKG_HANDOFF expands on Dom0 -- it is configuration, not
-    # sample-derived. $CMP holds untrusted, sample-chosen text, but it is
-    # a shell VARIABLE assigned in the guest and used quoted, never text
-    # spliced into a command string by Dom0, so nothing re-parses it. That
-    # distinction is the whole of docs/checklists/android.md:1430; see
-    # preconfig-android.sh's install injection for the other half.
+    # NO GUEST SHELL, so nothing is re-parsed. $CMP is guest-derived and
+    # therefore untrusted -- an APK chooses its own package and activity
+    # names -- but it reaches execve as a single argv element and no
+    # character in it is special. It is validated for shape below anyway,
+    # because a component that is not <package>/<activity> means
+    # resolve-activity returned a diagnostic and there is nothing to
+    # launch.
     #
     # `am` is /system/bin/sh's two-line wrapper around `cmd activity`, the
     # same native binary `pm` wraps, so this needs no classpath import.
@@ -266,14 +260,34 @@ if [ "$SAMPLE_KIND" = apk ]; then
     # with the import, because ActivityManager.isUserAMonkey() reports it
     # to the sample -- the same anti-evasion reasoning that renamed the
     # injection anchor in issue #7.
-    # shellcheck disable=SC2016  # $CMP must expand in the guest
-    GUEST_CMD='CMP=$(cat '"$APK_PKG_HANDOFF"' 2>/dev/null); rm -f '"$APK_PKG_HANDOFF"'; '
-    # An APK need not declare a launcher activity, in which case preconfig
-    # wrote resolve-activity's diagnostic here instead of a component. The
-    # guard is the difference between launching nothing and running
-    # `am start -n` on an error string.
-    # shellcheck disable=SC2016
-    GUEST_CMD="${GUEST_CMD}"'case "$CMP" in */*) am start -n "$CMP" ;; esac'
+    COMPONENT_FILE="$RESULT/launch-component"
+    CMP=$(cat "$COMPONENT_FILE" 2>/dev/null)
+
+    # Exactly one '/', and only characters a package or class name can
+    # contain -- '$' included, since an inner class is a legitimate
+    # launcher activity. Anything else is resolve-activity's diagnostic,
+    # or an empty file, or preconfig never got that far.
+    #
+    # The '$' is QUOTED inside the bracket expression. Unquoted, the shell
+    # expands `$-` (the current option flags) while building the pattern,
+    # which silently eats both '$' and '-' from the character class and
+    # rejects perfectly valid components -- caught in test 2026-08-17,
+    # where com.x/.Outer$Inner and a_b-c.d/.E were both refused.
+    LAUNCH_OK=no
+    case "$CMP" in
+        */*/*)                    ;;
+        */*) LAUNCH_OK=yes        ;;
+    esac
+    case "$CMP" in
+        *[!A-Za-z0-9._/'$'-]*) LAUNCH_OK=no ;;
+    esac
+
+    if [ "$LAUNCH_OK" != yes ]; then
+        echo "drakvuf-android: no usable launcher component" \
+             "(got '${CMP:-<empty>}'); nothing executed. See preconfig.log." \
+             >>"$RESULT/drakvuf.log" 2>&1
+        exit 1
+    fi
 
     # -t 150, not the ELF path's 120. dirwatch.c:650 arms a 180s timer over
     # this phase, so 150 plus process startup leaves roughly 20s of
@@ -282,7 +296,7 @@ if [ "$SAMPLE_KIND" = apk ]; then
     # trace's slowdown. Raising it past ~150 means raising dirwatch's timer
     # too, which needs a recompile and slows every Android run.
     drakvuf -r "$REKALL" -d "$DOMAIN" -i "$PID" \
-        -m execproc -e "/system/bin/sh" -f "-c" -f "$GUEST_CMD" \
+        -m execproc -e "/system/bin/am" -f "start" -f "-n" -f "$CMP" \
         -o json -t 150 \
         -a syscalls -a filetracer -a fileextractor -a memdump \
         -D "$RESULT/dump" \
