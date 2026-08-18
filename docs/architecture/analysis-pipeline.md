@@ -29,7 +29,7 @@ dirwatch 1 ubuntu_sandbox $REPO_ROOT/misc/ubuntu_sandbox.cfg \
   $REPO_ROOT/profiles/linux.json 1415 \
   /malware_incoming/ubuntu /malware_processing/ubuntu \
   /malware_finished/ubuntu 2 \
-  $REPO_ROOT/automation/{clone-ubuntu.pl,preconfig-ubuntu.sh,\
+  $REPO_ROOT/automation/{clone.pl,preconfig-ubuntu.sh,\
   drakvuf-ubuntu.sh,cleanup.sh,tcpdump.sh}
 ```
 
@@ -114,12 +114,53 @@ A retained fallback would have been an untested code path whose only
 function was to restore that exposure. There are deliberately no
 instructions here for re-enabling it.
 
-Per-sample flow: on a new file, `dirwatch` moves it out of the watch folder,
-then calls back into the worker scripts in order —
+Per-sample flow: on a new file, `dirwatch` **admits or rejects the filename**,
+moves it out of the watch folder with `rename(2)`, then calls back into the
+worker scripts in order —
 `clone_script → config_script → drakvuf_script → cleanup_script`, with
 `tcpdump_script` started on a separate thread. A 60s timeout guards the
 preconfig phase and a 180s timeout guards the drakvuf-trace phase; either
 timeout triggers `cleanup_script` and a fresh clone retry.
+
+`cleanup_script` also runs when the analysis **succeeds** — corrected
+2026-08-15. Until then it ran only on the timeout path, so a normally
+completed analysis left its clone running: the domain was torn down lazily
+by `clone.pl`, on the next sample that happened to claim the same VLAN
+slot. Invisible on a busy queue and permanent on a quiet one, and a
+containment defect rather than untidiness, because a finished sample kept
+executing with NAT'd egress until something displaced it. Both `dirwatch.c`
+and `dirwatch_old.c` carried it, so it came from the upstream tool.
+
+> **`cleanup.sh` still does not remove the clone's LV**, on either path —
+> it pauses and destroys the domain only. `clone.pl` removes a stale
+> snapshot when it next reuses that name, so the count is bounded by
+> `MAX_CLONES` rather than growing without limit, but one snapshot per slot
+> persists between runs. That is the state `lvs` shows on an idle Dom0
+> (`docs/runbooks/verify-android-isolation.md:975`).
+
+**Every callback is spawned as an argv vector, never as a command string**
+(DRAFT-030, 2026-08-15). The five call sites used to build
+`g_strdup_printf()` templates and pass them to
+`g_spawn_command_line_sync()`, which runs no shell but *does* apply
+`g_shell_parse_argv()` — shell word-splitting and quote handling over a
+string containing an attacker-chosen filename. A sample named `a b.exe`
+split into two arguments and shifted every positional after it, so the
+worker scripts silently received `$RUNFILE` and `$OUTPUTFOLDER` misaligned;
+an unbalanced quote failed to parse and left the sample to be retried
+forever. The 15-argument CLI contract and the callback arities are
+unchanged (C9) — only the construction is.
+
+**Filename admission** happens before a worker slot is claimed, so an
+unprocessable name costs nothing. Rejected: empty names, `.`/`..`, path
+separators, control characters, and names over 200 bytes. **Not** rejected:
+a leading `-`, because every consumer prefixes the folder
+(`md5sum -- "$RUNFOLDER/$RUNFILE"`) so the byte is never in option
+position; and Windows reserved device names, which are a guest-side hazard
+that `dirwatch` — not told which OS it serves — cannot judge (DRAFT-034
+owns that). A rejected sample is moved to `<out_folder>/rejected/` under
+the SHA-256 of its own name, because leaving it in the watch folder would
+re-reject and re-log it on every scan. A name that is not safe to path-join
+is logged and left untouched rather than moved.
 
 > **The trace-phase headroom is about 55s, and it has been exceeded.**
 > `drakvuf-ubuntu.sh` does `sleep 5` then `drakvuf ... -t 120`, so a run
@@ -263,7 +304,7 @@ evidence for that file's placement, re-derived from the current sources on
 
 | File | Ubuntu instance | Invoked as |
 |---|---|---|
-| `clone-*.pl` | `clone-ubuntu.pl` | `<origin> <vlan> <config>` — `CLONE_CMD`, `dirwatch.c:122,175`; the script enforces `@ARGV != 3` (`:169`) |
+| `clone.pl` (shared) | `clone.pl` | `<origin> <vlan> <config>` — `CLONE_CMD`, `dirwatch.c:122,175`; the script enforces `@ARGV != 3` (`:169`) |
 | `preconfig-*.sh` | `preconfig-ubuntu.sh` | 8 args — `CONFIG_CMD`, `:124,378`; the script reads 7 and ignores `utime` |
 | `drakvuf-*.sh` | `drakvuf-ubuntu.sh` | 8 args — `DRAKVUF_CMD`, `:123,398`; same, reads 7 |
 | `run_analysis-*.sh` | `run_analysis-ubuntu.sh` | top-level entry point; takes no arguments |
@@ -299,7 +340,7 @@ exactly **one** consumer in the tree (`run_analysis-ubuntu.sh:49`), while
 the bridge name it nominally parameterizes is hard-coded on **11 lines
 across 7 files** — `network-setup.sh:144,147,148,149,169`,
 `cleanup.sh:118`, `tcpdump.sh:117`, `drakvuf-ubuntu.sh:161`,
-`clone-ubuntu.pl:145`, `misc/ubuntu_sandbox.cfg:53` and
+`clone.pl:191`, `misc/ubuntu_sandbox.cfg:53` and
 `misc/android_sandbox.cfg:58`.
 `network-setup.sh`'s own header already says so: *"xenbr0 (uplink) and
 xenbr1 (analysis bridge) are project-wide fixed names… Renaming them here
@@ -312,7 +353,7 @@ alone is not enough."*
 | **Per-run** — already `dirwatch` arguments, no configuration needed | profile path, clone domain ID, injection PID, vlan, run folder, input filename, output folder (+ the ignored `utime`) | `CONFIG_CMD`/`DRAKVUF_CMD` |
 | **Per-OS** — genuinely differ by target | sandbox domain, `.cfg`, kernel profile, saved state, the three `/malware_*/<os>` folders, guest staging path, injection PID, the guest network recipe, the guest execution recipe | `pipeline-ubuntu.env`; guest recipes are inline in `preconfig-ubuntu.sh:205` and `drakvuf-ubuntu.sh:150` |
 | **Host-global, but sitting in a per-OS file** | `MAX_CLONES` (`:139`), `ANALYSIS_BRIDGE` (`:141`), `WATCH_MODE` (`:124`), and `GUEST_NAMESERVER` (`:119`) as containment *policy* | `pipeline-ubuntu.env` |
-| **Host-global, and reachable by no configuration at all** | `vg-root` (`clone-ubuntu.pl:142`), `xenbr1` (`:145`), `-L64G` (`:280`), the `172.16.<vlan>.0/24` scheme (`network-setup.sh:148`) | hard-coded |
+| **Host-global, and reachable by no configuration at all** | `vg-root` (`clone.pl:161`), `xenbr1` (`:191`) and the `172.16.<vlan>.0/24` scheme (`network-setup.sh:148`) | hard-coded. `-L64G` was here until DRAFT-015 and is now `CLONE_LV_SIZE` |
 
 The guest network recipe is the least portable line in the pipeline and is
 worth naming explicitly. `preconfig-ubuntu.sh:205` assumes `eth0`, `sudo`,
@@ -378,7 +419,8 @@ bridge, the `172.16.<vlan>.0/24` prefix and the volume group.
 and nine unreachable siblings.
 
 **The clone LV size is not among them — it is per-OS.** `-L64G`
-(`clone-ubuntu.pl:280`) sizes an LVM copy-on-write *exception store*: how
+(`clone.pl:326`, from `CLONE_LV_SIZE` since DRAFT-015) sizes an LVM
+copy-on-write *exception store*: how
 much divergence from the origin a clone may accumulate before the snapshot
 is invalidated. That is a function of how much the guest writes during an
 analysis, which is a property of the OS image and its workload, not of the
@@ -452,14 +494,35 @@ Every item is written to be verifiable **from the files**, not from an
 assertion, so it stays usable as a review instrument and remains
 convertible into a static CI check later (DRAFT-026a) without being one now.
 
-**C1 — Create exactly these five files, and no others.**
-`pipeline-<os>.env`, `clone-<os>.pl`, `preconfig-<os>.sh`,
-`drakvuf-<os>.sh`, `run_analysis-<os>.sh`.
+**C1 — Create exactly these four files, and no others.**
+`pipeline-<os>.env`, `preconfig-<os>.sh`, `drakvuf-<os>.sh`,
+`run_analysis-<os>.sh`. The clone step is **not** among them — it is
+shared; see C2.
+
+> **Amended 2026-08-15 (DRAFT-015).** C1 previously required five files,
+> including `clone-<os>.pl`. Writing Android's revealed that
+> `clone-ubuntu.pl` held exactly one OS-specific value — the `-L64G`
+> snapshot size — because everything else already arrives on the
+> 3-argument contract, is derived from it, or is host-global. With that
+> one value read from `$ENV{CLONE_LV_SIZE}`, a `clone-android.pl` would
+> have been a byte-identical copy, so the file was renamed
+> `automation/clone.pl` and shared instead. The test in decision 3 is what
+> permits this: a shared script reading a per-OS value from the
+> environment does not thereby learn about an OS.
+>
+> The rename was verified against Android before it was made — handed
+> `android_sandbox 1 misc/android_sandbox.cfg`, the existing rewrites
+> reproduce byte-for-byte the config that
+> `docs/runbooks/verify-android-isolation.md` steps 2–3 wrote by hand.
 
 **C2 — Do not copy, fork or special-case a shared file.** `dirwatch.c`,
-`network-setup.sh`, `cleanup.sh`, `tcpdump.sh`. Needing a change in one of
-them is a change to three pipelines at once and takes its own issue; a
-`<os>`-suffixed copy of any of them fails this check outright.
+`clone.pl`, `network-setup.sh`, `cleanup.sh`, `tcpdump.sh`. Needing a
+change in one of them is a change to three pipelines at once and takes its
+own issue; a `<os>`-suffixed copy of any of them fails this check
+outright. `clone-<os>.pl` in particular is now a C2 violation rather than
+a C1 requirement — if a target seems to need one, the value that differs
+belongs in `pipeline-<os>.env` and the environment, as `CLONE_LV_SIZE`
+does.
 
 **C3 — `pipeline-<os>.env` defines**: `SANDBOX_DOMAIN`, `DOMAIN_CONFIG`,
 `KERNEL_PROFILE`, `SAVED_STATE`, `TARGET_OS` and the three
@@ -512,9 +575,14 @@ OS's execution method.
 Not preferences. Each is a defect that gets multiplied if the order is
 ignored:
 
-- **DRAFT-033 before DRAFT-015.** `clone-ubuntu.pl` is the template
+- **DRAFT-033 before DRAFT-015.** ~~`clone-ubuntu.pl` is the template
   `clone-android.pl` is written from and it checks no exit status. Copy
-  first and the defect exists in three files.
+  first and the defect exists in three files.~~ **Premise superseded
+  2026-08-15, ordering unchanged.** There is no copy: DRAFT-015 renamed the
+  file to the shared `clone.pl` (see C1/C2). DRAFT-033's fixes are *more*
+  urgent for it, not less — a file with no exit-status checks now serves
+  three pipelines instead of one. DRAFT-015 ran first in practice; DRAFT-033
+  now lands on `clone.pl`.
 - **DRAFT-030 before DRAFT-016.** DRAFT-030 now owns the normalizer and the
   guest-naming retrofit. Writing `preconfig-android.sh` first means writing
   it against SHA-256 staging and rewriting it immediately.
@@ -523,14 +591,25 @@ ignored:
 - **DRAFT-036 before any two watchers run at once** — unchanged, and a
   correctness prerequisite rather than tuning.
 
-> **Open: who creates `platform.env`.** Decision 2 is a code change, and
-> issue #6 does not make code changes. Proposed, on the principle that each
-> file's existing owner does its own wiring: **DRAFT-028** creates
-> `platform.env` and wires `network-setup.sh` (it is already rewriting that
-> file); **DRAFT-033** wires `clone-*.pl`, whose acceptance criteria already
-> require parameterizing the snapshot size; **DRAFT-011** wires `cleanup.sh`
-> and `tcpdump.sh`, where it is already fixing the `ps | grep` matches. Needs
-> confirming before it is treated as assigned.
+> **~~Open:~~ Settled — who creates `platform.env`.** Decision 2 is a code
+> change, and issue #6 does not make code changes. Each file's existing
+> owner does its own wiring: **DRAFT-028b** creates `platform.env` and wires
+> `network-setup.sh`; **DRAFT-033** wires `clone.pl`, whose acceptance
+> criteria already require parameterizing the snapshot size; **DRAFT-011**
+> wires `cleanup.sh` and `tcpdump.sh`, where it is already fixing the
+> `ps | grep` matches.
+>
+> **Confirmed 2026-08-15, and the first part is done.**
+> `automation/platform.env` exists and holds `ANALYSIS_BRIDGE`,
+> `UPLINK_BRIDGE`, `SUBNET_PREFIX` and `VG_NAME`; `network-setup.sh` and
+> `run_analysis-ubuntu.sh` source it, and `ANALYSIS_BRIDGE` has left
+> `pipeline-ubuntu.env`. The other two wirings are still open.
+>
+> The "b" is not cosmetic: the proposal above justified DRAFT-028 on the
+> grounds that it *"is already rewriting that file"*, which stopped being
+> true when DRAFT-028 deployed on 2026-08-11. Scope added to landed work
+> does not land, so this went to a follow-on numbered on the DRAFT-026a/b
+> precedent.
 
 ## Decided: OS-independent job/result state model (issue #3, 2026-08-09)
 
@@ -718,7 +797,7 @@ Reconciliation with the candidate list this replaces:
 
 - `classified` → renamed **`admitted`**. Classification no longer decides
   anything; admission does.
-- `restoring` → **merged into `cloning`**. `clone-ubuntu.pl` performs the
+- `restoring` → **merged into `cloning`**. `clone.pl` performs the
   LVM snapshot and the `xl restore` in a single callback
   (`dirwatch.c:175`), and both fail the same way and recover the same way.
   Rule 1: the boundary is meaningless to a reader and to recovery.
@@ -876,22 +955,42 @@ Two rules make it safe:
 > (`preconfig-ubuntu.sh:172-175`). The stale citation is corrected here
 > rather than left for DRAFT-032 because issue #6 rewrites this subsection.
 >
-> **KNOWN GAP (issue #6) — the rule is decided and unimplemented.** Two
-> things are still missing, and neither is a design question:
+> **~~KNOWN GAP (issue #6)~~ — implemented 2026-08-15 by DRAFT-030.** Both
+> halves are closed, and the first one closed in a way worth reading before
+> writing a new pipeline.
 >
-> 1. **No normalizer exists** anywhere in the repository. The rules above
->    (separators and NUL stripped, length capped, Windows reserved names
->    rejected) are specified and unwritten.
-> 2. **Ubuntu deviates today.** `preconfig-ubuntu.sh:162` stages to
->    `$GUEST_STAGING_DIR/$SHA256` and `drakvuf-ubuntu.sh:150` executes the
->    same, so the guest currently sees a content hash, not a name. That was
->    the correct choice while the name still passed through a guest shell;
->    it is now a deviation from a decided rule rather than a safety measure.
+> 1. **There is no normalizer, by design.** The rule above is achieved by
+>    **admission, not transformation**: `dirwatch` rejects a name rather
+>    than rewriting it (empty, `.`/`..`, path separators, control
+>    characters, over 200 bytes), so every name that reaches a worker
+>    script is already safe and needs no transformation anywhere
+>    downstream. One check at one boundary, which is what "one
+>    implementation, not one per OS" was asking for.
 >
-> Issue #6 decides the contract and does **not** implement it — see "Shared
-> and per-OS code boundary" above for the ownership. Until the retrofit
-> lands, no per-OS pipeline should hard-code the SHA-256 as the guest leaf
-> name on the assumption that it is the convention.
+>    **The consequence to record rather than discover:**
+>    `original_filename` and `guest_filename` are therefore always
+>    **equal**. DRAFT-011 should emit that honestly instead of implying two
+>    fields that can differ.
+>
+>    Two rules from the specification above are deliberately *not* enforced
+>    at this boundary, and both are stated where they are enforced instead:
+>    a leading `-` is admitted, because every consumer path-prefixes the
+>    name so it is never in option position; and Windows reserved device
+>    names are admitted, because they are a guest-side hazard that
+>    `dirwatch` — which is not told which OS it serves — cannot judge.
+>    DRAFT-034 owns the second on the Windows pipeline.
+>
+> 2. **Ubuntu no longer deviates.** `preconfig-ubuntu.sh` stages to
+>    `$GUEST_STAGING_DIR/$RUNFILE` and `drakvuf-ubuntu.sh` executes the
+>    same path, both derived by the same rule from the same two `dirwatch`
+>    arguments. The SHA-256 leaf was correct while the name still passed
+>    through a guest shell and became a deviation once it did not.
+>
+> **A new pipeline should copy this, not work around it.** The safety
+> property it rests on is that the name is never *parsed*: `injector -e`
+> and `drakvuf -e` each take it as a single argv element. That is
+> established for Linux and **must be re-established for Windows** before
+> being relied on — see the `[LINUX]` qualification above.
 
 ### Recovery after interruption
 

@@ -154,13 +154,28 @@ OUTPUTFOLDER=$7
 # this change.
 MD5=$(md5sum -- "$RUNFOLDER/$RUNFILE" | awk -F" " '{print $1}')
 
-# SHA-256 names the file inside the guest. The submitted filename is
-# untrusted and is now interpolated into no command string at all, guest
-# or host -- which is what removes the quote-escape hazard the old
-# single-quoted download URL carried (DRAKVUF-02/03 for this script).
-SHA256=$(sha256sum -- "$RUNFOLDER/$RUNFILE" | awk -F" " '{print $1}')
-
-GUEST_SAMPLE="$GUEST_STAGING_DIR/$SHA256"
+# The guest sees the name the sample was SUBMITTED with, not its digest
+# (C5; DRAFT-030, 2026-08-15). Malware behaviour is frequently
+# name-dependent -- extension-driven handler dispatch, argv[0] self-checks,
+# APK filename assumptions -- and a sample renamed to its SHA-256
+# exercises none of that. Until this change the guest saw the hash, which
+# was the right call while the name still travelled through a guest shell
+# and is a deviation from the decided rule now that it does not.
+#
+# $RUNFILE is used unmodified, and that is the whole normalizer: dirwatch
+# ADMITS or REJECTS the name at the watch-folder boundary rather than
+# rewriting it, so anything that reaches this script has already been
+# checked (no separators, no control characters, <=200 bytes). Names that
+# would need rewriting never get here. One consequence worth stating for
+# whoever implements the state model: original_filename and guest_filename
+# are therefore always EQUAL, and DRAFT-011 should record that rather than
+# emit two fields implying they can differ.
+#
+# Safe despite admitting spaces, quotes and a leading '-', because the
+# name is never parsed: injector takes -e as a single argv element, and
+# the path it forms starts with GUEST_STAGING_DIR, so a leading '-' is
+# never in option position.
+GUEST_SAMPLE="$GUEST_STAGING_DIR/$RUNFILE"
 
 LOG="$OUTPUTFOLDER/$MD5/preconfig.log"
 mkdir -p "$OUTPUTFOLDER/$MD5" 1>/dev/null 2>&1

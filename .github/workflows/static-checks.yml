@@ -78,7 +78,7 @@ jobs:
         run: shellcheck automation/*.sh
 
       - name: perl -c
-        run: perl -c automation/clone-ubuntu.pl
+        run: perl -c automation/clone.pl
 
       - name: Shebang layout convention
         # CONTRIBUTING.md, "Script layout convention": line 1 is the

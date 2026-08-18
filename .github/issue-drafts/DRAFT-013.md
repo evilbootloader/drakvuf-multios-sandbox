@@ -86,6 +86,46 @@ Whatever works becomes DRAFT-016's implementation, and whatever does not is
 worth recording just as much — a list of three things that look right and
 are not is exactly what stops the next person repeating them.
 
+## Answered 2026-08-13 — the resolver mechanism exists now because the image was rebuilt
+
+All four candidates above were measured and **all four are dead** on Android
+14 (`docs/runbooks/verify-android-isolation.md`, step 7): `/etc/resolv.conf`
+and `setprop net.dns1` are no-ops, `ndc resolver` does not exist, and
+`cmd ethernet help` returns `No shell command implementation`. The conclusion
+was not "look harder" — there is no shell client for `IDnsResolver` on this
+release.
+
+The maintainer resolved it by **rebuilding BlissOS with Bliss-Bass
+EthernetConfig** integrated as a platform-signed privileged app
+(`docs/android_setup_good.md`). It exposes a standalone `main()`:
+
+```sh
+CLASSPATH="$(pm path com.example.ethernetconfig | sed 's/^package://')" \
+  app_process / com.example.ethernetconfig.network.EthernetConfigurator \
+  STATIC eth0 172.16.<vlan>.2 24 172.16.<vlan>.1 1.1.1.1 none
+```
+
+which reaches `IEthernetManager.updateConfiguration()` with a
+`StaticIpConfiguration` carrying address, prefix, gateway **and DNS**.
+
+**This changes the issue's shape rather than closing it.** Three consequences:
+
+1. **The test target changed.** The measurements in steps 0–7 were taken on
+   an image that no longer exists. Step 0's `1844fc0a…` checksum and step 5's
+   fingerprint are both stale by design.
+2. **The parity matrix may collapse.** If the framework installs the address,
+   route and per-network table itself, the five-command chain step 6 measured
+   — including the `table eth0` policy-routing line — reduces to one
+   invocation. Test with **no** manual `ip` setup, or it is impossible to
+   tell which mechanism worked.
+3. **`private_dns_mode` is untouched by it**, so step 7b stands unchanged and
+   is still the open visibility risk.
+
+The neutral half of this issue — whether Android tolerates the isolation
+rules — is **unaffected and still unmeasured**. The rules match on interface,
+not on the guest, so the prediction and its falsification conditions carry
+over to the rebuilt image verbatim.
+
 ## Also establish, because Ubuntu never had to
 
 - **`sudo` — settled 2026-08-12, and it is not a question.** The anchor
@@ -255,7 +295,7 @@ No code. The deliverables are evidence and documentation:
    | route | `ip route replace default via 172.16.<vlan>.1 dev eth0` | | |
    | resolver | `echo 'nameserver 1.1.1.1' > /etc/resolv.conf` | | **expected No** |
    | shell for the chain | `/bin/sh` | | |
-   | verification | `getent hosts google.com` | | |
+   | verification | `getent hosts google.com` | `ping -c2 google.com` — **`getent` absent (confirmed 2026-08-12)** | **No** |
 3. `docs/architecture/networking.md` — add Android's observed reaction to
    the containment posture section.
 4. Roadmap risk #5 — its remaining open half is exactly this; close or
@@ -314,19 +354,19 @@ ip -br addr show dev eth0; ip route
 # --- Step 4: the resolver. Try in this order, checking after EACH.
 cat /etc/resolv.conf 2>/dev/null            # does it even exist?
 echo 'nameserver 1.1.1.1' > /etc/resolv.conf
-getent hosts google.com                     # expect: fails -- prove the no-op
+ping -c2 google.com                         # expect: fails -- prove the no-op
 
 setprop net.dns1 1.1.1.1
 getprop net.dns1
-getent hosts google.com
+ping -c2 google.com
 
 ndc network list                            # find the netid
 ndc resolver setnetdns <netid> "" 1.1.1.1
-getent hosts google.com
+ping -c2 google.com
 
 # --- Whatever worked, verify it the way Ubuntu was verified:
 ping -c2 1.1.1.1                            # Internet by IP
-getent hosts google.com                     # name resolution
+ping -c2 google.com                         # name resolution
 ping -c2 172.16.1.1                         # gateway -- expect FAIL, by design
 ping -c2 <a LAN host>                       # expect FAIL, by design
 ```

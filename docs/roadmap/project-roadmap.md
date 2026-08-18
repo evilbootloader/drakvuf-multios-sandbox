@@ -10,7 +10,7 @@
 The project automates a DRAKVUF malware-analysis sandbox on
 `Proxmox/KVM → Xen Dom0 + DRAKVUF/LibVMI → {Ubuntu, Android/BlissOS, Windows}`.
 All three are **current targets**. Ubuntu automation (`automation/*-ubuntu.sh`,
-`clone-ubuntu.pl`, orchestrated by a modified `dirwatch.c`) mostly works.
+`clone.pl`, orchestrated by a modified `dirwatch.c`) mostly works.
 Android automation has real evidenced progress through
 `docs/checklists/android.md` Phase 1 (golden→sandbox clone, injection anchor,
 saved memory state), but Phase 2 onward — the actual Android scripts,
@@ -34,7 +34,7 @@ contradicted this file's own risk register two screens further down.
 
 | Was | Now |
 |---|---|
-| `Bash` non-functional in the dev container (`bwrap: No permissions to create a new namespace`), so `bash -n`/`shellcheck`/`perl -c` could not run there | Lifted. Re-confirmed working in-container on 2026-08-08, 2026-08-09 and 2026-08-11. Current results: `bash -n` and `dash -n` pass on all six `automation/*.sh`; `perl -c` passes on `clone-ubuntu.pl`; `shellcheck` 0.11.0 reports `SC1128` on five of six (licence header above the shebang — DRAFT-031) |
+| `Bash` non-functional in the dev container (`bwrap: No permissions to create a new namespace`), so `bash -n`/`shellcheck`/`perl -c` could not run there | Lifted. Re-confirmed working in-container on 2026-08-08, 2026-08-09 and 2026-08-11. Current results: `bash -n` and `dash -n` pass on all six `automation/*.sh`; `perl -c` passes on `clone.pl` (named `clone-ubuntu.pl` when those runs were made); `shellcheck` 0.11.0 reports `SC1128` on five of six (licence header above the shebang — DRAFT-031) |
 | No git repository existed | Closed as DRAFT-001; baseline commit `7764b77`. See risk #1 |
 | `gh` availability/auth unverifiable | Verified — six issues have since been published and closed with it |
 
@@ -47,11 +47,11 @@ much as `bash -n` here — the scripts execute under `dash` in production
 ## Current state (verified 2026-08-07, not assumed)
 
 **Ubuntu** — `automation/` (flat, no subfolders) contains
-`dirwatch.c, clone-ubuntu.pl, preconfig-ubuntu.sh, drakvuf-ubuntu.sh,
+`dirwatch.c, clone.pl, preconfig-ubuntu.sh, drakvuf-ubuntu.sh,
 cleanup.sh, tcpdump.sh, network-setup.sh, run_analysis-ubuntu.sh`.
 Architecture: `dirwatch.c` (GThreadPool + inotify, 15-arg CLI contract,
 60s/180s per-phase timeouts) calls
-`clone-ubuntu.pl → preconfig-ubuntu.sh → drakvuf-ubuntu.sh → cleanup.sh`
+`clone.pl → preconfig-ubuntu.sh → drakvuf-ubuntu.sh → cleanup.sh`
 plus `tcpdump.sh` on a side thread. **"Ubuntu works" is now
 execution-evidenced** (2026-08-08, issue #2): a recorded Dom0 run shows
 `ExecProc Status:Success` on `/home/carlos/Desktop/test` followed by ~359k
@@ -204,7 +204,7 @@ for the fully specified first batch (DRAFT-001 through DRAFT-008).
 | 2 | Dev-container `Bash` was non-functional (bwrap error) | `bash -n`/`shellcheck`/`perl -c` couldn't run there | Must run on real host/CI; documented in CONTRIBUTING.md's TEST section |
 | 3 | DRAKVUF's GPL-with-exceptions text treats subprocess-orchestration as derivative work; CERT-Polska needed dual consent for proprietary embedding of the closest prior art | Commercial/paywalled web platform (M7+) may not be legally safe as currently envisioned | Real legal consultation needed before M7 business-model decisions; does not block internal lab automation |
 | 4 | `tlsmon` is confirmed Windows-only | No known path to TLS visibility **on Ubuntu/Android guests**. Not a project-wide gap: with Windows current, `tlsmon` is the one working TLS-visibility path the project has | Original engineering or scope reduction required for Ubuntu/Android; adopt `tlsmon` for Windows. DRAFT-023 is rescoped accordingly *(rescoped 2026-08-11 — the risk was written when Windows was deferred and read as "no TLS visibility anywhere")* |
-| 5 | ~~Android §1.3 network isolation is unverified~~ — **verified 2026-08-11 (DRAFT-028), and what it found was that isolation had never worked** | The previous inter-clone rule was `-o !xenbr0`. Current iptables **accepts** that while storing `!xenbr0` as a *literal interface name* — one that has never existed — so the rule installed cleanly, appeared in `iptables -S`, and matched nothing. Every analysis run before that date, Ubuntu and Android alike, had the rule present and inert. No exit-status check could have caught it: the command succeeded. IPv6 was separately unfiltered altogether (no `ip6tables` rules, `disable_ipv6 = 0`), reachable to Dom0 over link-local by any sample that re-enabled it | **Mechanism now fixed and measured** — `docs/checklists/android.md` §1.3, transcript in `docs/runbooks/deploy-network-isolation.md`. Two things remain open: the measurements were taken on Ubuntu clones (sound, since the rules match on interface, but Android's *reaction* to an unreachable gateway is untested — DRAFT-013), and clones still have deliberate NAT egress, so "no Internet by default" was never the policy |
+| 5 | ~~Android §1.3 network isolation is unverified~~ — **verified 2026-08-11 (DRAFT-028), and what it found was that isolation had never worked** | The previous inter-clone rule was `-o !xenbr0`. Current iptables **accepts** that while storing `!xenbr0` as a *literal interface name* — one that has never existed — so the rule installed cleanly, appeared in `iptables -S`, and matched nothing. Every analysis run before that date, Ubuntu and Android alike, had the rule present and inert. No exit-status check could have caught it: the command succeeded. IPv6 was separately unfiltered altogether (no `ip6tables` rules, `disable_ipv6 = 0`), reachable to Dom0 over link-local by any sample that re-enabled it | **Mechanism fixed, measured, and now confirmed on Android** — `docs/checklists/android.md` §1.3, transcript in `docs/runbooks/deploy-network-isolation.md`. **The Android half closed 2026-08-14 (DRAFT-013, `docs/runbooks/verify-android-isolation.md`):** a clone booted on `xenbr1.1` probed its gateway with ICMP, had 10 packets dropped by `DRAKVUF_INPUT`, and validated the network regardless — so the posture is robust rather than lucky and needs no ICMP exemption. Failed IPv6 provisioning (8 dropped router solicitations) did not affect its verdict either. **One half remains open and is not this risk's:** clones still have deliberate NAT egress, so "no Internet by default" was never the policy — DRAFT-022 and risk #13 |
 | 6 | ~~Missing `.cfg` files~~ — corrected 2026-08-07: all four Xen guest configs are tracked under `misc/` | None — closed | Initial research missed the `misc/` directory; DRAFT-006 repurposed to reconcile `misc/` naming (`linux*.cfg` files define `ubuntu`/`ubuntu_sandbox`, not "linux") rather than recover missing files |
 | 7 | ~~`drakvuf-ubuntu.sh` has an apparent unsubstituted `<USER>` bug vs. working `preconfig-ubuntu.sh`~~ — resolved 2026-08-08 (issue #2): the deployed Dom0 copy is correctly substituted and samples execute; only this repo's copy carries the placeholder | None — closed. "Ubuntu works" is now execution-evidenced | DRAFT-007 complete; transcript in `docs/runbooks/verify-user-placeholder.md` |
 | 11 | ~~`automation/*` had drifted from the deployed Dom0 copies~~ — resolved 2026-08-08: `automation/` synced wholesale from the tested production host (`drakvuf-ubuntu.sh`, `network-setup.sh`, `dirwatch_old.c`; five other files were already byte-identical), and issue #1's host-side `linux_sandbox.cfg` → `ubuntu_sandbox.cfg` rename was completed | None — closed. Repo and host now agree everywhere | Recurrence prevention is the open part: nothing detects drift automatically (see DRAFT-026 CI) |

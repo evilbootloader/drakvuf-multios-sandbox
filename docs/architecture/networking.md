@@ -7,7 +7,7 @@
 
 ## Current implementation: `automation/network-setup.sh`
 
-Provisions the isolated per-clone networking that `clone-ubuntu.pl` and
+Provisions the isolated per-clone networking that `clone.pl` and
 `preconfig-ubuntu.sh` assume already exists. **Rewritten by DRAFT-028
 (2026-08-11)**; the shape below is current.
 
@@ -152,7 +152,7 @@ flushes rather than a hunt through chains other tools also write to.
 
 This is the source of the `172.16.<VLAN>.1` gateway value used by
 `preconfig-ubuntu.sh`, and of the `xenbr1.<vlan>` interface name
-`clone-ubuntu.pl` attaches clones to and `tcpdump.sh` captures on.
+`clone.pl` attaches clones to and `tcpdump.sh` captures on.
 
 **It does not create `xenbr1`, despite being the file named
 `network-setup.sh`.** It calls only `modprobe`, `ip` and `iptables`; the
@@ -203,13 +203,61 @@ Since 2026-08-09 the resolver is `GUEST_NAMESERVER` in
 consistent with the posture the lab already had — `network-setup.sh:139`
 NATs every clone to the uplink, so clones already had unrestricted
 outbound IP access, and refusing only DNS was a broken resolver rather
-than a control. It is **not** egress control — clone containment remains
-unverified (DRAFT-013) and the inter-clone `FORWARD` `DROP` rule may never
-install at all (DRAFT-028).
+than a control. It is **not** egress control.
 
-It costs no visibility. `tcpdump.sh` captures the clone's entire
-`xenbr1.<vlan>` sub-interface and DNS is plaintext UDP/53, so every query
-and answer is in the per-sample pcap whichever resolver serves it.
+> Both caveats that used to close this paragraph are now discharged. The
+> inter-clone `FORWARD` `DROP` rule was fixed and measured in DRAFT-028
+> (2026-08-11), made terminal in DRAFT-029 (2026-08-12), and clone
+> containment was verified against an Android guest in DRAFT-013
+> (2026-08-14, `docs/runbooks/verify-android-isolation.md`).
+
+**It costs no visibility — on Ubuntu.** `tcpdump.sh` captures the clone's
+entire `xenbr1.<vlan>` sub-interface and DNS is plaintext UDP/53 there, so
+every query and answer is in the per-sample pcap whichever resolver serves
+it.
+
+### This does not hold on Android 14
+
+**Measured 2026-08-14**, and it is the one place where a shared design
+assumption breaks on a per-OS basis.
+
+Android 9 and later default `private_dns_mode` to `opportunistic`: the
+resolver probes whether the configured server supports DNS-over-TLS on port
+853 and silently upgrades when it does. **`1.1.1.1` supports DoT.** On a
+clone left at the default, the capture carried a completed TLS session —
+probe, handshake and a 3263-byte certificate chain — rather than queries:
+
+```text
+16:35:23.917190 IP 172.16.1.2.32922 > 1.1.1.1.53: 24543+ AAAA? WqVk6n-dnsotls-ds.metric.gstatic.com. (54)
+16:35:23.810620 IP 172.16.1.2.41640 > 1.1.1.1.853: Flags [S], seq 2299661284 ...
+16:35:23.816160 IP 1.1.1.1.853 > 172.16.1.2.41640: Flags [P.], seq 1:3264 ... length 3263
+```
+
+`WqVk6n-dnsotls-ds.metric.gstatic.com` is Android's DoT capability probe.
+Only after `settings put global private_dns_mode off` did the capture show
+plaintext 53 alone.
+
+**The failure mode is the dangerous kind: silent.** Nothing errors, the guest
+resolves names normally, the pcap is written, and the analyst gets TLS to
+`1.1.1.1:853` where they expected the domains a sample looked up.
+
+**Mitigation today** is per-clone and belongs to the guest: `preconfig-android.sh`
+sets `private_dns_mode off` (DRAFT-016). The parity matrix in
+`docs/checklists/android.md` records it as a required step, not an optional
+one.
+
+**The alternative is a Dom0-side control** — drop outbound 853 on the
+analysis VLANs in `network-setup.sh`, so the opportunistic probe fails and
+Android falls back to plaintext without needing any guest cooperation. That
+is the more robust answer, because it does not depend on a guest-side command
+succeeding, and it would cover a *sample* that configures DoT for itself,
+which the guest-side setting does not. It also affects all three OS families
+and changes the egress posture, so it needs its own issue and review. **Not
+proposed here.**
+
+Ubuntu and Windows are unaffected as written: neither has an equivalent
+opportunistic-DoT default, and Ubuntu's resolver was measured on plaintext 53
+throughout.
 
 Android carried the same dead assumption one layer deeper, baked into the
 golden image: §1.4 of `docs/checklists/android.md` DNATs all in-guest DNS to
@@ -265,12 +313,13 @@ no VLAN, no `vif-openvswitch` script); sandbox VMs use `xenbr1` with the OVS
 vif script (see `misc/ubuntu_sandbox.cfg`, `misc/android_sandbox.cfg` —
 `bridge=xenbr1`).
 
-## Known gap: Android's reaction to the isolation rules is untested
+## Closed: Android tolerates the isolation rules (measured 2026-08-14)
 
-*(Corrected 2026-08-12. This section previously read "Android network
-isolation is unverified" and stated that §1.3's table had no
-"Actual"/"Passed" values recorded. That stopped being true on 2026-08-11,
-when DRAFT-028's deployment filled it.)*
+*(Corrected twice. On 2026-08-12 this section was retitled from "Android
+network isolation is unverified", because §1.3's table had been filled the
+day before by DRAFT-028's deployment. **Closed 2026-08-14** by DRAFT-013 —
+`docs/runbooks/verify-android-isolation.md`. The narrowed gap described
+below is answered, and the answer is at the end of the section.)*
 
 `docs/checklists/android.md` §1.3's isolation table is **complete** — nine
 rows with measured results and per-rule packet counters, transcript in
@@ -284,6 +333,44 @@ may mark a network unvalidated when it cannot reach its gateway — which it
 now cannot, since `DRAKVUF_INPUT` drops clone traffic to Dom0 and the
 gateway is deliberately not pingable. Ubuntu never checks. One Android
 clone boot answers it.
+
+### The answer: it probes, it is refused, and it does not care
+
+One Android clone was booted on `xenbr1.1` under the current rules on
+2026-08-14. **The posture survives contact with a guest that actively
+validates its network**, and the evidence is more useful than a simple pass:
+
+- **Android did probe the gateway.** `DRAKVUF_INPUT` counted **10 packets
+  dropped**, and the pcap identifies them as ICMP echo requests to
+  `172.16.1.1` at 16:44:13 and 16:44:14. No replies.
+- **It validated the network anyway.** Android reported "Internet through
+  Ethernet", raised no captive-portal notification, and a browser loaded a
+  public page.
+
+That combination — probed, refused, unbothered — is the strongest of the
+three possible outcomes. It means the posture is **robust rather than
+lucky**: it does not depend on Android happening not to look. **No
+ICMP-to-gateway exemption is needed**, so the `DRAKVUF_INPUT` blanket drop
+introduced by DRAFT-028 stays closed for all three OS families.
+
+The mechanism the prediction rested on is confirmed too. ARP/NUD is L2 and
+unfiltered by `iptables` — Dom0 answered the clone's ARP for `172.16.1.1`,
+which is the only way the clone could then route to `1.1.1.1`. This is the
+same property DRAFT-028 relied on when it concluded that blocking clone→Dom0
+traffic costs the pipeline nothing.
+
+**IPv6 is a second confirmation.** `DRAKVUF_INPUT6` counted 8 dropped router
+solicitations to `ff02::2`, retried unanswered from 16:14 to 16:31. Android
+obtained no IPv6 address and still validated the network, with no visible
+complaint — so the blanket v6 DROP described above costs nothing on the OS
+most likely to object to it.
+
+One caveat worth carrying: a restored clone boots holding the **golden VM's**
+LAN identity until `preconfig-android.sh` runs, and spends its first seconds
+ARPing for a residential gateway on the analysis VLAN. Containment held —
+that traffic reached nothing — but it is noise in every Android pcap and a
+window in which the clone is not yet configured. Detail and evidence in the
+runbook's finding F4; the fix belongs to DRAFT-015/016.
 
 Non-benign sample execution with networking remains gated, but on
 DRAFT-022 rather than on this — see roadmap risk #13.

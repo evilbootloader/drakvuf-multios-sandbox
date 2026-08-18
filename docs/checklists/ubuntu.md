@@ -48,7 +48,7 @@ execution. None of the checkboxes below represent execution evidence.
 - [x] `automation/dirwatch.c` exists — GThreadPool + inotify orchestrator,
   15-arg CLI contract, 60s preconfig timeout / 180s drakvuf-trace timeout,
   calls back into the scripts below in order.
-- [x] `automation/clone-ubuntu.pl` exists — LVM copy-on-write snapshot +
+- [x] `automation/clone.pl` exists — LVM copy-on-write snapshot +
   `xl restore` of the saved state, clone naming `<origin>-<vlan>-clone`,
   hard-codes `vg-root` and `xenbr1`. *(Updated 2026-08-09, issue #4: the
   restore path was `/home/user/Documents/ubuntu_sandbox.bak` and is now
@@ -176,7 +176,7 @@ Three things the same run surfaced that are **not** fixed:
 - [x] **Repo↔Dom0 drift — RESOLVED 2026-08-08 by syncing `automation/` from
   the tested production host.** Discovered while verifying the item above.
   Three files differed; five were already byte-identical (`dirwatch.c`,
-  `preconfig-ubuntu.sh`, `cleanup.sh`, `clone-ubuntu.pl`, `tcpdump.sh`), so
+  `preconfig-ubuntu.sh`, `cleanup.sh`, `clone.pl`, `tcpdump.sh`), so
   the drift was narrower than feared.
 
   | File | Was (repo) | Now (production, tested) |
@@ -288,7 +288,7 @@ this records what the gate does and does not enforce.
 |---|---|
 | `shellcheck automation/*.sh` | **exit 0**, bare, reading `.shellcheckrc` |
 | `bash -n`, `dash -n` on all six | pass |
-| `perl -c automation/clone-ubuntu.pl` | pass |
+| `perl -c automation/clone.pl` | pass |
 
 **Verified in CI, not just locally.** `.github/workflows/static-checks.yml`
 (DRAFT-026a) runs all of the above on every push and pull request. First
@@ -338,12 +338,12 @@ malware analysis as root is a behaviour change, not a lint cleanup.
 is **not used because shellcheck 0.11.0 silently ignores `severity=` in
 `.shellcheckrc`** — measured, not assumed. Re-test on upgrade.
 - [ ] Parameterize the remaining hard-coded values — `vg-root` and the
-  `xenbr1` / `172.16.<vlan>` scheme in `clone-ubuntu.pl` and
+  `xenbr1` / `172.16.<vlan>` scheme in `clone.pl` and
   `network-setup.sh` — per `CLAUDE.md`'s "prefer parameterization" rule,
   once the shared-vs-OS-specific script boundary (DRAFT-009) is decided.
   *(Partially done 2026-08-09, issue #4: deployment paths, guest user
   `carlos`, injection PID, clone count and resolver all moved into
-  `automation/pipeline-ubuntu.env`. `clone-ubuntu.pl` does not read that
+  `automation/pipeline-ubuntu.env`. `clone.pl` does not read that
   file — it is Perl, invoked by `dirwatch` with a fixed 3-argument
   contract — so its constants are untouched.)*
 

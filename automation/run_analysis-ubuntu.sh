@@ -24,8 +24,31 @@ REPO_ROOT="$(
     pwd
 )"
 
+# Host-global values first, per-OS second, so a pipeline-<os>.env that
+# wrongly redefines one of them would at least be visibly last-wins rather
+# than silently first-wins. C4 forbids it defining any of them at all;
+# this ordering is a backstop, not the check.
+# shellcheck source=automation/platform.env
+. "$SCRIPT_DIR/platform.env"
+
 # shellcheck source=automation/pipeline-ubuntu.env
 . "$SCRIPT_DIR/pipeline-ubuntu.env"
+
+# clone.pl is Perl and reads no config file: it takes its 3 arguments from
+# dirwatch's fixed CLONE_CMD contract and everything else from the
+# environment. Sourcing the file above makes CLONE_LV_SIZE a shell
+# variable in THIS process only -- it has to be exported to reach a child
+# (DRAFT-015).
+#
+# Nothing fails loudly if these are deleted. clone.pl falls back to its own
+# defaults, which are correct for Ubuntu and silently wrong for every other
+# pipeline, so the regression would first appear as an over-sized Android
+# snapshot rather than as an error.
+#
+# VG_NAME and ANALYSIS_BRIDGE come from platform.env and are host-global;
+# CLONE_LV_SIZE comes from pipeline-ubuntu.env and is per-OS. All three are
+# exported together because clone.pl reads all three the same way.
+export CLONE_LV_SIZE VG_NAME ANALYSIS_BRIDGE
 
 # Fail before starting anything rather than after a clone is already
 # running. A missing profile or saved state used to surface as an opaque
@@ -39,6 +62,34 @@ for asset in "$DOMAIN_CONFIG" "$KERNEL_PROFILE" "$SAVED_STATE"; do
         exit 1
     fi
 done
+
+# --- Concurrency guard --------------------------------------------------
+#
+# KNOWN GAP (DRAFT-036), enforced rather than documented and hoped for.
+# dirwatch derives each clone's VLAN from its worker-slot index and the
+# slot array is process-local, so a second dirwatch allocates VLANs
+# 1..MAX_CLONES exactly as the first one did. Two pipelines then share
+# gateway addresses, VLAN sub-interfaces and isolation rules, and the only
+# symptom is analyses interfering with each other.
+#
+# THIS CHECK MUST EXIST IN EVERY LAUNCHER OR IT PROTECTS NOTHING. Added to
+# Ubuntu's at the same time as Android's (DRAFT-015): a guard only in the
+# newer launcher would still let Ubuntu be started second, into the same
+# collision, which is the case an operator is most likely to hit.
+#
+# A pgrep is a weak check -- it races, and it cannot see a watcher on
+# another host -- but the failure it prevents is silent cross-contamination
+# between two malware analyses. It matches on the shared clone.pl path,
+# which every launcher passes to dirwatch. Remove it when DRAFT-036 lands a
+# host-global VLAN allocator, not before.
+if pgrep -f "[d]irwatch .* $REPO_ROOT/automation/clone.pl" >/dev/null 2>&1; then
+    echo "run_analysis-ubuntu.sh: another dirwatch is already running from" >&2
+    echo "  this checkout. Its clones use VLANs 1..MAX_CLONES and so would" >&2
+    echo "  these -- they would collide on gateway addresses and isolation" >&2
+    echo "  rules, and nothing would report it (DRAFT-036)." >&2
+    echo "  Stop the running launcher first." >&2
+    exit 1
+fi
 
 # Runtime data directories, one level per target OS. Created here so a
 # fresh Dom0 needs no manual mkdir beyond the three top-level
@@ -81,7 +132,7 @@ dirwatch "$WATCH_MODE" \
     "$SERVE_FOLDER" \
     "$OUTPUT_FOLDER" \
     "$MAX_CLONES" \
-    "$SCRIPT_DIR/clone-ubuntu.pl" \
+    "$SCRIPT_DIR/clone.pl" \
     "$SCRIPT_DIR/preconfig-ubuntu.sh" \
     "$SCRIPT_DIR/drakvuf-ubuntu.sh" \
     "$SCRIPT_DIR/cleanup.sh" \
@@ -94,7 +145,7 @@ dirwatch "$WATCH_MODE" \
 #       golden ubuntu. dirwatch hard-codes one origin per invocation, so a
 #       second OS pipeline means a second dirwatch process, launched from
 #       its own run_analysis-<os>.sh and its own pipeline-<os>.env.
-#   3   Xen config for that origin, used by clone-ubuntu.pl
+#   3   Xen config for that origin, used by clone.pl
 #   4   LibVMI kernel profile, passed straight through to drakvuf/injector
 #       as -r. Clone domains have no /etc/libvmi.conf stanza, so this
 #       argument is the only way the profile is ever resolved.

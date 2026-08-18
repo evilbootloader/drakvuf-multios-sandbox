@@ -5,7 +5,11 @@ scope approved for this session). See `docs/roadmap/project-roadmap.md` for
 the complete brainstormed workstream list this was derived from, and for
 the DRAFT-009 onward range. Most of that range is still title-index only;
 the exceptions, each with its own `DRAFT-NNN.md`, are DRAFT-009, DRAFT-010,
-DRAFT-025 through DRAFT-034, and DRAFT-036.
+DRAFT-013, DRAFT-015, DRAFT-016, DRAFT-022, DRAFT-025 through DRAFT-034, and
+DRAFT-036 through DRAFT-039. *(Corrected 2026-08-14: this sentence had not
+been updated since DRAFT-013, DRAFT-022 and the DRAFT-037–039 batch were
+written, and listed only DRAFT-009/010, 025–034 and 036. DRAFT-015 added
+2026-08-15.)*
 
 | Draft ID | Title | Area | Milestone | Priority | Depends on | Status |
 |---|---|---|---|---|---|---|
@@ -37,11 +41,12 @@ per-OS scripts inherit.
 |---|---|---|---|---|---|---|---|
 | DRAFT-027 | Replace HTTP/Apache sample delivery with direct guest injection | core/platform | ALL | M1 → M2/M3 | P0 | Issue #4; blocks DRAFT-016, DRAFT-026b | DRAKVUF-01 — **implemented for Ubuntu 2026-08-09 inside issue #4**, never published separately |
 | DRAFT-028 | Make `network-setup.sh` fail loudly, install correct rules, and be idempotent | platform/networking | ALL | M2 | P0 | — (blocks DRAFT-013) | NET-01, NET-04, NET-05 |
+| ~~**DRAFT-028b**~~ | **Done 2026-08-15.** Create `automation/platform.env` and wire `network-setup.sh` to it. `ANALYSIS_BRIDGE`, `UPLINK_BRIDGE`, `SUBNET_PREFIX`, `VG_NAME`; `network-setup.sh` and `run_analysis-ubuntu.sh` source it; `ANALYSIS_BRIDGE` removed from `pipeline-ubuntu.env`. **Not deployed or tested on Dom0** | platform/networking | ALL | M2 | P1 | DRAFT-028 (landed 2026-08-11) | issue #6 decision 2; assigned 2026-08-15 — unblocked DRAFT-015's C4 |
 | DRAFT-029 | ~~Restrict analysis-clone access to Dom0 host services~~ — retitled 2026-08-12 to "Make the DRAKVUF chains terminal, so containment does not depend on Dom0's default policies" | platform/security | ALL | M2 | P0 | DRAFT-028 (landed); ~~DRAFT-013~~, ~~DRAFT-027~~ both dropped — see `DRAFT-029.md` | NET-02, plus the fail-open window found 2026-08-12 |
-| DRAFT-030 | Stop passing untrusted sample filenames through shell-parsed command lines | core | ALL | M1 | P1 | — (should precede DRAFT-014) | DRAKVUF-03, DRAKVUF-02 |
+| ~~DRAFT-030~~ | **Dom0 half done 2026-08-15.** Stop passing untrusted sample filenames through shell-parsed command lines. All five `g_spawn_command_line_sync` sites converted to argv vectors via `g_spawn_sync`; the `mv` subprocess replaced by `g_rename`; filename admission added at the watch-folder boundary, with rejected samples moved to `<out>/rejected/` so they cannot spin the scan loop. Callback arity and order unchanged (C9). A leading `-` is deliberately **admitted** — every consumer path-prefixes the name, so it is never in option position. **Guest-side half done the same day**: `preconfig-ubuntu.sh` stages to and `drakvuf-ubuntu.sh` executes `$GUEST_STAGING_DIR/$RUNFILE`, and every SC2086 site carrying the sample filename is quoted (`tcpdump.sh`'s bare `md5sum` returned an EMPTY digest for a spaced name, sending every such pcap to one shared path). **There is no normalizer, deliberately** — admission at the boundary means no name needs rewriting, so `original_filename` == `guest_filename` always. `dirwatch.c` cannot be compiled outside a DRAKVUF tree; admission rules and argv construction were verified by standalone harness, and the guest-path invariant by an end-to-end stub run | core | ALL | M1 | P1 | — (should precede DRAFT-014) | DRAKVUF-03, DRAKVUF-02 |
 | DRAFT-031 | Establish a `shellcheck` baseline that `automation/` actually passes | testing | ALL | M1 | P1 | — (blocks DRAFT-026a) | CI-01 |
 | DRAFT-032 | Reconcile documentation with current project direction and closed issues #1/#2 | governance/docs | ALL | M0 | P1 | — | DOC-01…DOC-09, NET-04, GOV-02; extended 2026-08-09 by the comment audit (CONF-02/03/04/06/07/08/11/12, DOC-N4/N5/N6, TODO-03) |
-| DRAFT-033 | Make `clone-ubuntu.pl` fail safely and lock, before it is copied twice | core/ubuntu | ALL (template) | M1 | P1 | Issue #4 | DRAKVUF-05, DRAKVUF-06 |
+| ~~DRAFT-033~~ | **Done 2026-08-15.** Make `clone.pl` fail safely and lock. Exit status checked on `xl destroy`/`lvremove`/`lvcreate`/`xl restore`; preflight on tools, config, origin LV and saved state; argument validation; `END`-block removal of a partial snapshot and of the temporary config (the item no issue owned); stdout carries the clone ID **only** on success, guarded to a bare integer. Lock is **per clone name, not per origin** — a per-origin lock would serialize all `MAX_CLONES` workers of one origin and throttle the pipeline to one analysis at a time. Wired to `platform.env` (`VG_NAME`, `ANALYSIS_BRIDGE`). Title's "before it is copied twice" premise is void — DRAFT-015 shared the file instead. **Not deployed or tested on Dom0** | core/shared | ALL (shared) | M1 | P1 | Issue #4; DRAFT-028b | DRAKVUF-05, DRAKVUF-06 |
 | DRAFT-034 | Establish the Windows analysis-guest track (baseline, profile, anchor, configs) | windows | W | M5 → current | P1 | Issue #3, Issue #4, DRAFT-009, DRAFT-027; supersedes DRAFT-020's design half | Focus change; GOV-02, DOC-09 |
 
 ### Recommendations affecting existing entries
@@ -311,8 +316,8 @@ Not yet drafted in full — titles only, from `docs/roadmap/project-roadmap.md`:
 | DRAFT-012 | ~~Add static CI (`bash -n`, `shellcheck`, `perl -c`) for `automation/*`~~ — superseded by DRAFT-026 | testing | M1 | P1 | DRAFT-001 |
 | ~~DRAFT-013~~ | **Drafted in full and published 2026-08-12 — [#13](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/13).** Retitled "Confirm an Android clone tolerates the isolation rules, **and establish connectivity parity with Ubuntu**" — the parity half was added on drafting and is the larger one | android/security | M2 | P0 | DRAFT-028, DRAFT-029, DRAFT-037 — all landed |
 | DRAFT-014 | Decide sample OS auto-detection contract (magic/MIME/PE/ELF/APK) | core | M2 | P1 | DRAFT-008 |
-| DRAFT-015 | Implement `clone-android.pl` per checklist §2.5 | android | M3 | P1 | DRAFT-009, DRAFT-013 |
-| DRAFT-016 | Implement `preconfig-android.sh` / `drakvuf-android.sh` per checklist §2.7–2.8 | android | M3 | P1 | DRAFT-015 |
+| ~~DRAFT-015~~ | **Drafted and implemented 2026-08-15 — see `.github/issue-drafts/DRAFT-015.md`.** Retitled "Complete the Android pipeline — `pipeline-android.env`, `run_analysis-android.sh`, and a shared `clone.pl`". Scope widened from one file to three deliverables: DRAFT-016 assigns `pipeline-android.env` and `run_analysis-android.sh` here and no issue owned the latter. **Decision taken on drafting: there is no `clone-android.pl`** — `clone-ubuntu.pl` holds exactly one Ubuntu-specific value (`-L64G`), so once that comes from `$ENV{CLONE_LV_SIZE}` the file has no per-OS content and is renamed `automation/clone.pl`, shared by all three pipelines. **This amends C1 and C2** in `analysis-pipeline.md`. Android's `CLONE_LV_SIZE` is `32G`, measured from the 32,00g origin LV. Also found: `INJECTION_PID` is **3164**, not §1.5's 3163 — the template was re-saved before DRAFT-013 ran . **Built:** `pipeline-android.env` (C3 complete, C4 clean by grep), `run_analysis-android.sh`, and the `clone.pl` rename. `preconfig-android.sh`/`drakvuf-android.sh` remain DRAFT-016's, and the launcher refuses to start without them. Both launchers gained a DRAFT-036 concurrency guard — a one-sided guard would have protected nothing. **Nothing Android has run on Dom0** | android/core | M3 | P1 | DRAFT-033, DRAFT-028b (both hard); DRAFT-013/#13 and DRAFT-037/#7 landed; blocks DRAFT-016 |
+| ~~DRAFT-016~~ | **Drafted 2026-08-14, implemented 2026-08-15 — see `.github/issue-drafts/DRAFT-016.md`.** Retitled "Implement `preconfig-android.sh` **and** `drakvuf-android.sh`" — §2.7–2.8 is no longer the specification for either half (§1.6 supersedes the network half; issue #6 withdrew the in-guest collection §2.8's stage list assumes). Two decisions taken on drafting: the **APK path (`pm install` + launch) is in scope**, selected by a structural test rather than the advisory `detected_type`; and **`70-collect` is dropped with C7 unamended**. Dependencies widened from DRAFT-015 alone . **Built:** `preconfig-android.sh` (writefile + the single EthernetConfig call, mixed Dom0/guest quoting) and `drakvuf-android.sh` (APK via `pm install`+`monkey` through `/system/bin/sh -c`; native ELF via direct `execve`; anything else `unsupported_type`). `drakvuf -f` is evidenced from the installed build's own help, not assumed. **Nothing has run against an Android guest** — the APK launch step in particular is unverified | android | M3 | P1 | DRAFT-015, DRAFT-030, DRAFT-033 (all hard); DRAFT-011 (soft); DRAFT-013/#13 landed, supplies the spec |
 | DRAFT-017 | Implement Android sample classification (checklist §2.6) | android | M3 | P1 | DRAFT-014 |
 | DRAFT-018 | Define artifact/result schema | core | M4 | P1 | DRAFT-008 |
 | DRAFT-019 | Integrate capa against DRAKVUF logs (native v7.2.0 extractor) | enrichment | M4 | P2 | DRAFT-018 |
@@ -403,10 +408,20 @@ Scope moved by issue #6, same date:
   `execve`s and issue #2's finding does not carry over.
 - **DRAFT-011 gains** emitting `guest_filename` and `original_filename` as
   separate fields, plus a soft dependency on DRAFT-030.
-- **Proposed, needs confirming:** `automation/platform.env` is a code change
-  issue #6 cannot make. Each file's existing owner wires its own — DRAFT-028
-  creates it and wires `network-setup.sh`, DRAFT-033 wires `clone-*.pl`,
-  DRAFT-011 wires `cleanup.sh` and `tcpdump.sh`.
+- ~~**Proposed, needs confirming:**~~ **Confirmed 2026-08-15.**
+  `automation/platform.env` is a code change issue #6 cannot make. Each
+  file's existing owner wires its own — DRAFT-028 creates it and wires
+  `network-setup.sh`, DRAFT-033 wires `clone-*.pl`, DRAFT-011 wires
+  `cleanup.sh` and `tcpdump.sh`.
+  > **Carried to DRAFT-028b, because DRAFT-028 itself has landed.** The
+  > proposal's stated reason was that DRAFT-028 *"is already rewriting that
+  > file"* — true when it was written, not now: DRAFT-028 deployed
+  > 2026-08-11 (see the ordering note at the end of this file). Scope added
+  > to landed work does not land, so `platform.env` and the
+  > `network-setup.sh` wiring go to a follow-on, numbered on the DRAFT-026a/b
+  > precedent. DRAFT-033's and DRAFT-011's halves are unaffected — both are
+  > still open. Raised while drafting DRAFT-015, which cannot satisfy C4
+  > until `platform.env` exists.
 - **DRAFT-016 and DRAFT-017 lose the in-guest collection steps.** `logcat`,
   `logd`, `dumpsys` and `dmesg` are withdrawn; `docs/checklists/android.md`
   §4.2–4.4 are annotated as historical candidates. Android's semantic

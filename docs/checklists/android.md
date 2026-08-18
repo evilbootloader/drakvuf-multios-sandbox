@@ -21,9 +21,9 @@
 | Volume group | `vg-root` |
 | Isolated bridge | `xenbr1` |
 | Start date | 2026-08-06 |
-| Last update | 2026-08-11 |
-| Current phase | Phase 2 — Android automation scripts (not started). Phase 1 complete: template rebuilt and restore-validated 2026-08-11, issue #7 |
-| Current blocker | **Android's reaction to the new isolation rules is untested.** §1.3's table is filled as of 2026-08-11 (DRAFT-028) and the mechanism is fixed and measured — but on *Ubuntu* clones. The rules match on interface so they apply identically, yet Android does connectivity probing and may mark a network unvalidated when it cannot reach its gateway, which Ubuntu never checks. First boot of an Android clone after this lands is the case to watch (DRAFT-013). Separately, clones retain deliberate NAT egress, so no non-benign sample should run with networking enabled until the `offline`/`simulated` modes exist |
+| Last update | 2026-08-14 |
+| Current phase | Phase 2 — Android automation scripts (not started, **now unblocked**). Phase 1 complete: template rebuilt and restore-validated 2026-08-11 (issue #7), ROM rebuilt with EthernetConfig and re-validated 2026-08-14 (DRAFT-013) |
+| Current blocker | **None for containment — cleared 2026-08-14 (DRAFT-013, `docs/runbooks/verify-android-isolation.md`).** An Android clone booted on `xenbr1.1` under the current rules, probed its gateway with ICMP, had 10 packets dropped by `DRAKVUF_INPUT`, and validated the network anyway — the posture is robust rather than lucky, and no ICMP exemption is needed. Failed IPv6 provisioning did not change its verdict. Connectivity parity was established in the same run and is in §1.6. **Two constraints still bind Phase 2:** `preconfig-android.sh` must set `private_dns_mode off` or the pcap records DoT instead of DNS queries (§1.6), and clones retain deliberate NAT egress, so no non-benign sample should run with networking enabled until the `offline`/`simulated` modes exist (DRAFT-022) |
 
 ### Status legend
 
@@ -430,14 +430,27 @@ Boot result: Successful
 - [x] Confirm the sandbox VIF is attached to the expected bridge or OVS VLAN port.
 - [x] Confirm there is no route from the analysis network to the management
   network. *(2026-08-11, DRAFT-028. Measured on Ubuntu clones — the
-  mechanism is shared and matches on interface, not on guest OS.)*
+  mechanism is shared and matches on interface, not on guest OS.
+  **Re-measured on an Android clone 2026-08-14, DRAFT-013:** the LAN probe
+  was dropped by `DRAKVUF_ISOLATION` rule 4 — `192.168.0.0/16`, 2 packets —
+  and `ping` to a LAN host returned 100% loss from inside the guest.)*
+- [x] **Confirm Android tolerates the rules.** *(2026-08-14, DRAFT-013 —
+  `docs/runbooks/verify-android-isolation.md`. It probed the gateway with
+  ICMP, `DRAKVUF_INPUT` dropped 10 packets, and it reported "Internet
+  through Ethernet" regardless. This is the row §1.3 could not fill while
+  every measurement came from Ubuntu.)*
 - [ ] ~~Confirm there is no Internet access by default.~~ **Premise
   conflicts with the decided policy** — clones have deliberate NAT egress.
   Needs re-scoping against the network modes in
   `docs/architecture/networking.md`; see note 2 below. Not a failed test.
 - [x] Confirm IPv6 is either isolated or disabled. *(2026-08-11: isolated.
   Blanket DROP in `DRAKVUF_ISOLATION6`/`DRAKVUF_INPUT6`, counter-confirmed.
-  It was previously neither — no v6 rules existed at all.)*
+  It was previously neither — no v6 rules existed at all. **2026-08-14: and
+  Android does not mind.** It sent router solicitations to `ff02::2` from
+  16:14 to 16:31, all 8 dropped by `DRAKVUF_INPUT6`, obtained no v6 address,
+  and still validated the network with no visible complaint. `ISOLATION6`
+  stayed at 0, correctly — RS is link-local multicast to Dom0, so it is
+  `INPUT`, not `FORWARD`.)*
 - [x] Record the intended per-clone VLAN design. *(One `xenbr1.<vlan>`
   sub-interface per clone slot, `172.16.<vlan>.1/24` gateway on Dom0,
   clone at `.2`. `docs/architecture/networking.md`.)*
@@ -608,7 +621,9 @@ sudo vmi-process-list android_sandbox | grep -i drakvuf
 | Android PID | LibVMI PID/TGID | Runtime stable | Notes |
 |---:|---:|---:|---|
 | 5715 |  5715  | Yes | Pre-reinstall image; superseded — see below |
-| 3163 |  3163  | Yes | **Current.** 2026-08-11 rebuild (issue #7); exactly one match |
+| 3163 |  3163  | Yes | 2026-08-11 rebuild (issue #7); exactly one match. Superseded — see below |
+| 3164 |  3164  | Yes | Undated re-save before DRAFT-013; saved state `516644e2…`. Superseded |
+| 3174 |  3174  | Yes | **Current.** 2026-08-17 re-save; saved state `465aa4d7…`; backgrounded `ping` |
 
 > **Re-run 2026-08-11 (issue #7). Two things above no longer describe the
 > template**, and both are deliberate rather than drift. The block above is
@@ -632,6 +647,61 @@ sudo vmi-process-list android_sandbox | grep -i drakvuf
 > > multiple matching anchors" must key on something other than the name, or
 > > a guest that happens to run a second `nano` gets the wrong process
 > > injected — and `injector` does not warn.
+
+> **Re-run 2026-08-17. The `nano` anchor was replaced, because it could not
+> be injected into.** The 2026-08-11 block above is left as written.
+>
+> **Why it had to change.** `nano` was backgrounded on a console VT and took
+> `SIGTTIN` on its first tty read, so `xl save` captured it **stopped**.
+> `injector` waits for the target PID to be scheduled onto a vCPU, has no
+> timeout, and prints nothing while waiting — so on every clone restored
+> from that image, every injection hung silently and forever. It was
+> reachable only by switching to the console VT and typing `fg`, one
+> injection per nudge. Full diagnosis and evidence:
+> `docs/runbooks/verify-android-mvp.md` F1.
+>
+> **This invalidates §1.5's "Confirm the injection anchor is running".** A
+> `vmi-process-list` match proves the task *exists*; it says nothing about
+> whether it is ever *scheduled*, which is the property `injector` actually
+> needs. The two are not the same check and the checklist conflated them.
+>
+> **The replacement is a backgrounded `ping` against loopback**, PID 3174,
+> saved state `465aa4d7…`. Self-scheduling — one packet per interval, no
+> tty, no fork — and because the target is `127.0.0.1` **nothing reaches the
+> vif**, so `tcpdump.sh`'s per-sample pcaps stay free of anchor traffic and
+> nothing appears on the analysis VLAN. The anti-evasion constraint above is
+> unchanged: the string `drakvuf` appears nowhere, and the name-grep warning
+> still applies.
+>
+> **Acceptance evidence:** three full analyses completed with no console
+> interaction. That is nine consecutive injections (two per preconfig, one
+> per trace), against zero unattended injections under `nano`.
+>
+> **New requirements this episode adds for any future anchor**, all
+> evidenced rather than assumed:
+>
+> 1. **It must be scheduled on its own.** Existence is not enough. The
+>    acceptance test is three back-to-back `writefile`s on a fresh clone
+>    with the console untouched, or one full unattended analysis.
+> 2. **It must run as root.** `preconfig-android.sh` imports
+>    `/data/system/environ/classpath`, which is `0600 system:system`. A
+>    non-root anchor reads nothing, `app_process64` aborts 134, and the
+>    clone's network configuration fails **silently**
+>    (`verify-android-mvp.md` F5).
+> 3. **It must be 64-bit.** `injector --help`: the Linux `execproc` path is
+>    64-bit only.
+> 4. **It must not put traffic on the analysis VLAN.** The anchor runs for
+>    the whole analysis and `tcpdump.sh` captures the vif throughout, so
+>    anything it emits lands in the primary network evidence for every
+>    sample. Loopback satisfies this; an external ping target would not.
+> 5. **It should not hold a console VT**, so the guest can sit on the
+>    Android GUI rather than a text console (F7).
+>
+> The ticked item "Confirm the anchor creates no unnecessary files, sockets,
+> or recurring logs" is **partially** satisfied rather than fully: `ping`
+> holds a raw socket and wakes on an interval by construction. It writes no
+> files and no logs, and emits nothing observable outside the guest, which
+> is the part that matters for evidence integrity.
 >
 > **2. The DNS DNAT was NOT re-applied.** `iptables -t nat -L OUTPUT` was
 > empty on the reinstalled image and nothing was added, so the redirect to
@@ -798,6 +868,86 @@ Restore result: Correct
 
 ---
 
+## 1.6 Connectivity parity with Ubuntu — the DRAFT-016 specification
+
+**Measured 2026-08-14 on an Android clone.** Full transcript and evidence in
+`docs/runbooks/verify-android-isolation.md`. This section is what
+`preconfig-android.sh` is written from; it is a specification, not a summary.
+
+### The result: one framework call replaces the whole `ip` chain
+
+On the pre-EthernetConfig image, five commands were needed — including
+`ip route replace … table eth0`, Android's per-network policy routing, which
+nothing in the Ubuntu implementation hints at and which a translated script
+would never have produced. The ROM was rebuilt with **Bliss-Bass
+EthernetConfig** as a platform-signed privileged app
+(`docs/android_setup_good.md`), and that entire chain is now subsumed.
+
+| Step | Ubuntu (`preconfig-ubuntu.sh:206`) | Android — measured | Still needed? |
+|---|---|---|---|
+| privilege | `sudo` on each command | already root; no `sudo` binary, and upstream's `su -c` is dropped too | **n/a** |
+| interface | `eth0` | `eth0` | confirmed |
+| **prerequisite** | *(none)* | **import `/data/system/environ/classpath`** — without it `app_process64` aborts with exit 134 before `main()` | **YES** |
+| link up | *(implicit)* | done by the framework | No |
+| flush | `ip addr flush dev eth0` | not needed | No |
+| address | `ip addr add 172.16.<vlan>.2/24 dev eth0` | helper's `STATIC` args | No |
+| route | `ip route replace default via 172.16.<vlan>.1 dev eth0` | helper's `STATIC` args | No |
+| **route (2nd)** | *(none)* | `table eth0` populated by the framework | No — the old trap is gone |
+| resolver | `echo 'nameserver …' > /etc/resolv.conf` | helper's `STATIC` args; **no file equivalent exists on Android** | No |
+| persistence | *(n/a)* | `/data/misc/ethernet/ipconfig.txt` **not** written — configured live, not persisted | Correct for a disposable clone |
+| **private DNS** | *(n/a)* | `settings put global private_dns_mode off` — **not** handled by EthernetConfig | **YES** |
+| shell for the chain | `/bin/sh` | `/system/bin/sh` | confirmed |
+| verification | `getent hosts google.com` | `ping -c2 google.com` — `getent` absent, bionic ships no such tool | confirmed |
+
+### The sequence
+
+```sh
+# 1. ART classpath. Measured NOT already present on this image, so required.
+while IFS=' ' read -r action name value; do
+    [ "$action" = "export" ] && export "$name=$value"
+done < /data/system/environ/classpath
+
+# 2. Address, prefix, gateway AND resolver in one framework call.
+#    Note app_process64, not app_process.
+APK="$(pm path com.example.ethernetconfig | sed 's/^package://')"
+CLASSPATH="$APK" /system/bin/app_process64 / \
+    com.example.ethernetconfig.network.EthernetConfigurator \
+    STATIC eth0 172.16.<vlan>.2 24 172.16.<vlan>.1 "$GUEST_NAMESERVER" none
+
+# 3. Force plaintext DNS. Not optional -- see below.
+settings put global private_dns_mode off
+```
+
+Expected: `SUCCESS` from (2), exit 0. Verified from Dom0 rather than inferred
+from the guest — the pcap shows `A? connectivitycheck.gstatic.com` leaving
+for `1.1.1.1` and being answered.
+
+> **`private_dns_mode off` is a required step, not a tuning knob.** Android
+> defaults to `opportunistic` DoT and `1.1.1.1` supports it, so a clone left
+> alone resolves over TLS to port 853 and the per-sample pcap records an
+> encrypted stream instead of the domains a sample looked up — silently,
+> with nothing failing. Evidence and the Dom0-side alternative are in
+> `docs/architecture/networking.md`.
+
+> **The single-argv form is untested.** `injector -m execproc` is
+> execve-direct with no guest shell (issue #2), and the classpath import is a
+> `while` loop, so all three commands must go to `/system/bin/sh -c '…'` as
+> one argument. The three are evidenced individually from the console;
+> collapsing them is DRAFT-016's work and the quoting is the risk.
+
+### What `preconfig-android.sh` must not assume
+
+- **That the clone starts from a clean network state.** It does not. A
+  restored clone holds the *golden* VM's LAN identity (`192.168.1.122`) until
+  this runs, and spends its first seconds ARPing for a residential gateway.
+  Containment held — the traffic reached nothing — but anything reading the
+  interface before configuration sees the wrong network, and the ARP is noise
+  in every Android pcap. Runbook finding F4.
+- **That the classpath import can be dropped.** Keep it unconditionally; it
+  is idempotent and costs nothing.
+
+---
+
 # Phase 2 — Create the Android automation scripts
 
 ## 2.0 Version-control the Dom0 working copies
@@ -875,7 +1025,31 @@ Baseline commit:
 > memory into an Android clone. That one is flagged in the script's own
 > header comment.
 
-- [ ] Create `clone-android.pl` from `clone-ubuntu.pl`.
+> **Annotation 2026-08-15 (DRAFT-015) — the clone copy is cancelled, and
+> the saved-state warning above is obsolete.**
+>
+> **There is no `clone-android.pl`.** The file was renamed
+> `automation/clone.pl` and is now shared by all three pipelines: it held
+> exactly one OS-specific value, `-L64G`, which is now `CLONE_LV_SIZE` in
+> `pipeline-<os>.env`. C1/C2 in `analysis-pipeline.md` are amended to
+> match. Handed `android_sandbox 1 misc/android_sandbox.cfg`, it reproduces
+> byte-for-byte the config `verify-android-isolation.md` step 2 wrote by
+> hand — verified 2026-08-15 before the rename was made.
+>
+> The saved-state paragraph above describes behaviour issue #4 removed on
+> 2026-08-09: the path has been derived from the origin argument as
+> `<repo root>/state/<origin>.bak` since then, so a naive copy could not
+> have restored Ubuntu memory into an Android clone. Left in place as the
+> 2026-08-09 record; do not act on it.
+>
+> DRAFT-033 has **not** landed, and its constraint above still stands for
+> the remaining copies. It now applies to `clone.pl`, which makes it more
+> pressing rather than less — one file with no exit-status checks now
+> serves three pipelines.
+
+- [x] ~~Create `clone-android.pl` from `clone-ubuntu.pl`.~~ Cancelled
+      2026-08-15 — `automation/clone.pl` is shared instead. See the
+      annotation above.
 - [ ] Create `preconfig-android.sh` from `preconfig-ubuntu.sh`.
 - [ ] Create `drakvuf-android.sh` from `drakvuf-ubuntu.sh`.
 - [ ] Create `run_analysis-android.sh` from `run_analysis-ubuntu.sh`.
@@ -887,12 +1061,13 @@ Baseline commit:
 
 ```bash
 cd ~/drakvuf-tools
-cp -a clone-ubuntu.pl clone-android.pl
+# NOT run: clone-android.pl is cancelled -- automation/clone.pl is shared.
+# cp -a clone-ubuntu.pl clone-android.pl
 cp -a preconfig-ubuntu.sh preconfig-android.sh
 cp -a drakvuf-ubuntu.sh drakvuf-android.sh
 cp -a run_analysis-ubuntu.sh run_analysis-android.sh
 
-chmod 0755 clone-android.pl preconfig-android.sh drakvuf-android.sh run_analysis-android.sh
+chmod 0755 preconfig-android.sh drakvuf-android.sh run_analysis-android.sh
 ls -l *-android.*
 ```
 
@@ -1102,7 +1277,40 @@ Startup log:
 
 ---
 
-## 2.5 Implement `clone-android.pl`
+## 2.5 ~~Implement `clone-android.pl`~~ — superseded 2026-08-15
+
+> **This section no longer describes work that will be done.** DRAFT-015
+> established that the clone script holds no OS-specific value and renamed
+> `clone-ubuntu.pl` to the shared `automation/clone.pl` rather than
+> creating an Android copy. C1/C2 in `analysis-pipeline.md` are amended.
+>
+> Disposition of the eighteen "required Android changes" below, worked
+> through in `.github/issue-drafts/DRAFT-015.md`:
+>
+> - **1 was already done** — "change the saved-state path to
+>   `android_sandbox.bak`". Derived from the origin argument since issue #4
+>   (2026-08-09); passing `android_sandbox` already yields it.
+> - **1 landed with the rename** — the snapshot size, now
+>   `$ENV{CLONE_LV_SIZE}` (`clone.pl:185`), `32G` for Android against
+>   Ubuntu's `64G`, measured from the 32,00g `android_sandbox` LV.
+> - **2 are answered by evidence, not code** — "preserve disk
+>   frontend/options" and "do not blindly assume `hda`".
+>   `misc/android_sandbox.cfg:59` and `misc/ubuntu_sandbox.cfg:54` are the
+>   same line but for the LV name, and the manual clone in
+>   `verify-android-isolation.md` restored, ran 99 s and passed eleven
+>   isolation steps on `hda`.
+> - **12 belong to DRAFT-033**, which has not landed: locking, the four
+>   exit-status checks, snapshot removal on failure, the restore timeout,
+>   stdout-only-on-success, stderr diagnostics, config-path validation, and
+>   the VLAN/name validation. They apply to `clone.pl` now.
+> - **1 is owned by nobody** — "remove the temporary config after success
+>   or failure". `clone.pl:190` writes `/tmp/$clone.config` and never
+>   unlinks it. Recommended for DRAFT-033; not yet assigned.
+> - **1 was already true** — keeping the origin parameterized.
+>
+> The "manual clone test" and "clone test evidence" blocks below are still
+> the right test; run them against `clone.pl`, per DRAFT-015's TEST
+> section.
 
 ### Existing Ubuntu behavior to review
 
@@ -2380,8 +2588,8 @@ for script in *.sh; do
 done
 
 shellcheck *.sh
-perl -c clone-ubuntu.pl
-perl -c clone-android.pl
+# One shared clone script since DRAFT-015 -- there is no clone-android.pl.
+perl -c clone.pl
 
 # Note the inverted exit status: grep returns 0 when it FINDS something, so
 # a clean result here is exit 1. Written as an explicit gate rather than a
@@ -2931,6 +3139,8 @@ Next phase:
 | 2026-08-11 | Golden `android` VM **reinstalled** with `HWACCEL=0` | BlissOS installer, Options → Graphics → Hardware Acceleration → Disable hardware acceleration; procedure in `docs/android_setup.md` | Golden VM boots to a usable UI; AND-001 resolved | evilbootloader |
 | 2026-08-11 | Issue log populated from the 2026-08-11 diagnostic capture; §0.3 and §1.5 annotated | — | Phase 1 reopened: `android_sandbox` must be rebuilt from the reinstalled golden — DRAFT-037, published as [#7](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/7) | evilbootloader |
 | 2026-08-11 | **`android_sandbox` rebuilt and restore-validated** from the reinstalled golden. New saved state `1844fc0a…`, anchor PID 3163. DNS DNAT deliberately not re-applied; anchor renamed to `nano` for anti-evasion | `docs/runbooks/rebuild-android-sandbox.md` | Phase 1 complete; issue #7 closed. §1.3 isolation still open | evilbootloader |
+| 2026-08-17 | **Android MVP bring-up run.** `injector` proven against BlissOS (12 MB APK `writefile`/`readfile` byte-exact), clone 32G, network injection, native ELF traced, APK installed and launched. Every injection required a manual `fg` at the guest console — the `nano` anchor is never scheduled | `docs/runbooks/verify-android-mvp.md` (F1–F8) | `monkey` rejected in favour of `am start -n`; APK install exceeds the 120 s trace window | evilbootloader |
+| 2026-08-17 | **`android_sandbox` re-saved to replace the injection anchor.** New saved state `465aa4d7…`, anchor PID **3174**, anchor is a backgrounded `ping` — self-scheduling, which the `nano` anchor was not. `pipeline-android.env` and `CLAUDE.md` updated the same day | §1.4/§1.5 annotations below | Three full unattended analyses completed; F1 closed pending the pcap question in §1.4 | evilbootloader |
 
 ---
 

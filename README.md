@@ -42,7 +42,7 @@ guest state in `state/`; neither is git-tracked. See `profiles/README.md`,
 ## Repository layout
 
 - `automation/` — the Ubuntu automation scripts (`dirwatch.c`,
-  `clone-ubuntu.pl`, `preconfig-ubuntu.sh`, `drakvuf-ubuntu.sh`,
+  `clone.pl`, `preconfig-ubuntu.sh`, `drakvuf-ubuntu.sh`,
   `cleanup.sh`, `tcpdump.sh`, `network-setup.sh`, `run_analysis-ubuntu.sh`)
   plus `pipeline-ubuntu.env`, the per-OS configuration they all source.
   See `docs/architecture/analysis-pipeline.md` for how they fit together.

@@ -235,7 +235,7 @@ specific defect, that defect was real and is in the history.
    explicitly that they do not — `KNOWN GAP (DRAFT-NNN)`, never a bare
    assertion. When an implementation is removed or disabled, its rationale
    comment is rewritten in the same change. An orphaned rationale is worse
-   than no comment: `clone-ubuntu.pl` still asserts that only one clone
+   than no comment: `clone.pl` still asserts that only one clone
    process may touch an origin VM at a time while its `flock` sits
    commented out and `dirwatch` runs a thread pool.
 

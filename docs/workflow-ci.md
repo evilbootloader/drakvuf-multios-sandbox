@@ -16,7 +16,7 @@
 
 Prove, on every pull request, that this repository's own code — the
 DRAKVUF/LibVMI build inputs (`automation/dirwatch.c` plus the pinned
-upstream source) and the pipeline scripts (`clone-ubuntu.pl` →
+upstream source) and the pipeline scripts (`clone.pl` →
 `preconfig-ubuntu.sh` → `drakvuf-ubuntu.sh` → `cleanup.sh`) — still
 produces a working analysis run against a real Xen Dom0 lab, not just
 that the scripts parse. The runner resets to a known-clean **base
@@ -127,7 +127,7 @@ would prove nothing about the PR under test and would cost a lot of time:
   repository tracks (`automation/dirwatch.c`) plus a pinned upstream
   revision — a PR *can* break this build, so it is rebuilt fresh from the
   PR's checkout every job, never cached into the base.
-- **The pipeline scripts** (`clone-ubuntu.pl` etc.) are exactly what a PR
+- **The pipeline scripts** (`clone.pl` etc.) are exactly what a PR
   is usually changing, so they always run against a freshly-cloned
   sandbox, never a leftover one.
 
@@ -152,7 +152,7 @@ scripts are interpreted by `/bin/sh`.
 ```bash
 for f in automation/*.sh; do bash -n "$f"; dash -n "$f"; done
 shellcheck automation/*.sh          # bare: reads .shellcheckrc, exits 0
-perl -c automation/clone-ubuntu.pl
+perl -c automation/clone.pl
 
 # Anti-pattern checks, same acceptance gates docs/checklists/android.md
 # §6.1 already defines for the (not yet written) Android scripts, applied
@@ -417,7 +417,7 @@ Unchanged from the GitHub-hosted section above. Trigger: `pull_request`
   model"), `push` to `master`, `workflow_dispatch`.
 - **Scope detection:** diff the PR against its base to decide whether to
   exercise the `ubuntu`, `android`, or both pipelines — e.g. a path
-  filter on `automation/*-ubuntu.sh`/`clone-ubuntu.pl` vs. the (currently
+  filter on `automation/*-ubuntu.sh` vs. the (currently
   nonexistent) `*-android.*` scripts. A PR touching only unrelated docs
   can skip both — exact filter rules are implementation detail for when
   the workflow YAML is written.
@@ -482,7 +482,7 @@ trusting it in the pipeline test.
 
 #### `ubuntu-pipeline` sub-stage
 
-Invoke the existing per-script pipeline (`clone-ubuntu.pl` →
+Invoke the existing per-script pipeline (`clone.pl` →
 `preconfig-ubuntu.sh` → `drakvuf-ubuntu.sh` → `cleanup.sh`) directly
 against a CI-scoped fixture directory
 (`$GITHUB_WORKSPACE/.ci-fixtures/{incoming,processing,finished}`, never

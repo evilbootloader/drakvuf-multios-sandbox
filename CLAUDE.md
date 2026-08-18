@@ -69,29 +69,55 @@ subfolders):
   OS-selection mechanism rather than a gap: the target OS is chosen by the
   submitter, via one incoming directory and one `dirwatch` instance per OS.
   File magic is recorded for identification and mismatch-rejection only —
-  it does not route. Two things this still needs before per-OS watchers
-  can run concurrently are tracked as DRAFT-036: memory-based clone
-  admission, and a host-global VLAN allocator (today the thread-slot index
-  *is* the VLAN, and the slot array is process-local, so two instances
-  would collide). See `docs/architecture/analysis-pipeline.md`.
+  it does not route. Since DRAFT-030 (2026-08-15) it spawns every callback
+  as an **argv vector**, not a formatted command string, and admits or
+  rejects the sample filename before claiming a worker slot; rejected
+  samples go to `<out_folder>/rejected/`.
+  Two things this still needs before per-OS watchers can run concurrently
+  are tracked as DRAFT-036: memory-based clone admission, and a host-global
+  VLAN allocator (today the thread-slot index *is* the VLAN, and the slot
+  array is process-local, so two instances would collide). See
+  `docs/architecture/analysis-pipeline.md`.
   For each sample it calls back into the worker scripts below, in
-  order: `clone-ubuntu.pl` → `preconfig-ubuntu.sh` → `drakvuf-ubuntu.sh` →
+  order: `clone.pl` → `preconfig-ubuntu.sh` → `drakvuf-ubuntu.sh` →
   `cleanup.sh`, with `tcpdump.sh` started on a side thread. The preconfig
   phase is guarded by a 60s timeout and the drakvuf-trace phase by a 180s
   timeout; either timeout triggers `cleanup.sh` and a fresh clone retry.
-- `pipeline-ubuntu.env` — sourced config holding every per-OS value the
+- `platform.env` — sourced config holding the **host-global** values:
+  `ANALYSIS_BRIDGE`, `UPLINK_BRIDGE`, `SUBNET_PREFIX`, `VG_NAME`. One Dom0
+  has one of each, so these are deliberately *not* per-OS: three pipeline
+  files free to disagree about the bridge is not a loud misconfiguration,
+  it is a clone attached to a bridge with no isolation rules. Added by
+  DRAFT-028b (2026-08-15); sourced by `network-setup.sh` and
+  `run_analysis-<os>.sh`. C4 forbids `pipeline-<os>.env` from redefining
+  any of these, and the check is a grep — see the file's own header.
+  Wiring `cleanup.sh` and `tcpdump.sh` to it is still open (DRAFT-011),
+  and the `misc/*.cfg` bridge literals stay literal because a Xen config
+  cannot source shell.
+- `pipeline-ubuntu.env` — sourced config holding every **per-OS** value the
   scripts below need (sandbox domain, `.cfg`, profile, saved state,
   injection PID, clone count, malware directories, guest user and staging
-  dir, resolver). Added in issue #4. Each entry is `${NAME:-default}`, so
-  the environment wins — that is how CI overrides paths without patching
-  files. A second OS pipeline is a copy of this one file plus its own
-  `run_analysis-<os>.sh`.
-- `clone-ubuntu.pl` — LVM copy-on-write snapshot + `xl restore` of the
-  sandbox template's saved memory image, producing a disposable clone. The
-  restore path is derived via `FindBin` as `<repo root>/state/<origin>.bak`,
-  so the disk snapshot and the memory image cannot name different domains.
-  It does **not** read `pipeline-ubuntu.env` — it is Perl, invoked by
-  `dirwatch` with a fixed 3-argument contract.
+  dir, resolver, `CLONE_LV_SIZE`). Added in issue #4. Each entry is
+  `${NAME:-default}`, so the environment wins — that is how CI overrides
+  paths without patching files. A second OS pipeline is a copy of this one
+  file plus its own `run_analysis-<os>.sh`. `ANALYSIS_BRIDGE` used to live
+  here and moved to `platform.env` in DRAFT-028b; do not restore it.
+- `clone.pl` — **shared by all three OS pipelines**, not per-OS. LVM
+  copy-on-write snapshot + `xl restore` of the sandbox template's saved
+  memory image, producing a disposable clone. The restore path is derived
+  via `FindBin` as `<repo root>/state/<origin>.bak`, so the disk snapshot
+  and the memory image cannot name different domains. It does **not** read
+  `pipeline-<os>.env` — it is Perl, invoked by `dirwatch` with a fixed
+  3-argument contract — but it does read `CLONE_LV_SIZE` from the
+  environment, which `run_analysis-<os>.sh` exports from that file.
+
+  *Named `clone-ubuntu.pl` until DRAFT-015 (2026-08-15). It was renamed
+  rather than copied to `clone-android.pl` because it holds no OS-specific
+  value: everything that varies arrives on the 3-argument contract, is
+  derived from it, or comes from the environment. This amends C1/C2 in
+  `docs/architecture/analysis-pipeline.md` to "four per-OS files plus the
+  shared clone script". Do not add an OS branch to this file — add a
+  variable.*
 - `preconfig-ubuntu.sh` — stages the sample into the guest via
   `injector -m writefile` (`-B` Dom0 source, `-e` guest destination), then
   configures the clone's network. Two separate injections; delivery
@@ -101,14 +127,17 @@ subfolders):
 - `drakvuf-ubuntu.sh` — runs the DRAKVUF trace (`syscalls`, `filetracer`, `fileextractor`,
   `memdump` 120s timeout, `--memdump-dir`) and kills the per-VLAN `tcpdump`
   process afterward. Executes the staged sample at
-  `$GUEST_STAGING_DIR/<sha256>`, built by the same rule `preconfig-ubuntu.sh`
-  stages to.
+  `$GUEST_STAGING_DIR/<submitted filename>`, built by the same rule
+  `preconfig-ubuntu.sh` stages to. The leaf was the sample's SHA-256 until
+  DRAFT-030 (2026-08-15); it is now the name the sample was submitted
+  with, per C5, because extension dispatch and `argv[0]` self-checks are
+  real evasion surface that a hash-named file exercises none of.
 - `cleanup.sh` — pauses/destroys the clone domain and kills any lingering
   `injector`/`drakvuf` processes for it.
 - `tcpdump.sh` — captures traffic on the clone's VLAN sub-interface to a
   per-sample pcap.
 - `network-setup.sh` — provisions the per-VLAN isolated networks
-  (`172.16.<vlan>.1/24` gateway per VLAN) that `clone-ubuntu.pl` and
+  (`172.16.<vlan>.1/24` gateway per VLAN) that `clone.pl` and
   `preconfig-ubuntu.sh` assume already exist. It does **not** create
   `xenbr1`, despite the name: it calls only `modprobe`/`ip`/`iptables`, and
   the OVS bridge comes from a separate one-time install step
@@ -163,9 +192,82 @@ these files as missing entirely; that was wrong — `misc/` had simply not
 been checked. Always check for a `misc/` directory before concluding a
 referenced file doesn't exist anywhere in this repo.
 
-Android equivalents (`clone-android.pl`, `preconfig-android.sh`,
-`drakvuf-android.sh`, `run_analysis-android.sh`) do not exist yet — this is
-the Phase 2 gap the checklist tracks. Do not assume they are present.
+Android's own files, as of 2026-08-17:
+
+- `pipeline-android.env` and `run_analysis-android.sh` — **exist**
+  (DRAFT-015). `CLONE_LV_SIZE=32G`, `GUEST_STAGING_DIR=/data/local/tmp`,
+  `INJECTION_PID=3174`.
+- `preconfig-android.sh` and `drakvuf-android.sh` — **exist**
+  (DRAFT-016, reworked 2026-08-17). `preconfig-android.sh` runs up to
+  three injections: `writefile` delivery, one Bliss-Bass EthernetConfig
+  call for the network (measured by DRAFT-013,
+  `docs/checklists/android.md` §1.6, not Ubuntu's `ip` chain), and — for
+  an APK only — `pm install`. `drakvuf-android.sh` then has **two
+  execution paths**, selected from the sample's own bytes: an APK
+  (ZIP containing `AndroidManifest.xml`) is **launched**, already
+  installed, via `cmd package resolve-activity` + `am start -n`; a native
+  ELF is `execve`d directly, the Ubuntu shape; anything else is
+  `unsupported_type` and is not executed. The selector is a structural
+  test, deliberately **not** the state model's advisory `detected_type`,
+  and it is repeated in both scripts rather than carried between them —
+  they are separate `dirwatch` callbacks with no channel, and a marker
+  file is state a sample could read.
+- `clone-android.pl` — **will never exist.** The clone step is the shared
+  `clone.pl`; see its entry above and C1/C2.
+
+**Why the install is not traced, and why the launch is not `monkey`**
+(both settled on Dom0 2026-08-17, `docs/runbooks/verify-android-mvp.md`
+F2/F3): `pm install` takes 3s untraced and does not finish in 120s under
+the trace, and `-t` cannot be raised past `dirwatch`'s 180s timer. Nothing
+is lost by installing untraced — an Android application cannot run its own
+code during installation. `monkey` was rejected because
+`ActivityManager.isUserAMonkey()` reports it to the sample, and because it
+reaches `app_process64`, which aborts with exit 134 without the
+`/data/system/environ/classpath` import that `am` (a wrapper around the
+native `cmd`) does not need.
+
+**Android traces with `-F` and `--disable-sysret`; Ubuntu does not.** This
+is a property of the guest, not a preference. DRAKVUF's cost scales with
+syscalls *executed*, and Android's baseline rate is structurally far
+higher than a Linux desktop's — every binder IPC is an `ioctl()` and every
+system service runs a Looper on `epoll_pwait`/`ppoll`, so an idle BlissOS
+clone generates thousands of events before anything is analysed. Without
+these two options an APK installed and launched correctly and still could
+not finish drawing inside the trace window. **`--disable-sysret` costs
+syscall return values**: an Android trace shows that a sample called
+`openat`/`connect`/`execve` and with what arguments, but not whether it
+succeeded or what fd came back. Attempted behaviour is visible, outcomes
+are not — set `DISABLE_SYSRET=0` in `pipeline-android.env` when an
+analysis needs to tell a successful open from a refused one. Ubuntu is
+deliberately left alone: it is evidenced working and does not have the
+problem these solve.
+
+**Untrusted filenames must never be spliced into a guest shell string.**
+`dirwatch`'s `sample_name_admissible()` rejects only `/` and control
+characters, so `"`, `$`, a backtick and `;` are all admissible in a
+submitted name — and all are live inside a double-quoted guest shell word.
+The `pm install` injection therefore uses the `sh -c '…' sh "$UNSAFE"`
+idiom — `-e /system/bin/sh -f -c -f "$INSTALL_CMD" -f sh -f "$GUEST_SAMPLE"`
+— so the path arrives as a separate `execve` element and the script refers
+to it as `"$1"`, a variable reference nothing re-parses. Sample-derived text
+may be held in guest shell *variables* and used quoted, which is what the
+launch does with the package name; what it may not do is reach the guest as
+text Dom0 pasted into a command.
+
+**Android is execution-evidenced end to end as of 2026-08-17**
+(`docs/runbooks/verify-android-mvp.md`): `injector` `writefile`/`readfile`
+round-trips 12 MB byte-exact, the network injection configures the clone,
+a native ELF traces through the execve path, and an APK installs and
+launches. What is **not** yet evidenced is the reworked APK path above —
+install-in-preconfig and `am start` are implemented but have not run on
+Dom0, and no Android step has been re-run since the 2026-08-17 template
+re-save (`465aa4d7…`). Treat the APK path as untested code.
+
+**Neither launcher may run while the other does** — `dirwatch` derives each
+clone's VLAN from a process-local worker-slot index, so two watchers
+allocate the same VLANs and share gateway addresses and isolation rules
+with no symptom but interference. Both launchers now refuse to start if
+another is running (DRAFT-036 owns the real fix, a host-global allocator).
 
 **`automation/` now mirrors the working Dom0 host** as of 2026-08-08: the
 tested production scripts were copied in wholesale, resolving the repo↔host
@@ -207,9 +309,16 @@ confirm before changing):
   username `carlos`~~ — moved to `GUEST_USER` in `pipeline-ubuntu.env` in
   issue #4. Still a fixed value rather than one discovered from the guest;
   that remains open M1 work.
-- `clone-ubuntu.pl` still hard-codes `vg-root` and `xenbr1`, and
+- ~~`clone.pl` still hard-codes `vg-root` and `xenbr1`, and
   `network-setup.sh` the `172.16.<vlan>.0/24` scheme. Neither reads
-  `pipeline-ubuntu.env`. Open M1 work, gated on DRAFT-009.
+  `pipeline-ubuntu.env`.~~ — **closed 2026-08-15** across DRAFT-015,
+  DRAFT-028b and DRAFT-033. `clone.pl` still reads no config *file* — it is
+  Perl on a fixed 3-argument contract — but takes `VG_NAME`,
+  `ANALYSIS_BRIDGE` and `CLONE_LV_SIZE` from the environment, which
+  `run_analysis-<os>.sh` exports from `platform.env` and
+  `pipeline-<os>.env`. `network-setup.sh` takes the subnet from
+  `SUBNET_PREFIX`. The defaults still reproduce the old literals exactly,
+  so an unset variable is not a behaviour change.
 - Guest DNS pointed at the clone's gateway, where nothing listens, so name
   resolution failed on every run before 2026-08-09. Now `GUEST_NAMESERVER`
   (default `1.1.1.1`). ~~Android's golden image has the same dead assumption
@@ -233,8 +342,10 @@ Do not modify the Ubuntu behavior unless required and explicitly requested.
   (C1–C10) in `docs/architecture/analysis-pipeline.md`, "Shared and per-OS
   code boundary" — not copying the Ubuntu file and editing it.** The Ubuntu
   implementation is the reference for *shape*, and it still carries known
-  defects (no exit-status checks in `clone-ubuntu.pl`, SHA-256 as the guest
-  leaf name, the licence header above the shebang). Copying it copies those.
+  defects (the licence header above the shebang). Copying it copies those.
+  *(Two entries left this list on 2026-08-15: `clone.pl`'s missing
+  exit-status checks, fixed by DRAFT-033, and the SHA-256 guest leaf name,
+  fixed by DRAFT-030.)*
   A defect known in the template is fixed in the template before the copy is
   made.
 - Prefer parameterization over duplicated hard-coded values.
@@ -331,7 +442,7 @@ Volume group: `vg-root`
 Analysis bridge: `xenbr1`
 Saved state: `state/ubuntu_sandbox.bak`
 Incoming / processing / finished: `/malware_{incoming,processing,finished}/ubuntu`
-Guest staging: `/home/carlos/Desktop/<sha256>`
+Guest staging: `/home/carlos/Desktop/<submitted filename>`
 
 ## Workflow
 
