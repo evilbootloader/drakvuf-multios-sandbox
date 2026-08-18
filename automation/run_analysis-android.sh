@@ -160,7 +160,8 @@ dirwatch "$WATCH_MODE" \
 #       silently. See pipeline-android.env.
 #   6   watch folder    (samples land here)
 #   7   serve folder    (sample moved here for the duration of the run)
-#   8   output folder   (per-sample results, keyed by MD5)
+#   8   output folder   (results at <sha256>/<utime>-<vlan>, one
+#       directory per RUN rather than per sample -- see preconfig-ubuntu.sh)
 #   9   max clones -- see the network-setup.sh note above
 #  10   clone script     ) called per sample in this order, with
 #  11   preconfig script ) tcpdump started on a side thread.

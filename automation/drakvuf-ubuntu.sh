@@ -123,8 +123,10 @@ REPO_ROOT="$(
 # shellcheck source=automation/pipeline-ubuntu.env
 . "$SCRIPT_DIR/pipeline-ubuntu.env"
 
+# 8, not 7: the result path needs $8, and an unset UTIME would silently
+# produce a directory named "-$VLAN" rather than fail.
 ARGC=$#
-if [ $ARGC -le 6 ]; then
+if [ $ARGC -le 7 ]; then
     exit 0;
 fi
 
@@ -135,7 +137,14 @@ VLAN=$4
 RUNFOLDER=$5
 RUNFILE=$6
 OUTPUTFOLDER=$7
-MD5=$(md5sum -- "$RUNFOLDER/$RUNFILE" | awk -F" " '{print $1}')
+UTIME=$8
+
+# <sha256>/<analysis id>, derived by the same rule preconfig-ubuntu.sh
+# uses, from the same dirwatch arguments -- see that file for why the key
+# is no longer the sample's MD5 alone (F8) and why the id is <utime>-<vlan>
+# rather than the state model's ULID.
+SHA256=$(sha256sum -- "$RUNFOLDER/$RUNFILE" | awk -F" " '{print $1}')
+RESULT="$OUTPUTFOLDER/$SHA256/$UTIME-$VLAN"
 
 # The staged sample's guest path. Both this script and
 # preconfig-ubuntu.sh build it the same way -- GUEST_STAGING_DIR from
@@ -162,12 +171,24 @@ sleep 5 2>&1
 # and pointing them at the same directory as the JSON log put three kinds
 # of artifact in one flat namespace.
 #
-# -p, not a bare mkdir, for two reasons that both bite in normal
-# operation: dirwatch re-runs this script for the SAME sample and the same
-# MD5 after a trace timeout (`goto restart`), so a bare mkdir fails "File
-# exists" on every retry; and if preconfig-ubuntu.sh exited before
-# creating $OUTPUTFOLDER/$MD5, creating a subdirectory of it fails outright.
-mkdir -p "$OUTPUTFOLDER/$MD5/dump" "$OUTPUTFOLDER/$MD5/memdump"
+# -p, not a bare mkdir: $RESULT is now two levels deep (<sha256>/<id>),
+# and if preconfig-ubuntu.sh exited before creating it, creating a
+# subdirectory of it fails outright.
+#
+# A trace timeout used to land back here with the SAME path, because the
+# key was the sample's MD5 and a retry does not change the bytes. It no
+# longer does: dirwatch's `goto restart` re-enters prepare(), which
+# re-stamps utime (dirwatch.c:531), so each attempt now writes to its own
+# directory instead of truncating the previous one's logs.
+#
+# Two loose ends, both stated rather than assumed away. Nothing marks
+# three directories as three attempts at one submission -- DRAFT-011 owns
+# that when it emits status.json's `attempt`. And utime is second-granular,
+# so a retry that got all the way through cleanup and a fresh clone inside
+# one second would reuse the directory; that is not reachable in practice
+# (the retry path does an LVM snapshot and an xl restore) and degrades to
+# the old behaviour rather than to anything worse.
+mkdir -p "$RESULT/dump" "$RESULT/memdump"
 
 # Quoted as of DRAFT-030. The expansions here were bare, which was
 # survivable only while every value was a hex digest or a configured
@@ -179,14 +200,17 @@ drakvuf -r "$REKALL" -d "$DOMAIN" -i "$PID" \
     -m execproc -e "$CMD" \
     -o json -t 120 \
     -a syscalls -a filetracer -a fileextractor -a memdump \
-    -D "$OUTPUTFOLDER/$MD5/dump" \
-    --memdump-dir "$OUTPUTFOLDER/$MD5/memdump" \
-    1>"$OUTPUTFOLDER/$MD5/drakvuf.log" 2>&1
+    -D "$RESULT/dump" \
+    --memdump-dir "$RESULT/memdump" \
+    1>"$RESULT/drakvuf.log" 2>&1
 
 RET=$?
 
+# The sample lands inside the RUN directory, not beside it under
+# <sha256>/: it carries the name it was submitted with, and that name is
+# what varies between two runs of identical bytes.
 if [ $RET -eq 1 ]; then
-   mv -- "$RUNFOLDER/$RUNFILE" "$OUTPUTFOLDER/$MD5" 1>/dev/null 2>&1
+   mv -- "$RUNFOLDER/$RUNFILE" "$RESULT" 1>/dev/null 2>&1
 fi
 
 TCPDUMPPID=$(ps aux | grep "tcpdump -i xenbr1.$VLAN" | grep -v grep | awk -F" " '{print $2}')

@@ -135,7 +135,30 @@ subfolders):
 - `cleanup.sh` — pauses/destroys the clone domain and kills any lingering
   `injector`/`drakvuf` processes for it.
 - `tcpdump.sh` — captures traffic on the clone's VLAN sub-interface to a
-  per-sample pcap.
+  per-**run** pcap.
+
+**Results are `<out_folder>/<sha256>/<utime>-<vlan>/`, one directory per
+run** (2026-08-18). Every script that writes there — `preconfig-<os>.sh`,
+`drakvuf-<os>.sh`, `tcpdump.sh` — derives it independently, as a pure
+function of arguments `dirwatch` already passes; they have no channel
+between them, which is why it must be derivable rather than carried. No
+contract changed and no callback arity moved (C9), but all five scripts
+now require the `utime` argument they previously ignored, so their arity
+checks tightened by one.
+
+*It was `<out_folder>/<md5>/` until then: keyed on content alone, so two
+submissions of identical bytes under different names shared one directory
+and truncated each other's logs — harmless until DRAFT-030 made the
+submitted filename the thing the guest executes, which turns those into
+two different analyses. Recorded as F8 in
+`docs/runbooks/verify-android-mvp.md`. `<utime>-<vlan>` is deliberately
+**not** the state model's ULID: `utime` is second-granular and not unique
+alone, the VLAN disambiguates it, and a ULID would have to be generated in
+`dirwatch.c` and carried. Two things this did NOT do: publish the
+directory atomically (still written in place — `KNOWN GAP (DRAFT-018)`),
+and migrate existing MD5-keyed directories on disk. A retry now writes to
+a new directory rather than overwriting, which nothing yet marks as a
+retry.*
 - `network-setup.sh` — provisions the per-VLAN isolated networks
   (`172.16.<vlan>.1/24` gateway per VLAN) that `clone.pl` and
   `preconfig-ubuntu.sh` assume already exist. It does **not** create

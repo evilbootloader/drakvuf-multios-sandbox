@@ -103,8 +103,10 @@
 #                                                                        #
 #************************************************************************#
 
+# 5, not 4: the result path needs $5, and an unset UTIME would silently
+# produce a directory named "-$VLAN" rather than fail.
 ARGC=$#
-if [ $ARGC -le 3 ]; then
+if [ $ARGC -le 4 ]; then
     exit 0;
 fi
 
@@ -112,20 +114,28 @@ VLAN=$1
 RUNFOLDER=$2
 RUNFILE=$3
 OUTPUTFOLDER=$4
+UTIME=$5
+
+# Shared by every OS pipeline -- this file has no per-OS content, so the
+# result path is derived by the same rule preconfig-<os>.sh uses, from the
+# same dirwatch arguments. See preconfig-ubuntu.sh for why the key is no
+# longer the sample's MD5 alone (F8) and why the id is <utime>-<vlan>.
+#
 # Quoted, and `--`, as of DRAFT-030. dirwatch admits sample names
 # containing spaces, so the bare expansion this replaced split the name
-# and handed md5sum two nonexistent paths: MD5 came back EMPTY, and the
-# capture below then wrote to "$OUTPUTFOLDER//tcpdump.pcap" -- one shared
-# file for every such sample, silently overwritten by each run, while the
-# real result directory got no pcap at all.
-MD5=$(md5sum -- "$RUNFOLDER/$RUNFILE" | awk -F" " '{print $1}')
+# and handed the hashing tool two nonexistent paths: the digest came back
+# EMPTY, and the capture below then wrote to "$OUTPUTFOLDER//tcpdump.pcap"
+# -- one shared file for every such sample, silently overwritten by each
+# run, while the real result directory got no pcap at all.
+SHA256=$(sha256sum -- "$RUNFOLDER/$RUNFILE" | awk -F" " '{print $1}')
+RESULT="$OUTPUTFOLDER/$SHA256/$UTIME-$VLAN"
 
-# The result directory is created by preconfig-ubuntu.sh, which dirwatch
+# The result directory is created by preconfig-<os>.sh, which dirwatch
 # runs before this thread starts. Guarded anyway: tcpdump exits
 # immediately if the -w path is unwritable, and a missing pcap is the kind
 # of absence that reads as "the sample generated no traffic".
-mkdir -p "$OUTPUTFOLDER/$MD5" 1>/dev/null 2>&1
+mkdir -p "$RESULT" 1>/dev/null 2>&1
 
-tcpdump -i "xenbr1.$VLAN" -n -U -w "$OUTPUTFOLDER/$MD5/tcpdump.pcap" 1>/dev/null 2>&1
+tcpdump -i "xenbr1.$VLAN" -n -U -w "$RESULT/tcpdump.pcap" 1>/dev/null 2>&1
 
 exit $?;

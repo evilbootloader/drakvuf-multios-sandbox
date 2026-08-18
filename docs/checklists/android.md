@@ -1453,7 +1453,14 @@ Maximum size:
 
 The current Ubuntu preconfiguration script:
 
-- computes an MD5 result directory;
+- ~~computes an MD5 result directory;~~ **No longer true as of
+  2026-08-18** — both pipelines now write to
+  `<out>/<sha256>/<utime>-<vlan>/`, so this is a shared behaviour rather
+  than an Ubuntu one to remove. (The rest of this list is also stale for
+  reasons predating that change: the `wget` and `/etc/resolv.conf` steps
+  went with HTTP delivery in issue #4, and the hard-coded guest path
+  became `GUEST_USER`/`GUEST_STAGING_DIR`. Left in place as the
+  pre-issue-#4 record; do not read it as current.)
 - executes `/usr/bin/sh -c ...` inside the guest;
 - configures `eth0` with `172.16.<VLAN>.2/24`;
 - sets the gateway to `172.16.<VLAN>.1`;
@@ -1467,9 +1474,14 @@ The current Ubuntu preconfiguration script:
 ### Android requirements
 
 - [ ] Enable strict shell behavior.
-- [ ] Validate all seven expected arguments from `dirwatch`.
+- [ ] ~~Validate all seven expected arguments from `dirwatch`.~~ **Eight
+      as of 2026-08-18** — the `utime` argument the scripts previously
+      ignored is now read, and the arity check requires it. Still an open
+      item: the check exits 0 rather than nonzero on wrong arity.
 - [ ] Return a nonzero code on invalid input.
-- [ ] Create a SHA-256 result directory.
+- [x] Create a SHA-256 result directory. **Done 2026-08-18** —
+      `<out>/<sha256>/<utime>-<vlan>/`, nested so the digest groups every
+      run of the same bytes. See `docs/architecture/result-schema.md` §1.
 - [ ] ~~Create a per-analysis guest directory under `/data/local/tmp/drakvuf/<SHA256>`.~~
       **Superseded 2026-08-10 (issue #6).** Staging is flat into
       `/data/local/tmp`, which pre-exists; `writefile` cannot create

@@ -104,7 +104,7 @@
 #************************************************************************#
 #
 # Stages one sample into a booted analysis clone and configures its
-# network. Called by dirwatch with a fixed 7-argument list.
+# network. Called by dirwatch with a fixed 8-argument list.
 #
 # Delivery is host-to-guest injection. It used to be a guest-side fetch
 # from a Dom0 web server, removed outright as of issue #4 / DRAFT-027 --
@@ -136,8 +136,11 @@ REPO_ROOT="$(
 # shellcheck source=automation/pipeline-ubuntu.env
 . "$SCRIPT_DIR/pipeline-ubuntu.env"
 
+# 7 was enough while $8 was ignored. The result path now needs it, and an
+# unset UTIME would silently produce a directory named "-$VLAN" rather
+# than fail, so the arity this script actually requires is 8.
 ARGC=$#
-if [ $ARGC -le 6 ]; then
+if [ $ARGC -le 7 ]; then
     exit 0;
 fi
 
@@ -148,11 +151,35 @@ VLAN=$4
 RUNFOLDER=$5
 RUNFILE=$6
 OUTPUTFOLDER=$7
+UTIME=$8
 
-# MD5 keys the result directory. Unchanged -- issue #3 decided results
-# will move to an analysis_id, but implementing that is DRAFT-018, not
-# this change.
-MD5=$(md5sum -- "$RUNFOLDER/$RUNFILE" | awk -F" " '{print $1}')
+# The result directory is <sha256>/<analysis id>, and this script derives
+# it rather than being told: dirwatch has no channel to its callbacks
+# beyond the argument list, and every value needed is already on it.
+#
+# SHA-256 groups every analysis of the same bytes; the analysis id
+# separates the runs. Keying on content ALONE was F8 in
+# docs/runbooks/verify-android-mvp.md -- four samples with identical bytes
+# under different submitted names shared one directory and truncated each
+# other's logs. That was benign before DRAFT-030 and is not after it: the
+# submitted name is now what the guest executes (C5), and extension
+# dispatch and argv[0] self-checks are exactly the behaviour that makes
+# two such submissions DIFFERENT analyses rather than one repeated.
+#
+# <utime>-<vlan> is the analysis id. utime is dirwatch's per-run
+# time(NULL) (dirwatch.c:531) at second granularity, so it is not unique
+# by itself -- two workers cloning in the same second share it. One VLAN
+# carries one clone at a time, so the pair is unique, and it stays unique
+# across watchers once DRAFT-036 makes VLAN allocation host-global, which
+# is the point at which a second watcher may run at all.
+#
+# NOT the state model's ULID. Deviation recorded in
+# docs/architecture/analysis-pipeline.md rather than left to be
+# rediscovered: a ULID cannot be derived independently by three scripts,
+# so it would have to be generated in dirwatch.c and carried, which is a
+# C change and a C9 question this does not need to open.
+SHA256=$(sha256sum -- "$RUNFOLDER/$RUNFILE" | awk -F" " '{print $1}')
+RESULT="$OUTPUTFOLDER/$SHA256/$UTIME-$VLAN"
 
 # The guest sees the name the sample was SUBMITTED with, not its digest
 # (C5; DRAFT-030, 2026-08-15). Malware behaviour is frequently
@@ -177,8 +204,8 @@ MD5=$(md5sum -- "$RUNFOLDER/$RUNFILE" | awk -F" " '{print $1}')
 # never in option position.
 GUEST_SAMPLE="$GUEST_STAGING_DIR/$RUNFILE"
 
-LOG="$OUTPUTFOLDER/$MD5/preconfig.log"
-mkdir -p "$OUTPUTFOLDER/$MD5" 1>/dev/null 2>&1
+LOG="$RESULT/preconfig.log"
+mkdir -p "$RESULT" 1>/dev/null 2>&1
 
 # 1. Deliver. Deliberately first: delivery no longer depends on guest
 #    networking, and running it before the network exists is what keeps

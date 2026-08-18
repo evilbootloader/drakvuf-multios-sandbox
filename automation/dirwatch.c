@@ -578,8 +578,13 @@ static inline void start(struct start_drakvuf* start, char* sample)
 
 /*
  * Builds and runs one of the two 8-argument worker callbacks. preconfig
- * and drakvuf take an identical shape (C9) and read the first seven, so
- * one builder serves both.
+ * and drakvuf take an identical shape (C9), so one builder serves both.
+ *
+ * They read all eight as of 2026-08-18. utime was passed and ignored
+ * until then; it is now half the result-directory name
+ * (<sha256>/<utime>-<vlan>), which is why both scripts' arity checks
+ * require 8 rather than tolerating 7. Nothing here changed to achieve
+ * that -- the argument was always being sent.
  *
  * Everything allocated here is freed before it returns, and that is the
  * reason this is a function rather than two inline blocks: run_drakvuf()

@@ -145,8 +145,10 @@ REPO_ROOT="$(
 # shellcheck source=automation/pipeline-android.env
 . "$SCRIPT_DIR/pipeline-android.env"
 
+# 8, not 7: the result path needs $8, and an unset UTIME would silently
+# produce a directory named "-$VLAN" rather than fail.
 ARGC=$#
-if [ $ARGC -le 6 ]; then
+if [ $ARGC -le 7 ]; then
     exit 0;
 fi
 
@@ -157,9 +159,13 @@ VLAN=$4
 RUNFOLDER=$5
 RUNFILE=$6
 OUTPUTFOLDER=$7
+UTIME=$8
 
-# MD5 keys the result directory, as it does for Ubuntu.
-MD5=$(md5sum -- "$RUNFOLDER/$RUNFILE" | awk -F" " '{print $1}')
+# <sha256>/<analysis id> keys the result directory, as it does for Ubuntu.
+# See preconfig-ubuntu.sh for why the key is no longer the sample's MD5
+# alone (F8) and why the id is <utime>-<vlan> rather than a ULID.
+SHA256=$(sha256sum -- "$RUNFOLDER/$RUNFILE" | awk -F" " '{print $1}')
+RESULT="$OUTPUTFOLDER/$SHA256/$UTIME-$VLAN"
 
 # The guest sees the submitted name (C5). dirwatch admits or rejects the
 # name at the watch-folder boundary, so nothing here needs to rewrite it.
@@ -167,8 +173,8 @@ MD5=$(md5sum -- "$RUNFOLDER/$RUNFILE" | awk -F" " '{print $1}')
 # and permits execution, which /storage/self/primary/Download does not.
 GUEST_SAMPLE="$GUEST_STAGING_DIR/$RUNFILE"
 
-LOG="$OUTPUTFOLDER/$MD5/preconfig.log"
-mkdir -p "$OUTPUTFOLDER/$MD5" 1>/dev/null 2>&1
+LOG="$RESULT/preconfig.log"
+mkdir -p "$RESULT" 1>/dev/null 2>&1
 
 # 1. Deliver. First, and deliberately: delivery does not depend on guest
 #    networking, which is what keeps an `offline` analysis mode reachable.
@@ -391,7 +397,7 @@ sleep "$APK_INSTALL_WAIT"
 # This also makes the resolved component visible in preconfig.log, which
 # is the diagnostic this pipeline most conspicuously lacked -- an empty
 # handoff previously showed up only as a trace where nothing launched.
-COMPONENT_FILE="$OUTPUTFOLDER/$MD5/launch-component"
+COMPONENT_FILE="$RESULT/launch-component"
 
 injector -r "$REKALL" -d "$DOMAIN" -i "$PID" -m readfile \
     -B "$COMPONENT_FILE" \

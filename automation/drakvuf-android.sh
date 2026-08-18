@@ -144,8 +144,10 @@ REPO_ROOT="$(
 # shellcheck source=automation/pipeline-android.env
 . "$SCRIPT_DIR/pipeline-android.env"
 
+# 8, not 7: the result path needs $8, and an unset UTIME would silently
+# produce a directory named "-$VLAN" rather than fail.
 ARGC=$#
-if [ $ARGC -le 6 ]; then
+if [ $ARGC -le 7 ]; then
     exit 0;
 fi
 
@@ -156,14 +158,21 @@ VLAN=$4
 RUNFOLDER=$5
 RUNFILE=$6
 OUTPUTFOLDER=$7
+UTIME=$8
 
-MD5=$(md5sum -- "$RUNFOLDER/$RUNFILE" | awk -F" " '{print $1}')
+SHA256=$(sha256sum -- "$RUNFOLDER/$RUNFILE" | awk -F" " '{print $1}')
 
 # Built by the same rule preconfig-android.sh stages to, from the same two
 # dirwatch arguments, so staging and execution cannot name different files.
 CMD="$GUEST_STAGING_DIR/$RUNFILE"
 
-RESULT="$OUTPUTFOLDER/$MD5"
+# The same rule preconfig-android.sh derives, from the same arguments --
+# and here that agreement is load-bearing rather than tidy: the launch
+# component is handed over as a FILE in this directory, so a preconfig and
+# a drakvuf callback that disagreed about the path would present as an APK
+# that resolved correctly and then launched nothing. Both take utime from
+# the same start->utime, so one attempt yields one path.
+RESULT="$OUTPUTFOLDER/$SHA256/$UTIME-$VLAN"
 mkdir -p "$RESULT/dump" "$RESULT/memdump" 1>/dev/null 2>&1
 
 # --- Sample type: a STRUCTURAL test, not the state model's detected_type -

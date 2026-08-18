@@ -649,7 +649,7 @@ only file a reader (including the future web platform) needs to open.
 
 | Group | Fields |
 |---|---|
-| Identity | `schema_version`, `analysis_id` |
+| Identity | `schema_version`, `analysis_id`, `owner`, `visibility` |
 | Sample | `sample_sha256`, `sample_sha1`, `sample_md5`, `sample_size`, `original_filename`, `guest_filename`, `detected_type`, `type_identifiers{}` |
 | Request | `target_os`, `execution_recipe`, `requested_timeout`, `network_mode` |
 | Run | `domain`, `clone_id`, `vlan`, `attempt`, `queue_reason`, `submitted_at`, `started_at`, `finished_at`, `duration_seconds` |
@@ -657,11 +657,52 @@ only file a reader (including the future web platform) needs to open.
 | State | `state`, `stage`, `status`, `failure_stage`, `failure_reason`, `errors[]`, `cleanup_status` |
 | Provenance | `sandbox_version`, `profile_version`, `drakvuf_version` |
 
-`analysis_id` identifies **one run**, not one sample: a ULID, and the name
-of the result directory. Submitting the same sample twice produces two
-independent records that cannot collide or overwrite each other. Samples
-are found by `sample_sha256` through an `index/by-sha256/` mapping, which
-is also what gives the web platform an "all runs of this sample" view.
+`analysis_id` identifies **one run**, not one sample. Submitting the same
+sample twice produces two independent records that cannot collide or
+overwrite each other.
+
+> **Amended 2026-08-18, on implementing the layout (runbook F8).** Two
+> parts of this paragraph were changed by contact with the scripts that
+> had to produce them, and the original wording is kept here rather than
+> silently replaced.
+>
+> **The result directory is `<sha256>/<analysis_id>/`, not a flat
+> `<analysis_id>/`, and there is no `index/by-sha256/` mapping.** Nesting
+> makes the filesystem the index: "all runs of this sample" is one `ls`,
+> and there is no second structure to build, keep consistent, or repair
+> after a crash. The index was the right call for a flat layout and is
+> redundant under a nested one.
+>
+> **`analysis_id` is `<utime>-<vlan>`, not a ULID.** A ULID cannot be
+> derived independently, and the three callbacks that write into the
+> result directory — `preconfig-<os>.sh`, `drakvuf-<os>.sh`, `tcpdump.sh`
+> — have no channel between them; they agree today only by computing the
+> same pure function of the arguments they each receive. A ULID would
+> have to be generated in `dirwatch.c` and carried, which is a C change
+> and reopens C9. `utime` is `dirwatch`'s per-run `time(NULL)`
+> (`dirwatch.c:531`) and is second-granular, so it is **not unique alone**
+> — two workers cloning in the same second share it. One VLAN carries one
+> clone at a time, so the pair is unique, and it stays unique across
+> watchers once DRAFT-036 makes VLAN allocation host-global, which is the
+> point at which a second watcher may run at all. Revisit if `dirwatch`
+> is ever replaced (DRAFT-010) — a rewrite can afford a real ULID.
+
+**SHA-256 grouping is an index, never a deduplication skip.** Identical
+bytes submitted twice are two analyses and must both run. This is a
+correctness rule now and a confidentiality rule at M7: returning an
+existing directory for a matching digest would disclose that someone else
+had already submitted that sample, and hand the second submitter the first
+one's results. The grouping makes that shortcut easy to reach for, which
+is why it is refused here explicitly rather than left to judgement.
+
+`owner` and `visibility` are reserved now and unused until M7. `owner` is
+null on a single-operator lab; `visibility` defaults to `private`, with
+`public` the opt-in that makes a run readable to anyone. Access is
+enforced per analysis by the web platform against these fields — the
+directory layout carries no ownership of its own, so a reader that lists
+`<sha256>/` directly sees every run of those bytes regardless of who
+submitted them. M7 must therefore expose filtered queries and never raw
+directory listings; the run count under a digest is itself metadata.
 
 `attempt` exists because one submission can legitimately produce several
 clone lifecycles: `dirwatch.c:424-429` retries a timed-out sample on a
@@ -689,10 +730,11 @@ sample_size     also the admission size cap
 ```
 
 MD5 is retained as an *identifier* precisely because external services are
-keyed by it. It is no longer a *key*: the three scripts computing it today
-(`drakvuf-ubuntu.sh:118`, `preconfig-ubuntu.sh:118`, `tcpdump.sh:115`) use
-it to name the result directory, and DRAFT-011's retrofit needs both values
-present during the transition.
+keyed by it. It is no longer a *key*, and as of 2026-08-18 it is no longer
+computed by the pipeline at all: the five scripts that used to derive the
+result directory from `md5sum` now derive it from `sha256sum` plus the run
+id. `sample_md5` remains a field DRAFT-011 should emit for cross-corpus
+lookup; nothing depends on it for a path.
 
 Structural identifiers are **format-scoped**, in `type_identifiers`,
 because they do not generalize — `imphash` is a hash of a PE import table
@@ -1009,15 +1051,24 @@ held only in a running process.
   `cleanup.sh` — which already takes exactly those two arguments
   (`cleanup.sh:113-114`).
 
-> **Implementation note — the ID carrier.** `dirwatch` passes its per-run
-> `utime` to the preconfig, drakvuf and tcpdump callbacks
-> (`dirwatch.c:188,378,398`), and the current scripts ignore it
-> (`preconfig-ubuntu.sh:111-117` reads only `$1`–`$7`). So an
-> `analysis_id` can reach three of the five callbacks with **no** change to
-> the 15-argument contract. `clone-*.pl` and `cleanup.sh` receive only
-> domain and vlan (`dirwatch.c:175,214`); reaching those needs either a
-> vlan-keyed lookup or a contract change, which is DRAFT-010's decision,
-> not this model's.
+> **Implementation note — the ID carrier. Implemented 2026-08-18.**
+> `dirwatch` passes its per-run `utime` to the preconfig, drakvuf and
+> tcpdump callbacks (`dirwatch.c:188,378,398`), and the scripts used to
+> ignore it. They now read it, so the `analysis_id` reaches all three
+> callbacks that write into the result directory with **no** change to the
+> 15-argument contract and no change to callback arity or order (C9).
+>
+> The two callbacks it does not reach do not need it: `clone.pl` and
+> `cleanup.sh` receive only domain and vlan (`dirwatch.c:175,214`) and
+> write no results. So the vlan-keyed lookup and contract change this note
+> anticipated are not required for the result layout — they remain open
+> only if some *later* need puts the run id in front of those two, which is
+> still DRAFT-010's decision rather than this model's.
+>
+> One consequence to keep in view: the scripts each derive the path
+> independently, as a pure function of the arguments. That is what lets
+> three callbacks with no channel between them agree — and it is also why
+> the id could not be a ULID. See the amendment under `analysis_id` above.
 
 ### Presentation projection (M7 web platform)
 
@@ -1053,11 +1104,23 @@ A job in `queued` also carries `queue_reason`, so the UI can distinguish
 "your turn is coming" from "the host is out of memory" — the second is an
 operator signal, not a user one, and the two should not render identically.
 
-Artifacts are unreadable before `cleaning` because the result directory is
-built at `.<analysis_id>.tmp` and renamed into place only when complete
-(the pattern already drafted at `docs/checklists/android.md:1756-1761`).
-A reader therefore never observes a half-written run, and needs no locking
-to avoid it.
+Artifacts are to be unreadable before `cleaning` because the result
+directory is built at `<sha256>/.<analysis_id>.tmp` and renamed into place
+only when complete (the pattern already drafted at
+`docs/checklists/android.md:1756-1761`). A reader then never observes a
+half-written run, and needs no locking to avoid it.
+
+> **KNOWN GAP (DRAFT-018) — not implemented, as of 2026-08-18.** The
+> 2026-08-18 layout change moved the result directory to
+> `<sha256>/<analysis_id>/` but did **not** add the temp-then-rename
+> boundary: `preconfig-<os>.sh`, `drakvuf-<os>.sh` and `tcpdump.sh` all
+> write into the final path directly, and a reader can observe a run
+> mid-write today. Publication cannot be done by any one of those three
+> scripts, because none of them knows the other two have finished — it
+> needs an actor that owns the whole run, which is `dirwatch`/`cleanup.sh`
+> and therefore DRAFT-018's work rather than a script-local fix. The
+> layout is compatible with it: the rename target is exactly the
+> `<analysis_id>` leaf.
 
 ### What this supersedes
 
@@ -1065,8 +1128,11 @@ to avoid it.
   two-outcome reading of DRAKVUF's return code (`drakvuf-ubuntu.sh:127`).
   Superseded deliberately, not by oversight: it was never a cross-OS
   design, it predates Android and Windows, and it cannot express a
-  cancelled, retried, rejected or interrupted run. Ubuntu keeps behaving
-  exactly as it does today until DRAFT-011 retrofits it.
+  cancelled, retried, rejected or interrupted run. *(The MD5-keyed
+  directory half of this was superseded in fact on 2026-08-18: Ubuntu now
+  writes to `<sha256>/<analysis_id>/` like Android. The rest of the
+  sentence stands — Ubuntu's status reporting is unchanged until DRAFT-011
+  retrofits it.)*
 - **The MD5-vs-SHA-256 question.** Decided here, once: SHA-256 is the
   sample key; MD5 survives as an identifier only.
   `docs/architecture/result-schema.md` §3 defers to this section rather
