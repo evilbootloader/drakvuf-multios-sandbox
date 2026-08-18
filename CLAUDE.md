@@ -226,6 +226,22 @@ reaches `app_process64`, which aborts with exit 134 without the
 `/data/system/environ/classpath` import that `am` (a wrapper around the
 native `cmd`) does not need.
 
+**Android traces with `-F` and `--disable-sysret`; Ubuntu does not.** This
+is a property of the guest, not a preference. DRAKVUF's cost scales with
+syscalls *executed*, and Android's baseline rate is structurally far
+higher than a Linux desktop's — every binder IPC is an `ioctl()` and every
+system service runs a Looper on `epoll_pwait`/`ppoll`, so an idle BlissOS
+clone generates thousands of events before anything is analysed. Without
+these two options an APK installed and launched correctly and still could
+not finish drawing inside the trace window. **`--disable-sysret` costs
+syscall return values**: an Android trace shows that a sample called
+`openat`/`connect`/`execve` and with what arguments, but not whether it
+succeeded or what fd came back. Attempted behaviour is visible, outcomes
+are not — set `DISABLE_SYSRET=0` in `pipeline-android.env` when an
+analysis needs to tell a successful open from a refused one. Ubuntu is
+deliberately left alone: it is evidenced working and does not have the
+problem these solve.
+
 **Untrusted filenames must never be spliced into a guest shell string.**
 `dirwatch`'s `sample_name_admissible()` rejects only `/` and control
 characters, so `"`, `$`, a backtick and `;` are all admissible in a

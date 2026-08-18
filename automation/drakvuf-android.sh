@@ -219,6 +219,28 @@ if [ "$SAMPLE_KIND" = elf ]; then
     sleep 5 2>&1
 fi
 
+# --- Trace tuning, shared by both invocations ----------------------------
+#
+# Built into the positional parameters so the options can be passed as
+# "$@" without an unquoted expansion. A single variable holding "-F
+# --disable-sysret" would need word splitting at the call site, which is
+# the SC2086 pattern DRAFT-011 is removing from this repository rather
+# than adding to.
+#
+# Safe here: dirwatch's seven arguments were copied into named variables
+# at the top of this file and nothing below reads $1..$7 again.
+#
+# See FAST_SINGLESTEP / DISABLE_SYSRET in pipeline-android.env for why
+# Android needs these and Ubuntu does not -- and for what --disable-sysret
+# costs, which is syscall return values.
+set --
+if [ "$FAST_SINGLESTEP" = 1 ]; then
+    set -- "$@" -F
+fi
+if [ "$DISABLE_SYSRET" = 1 ]; then
+    set -- "$@" --disable-sysret
+fi
+
 # --- The two invocations ------------------------------------------------
 #
 # Everything but the injection differs by nothing, so only the injection
@@ -297,6 +319,7 @@ if [ "$SAMPLE_KIND" = apk ]; then
     # too, which needs a recompile and slows every Android run.
     drakvuf -r "$REKALL" -d "$DOMAIN" -i "$PID" \
         -m execproc -e "/system/bin/am" -f "start" -f "-n" -f "$CMP" \
+        "$@" \
         -o json -t 150 \
         -a syscalls -a filetracer -a fileextractor -a memdump \
         -D "$RESULT/dump" \
@@ -309,6 +332,7 @@ else
     # chmod is silently a no-op.
     drakvuf -r "$REKALL" -d "$DOMAIN" -i "$PID" \
         -m execproc -e "$CMD" \
+        "$@" \
         -o json -t 120 \
         -a syscalls -a filetracer -a fileextractor -a memdump \
         -D "$RESULT/dump" \
