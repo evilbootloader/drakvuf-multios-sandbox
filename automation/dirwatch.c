@@ -119,6 +119,10 @@
 #include <signal.h>
 #include <time.h>
 #include <poll.h>
+/* open(O_CLOEXEC) and flock() for the host-global VLAN lease (DRAFT-036). */
+#include <fcntl.h>
+#include <sys/file.h>
+#include <sys/stat.h>
 #include <config.h>
 
 #include "../xen_helper/xen_helper.h"
@@ -305,6 +309,19 @@ static gboolean sample_name_admissible(const char* name, const char** reason)
 struct start_drakvuf
 {
     int threadid;
+    /*
+     * The leased VLAN. Was `threadid + 1` at nine sites until DRAFT-036;
+     * it is now whatever the host-global pool handed this worker, so the
+     * two numbers are unrelated and the slot index must never be used as
+     * a network identity again.
+     */
+    int vlan;
+    /*
+     * Clone lifecycles this ONE submission has consumed. The state model's
+     * `attempt` field: a timed-out sample is retried on a fresh clone, and
+     * neither superseded model could tell a retry from a first run.
+     */
+    unsigned int attempt;
     domid_t cloneID;
     char* input;
     char* clone_name;
@@ -376,7 +393,7 @@ make_clone(xen_interface_t* xen, domid_t* cloneID, uint16_t vlan, char** clone_n
 gpointer tcpdump(gpointer data)
 {
     struct start_drakvuf* start = (struct start_drakvuf*)data;
-    gchar* vlan_s  = g_strdup_printf("%u", start->threadid + 1);
+    gchar* vlan_s  = g_strdup_printf("%d", start->vlan);
     gchar* utime_s = g_strdup_printf("%lu", (unsigned long)start->utime);
     gchar* argv[] = {
         (gchar*)tcpdump_script,
@@ -396,6 +413,452 @@ gpointer tcpdump(gpointer data)
     return NULL;
 }
 
+/*
+ * ---- Host-global VLAN lease (DRAFT-036) --------------------------------
+ *
+ * The slot index USED to be the VLAN: slot 0 meant VLAN 1, xenbr1.1 and
+ * 172.16.1.0/24. slots_busy[] is process-local, so a second dirwatch
+ * handed out VLAN 1 too, and two clones from different pipelines landed on
+ * one segment sharing an address, with no rule between them and no symptom
+ * in any log. The VLAN is now leased from a host-global pool instead, and
+ * the slot index means only "which worker".
+ *
+ * The authority is the filesystem, not this process: one file per VLAN
+ * under $DRAKVUF_LEASE_DIR, held with flock(LOCK_EX|LOCK_NB) for the
+ * lifetime of the run. That choice is deliberate over an in-process
+ * allocator, because it is what makes the mechanism survive DRAFT-010 --
+ * a Python rewrite of dirwatch speaks the same protocol without sharing
+ * any code with this file.
+ *
+ * flock IS the mutual exclusion, and no outer allocation lock is needed
+ * around the scan. Two processes may hold open descriptors on the same
+ * lease file at once -- open() is not exclusive and is not meant to be --
+ * but the kernel grants the lock to exactly one, and the loser moves to
+ * the next VLAN. Verified by standalone harness (dirwatch.c cannot be
+ * compiled outside a DRAKVUF tree): 64 processes racing for 8 VLANs, 25
+ * iterations, 1600 acquisitions, zero duplicates.
+ *
+ * Crash safety is the kernel's, not ours: the lock is released when the
+ * descriptor closes, including when a SIGKILLed process has it closed for
+ * it. A watcher killed mid-run strands its clone and its LV -- both known
+ * gaps -- but not its VLAN.
+ *
+ * TWO RULES BELOW ARE LOAD-BEARING, and both were confirmed by removing
+ * them in the same harness rather than reasoned about:
+ *
+ *   1. The lease file is NEVER unlinked. Release is close(), not remove().
+ *      Unlinking while another process holds a descriptor on that path
+ *      lets a third create a fresh inode there and lock it -- two winners
+ *      on one VLAN, with neither call returning an error.
+ *
+ *   2. O_CLOEXEC is required, not hygiene. flock belongs to the open file
+ *      DESCRIPTION, so a descriptor inherited across fork/exec keeps the
+ *      lock alive after this process closes its copy. dirwatch spawns
+ *      tcpdump for the whole trace; without O_CLOEXEC that child pins the
+ *      VLAN after the run released it.
+ *
+ * The pool is $DRAKVUF_TOTAL_VLANS, exported by run_analysis-<os>.sh from
+ * platform.env. It defaults to `threads`, which reproduces today's
+ * behaviour exactly for a single watcher, so an un-updated launcher does
+ * not break.
+ */
+#define VLAN_LEASE_DIR_DEFAULT "/run/drakvuf/vlan"
+
+static uint32_t total_vlans;
+static int slot_lease_fd[128];
+static int slot_vlan[128];
+
+static const char* vlan_lease_dir(void)
+{
+    const char* d = g_getenv("DRAKVUF_LEASE_DIR");
+    return (d && *d) ? d : VLAN_LEASE_DIR_DEFAULT;
+}
+
+/*
+ * A lease says nothing about whether the network exists. network-setup.sh
+ * provisions <bridge>.<vlan> and its gateway from its own argument, so a
+ * pool larger than what was provisioned hands out a VLAN with no
+ * sub-interface, no gateway and -- because every isolation rule matches
+ * the `<bridge>.+` wildcard -- no containment either. That is the same
+ * class of silent failure this whole issue exists to remove, so it is
+ * checked rather than assumed.
+ */
+static gboolean vlan_iface_exists(int vlan)
+{
+    const char* bridge = g_getenv("DRAKVUF_ANALYSIS_BRIDGE");
+    if (!bridge || !*bridge)
+        bridge = "xenbr1";
+
+    gchar* p = g_strdup_printf("/sys/class/net/%s.%d", bridge, vlan);
+    gboolean ok = g_file_test(p, G_FILE_TEST_EXISTS);
+    g_free(p);
+
+    return ok;
+}
+
+static int vlan_lease_acquire(int* out_vlan)
+{
+    const char* dir = vlan_lease_dir();
+
+    if (g_mkdir_with_parents(dir, 0700) != 0)
+    {
+        fprintf(stderr, "[!] Cannot create VLAN lease directory %s: %s\n",
+                dir, g_strerror(errno));
+        return -1;
+    }
+
+    for (uint32_t v = 1; v <= total_vlans; v++)
+    {
+        gchar* path = g_strdup_printf("%s/%u.lease", dir, v);
+        int fd = open(path, O_RDWR | O_CREAT | O_CLOEXEC, 0600);
+        g_free(path);
+
+        if (fd < 0)
+            continue;
+
+        if (flock(fd, LOCK_EX | LOCK_NB) != 0)
+        {
+            close(fd);
+            continue;
+        }
+
+        if (!vlan_iface_exists((int)v))
+        {
+            fprintf(stderr,
+                    "[!] Leased VLAN %u but its sub-interface does not exist. "
+                    "DRAKVUF_TOTAL_VLANS (%u) is larger than what "
+                    "network-setup.sh provisioned; a clone here would have no "
+                    "gateway and no isolation rules.\n",
+                    v, total_vlans);
+            close(fd);
+            return -1;
+        }
+
+        /*
+         * Diagnostics only -- nothing reads this back to make a decision.
+         * Written under the lock, so it cannot interleave with a second
+         * writer, and truncated first so a shorter line cannot leave a
+         * previous holder's tail behind.
+         */
+        gchar* who = g_strdup_printf("pid=%ld domain=%s acquired=%lld\n",
+                                     (long)getpid(),
+                                     domain_name ? domain_name : "?",
+                                     (long long)time(NULL));
+        if (ftruncate(fd, 0) == 0 && lseek(fd, 0, SEEK_SET) == 0)
+        {
+            ssize_t ignored = write(fd, who, strlen(who));
+            (void)ignored;
+        }
+        g_free(who);
+
+        *out_vlan = (int)v;
+        return fd;
+    }
+
+    return -1;
+}
+
+/*
+ * ---- Memory admission (DRAFT-036, second half) -------------------------
+ *
+ * A clone is created when the host can afford THAT clone, not when a
+ * per-watcher counter says so. The counter cannot work across pipelines:
+ * three watchers with independent caps either overcommit when all three
+ * are busy or leave the host idle when only one is, and they cannot lend
+ * capacity because they cannot see each other.
+ *
+ * Clones are also unequal, which is what makes the count the wrong unit
+ * rather than merely a coarse one. Measured on Dom0 2026-08-18:
+ *
+ *     Ubuntu / Android   cfg 2048 MiB  ->  2160 MiB actually consumed
+ *     Windows            cfg 6144 MiB  ->  6256 MiB (projected, DRAFT-034)
+ *
+ * required = <cfg memory> + DOMAIN_OVERHEAD_MIB, and that is a real bound
+ * rather than an estimate: `xl list -l` reports max_memkb equal to the
+ * .cfg's memory, so a clone cannot grow into memory admitted to another.
+ *
+ * THE CHECK IS SERIALIZED, because it is check-then-act and every watcher
+ * racing is the NORMAL case rather than the unlucky one. Without the lock
+ * each reads the same free_memory, each sees room for one clone, and all
+ * proceed -- the host is overcommitted by however many were deciding at
+ * that instant, and it surfaces late and badly as a failed or OOM-killed
+ * `xl restore` partway through a run rather than as a refused admission.
+ *
+ * A LOCK ALONE IS NOT ENOUGH, and this is the subtle half. A clone's
+ * memory is not accounted by `xl info` until its domain is built, so a
+ * lock released when `xl restore` starts leaves the next watcher reading a
+ * free_memory that still counts the in-flight clone as free. The
+ * reservation therefore outlives the lock: it is written into the VLAN
+ * lease file, which this worker already holds for the run, and subtracted
+ * from free_memory by every later check until the domain exists.
+ *
+ * Reusing the lease file rather than adding a second file is deliberate.
+ * DRAFT-036 argues VLAN leases and memory reservations should be one
+ * mechanism; they have one lifetime and one owner, and a separate
+ * reservation file would be a second thing to leak. Crash safety comes
+ * free with it -- flock drops when the process dies, so a watcher killed
+ * between reserving and building stops being counted without anyone
+ * reclaiming anything.
+ *
+ * The lock is held across read-available -> write-reservation only, and
+ * released before `xl restore`. Watchers serialize on the decision, which
+ * is milliseconds, not on the clone, which is seconds.
+ */
+
+/*
+ * Per-domain overhead above the .cfg's `memory`, in MiB.
+ *
+ * MEASURED at 112: a clone configured for 2048 MiB consumed 2160 MiB of
+ * free_memory, against a baseline `xl list` proved empty (Dom0,
+ * 2026-08-18). The absolute capacity that follows from that is a property
+ * of the host and changes with it; the overhead is a property of Xen and
+ * the domain config and does not.
+ *
+ * SET DELIBERATELY HIGHER THAN MEASURED, and the gap is the point. 112 is
+ * one measurement of one Android clone; over-reserving costs a little
+ * idle memory, while under-reserving costs a failed or OOM-killed
+ * `xl restore` partway through an analysis. The margin is not a guess
+ * standing in for a measurement -- it is a margin on top of one.
+ *
+ * Re-measure per OS rather than assuming this transfers: Windows clones
+ * are ~3x larger (DRAFT-034) and their overhead has never been observed.
+ */
+#define DOMAIN_OVERHEAD_MIB 150
+
+/*
+ * Left for Xen's own allocation. NOT for a restore burst: free_memory was
+ * sampled at 0.1s across a full clone creation and falls in a monotonic
+ * ramp (~220 MiB per sample, about a second) that never dips below its
+ * settled value, so there is no transient to absorb.
+ */
+#define MEM_RESERVE_MIB_DEFAULT 512
+
+static uint32_t clone_memory_mib;
+static uint32_t mem_reserve_mib;
+
+/*
+ * Clone lifecycles one submission may consume before it is abandoned.
+ *
+ * Three, not one: a timeout is not always the sample's fault -- a clone
+ * can fail to boot, or lose a race with a slow restore -- and the retry
+ * exists because those are real. What it must not do is run forever.
+ */
+#define MAX_ATTEMPTS_DEFAULT 3
+static uint32_t max_attempts;
+
+/*
+ * Dom0's view of free memory, in MiB, from `xl info`.
+ *
+ * A subprocess per admission decision, which is once per sample rather
+ * than in any loop. Parsed from `xl info` rather than read through
+ * xen_helper because this file must not invent an API it cannot check
+ * (CLAUDE.md), and `xl info`'s output is already evidenced on Dom0.
+ *
+ * Returns -1 when the value cannot be read, which callers treat as
+ * "refuse admission" rather than "assume plenty".
+ */
+static long xl_free_memory_mib(void)
+{
+    gchar* argv[] = { (gchar*)"xl", (gchar*)"info", NULL };
+    char* output = NULL;
+    long mib = -1;
+
+    if (!spawn_argv(argv, &output, NULL) || !output)
+    {
+        g_free(output);
+        return -1;
+    }
+
+    /* free_memory            : 8026 */
+    char* p = strstr(output, "free_memory");
+    if (p)
+    {
+        p = strchr(p, ':');
+        if (p)
+            mib = strtol(p + 1, NULL, 10);
+    }
+
+    g_free(output);
+    return mib;
+}
+
+/*
+ * Sum of memory reserved by clones that are not yet built anywhere on this
+ * host, including this process's own.
+ *
+ * A reservation is "live" exactly when its lease is still held, which is
+ * tested by trying to take the lock: failure means an owner exists,
+ * success means the owner is gone and the file is stale. That is the same
+ * test the VLAN pool uses, and it is why a crashed watcher's reservation
+ * needs no reclaiming.
+ *
+ * A second open() of a file this process already locks IS denied by our
+ * own lock -- flock treats descriptors independently -- so this counts
+ * our own reservation alongside everyone else's. That does not distort
+ * the check: the caller clears its reservation to 0 as soon as its domain
+ * is built, so at the moment a decision is taken this worker's own entry
+ * contributes nothing.
+ *
+ * Measured, because the alternative would be a silent bug rather than a
+ * wrong number: opening and closing that second descriptor does NOT
+ * release the lease held on the first. If it did, scanning would drop
+ * this worker's own VLAN mid-run and another watcher could take it.
+ */
+static long outstanding_reservations_mib(void)
+{
+    const char* dir = vlan_lease_dir();
+    long total = 0;
+
+    for (uint32_t v = 1; v <= total_vlans; v++)
+    {
+        gchar* path = g_strdup_printf("%s/%u.lease", dir, v);
+        int fd = open(path, O_RDONLY | O_CLOEXEC);
+        g_free(path);
+
+        if (fd < 0)
+            continue;
+
+        if (flock(fd, LOCK_EX | LOCK_NB) == 0)
+        {
+            /* Nobody holds it: stale contents, not a live reservation. */
+            flock(fd, LOCK_UN);
+            close(fd);
+            continue;
+        }
+
+        char buf[256] = { 0 };
+        ssize_t n = read(fd, buf, sizeof(buf) - 1);
+        close(fd);
+
+        if (n <= 0)
+            continue;
+
+        char* m = strstr(buf, "mem_mib=");
+        if (m)
+            total += strtol(m + 8, NULL, 10);
+    }
+
+    return total;
+}
+
+/*
+ * Record this worker's reservation into the VLAN lease it already holds.
+ * mib of 0 clears it, which is what happens once the domain is built and
+ * Xen accounts for the memory itself -- leaving it set would double-count
+ * every running clone and shrink apparent capacity permanently.
+ */
+static void write_reservation(int threadid, long mib)
+{
+    int fd = slot_lease_fd[threadid];
+    if (fd < 0)
+        return;
+
+    gchar* s = g_strdup_printf("pid=%ld domain=%s vlan=%d mem_mib=%ld\n",
+                               (long)getpid(),
+                               domain_name ? domain_name : "?",
+                               slot_vlan[threadid],
+                               mib);
+
+    if (ftruncate(fd, 0) == 0 && lseek(fd, 0, SEEK_SET) == 0)
+    {
+        ssize_t ignored = write(fd, s, strlen(s));
+        (void)ignored;
+    }
+
+    g_free(s);
+}
+
+/*
+ * One admission attempt. TRUE means the reservation is recorded and the
+ * caller may build its clone; FALSE means the host cannot currently afford
+ * it and the caller should wait.
+ *
+ * Never blocks on the clone, only on the decision.
+ */
+static gboolean admission_try_reserve(int threadid)
+{
+    /*
+     * Admission disabled: no configured clone size to check against, so
+     * admit unconditionally and behave exactly as this file did before
+     * DRAFT-036. Deliberately not a refusal -- an un-updated launcher must
+     * keep working rather than deadlock on a variable it does not set.
+     */
+    if (clone_memory_mib == 0)
+        return TRUE;
+
+    const char* dir = vlan_lease_dir();
+    long required = (long)clone_memory_mib + DOMAIN_OVERHEAD_MIB;
+    gboolean admitted = FALSE;
+
+    gchar* lock_path = g_strdup_printf("%s/admission.lock", dir);
+    int lock_fd = open(lock_path, O_RDWR | O_CREAT | O_CLOEXEC, 0600);
+    g_free(lock_path);
+
+    if (lock_fd < 0)
+    {
+        fprintf(stderr, "[!] Cannot open admission lock: %s\n",
+                g_strerror(errno));
+        return FALSE;
+    }
+
+    /*
+     * Blocking, not LOCK_NB: contention here is the expected case with
+     * several watchers and the critical section is two reads and a write.
+     * Spinning would turn a queue into a race.
+     */
+    if (flock(lock_fd, LOCK_EX) != 0)
+    {
+        close(lock_fd);
+        return FALSE;
+    }
+
+    long free_mib = xl_free_memory_mib();
+    if (free_mib >= 0)
+    {
+        long available = free_mib
+                         - outstanding_reservations_mib()
+                         - (long)mem_reserve_mib;
+
+        if (required <= available)
+        {
+            write_reservation(threadid, required);
+            admitted = TRUE;
+        }
+        else
+        {
+            printf("[%i] Holding: need %ld MiB, %ld available "
+                   "(free %ld, reserved elsewhere %ld, host reserve %u)\n",
+                   threadid, required, available, free_mib,
+                   free_mib - available - (long)mem_reserve_mib,
+                   mem_reserve_mib);
+        }
+    }
+    else
+    {
+        fprintf(stderr, "[%i] Could not read free memory from `xl info`; "
+                "refusing admission rather than assuming capacity\n",
+                threadid);
+    }
+
+    flock(lock_fd, LOCK_UN);
+    close(lock_fd);
+
+    return admitted;
+}
+
+/*
+ * Claims a worker slot AND the VLAN that run will use. The two are
+ * acquired together because they have one lifetime: every existing
+ * release_thread() call site is also the point at which the VLAN stops
+ * being needed, and splitting them would create a second lifetime to get
+ * wrong.
+ *
+ * Returns -1 when no worker slot is free OR when the VLAN pool is
+ * exhausted. The caller already retries on -1, so pool exhaustion presents
+ * as backpressure rather than as a failed analysis -- which is what the
+ * state model's `waiting_for_vlan` describes, though nothing emits it yet
+ * (DRAFT-011).
+ */
 static inline int find_thread(void)
 {
     for (unsigned int i = 0; i < threads; i++)
@@ -405,6 +868,24 @@ static inline int find_thread(void)
                 0,
                 1))
         {
+            int vlan = -1;
+            int fd = vlan_lease_acquire(&vlan);
+
+            if (fd < 0)
+            {
+                /*
+                 * Give the slot straight back. Holding a worker slot with
+                 * no VLAN would shrink capacity for as long as the pool
+                 * stayed full, and would do it invisibly.
+                 */
+                g_atomic_int_set(&slots_busy[i], 0);
+                return -1;
+            }
+
+            slot_lease_fd[i] = fd;
+            slot_vlan[i] = vlan;
+
+            printf("[%u] Leased VLAN %d\n", i, vlan);
             return (int)i;
         }
     }
@@ -457,7 +938,7 @@ gpointer timer_thread(gpointer data)
     }
 
     if ( !gotlock )
-        cleanup(start->cloneID, start->threadid+1);
+        cleanup(start->cloneID, start->vlan);
 
     return NULL;
 }
@@ -507,18 +988,72 @@ static struct start_drakvuf* prepare(struct start_drakvuf* start, int requested_
         g_clear_pointer(&start->clone_name, g_free);
     }
 
+    /*
+     * The VLAN comes from the lease find_thread() took alongside this
+     * slot, NOT from the slot index -- that equivalence is what DRAFT-036
+     * removed. Re-read on the retry path too: the lease is held across a
+     * retry (the worker still owns that VLAN), so this is the same value,
+     * and reading it in one place keeps it that way if it ever stops being.
+     */
+    start->vlan = slot_vlan[threadid];
+
+    if (start->vlan < 1)
+    {
+        fprintf(stderr,
+                "[%i] No VLAN leased for this worker slot; refusing to clone. "
+                "This is a bug -- find_thread() must not hand out a slot "
+                "without one.\n", threadid);
+
+        if (allocated_here)
+        {
+            g_mutex_clear(&start->timer_lock);
+            g_free(start);
+        }
+
+        return NULL;
+    }
+
     while (!shutting_down)
     {
-        
+        /*
+         * Wait for the host to be able to afford this clone before asking
+         * Xen for it. The reservation taken here is subtracted from
+         * free_memory by every other watcher's check until the domain is
+         * built, which is what stops several watchers admitting against
+         * the same memory.
+         *
+         * KNOWN GAP (DRAFT-036, PLAN step 5): this is greedy, and greedy
+         * admission starves the LARGEST clone. A Windows job needing ~6.3
+         * GiB waits for a window that never opens while smaller Ubuntu and
+         * Android jobs keep fitting into memory as it frees. Every
+         * individual decision here is correct and the aggregate is not.
+         * Head-of-line reservation is the fix and is not implemented; the
+         * queue that would order it does not exist yet either.
+         */
+        while (!shutting_down && !admission_try_reserve(threadid))
+            g_usleep(G_USEC_PER_SEC);
+
+        if (shutting_down)
+            break;
 
         printf("[%i] Making clone\n", threadid);
 
-        make_clone(xen, &cloneID, threadid + 1, &clone_name);
+        make_clone(xen, &cloneID, start->vlan, &clone_name);
+
+        /*
+         * The domain now exists, so Xen accounts for its memory in
+         * `xl info` and the reservation must go: counting both would
+         * double-charge every running clone and shrink apparent capacity
+         * for as long as it ran. Cleared on the failure paths below too --
+         * a reservation for a clone that was never built is capacity
+         * withheld from everyone for nothing.
+         */
+        write_reservation(threadid, 0);
 
         if (shutting_down)
         {
             if (cloneID != 0)
-                cleanup(cloneID, threadid + 1);
+                cleanup(cloneID, start->vlan);
 
             g_clear_pointer(&clone_name, g_free);
             break;
@@ -542,7 +1077,7 @@ static struct start_drakvuf* prepare(struct start_drakvuf* start, int requested_
          * A domain may have been created even if its name was not parsed.
          */
         if (cloneID != 0)
-            cleanup(cloneID, threadid + 1);
+            cleanup(cloneID, start->vlan);
 
         g_clear_pointer(&clone_name, g_free);
 
@@ -602,7 +1137,7 @@ static void spawn_worker(const char* label,
 {
     gchar* domid_s  = g_strdup_printf("%u", start->cloneID);
     gchar* injpid_s = g_strdup_printf("%u", injection_pid);
-    gchar* vlan_s   = g_strdup_printf("%u", start->threadid + 1);
+    gchar* vlan_s   = g_strdup_printf("%d", start->vlan);
     gchar* utime_s  = g_strdup_printf("%lu", (unsigned long)start->utime);
 
     gchar* argv[] = {
@@ -699,7 +1234,7 @@ restart:
          * domain and `kill` on an empty PID both discard their errors -- so
          * the timeout branch below is unaffected and a double call is safe.
          */
-        cleanup(start->cloneID, start->threadid+1);
+        cleanup(start->cloneID, start->vlan);
 
         release_thread(start->threadid);
 
@@ -709,23 +1244,86 @@ restart:
         g_free(start);
         return;
     } else {
-        cleanup(start->cloneID, start->threadid+1);
+        cleanup(start->cloneID, start->vlan);
     }
 
 end:
-    if (!shutting_down)
+    /*
+     * Every exit from here must release the worker slot and free the
+     * structure. Previously only the success path above did: on shutdown
+     * this function simply returned, leaking the slot, its VLAN lease and
+     * the start_drakvuf (DRAFT-010's finding). With memory admission that
+     * leak also withholds a reservation, so it is closed here rather than
+     * left beside new code that would inherit it.
+     */
+    if (shutting_down)
     {
-        printf("[%i] %s failed to execute on %u because of a timeout, creating new clone\n", start->threadid, start->input, start->cloneID);
-        prepare(start, -1);
-        goto restart;
-/*
-        if (prepared)
-        {
-            start = prepared;
-            goto restart;
-        }
-*/
+        release_thread(start->threadid);
+        g_mutex_clear(&start->timer_lock);
+        g_clear_pointer(&start->input, g_free);
+        g_clear_pointer(&start->clone_name, g_free);
+        g_free(start);
+        return;
     }
+
+    /*
+     * THE RETRY IS NOW BOUNDED. It was not: this branch called prepare()
+     * and `goto restart` with no counter and its return value ignored (the
+     * `if (prepared)` guard was commented out), so a sample that reliably
+     * times out retried forever -- holding a worker slot and a VLAN, and
+     * since DRAFT-036's admission, cycling a memory reservation as well.
+     * One malformed sample could occupy a slot indefinitely, which is a
+     * local denial of service reachable by submitting a file.
+     *
+     * `attempt` is the state model's field of the same name
+     * (analysis-pipeline.md, "Run"), which exists precisely because one
+     * submission can legitimately produce several clone lifecycles.
+     * Nothing emits it yet -- DRAFT-011 owns that -- but the count is now
+     * real rather than notional.
+     */
+    start->attempt++;
+
+    if (start->attempt >= max_attempts)
+    {
+        fprintf(stderr,
+                "[%i] %s exhausted %u attempts; giving up. The sample stays "
+                "in the run folder and is NOT moved to results.\n",
+                start->threadid, start->input, max_attempts);
+
+        cleanup(start->cloneID, start->vlan);
+        release_thread(start->threadid);
+        g_mutex_clear(&start->timer_lock);
+        g_clear_pointer(&start->input, g_free);
+        g_clear_pointer(&start->clone_name, g_free);
+        g_free(start);
+        return;
+    }
+
+    printf("[%i] %s failed to execute on %u because of a timeout; "
+           "attempt %u of %u, creating new clone\n",
+           start->threadid, start->input, start->cloneID,
+           start->attempt + 1, max_attempts);
+
+    /*
+     * prepare()'s result is checked now. It returns NULL without freeing a
+     * caller-owned structure, so `start` is still valid here -- but jumping
+     * to restart after a failed prepare would run an analysis against a
+     * clone that was never created.
+     */
+    if (!prepare(start, -1))
+    {
+        fprintf(stderr, "[%i] Could not prepare a replacement clone for %s; "
+                "giving up.\n", start->threadid, start->input);
+
+        release_thread(start->threadid);
+        g_mutex_clear(&start->timer_lock);
+        g_clear_pointer(&start->input, g_free);
+        g_clear_pointer(&start->clone_name, g_free);
+        g_free(start);
+        return;
+    }
+
+    goto restart;
 }
 
 int main(int argc, char** argv)
@@ -780,6 +1378,82 @@ int main(int argc, char** argv)
         return 1;
     }
 
+    /*
+     * Explicitly, and NOT left to static zero-initialization: fd 0 is
+     * stdin, so a zeroed slot_lease_fd[] would make release_thread()'s
+     * `>= 0` test true for a slot that holds no lease and close stdin.
+     */
+    for (unsigned int i = 0; i < 128; i++)
+    {
+        slot_lease_fd[i] = -1;
+        slot_vlan[i] = -1;
+    }
+
+    /*
+     * The VLAN pool is host-global and therefore cannot come from argv --
+     * this contract is per-watcher and every launcher passes its own
+     * clone count in argv[9]. It arrives in the environment instead,
+     * exported by run_analysis-<os>.sh from platform.env, which is the
+     * same mechanism clone.pl already takes VG_NAME and CLONE_LV_SIZE
+     * through.
+     *
+     * Defaulting to `threads` reproduces the pre-DRAFT-036 behaviour
+     * exactly for a single watcher -- VLANs 1..threads, one per slot -- so
+     * a launcher that has not been updated still works and simply cannot
+     * run alongside a second one.
+     */
+    const char* pool_s = g_getenv("DRAKVUF_TOTAL_VLANS");
+    total_vlans = (pool_s && *pool_s) ? (uint32_t)atoi(pool_s) : threads;
+
+    if (total_vlans < threads || total_vlans > 254)
+    {
+        printf("Invalid DRAKVUF_TOTAL_VLANS %u: must be >= this watcher's "
+               "clone count (%u) and <= 254 (the VLAN id is the third octet "
+               "of the gateway address).\n", total_vlans, threads);
+        return 1;
+    }
+
+    /*
+     * This clone's configured memory, from the same .cfg dirwatch already
+     * receives as argv[3]. The launcher greps it and exports it rather
+     * than this file parsing Xen config syntax in C: the .cfg stays the
+     * single source of truth, nobody types the number twice, and a
+     * mismatch between config and admission is impossible by construction.
+     *
+     * Zero disables memory admission and restores the pre-DRAFT-036
+     * behaviour of admitting whatever the worker-slot count allows. That
+     * is the safe default for a launcher that has not been updated: it
+     * cannot silently admit against a wrong figure, because it does not
+     * admit against a figure at all.
+     */
+    const char* mem_s = g_getenv("DRAKVUF_CLONE_MEMORY_MIB");
+    clone_memory_mib = (mem_s && *mem_s) ? (uint32_t)atoi(mem_s) : 0;
+
+    const char* reserve_s = g_getenv("DRAKVUF_MEM_RESERVE_MIB");
+    mem_reserve_mib = (reserve_s && *reserve_s)
+                      ? (uint32_t)atoi(reserve_s)
+                      : MEM_RESERVE_MIB_DEFAULT;
+
+    const char* attempts_s = g_getenv("DRAKVUF_MAX_ATTEMPTS");
+    max_attempts = (attempts_s && *attempts_s)
+                   ? (uint32_t)atoi(attempts_s)
+                   : MAX_ATTEMPTS_DEFAULT;
+
+    if (max_attempts < 1)
+        max_attempts = 1;
+
+    printf("VLAN pool: 1..%u (leases in %s), worker slots: %u\n",
+           total_vlans, vlan_lease_dir(), threads);
+
+    if (clone_memory_mib > 0)
+        printf("Memory admission: %u MiB cfg + %u MiB overhead = %u MiB "
+               "per clone, host reserve %u MiB\n",
+               clone_memory_mib, DOMAIN_OVERHEAD_MIB,
+               clone_memory_mib + DOMAIN_OVERHEAD_MIB, mem_reserve_mib);
+    else
+        printf("Memory admission: DISABLED (DRAKVUF_CLONE_MEMORY_MIB unset) "
+               "-- clones are limited only by worker slots, and concurrent "
+               "watchers can overcommit this host\n");
 
     pool = g_thread_pool_new(run_drakvuf, NULL, threads, TRUE, NULL);
 
@@ -973,7 +1647,7 @@ int main(int argc, char** argv)
                             ent->d_name,
                             _start->cloneID);
 
-                    cleanup(_start->cloneID, _start->threadid + 1);
+                    cleanup(_start->cloneID, _start->vlan);
                     g_mutex_clear(&_start->timer_lock);
                     g_clear_pointer(&_start->clone_name, g_free);
                     g_free(_start);
@@ -1050,6 +1724,21 @@ static inline void release_thread(int threadid)
 {
     if (threadid < 0 || (guint)threadid >= threads)
         return;
+
+    /*
+     * Release the VLAN before the slot, for the same reason cleanup()
+     * runs before release_thread() at :702 -- whatever becomes claimable
+     * first must be the thing that is already finished with. Closing the
+     * descriptor drops the flock; the file itself is deliberately left in
+     * place (see the lease notes above -- unlinking it is a correctness
+     * bug, not untidiness).
+     */
+    if (slot_lease_fd[threadid] >= 0)
+    {
+        close(slot_lease_fd[threadid]);
+        slot_lease_fd[threadid] = -1;
+        slot_vlan[threadid] = -1;
+    }
 
     g_atomic_int_set(&slots_busy[threadid], 0);
 }

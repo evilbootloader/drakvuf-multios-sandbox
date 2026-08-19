@@ -11,8 +11,9 @@
 # repository-owned asset is resolved from this script's own location, not
 # from $PWD, ~, or a deployment path baked in at authoring time.
 #
-# DO NOT RUN THIS ALONGSIDE run_analysis-ubuntu.sh. See the concurrency
-# guard below -- it is a real collision, not a caution.
+# Running this alongside run_analysis-ubuntu.sh is SUPPORTED as of
+# DRAFT-036's VLAN lease -- it was previously refused outright. See the
+# concurrency note below for the one thing that is still per-watcher.
 
 # Real line-1 shebang, so this genuinely runs under bash -- unlike the
 # worker scripts, whose shebangs sit below the DRAKVUF license header.
@@ -49,6 +50,33 @@ REPO_ROOT="$(
 # came up".
 export CLONE_LV_SIZE VG_NAME ANALYSIS_BRIDGE
 
+# dirwatch reads its VLAN pool from the environment rather than argv: the
+# 15-argument contract is per-watcher and TOTAL_VLANS is host-global, so it
+# does not belong in a positional slot every launcher sets independently.
+# Same mechanism clone.pl already uses for VG_NAME (DRAFT-036).
+#
+# DRAKVUF_ANALYSIS_BRIDGE lets dirwatch check that a leased VLAN's
+# sub-interface actually exists before a clone is attached to it.
+DRAKVUF_TOTAL_VLANS="$TOTAL_VLANS"
+DRAKVUF_ANALYSIS_BRIDGE="$ANALYSIS_BRIDGE"
+export DRAKVUF_TOTAL_VLANS DRAKVUF_ANALYSIS_BRIDGE
+
+# This clone's configured memory, read from the .cfg so admission cannot
+# disagree with what the domain is built with. Identical to Ubuntu's --
+# see run_analysis-ubuntu.sh for why it is parsed here rather than in C.
+DRAKVUF_CLONE_MEMORY_MIB="$(
+    awk -F= '/^[[:space:]]*memory[[:space:]]*=/ {
+        gsub(/[^0-9]/, "", $2); print $2; exit
+    }' "$DOMAIN_CONFIG"
+)"
+export DRAKVUF_CLONE_MEMORY_MIB
+
+if [ -z "$DRAKVUF_CLONE_MEMORY_MIB" ]; then
+    echo "run_analysis-android.sh: could not read 'memory =' from $DOMAIN_CONFIG;" >&2
+    echo "  starting WITHOUT memory admission -- clones will be limited only" >&2
+    echo "  by MAX_CLONES, and concurrent watchers can overcommit the host." >&2
+fi
+
 # Fail before starting anything rather than after a clone is already
 # running. A missing profile or saved state would otherwise surface as an
 # opaque `xl restore` error several steps into a per-sample run.
@@ -75,29 +103,13 @@ for worker in "$SCRIPT_DIR/preconfig-android.sh" "$SCRIPT_DIR/drakvuf-android.sh
     fi
 done
 
-# --- Concurrency guard --------------------------------------------------
+# --- Concurrency ---------------------------------------------------------
 #
-# KNOWN GAP (DRAFT-036), enforced here rather than documented and hoped
-# for. dirwatch derives each clone's VLAN from its worker-slot index and
-# the slot array is process-local, so a second dirwatch allocates VLANs
-# 1..MAX_CLONES exactly as the first one did. Two pipelines then share
-# gateway addresses, VLAN sub-interfaces and isolation rules, and the only
-# symptom is analyses that interfere with each other.
-#
-# Nothing in dirwatch detects this. A pgrep is a weak check -- it races,
-# and it cannot see a watcher on another host -- but the failure it
-# prevents is silent cross-contamination between two malware analyses,
-# which is worth a weak check rather than none. Remove it when DRAFT-036
-# lands a host-global VLAN allocator, not before.
-if pgrep -f "[d]irwatch .* $REPO_ROOT/automation/clone.pl" >/dev/null 2>&1; then
-    echo "run_analysis-android.sh: another dirwatch is already running from" >&2
-    echo "  this checkout. Its clones use VLANs 1..MAX_CLONES and so would" >&2
-    echo "  these -- they would collide on gateway addresses and isolation" >&2
-    echo "  rules, and nothing would report it (DRAFT-036)." >&2
-    echo "  Stop the running launcher first." >&2
-    exit 1
-fi
-
+# The pgrep guard that stood here is REMOVED, and its removal is the point
+# of DRAFT-036's first half rather than a relaxation of it. Kept identical
+# to Ubuntu's, since the two launchers are meant to stay diffable -- see
+# run_analysis-ubuntu.sh for the full reasoning and for what remains open
+# (memory admission, still per-watcher and still able to overcommit).
 # Runtime data directories, one level per target OS. Created here so a
 # fresh Dom0 needs no manual mkdir beyond the three top-level /malware_*
 # directories from the setup guide.
@@ -114,7 +126,7 @@ ip link set "$ANALYSIS_BRIDGE" up
 # than none, because it looks like a working one -- clones would run with
 # no inter-clone isolation, no LAN block and no Dom0 protection, and
 # nothing would say so.
-if ! "$SCRIPT_DIR/network-setup.sh" "$MAX_CLONES"; then
+if ! "$SCRIPT_DIR/network-setup.sh" "$TOTAL_VLANS"; then
     echo "run_analysis-android.sh: network provisioning failed; refusing to start dirwatch" >&2
     exit 1
 fi

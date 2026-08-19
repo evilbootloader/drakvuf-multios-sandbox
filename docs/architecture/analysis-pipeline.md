@@ -223,32 +223,68 @@ can use the whole host.
 
 **2. `slots_busy[]` is process-local, so the VLAN space collides.**
 
-> **KNOWN GAP (DRAFT-036).** Three `dirwatch` instances each allocate from
-> their own zero-based array, so all three hand out VLAN 1 first and all
-> three clones land on `xenbr1.1` / `172.16.1.0/24` — breaking the per-VLAN
-> isolation that `network-setup.sh` exists to provide. A host-global VLAN
-> allocator is therefore a **prerequisite** of running per-OS watchers
-> concurrently, not a later optimization.
+> **CLOSED 2026-08-19 (DRAFT-036).** This read: *"Three `dirwatch`
+> instances each allocate from their own zero-based array, so all three
+> hand out VLAN 1 first and all three clones land on `xenbr1.1` /
+> `172.16.1.0/24` — breaking the per-VLAN isolation that
+> `network-setup.sh` exists to provide."* That was correct and is now
+> fixed.
+>
+> The VLAN is leased from a host-global pool of `flock`'d files under
+> `$DRAKVUF_LEASE_DIR`, sized by `TOTAL_VLANS` in `platform.env`. The slot
+> index means only "which worker". `flock` is the mutual exclusion — no
+> outer allocation lock is needed, since the kernel grants the lock to
+> exactly one racer — and release is automatic on process death, which is
+> why this is the filesystem rather than a lock held in one process or a
+> TTL in a broker: a watcher that *stalls* rather than dies must not have
+> its VLAN reassigned while its clone is still on that segment.
+>
+> Two rules are load-bearing and were confirmed by removing them and
+> watching the mechanism break: the lease file is **never unlinked**
+> (unlinking lets a second process create a fresh inode at the same path
+> and lock it — two winners, no error), and the descriptor is opened
+> **`O_CLOEXEC`** (`flock` follows the open file description, so a
+> spawned `tcpdump` would otherwise pin the VLAN past release).
 
 Both point at one change: admission decides whether a clone may be created
 from live host state, and VLAN assignment becomes a separate host-global
 lease instead of a by-product of a slot index.
 
-Candidate admission rule — **requires testing on Dom0, not validated:**
+Admission rule — **measured on Dom0 2026-08-18, no longer a candidate:**
 
 ```text
-required  = clone .cfg memory + shadow_memory (32) + per-domain overhead
+required  = clone .cfg memory + 112 MiB per-domain overhead
 available = xl info -> free_memory, minus a fixed reserve
 admit if    required <= available
 ```
 
-Dom0 is pinned at `dom0_mem=4096M,max:4096M`
-(`docs/drakvuf-on-xen-nested-within-proxmox.md:280`) and so does not
-balloon; the reserve exists for Xen's own allocation and for the restore
-burst, not for Dom0. `xl restore` reinstates a full memory image, so
-admission has to be sized against that peak rather than steady-state
-usage — this is the part most likely to be wrong on first attempt and
-should be measured before the rule is trusted.
+Three things were measured rather than assumed, and each removed a
+question the rule previously carried:
+
+- **A clone is capped at its configured `memory`/`maxmem`.**
+  `xl list -l` on a running `android_sandbox` clone reports
+  `max_memkb: 2097152` — exactly the 2048 MiB in `misc/android_sandbox.cfg`.
+  So `required` is a bound, not an estimate, and no clone can grow into
+  memory admitted to another. A 2026-08-09 `xl top` reading suggesting
+  `maxmem` was unlimited is superseded by this and is not explained.
+- **Overhead is 112 MiB.** A clone configured for 2048 MiB costs 2160 MiB
+  of `free_memory`, measured against a baseline `xl list` proved empty.
+  The absolute capacity that follows is a property of the host and changes
+  with it; the 112 MiB does not.
+- **There is no restore peak to reserve against.** `free_memory` sampled
+  at 0.1 s across a full clone creation falls in a monotonic ramp — about
+  220 MiB per sample for roughly a second, the restore streaming the memory
+  image in — and never dips below its settled value. Minimum == settled, so
+  the reserve covers Xen's own allocation only, not a transient.
+  *Caveat: this is "no peak observed at ~0.1 s resolution", not "no peak
+  exists".*
+
+Dom0 is pinned at `dom0_mem=8192M,max:8192M` and does not balloon, so it
+is outside the clone budget entirely. *(This document previously said
+`4096M`, citing `docs/drakvuf-on-xen-nested-within-proxmox.md:280`; the
+live `xen_commandline` and `xl list` both say 8192. The imported guide is
+historical provenance and is not edited in place — the defect was
+repeating its figure here as current.)*
 
 Memory admission on its own is greedy, and greedy admission starves the
 largest clone: whenever memory frees up, a smaller job is already eligible

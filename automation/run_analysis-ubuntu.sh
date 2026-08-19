@@ -50,6 +50,40 @@ REPO_ROOT="$(
 # exported together because clone.pl reads all three the same way.
 export CLONE_LV_SIZE VG_NAME ANALYSIS_BRIDGE
 
+# dirwatch reads its VLAN pool from the environment rather than argv: the
+# 15-argument contract is per-watcher and TOTAL_VLANS is host-global, so it
+# does not belong in a positional slot every launcher sets independently.
+# Same mechanism clone.pl already uses for VG_NAME (DRAFT-036).
+#
+# DRAKVUF_ANALYSIS_BRIDGE lets dirwatch check that a leased VLAN's
+# sub-interface actually exists before a clone is attached to it.
+DRAKVUF_TOTAL_VLANS="$TOTAL_VLANS"
+DRAKVUF_ANALYSIS_BRIDGE="$ANALYSIS_BRIDGE"
+export DRAKVUF_TOTAL_VLANS DRAKVUF_ANALYSIS_BRIDGE
+
+# Memory admission needs this clone's configured size. It is READ FROM THE
+# .cfg rather than configured separately, so the Xen config stays the
+# single source of truth: nobody types the number twice, and admission
+# cannot disagree with what the domain is actually built with.
+#
+# Parsed here rather than in dirwatch.c because that would mean a Xen
+# config parser in C for one integer, and the shell already has the file
+# open. dirwatch treats an empty or zero value as "admission disabled"
+# rather than as "zero memory", so a .cfg this fails to match degrades to
+# the old slot-count behaviour instead of refusing every clone.
+DRAKVUF_CLONE_MEMORY_MIB="$(
+    awk -F= '/^[[:space:]]*memory[[:space:]]*=/ {
+        gsub(/[^0-9]/, "", $2); print $2; exit
+    }' "$DOMAIN_CONFIG"
+)"
+export DRAKVUF_CLONE_MEMORY_MIB
+
+if [ -z "$DRAKVUF_CLONE_MEMORY_MIB" ]; then
+    echo "run_analysis-ubuntu.sh: could not read 'memory =' from $DOMAIN_CONFIG;" >&2
+    echo "  starting WITHOUT memory admission -- clones will be limited only" >&2
+    echo "  by MAX_CLONES, and concurrent watchers can overcommit the host." >&2
+fi
+
 # Fail before starting anything rather than after a clone is already
 # running. A missing profile or saved state used to surface as an opaque
 # `xl restore` error several steps into a per-sample run; the launcher is
@@ -63,34 +97,26 @@ for asset in "$DOMAIN_CONFIG" "$KERNEL_PROFILE" "$SAVED_STATE"; do
     fi
 done
 
-# --- Concurrency guard --------------------------------------------------
+# --- Concurrency ---------------------------------------------------------
 #
-# KNOWN GAP (DRAFT-036), enforced rather than documented and hoped for.
-# dirwatch derives each clone's VLAN from its worker-slot index and the
-# slot array is process-local, so a second dirwatch allocates VLANs
-# 1..MAX_CLONES exactly as the first one did. Two pipelines then share
-# gateway addresses, VLAN sub-interfaces and isolation rules, and the only
-# symptom is analyses interfering with each other.
+# The pgrep guard that stood here is REMOVED, and its removal is the point
+# of DRAFT-036's first half rather than a relaxation of it. It refused to
+# start when another dirwatch was running, because the worker-slot index
+# was the VLAN and a second watcher re-allocated VLAN 1: two clones on one
+# segment, sharing 172.16.1.2, with no rule between them and no symptom in
+# any log. Its own comment said "remove it when DRAFT-036 lands a
+# host-global VLAN allocator, not before" -- that allocator is now the
+# flock'd lease pool under $DRAKVUF_LEASE_DIR, and VLANs no longer collide.
 #
-# THIS CHECK MUST EXIST IN EVERY LAUNCHER OR IT PROTECTS NOTHING. Added to
-# Ubuntu's at the same time as Android's (DRAFT-015): a guard only in the
-# newer launcher would still let Ubuntu be started second, into the same
-# collision, which is the case an operator is most likely to hit.
-#
-# A pgrep is a weak check -- it races, and it cannot see a watcher on
-# another host -- but the failure it prevents is silent cross-contamination
-# between two malware analyses. It matches on the shared clone.pl path,
-# which every launcher passes to dirwatch. Remove it when DRAFT-036 lands a
-# host-global VLAN allocator, not before.
-if pgrep -f "[d]irwatch .* $REPO_ROOT/automation/clone.pl" >/dev/null 2>&1; then
-    echo "run_analysis-ubuntu.sh: another dirwatch is already running from" >&2
-    echo "  this checkout. Its clones use VLANs 1..MAX_CLONES and so would" >&2
-    echo "  these -- they would collide on gateway addresses and isolation" >&2
-    echo "  rules, and nothing would report it (DRAFT-036)." >&2
-    echo "  Stop the running launcher first." >&2
-    exit 1
-fi
-
+# WHAT IS STILL OPEN, so this is not read as "concurrency is solved":
+# admission is still a fixed per-watcher MAX_CLONES rather than host memory
+# (DRAFT-036's second half, gated on measuring whether a clone is bounded
+# by its .cfg at all). Two watchers can therefore still overcommit the host
+# between them. That failure is loud and local -- a failed or OOM-killed
+# `xl restore` on one clone -- rather than silent cross-contamination
+# between two analyses, which is why it does not warrant blocking a launch
+# the way the VLAN collision did. Keep the sum of every running watcher's
+# MAX_CLONES within what the host can afford until admission lands.
 # Runtime data directories, one level per target OS. Created here so a
 # fresh Dom0 needs no manual mkdir beyond the three top-level
 # /malware_* directories from the setup guide. Not repo-relative and
@@ -99,11 +125,16 @@ mkdir -p -- "$WATCH_FOLDER" "$SERVE_FOLDER" "$OUTPUT_FOLDER" || exit 1
 
 ip link set "$ANALYSIS_BRIDGE" up
 
-# The argument here is the VLAN/clone count and MUST match the max-clones
-# argument to dirwatch below: it sizes the worker pool on one side and the
-# number of xenbr1.<n> sub-interfaces that must already exist on the other.
-# Raise one without the other and clones are handed a VLAN with no gateway.
-# Both now come from MAX_CLONES so they cannot be raised independently.
+# The argument is TOTAL_VLANS, not MAX_CLONES, as of DRAFT-036. It used to
+# have to match dirwatch's max-clones exactly, because the worker-slot
+# index WAS the VLAN. It no longer is: dirwatch leases a VLAN from a
+# host-global pool, so what must exist is one sub-interface per pool entry,
+# independent of how many workers any single watcher runs.
+#
+# This is also what lets two launchers coexist. Both provision the same
+# 1..TOTAL_VLANS -- the loop is idempotent by reuse, and every isolation
+# rule matches the `<bridge>.+` wildcard rather than a specific id, so the
+# second run neither duplicates interfaces nor narrows the first's rules.
 #
 # The exit status is checked as of DRAFT-028. It was previously discarded,
 # which mattered because network-setup.sh could not fail: it had no
@@ -112,7 +143,7 @@ ip link set "$ANALYSIS_BRIDGE" up
 # half-provisioned analysis network is worse than none, because it looks
 # like a working one -- clones would run with no inter-clone isolation, no
 # LAN block and no Dom0 protection, and nothing would say so.
-if ! "$SCRIPT_DIR/network-setup.sh" "$MAX_CLONES"; then
+if ! "$SCRIPT_DIR/network-setup.sh" "$TOTAL_VLANS"; then
     echo "run_analysis-ubuntu.sh: network provisioning failed; refusing to start dirwatch" >&2
     exit 1
 fi

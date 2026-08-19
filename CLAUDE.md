@@ -73,16 +73,27 @@ subfolders):
   as an **argv vector**, not a formatted command string, and admits or
   rejects the sample filename before claiming a worker slot; rejected
   samples go to `<out_folder>/rejected/`.
-  Two things this still needs before per-OS watchers can run concurrently
-  are tracked as DRAFT-036: memory-based clone admission, and a host-global
-  VLAN allocator (today the thread-slot index *is* the VLAN, and the slot
-  array is process-local, so two instances would collide). See
+  Both things per-OS watchers needed before they could run concurrently
+  landed 2026-08-19 (DRAFT-036): a **host-global VLAN lease** and
+  **memory-based clone admission**. The thread-slot index no longer *is*
+  the VLAN — it means only "which worker" — and clones are admitted against
+  live host memory rather than a per-watcher count. Both use one mechanism,
+  `flock` on files under `$DRAKVUF_LEASE_DIR` (default `/run/drakvuf/vlan`),
+  chosen so the authority is the filesystem rather than any process: a
+  killed watcher's VLAN and reservation are released by the kernel, and a
+  future non-C orchestrator speaks the same protocol. See
   `docs/architecture/analysis-pipeline.md`.
   For each sample it calls back into the worker scripts below, in
   order: `clone.pl` → `preconfig-ubuntu.sh` → `drakvuf-ubuntu.sh` →
   `cleanup.sh`, with `tcpdump.sh` started on a side thread. The preconfig
   phase is guarded by a 60s timeout and the drakvuf-trace phase by a 180s
   timeout; either timeout triggers `cleanup.sh` and a fresh clone retry.
+  **The retry is bounded at 3 attempts** (`DRAKVUF_MAX_ATTEMPTS`) as of
+  2026-08-19. It previously had no counter and ignored `prepare()`'s
+  return, so a sample that reliably timed out retried forever, holding a
+  worker slot, a VLAN and — once admission landed — a memory reservation:
+  a local denial of service reachable by submitting one file. On giving
+  up, the sample stays in the run folder and is not moved to results.
 - `platform.env` — sourced config holding the **host-global** values:
   `ANALYSIS_BRIDGE`, `UPLINK_BRIDGE`, `SUBNET_PREFIX`, `VG_NAME`. One Dom0
   has one of each, so these are deliberately *not* per-OS: three pipeline
@@ -286,11 +297,30 @@ install-in-preconfig and `am start` are implemented but have not run on
 Dom0, and no Android step has been re-run since the 2026-08-17 template
 re-save (`465aa4d7…`). Treat the APK path as untested code.
 
-**Neither launcher may run while the other does** — `dirwatch` derives each
-clone's VLAN from a process-local worker-slot index, so two watchers
-allocate the same VLANs and share gateway addresses and isolation rules
-with no symptom but interference. Both launchers now refuse to start if
-another is running (DRAFT-036 owns the real fix, a host-global allocator).
+**Both launchers may now run at once** (DRAFT-036, 2026-08-19). They used
+to refuse: `dirwatch` derived each clone's VLAN from a process-local
+worker-slot index, so two watchers allocated the same VLANs and shared
+gateway addresses and isolation rules with no symptom but interference.
+The `pgrep` guards are gone and the VLAN comes from a host-global lease.
+
+`TOTAL_VLANS` in `platform.env` sizes the pool and is what each launcher
+passes to `network-setup.sh` — **not** its own `MAX_CLONES`, which now
+means only "how many analyses may this watcher run at once". It must be at
+least the *sum* of every running watcher's `MAX_CLONES`; `dirwatch` checks
+it against its own but cannot see the others.
+
+Memory admission reads each clone's size from its `.cfg` (the launcher
+greps `memory =` and exports `DRAKVUF_CLONE_MEMORY_MIB`, so the Xen config
+stays the single source of truth) and adds `DOMAIN_OVERHEAD_MIB`, set to
+150 against a measured 112 for margin. **Unset means admission is
+disabled**, not zero-sized, so an un-updated launcher degrades to the old
+slot-count behaviour rather than refusing every clone.
+
+**Admission is greedy, and greedy admission starves the largest clone** —
+`KNOWN GAP (DRAFT-036)`. A 6 GiB Windows clone waits for a window that
+smaller Ubuntu/Android jobs keep consuming as memory frees, and every
+individual decision is correct. Head-of-line reservation is the fix and
+needs a real job queue to order it, which does not exist.
 
 **`automation/` now mirrors the working Dom0 host** as of 2026-08-08: the
 tested production scripts were copied in wholesale, resolving the repo↔host

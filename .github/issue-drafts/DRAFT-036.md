@@ -1,6 +1,10 @@
 # DRAFT-036: Replace fixed clone slots with a host-global admission controller — VLAN leases, memory reservation, starvation-free queue
 
-**Status:** Drafted, not published — see "Publication gate" below.
+**Status:** **Items 1 and 2 implemented 2026-08-19; item 3 (queue order and
+anti-starvation) is not.** Not published as a GitHub issue. The publication
+gate below is **dissolved** rather than satisfied — see its own note.
+Nothing has run on Dom0: `dirwatch.c` needs a build there and the
+two-watcher test is the acceptance evidence.
 **Area:** core/platform
 **OS:** ALL (shared `dirwatch.c` + `network-setup.sh`)
 **Milestone:** M1
@@ -196,26 +200,87 @@ Deliberately thin below step 2 — the mechanism depends on DRAFT-010.
    admit if    required <= available
    ```
 
-   > **Precondition, observed on Dom0 2026-08-09 during issue #4's
-   > deployment: a running analysis clone showed `maxmem` unlimited in
-   > `xl top`.** This rule assumes a clone's consumption is bounded by its
-   > config, and all four `misc/*.cfg` do set `maxmem` equal to `memory`
-   > (2048 for the sandbox templates). If the *effective* ceiling is
-   > unbounded, `required` above is a guess rather than a bound, and a
-   > clone can grow into memory the controller had reserved for another —
-   > which converts this from an admission rule into a hint.
+   > **SETTLED on Dom0 2026-08-18. The rule stands as written.**
    >
-   > Likely cause is how `xl restore` reconciles the passed config against
-   > the settings inside the saved image; `clone-ubuntu.pl` copies
-   > `maxmem`/`memory` through verbatim and rewrites only `name=`, `vif=`
-   > and `disk=`. **Not diagnosed** — needs `xl list -l <clone>` compared
-   > against the generated `/tmp/<clone>.config`.
+   > This step used to carry a blocking precondition: a running clone had
+   > shown `maxmem` unlimited in `xl top` on 2026-08-09, which would have
+   > made `required` a guess rather than a bound and demoted this from an
+   > admission rule to a hint. **Measured directly, that is not what the
+   > clone does.**
    >
-   > Settle this before implementing step 3. If clones cannot be capped,
-   > this issue needs a different mechanism (a hard `maxmem` set on the
-   > clone after restore, or admission against a pessimistic ceiling)
-   > rather than a more careful version of the same arithmetic. See
-   > `docs/runbooks/deploy-repo-relative-paths.md`, D5 observations.
+   > ```
+   > xl list -l android_sandbox-1-clone
+   >     "max_memkb":    2097152,      # 2048 MiB, exactly the .cfg
+   >     "target_memkb": 2097152,
+   > ```
+   >
+   > The clone is capped at its configured `memory`/`maxmem`, so no clone
+   > can grow into memory reserved for another and the arithmetic is a
+   > real bound. The alternative mechanisms this precondition would have
+   > forced — a hard `xl mem-max` after restore, or admission against a
+   > pessimistic ceiling — are **not needed**. The 2026-08-09 `xl top`
+   > reading is not explained and is not pursued; `xl list -l` is the
+   > authoritative source and it is unambiguous.
+   >
+   > **Measured constants**, from a baseline proven empty by `xl list`
+   > (only `Domain-0`, 8192 MiB) rather than assumed empty:
+   >
+   > | | MiB |
+   > |---|---|
+   > | `free_memory`, no clones | 8026 |
+   > | `free_memory`, one `android_sandbox` clone | 5866 |
+   > | **cost of one clone** | **2160** |
+   > | configured `memory` = `maxmem` | 2048 |
+   > | **per-domain overhead** | **112** |
+   >
+   > So `required = <cfg memory> + 112`. The absolute figures are properties
+   > of a 16 GiB host and change with it; **the 112 MiB overhead and the
+   > cap do not**, and they are what the rule needs.
+   >
+   > **There is no restore peak, so the reserve does not have to cover
+   > one.** `free_memory` sampled at 0.1 s across a full `clone.pl` run
+   > never dipped below its settled value. The full distribution:
+   >
+   > ```
+   > uniq -c /tmp/peak.log
+   >     106 8026      <- baseline
+   >       1 7770        \
+   >       1 7550         |
+   >       1 7330         |  monotonic ramp, ~220 MiB per 100 ms
+   >       1 7110         |  (~2.2 GB/s), about one second end to end
+   >       1 6886         |
+   >       1 6658         |
+   >       1 6434         |
+   >       1 6210         |
+   >       1 5982        /
+   >     191 5866      <- settled; also the MINIMUM
+   > ```
+   >
+   > Allocation is **gradual and monotonic** — the restore streams the
+   > memory image in — and never overshoots. Minimum == settled, so
+   > admission sized to steady state cannot be surprised by a transient.
+   > This removes a term the draft previously called "the part most likely
+   > to be wrong first time".
+   >
+   > *An earlier revision of this note attributed the absence of a peak to
+   > Xen's claim mechanism reserving the whole allocation in one atomic
+   > step. The distribution above refutes that: it is a ramp, not a single
+   > reservation. The conclusion is unchanged — monotonic means no
+   > overshoot either way — but the mechanism was wrong and is corrected
+   > rather than quietly reworded.*
+   >
+   > *Residual caveat:* the ramp is sampled, so this is "no peak observed
+   > at ~0.1 s resolution". Each `xl info` call costs time, so a spike
+   > shorter than one sample interval could still hide between two of the
+   > nine ramp readings.
+   >
+   > **Correction — `dom0_mem` is 8192M, not 4096M.** This step previously
+   > cited `dom0_mem=4096M,max:4096M` from
+   > `docs/drakvuf-on-xen-nested-within-proxmox.md:280`. The live
+   > `xen_commandline` reads `dom0_mem=8192M,max:8192M dom0_max_vcpus=8`,
+   > and `xl list` confirms `Domain-0` at 8192. The imported guide is
+   > historical provenance and is not edited in place; the defect was this
+   > draft repeating its figure as current.
 
    Dom0 is pinned at `dom0_mem=4096M,max:4096M`
    (`docs/drakvuf-on-xen-nested-within-proxmox.md:280`) and does not
@@ -272,17 +337,31 @@ Deliberately thin below step 2 — the mechanism depends on DRAFT-010.
    terms exist: the preconfig phase is capped at 60s and the trace at 180s
    (`dirwatch.c:374`, `:394`), with clone and cleanup time on top.
 
-   > **Prerequisite for Stage B — the third term is currently unbounded.**
-   > On timeout, `run_drakvuf` calls `prepare()` and `goto restart`
-   > (`dirwatch.c:424-429`) with **no retry counter**, and `prepare()`'s
-   > return value is not checked — the `if (prepared)` guard is commented
-   > out at `:430-436`. A sample that times out reliably therefore retries
-   > indefinitely, holding its worker slot and VLAN. So per-job worst-case
-   > runtime has no bound today, and Stage B cannot be made safe until the
-   > retry loop gains one. That same branch is where DRAFT-035 must add its
-   > cancellation check, and the surrounding cleanup path is DRAFT-010's
-   > worker-slot leak — three separate issues meeting at one `goto`, which
-   > is itself an argument for settling DRAFT-010 first.
+   > **Prerequisite for Stage B — SATISFIED 2026-08-19.** This read: *"On
+   > timeout, `run_drakvuf` calls `prepare()` and `goto restart` with no
+   > retry counter, and `prepare()`'s return value is not checked — the
+   > `if (prepared)` guard is commented out. A sample that times out
+   > reliably therefore retries indefinitely, holding its worker slot and
+   > VLAN."* All three are now fixed at that one `goto`:
+   >
+   > - the retry is capped at `DRAKVUF_MAX_ATTEMPTS` (default 3), using
+   >   the state model's own `attempt` field;
+   > - `prepare()`'s return is checked, so a failed re-clone gives up
+   >   instead of running an analysis against a clone that was never made;
+   > - the shutdown path releases the worker slot, VLAN lease and memory
+   >   reservation instead of leaking all three — DRAFT-010's finding,
+   >   closed here because new code would otherwise have inherited it.
+   >
+   > Memory admission made this urgent rather than untidy: the unbounded
+   > retry also cycled a reservation, so one malformed sample could
+   > withhold host capacity indefinitely — a local denial of service
+   > reachable by submitting a file.
+   >
+   > **What Stage B still lacks is the queue, not the bound.** A
+   > worst-case per-job runtime now exists (60 s preconfig + 180 s trace +
+   > clone/cleanup, times at most 3 attempts), but there is nothing to
+   > order jobs against. DRAFT-035's cancellation check still belongs at
+   > this same branch.
 
    Do **not** implement per-OS reserved floors as the anti-starvation
    mechanism. Guaranteeing each OS a slice reintroduces exactly the static
@@ -426,8 +505,18 @@ for doing so belongs in `docs/runbooks/`.
 
 # Publication gate
 
-Draft only. Do **not** publish until DRAFT-010 has decided C-vs-Python:
-the Objective, Context and Evidence above are settled and source-verified,
-but PLAN/CREATE would commit to an approach that decision may invalidate.
-Publishing early would put a design in a public issue that we already know
-is provisional.
+> **Dissolved 2026-08-19, not satisfied.** The gate said: do not publish
+> until DRAFT-010 decides C-vs-Python, because PLAN/CREATE would otherwise
+> commit to an approach that decision might invalidate. That reasoning was
+> sound and the fix routed around it instead of waiting.
+>
+> The allocator is **out of process**: the authority is a set of `flock`'d
+> files under `$DRAKVUF_LEASE_DIR`, and `dirwatch` is merely a client of
+> it. A Python replacement speaks the same protocol without sharing a line
+> of code, so the C-vs-Python decision no longer changes the design — only
+> who calls it. DRAFT-010 is therefore no longer a blocker for items 1
+> and 2.
+>
+> **It becomes a blocker again for item 3.** A host-global queue with
+> ordering and anti-starvation is where the language question really
+> bites — see the note under PLAN step 5.
