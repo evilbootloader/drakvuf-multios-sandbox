@@ -29,7 +29,7 @@
 | Volume group | TBD |
 | Analysis bridge | TBD |
 | Saved state | TBD |
-| Windows baseline (version/build) | Not yet selected |
+| Windows baseline (version/build) | **Windows 11 first, Windows 10 as fallback** (direction set 2026-08-19). Exact build not yet recorded — §0.1's profile step keys on one kernel GUID |
 | VM lifecycle model | clone-per-run (current Ubuntu/Android model) — decided by elimination: snapshot-restore (DRAKVUF Sandbox's model) does not work in this nested Xen-inside-Proxmox setup, since `xl save`/`xl restore` leaves the base and cloned disk images read-only; see roadmap "Architecture decisions needing experiments" |
 | Current phase | Phase 0 — baseline selection (DRAFT-034, unpublished) |
 | Current blocker | DRAFT-034 not yet published; no baseline selected |
@@ -84,6 +84,10 @@ making it the project's only working TLS-visibility route (DRAFT-023).
 # Phase 0 — Planning spike (M5)
 
 - [ ] Select a specific supported Windows baseline (version/build).
+  **Direction set 2026-08-19: try Windows 11 first, Windows 10 as the
+  fallback.** The exact build still has to be recorded, because §0.1's
+  profile step is keyed to one kernel GUID. See §0.2 for the install
+  constraints to expect.
 - [x] Decide golden-VM lifecycle model — **clone-per-run, decided by
   elimination** (roadmap "Architecture decisions needing experiments" #3;
   the status table above records the same). Snapshot-restore is not viable
@@ -91,9 +95,114 @@ making it the project's only working TLS-visibility route (DRAFT-023).
   Windows-specific choice to make. What remains is confirming clone-per-run
   works against a Windows guest specifically — DRAFT-034, not this item.
 - [ ] Determine profile/symbol requirements for the selected baseline.
+  **Procedure recorded in §0.1 (Candidate).** It is volatility3's
+  `pdbconv.py` keyed on the kernel PDB GUID — not `dwarf2json`, which was
+  the open unknown DRAFT-034 raised. What remains for this item is running
+  it against the chosen build and settling §0.1's `-r` vs `libvmi.conf`
+  question.
 - [ ] Determine injector target and plugin compatibility for Windows guests.
 - [ ] Scope the first Windows sample type (PE executable, per the roadmap's
   "do not support every sample type in the first milestone" guidance).
+
+---
+
+## §0.1 — Profile toolchain
+
+**Status: Candidate. Nothing below has been run on this project's Dom0.**
+Recorded 2026-08-19 from upstream DRAKVUF documentation, which discharges
+DRAFT-034 PLAN step 2's requirement to establish this *from primary
+sources rather than by analogy* — the answer was genuinely not derivable
+from what this repository already does.
+
+**It is neither `dwarf2json` nor `drakpdb`.** Ubuntu and Android profiles
+come from `dwarf2json` against kernel DWARF, which has no Windows
+equivalent. The Windows path is **volatility3's `pdbconv.py`**, driven by
+the kernel's PDB GUID.
+
+Step 1 — get the GUID and kernel filename from the running domain:
+
+```bash
+sudo vmi-win-guid name <domain>
+# The two fields that matter:
+#   PDB GUID:        684da42a30cc450f81c535b4d18944b12
+#   Kernel filename: ntkrpamp.pdb
+```
+
+Fallback, if `vmi-win-guid` cannot find the kernel in memory — read it off
+the disk instead:
+
+```bash
+sudo su
+kpartx -a /dev/<vg>/<windows lv>
+mount -o ro /dev/mapper/<vg>-<lv>p1 /mnt
+python3 tools/pdbguid.py /mnt/Windows/System32/ntoskrnl.exe
+umount /mnt
+kpartx -d /dev/<vg>/<windows lv>
+```
+
+Step 2 — generate the profile:
+
+```bash
+python3 ~/drakvuf/volatility3/volatility/framework/symbols/windows/pdbconv.py \
+    --guid <PDB GUID> -p <kernel filename> -o windows.json
+```
+
+Step 3 — **open question, do not copy the upstream step blindly.** Upstream
+then registers the profile in `/etc/libvmi.conf`:
+
+```bash
+printf "windows11 {\n\tvolatility_ist = \"/root/windows.json\";\n}" >> /etc/libvmi.conf
+```
+
+That conflicts with how this project resolves profiles. Clone domains have
+no `/etc/libvmi.conf` stanza — the `-r <path>` argument is the only way a
+profile is ever resolved here, which is why `pipeline-<os>.env` carries
+`KERNEL_PROFILE` and `dirwatch` passes it through to `drakvuf`/`injector`
+(`CLAUDE.md`, "Current implementation"). Following this project's
+convention means placing the output at `profiles/windows.json` and passing
+it with `-r`, exactly as Ubuntu and Android do.
+
+**To settle on Dom0:** does `-r <profile.json>` work for a Windows guest,
+or does the Windows path require the `volatility_ist` stanza specifically?
+If the latter, that is a genuine per-OS divergence and C1–C10 needs an
+amendment rather than a workaround.
+
+Also unresolved, and it is PLAN step 4's: the example above is 32-bit
+(`ntkrpamp.pdb`, "Multi-processor with PAE"). A 64-bit guest has a
+different kernel filename, and `injector --help` labels the Linux
+`execproc` path `[LINUX] (execproc -> execve(...); 64bit only)`. Windows
+injection semantics are still unread.
+
+## §0.2 — Windows 11 install constraints on Xen
+
+**Status: Candidate, from Qubes OS's Windows-HVM documentation**
+(`doc.qubes-os.org`, read 2026-08-19). Qubes runs Windows HVMs on Xen, so
+this transfers; it has **not** been reproduced here.
+
+- **Windows 11 is installable as a Xen HVM.** So is 10. Both x64.
+- **HVM only — PVH will not work.** Xen's current PVH limitations prevent
+  it. The four tracked `misc/*.cfg` are already `builder = "hvm"`.
+- **Xen does not support TPM 2.0**, so Windows 11's check must be
+  bypassed during setup: `Shift-F10` → `regedit` →
+  `HKEY_LOCAL_MACHINE\SYSTEM\Setup` → create key `LabConfig` → add DWORDs
+  `BypassTPMCheck`, `BypassSecureBootCheck`, `BypassRAMCheck`, each `1`.
+  This is the single most likely thing to waste an install attempt.
+- **Memory: 4096 MiB minimum, 6144–8192 recommended** — below that the
+  installer crashes. This bears directly on admission: at `memory = 6144`
+  a clone costs **6294 MiB** (`+ DOMAIN_OVERHEAD_MIB`), so a 28 GiB host
+  with `dom0_mem=8192M` affords three concurrent Windows clones; at 8192
+  it affords two. Pick deliberately.
+- **Disk: 60 GB minimum.** `CLONE_LV_SIZE` is per-OS precisely for this —
+  Android is `32G`, Ubuntu `64G`, and Windows must be at least `60G`.
+- **The VM halts after extracting installer files.** Expected, not a
+  fault. Cloning the LV *before* the restart is worth doing — it saves
+  repeating the bypass above if the install is botched later.
+- **Windows 11 24H2 and later may require internet access during setup**,
+  even for Pro, and the Microsoft-account bypasses are progressively
+  blocked. Relevant here because the golden image build is the one phase
+  that legitimately needs egress; clones must not inherit it.
+
+---
 
 No further phases are defined yet — later phases should mirror `android.md`'s
 structure (sandbox VM build, automation scripts, sample-type branches,
