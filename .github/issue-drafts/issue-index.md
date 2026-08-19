@@ -473,6 +473,49 @@ by *reuse*, so a trap deleting every `xenbr1.*` would remove interfaces
 belonging to a running clone. Cleanup must distinguish what this run
 created from what it found, which is why it is an issue rather than a patch.
 
+## Sixth batch — DRAFT-040
+
+Added 2026-08-19, produced by DRAFT-036's implementation rather than a
+backlog review. It is a **decision issue**: it settles an architecture
+question and produces no automation.
+
+| Draft ID | Title | Area | OS | Milestone | Priority | Depends on | Origin |
+|---|---|---|---|---|---|---|---|
+| DRAFT-040 | Decide the job-queue and web↔Dom0 communication architecture | core/platform | ALL | M1 → gates M7 | P1 | Couples to DRAFT-010 and DRAFT-035; informs DRAFT-018 | DRAFT-036 item 3 could not be designed without it |
+
+**Drafted in full** — see `.github/issue-drafts/DRAFT-040.md`.
+
+It exists because **roadmap decision #6's premise expired**. That decision
+reads "job-queue technology — low urgency, revisit near M7", which was
+correct when written. Three things that looked separate have since
+converged on one mechanism: anti-starvation needs a host-global order over
+jobs (DRAFT-036 item 3); cancellation needs a queued job to *have a
+record*, which today it does not — it is a file in a watch directory plus a
+spinning worker, with no id and no field to set, so cancelling a queued job
+is unexpressible rather than merely unimplemented (DRAFT-035); and the web
+platform needs all of it (M7). Deferring now means building a
+filesystem-shaped queue and discarding it, which is the cost the deferral
+was meant to avoid.
+
+Two things it settles that are worth reading even if the rest waits:
+
+- **VLAN leases and memory reservations stay on `flock`, deliberately.**
+  Their requirement is release on process *death* and never on delay. A
+  broker TTL plus heartbeats would reassign a stalled watcher's VLAN while
+  its clone was still on that segment — the defect DRAFT-036 just removed,
+  rebuilt with more machinery.
+- **`drakvuf-sandbox` uses RQ over Redis**, verified 2026-08-19 from its
+  `requirements.txt` at `master` (`rq==2.9.0`, `Flask==3.0.3`,
+  `boto3`, `karton-core` as an optional integration). The roadmap's reuse
+  table was already right. What has *not* been read is how they use it —
+  the manifest is evidence of what, not how, and PLAN step 2 owns that.
+
+It deliberately makes **no recommendation on RQ vs plain Redis**, because
+that largely decides DRAFT-010: RQ's job payloads and worker loop are
+Python, so an RQ *worker* cannot be C — though `hiredis` makes plain Redis
+from C entirely viable. The constraint is handed to DRAFT-010 rather than
+pre-empted.
+
 ## Current order (consolidated 2026-08-11)
 
 The single current sequence. Two earlier order blocks and their scattered
