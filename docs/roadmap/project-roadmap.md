@@ -234,8 +234,15 @@ for the fully specified first batch (DRAFT-001 through DRAFT-008).
    independently-versioned checkout with pinned-revision documentation (not
    a submodule, not vendoring) — confirm via an actual build-from-pinned-
    revision test before locking this in.
-6. **Job-queue technology for the eventual orchestrator** — low urgency,
-   revisit near M7.
+6. ~~**Job-queue technology for the eventual orchestrator** — low urgency,
+   revisit near M7.~~ **Premise expired 2026-08-19; now DRAFT-040.** The
+   "low urgency" reading was correct while the queue served only the web
+   platform. Three needs have since converged on it: anti-starvation
+   (DRAFT-036 item 3) needs a host-global order over jobs; cancellation
+   (DRAFT-035) needs a queued job to have a record at all, which today it
+   does not; and M7 needs both. Deferring now means building a
+   filesystem-shaped queue and discarding it — the cost the deferral
+   existed to avoid. See `.github/issue-drafts/DRAFT-040.md`.
 
 ## Test classification
 
