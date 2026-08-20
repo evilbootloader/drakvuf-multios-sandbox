@@ -6,7 +6,7 @@
 > work becoming near-term (CONF-11, section E) — so the old title
 > understated it.
 
-**Status:** **Applied 2026-08-11**, without being published as a GitHub
+**Status:** **[#27](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/27) — published and closed 2026-08-19.** **Applied 2026-08-11**, without being published as a GitHub
 issue — a documentation-only pass, so `CONTRIBUTING.md`'s Stage 2 gate was
 not triggered and no issue body was edited. Tables A–E below are the record
 of what was found; the resolution note at the end of this file records what

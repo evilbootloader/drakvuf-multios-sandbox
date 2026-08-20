@@ -1,6 +1,6 @@
 # DRAFT-030: Stop passing untrusted sample filenames through shell-parsed command lines
 
-**Status:** Drafted, not published
+**Status:** **[#31](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/31) — published and closed 2026-08-19.** Drafted, not published
 **Area:** core (shared orchestrator — affects Ubuntu, Android, Windows)
 **Milestone:** M1
 **Priority:** P1

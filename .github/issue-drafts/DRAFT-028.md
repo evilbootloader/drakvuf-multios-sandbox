@@ -1,6 +1,6 @@
 # DRAFT-028: Make `network-setup.sh` fail loudly, install correct rules, and be idempotent
 
-**Status:** Drafted, not published
+**Status:** **[#24](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/24) — published and closed 2026-08-19.** Drafted, not published
 **Area:** platform / networking (shared by Ubuntu, Android, Windows)
 **Milestone:** M2 (containment closure)
 **Priority:** P0

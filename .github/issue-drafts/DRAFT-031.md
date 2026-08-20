@@ -1,6 +1,6 @@
 # DRAFT-031: Establish a `shellcheck` baseline that `automation/` actually passes
 
-**Status:** **Implemented 2026-08-11.** Repo change and static verification
+**Status:** **[#25](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/25) — published and closed 2026-08-19.** **Implemented 2026-08-11.** Repo change and static verification
 complete; the Dom0 pull and one benign analysis run remain outstanding (see
 DEPLOY). Verified in CI rather than by a Dom0 runbook, at the maintainer's
 direction — `.github/workflows/static-checks.yml` was implemented alongside

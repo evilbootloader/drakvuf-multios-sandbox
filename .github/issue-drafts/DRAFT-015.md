@@ -1,6 +1,6 @@
 # DRAFT-015: Complete the Android pipeline — `pipeline-android.env`, `run_analysis-android.sh`, and a shared `clone.pl`
 
-**Status:** Drafted, not published — 2026-08-15
+**Status:** **[#28](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/28) — published and closed 2026-08-19.** Drafted, not published — 2026-08-15
 **Area:** android / core
 **Milestone:** M3 (Android MVP)
 **Priority:** P1

@@ -516,54 +516,141 @@ Python, so an RQ *worker* cannot be C — though `hiredis` makes plain Redis
 from C entirely viable. The constraint is handed to DRAFT-010 rather than
 pre-empted.
 
-## Current order (consolidated 2026-08-11)
+## Current order (consolidated 2026-08-19) — six parallel tracks
 
-The single current sequence. Two earlier order blocks and their scattered
-dated addenda were removed on 2026-08-11 — three stacked revisions patching
-each other by reference had stopped reading as one sequence, which is the
-whole point of having one.
+Replaces the 2026-08-11 sequence, which had gone stale in the way this
+project treats as a defect rather than drift: it listed #13 as open (closed
+2026-08-14), called DRAFT-028/030/031/033 "still unpublished P0s" when all
+four had landed, and led its "Next six" with four completed items. Removed
+rather than annotated, for the reason the 2026-08-11 block itself gave when
+it removed *its* predecessors — stacked revisions patching each other by
+reference stop reading as one sequence, which is the whole point of having
+one.
 
-**#1, #2, #3, #4, #6, #7 and #9 are all closed** — #9 (DRAFT-029) was
-published, merged as `aed37af` and deployed on 2026-08-12. **Three issues
-are open:**
+### The tracker now matches reality (2026-08-19)
 
-| # | Draft | Priority | State |
+Until this date, **two GitHub issues were open against roughly seventeen
+open drafts**. The gap was not neglect: most work here was implemented
+straight from its draft without ever being opened as an issue —
+DRAFT-015, 016, 028b, 030 and 033 all shipped in PR #14 that way. Anyone
+reading GitHub saw a nearly-idle project.
+
+**Sixteen issues were published on 2026-08-19 to close that gap**
+(#18–#33). Fifteen were created and immediately closed, because the work
+was already done; #33 (DRAFT-036) is open, because it is not.
+
+| Draft | Issue | Draft | Issue |
 |---|---|---|---|
-| [#13](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/13) | DRAFT-013 | P0 | Runbook written (`docs/runbooks/verify-android-isolation.md`), awaiting execution on Dom0 |
-| [#11](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/11) | DRAFT-038 | P1 | Spawned by DRAFT-029's deployment (F1, F2′) |
-| [#12](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/12) | DRAFT-039 | P2 | Spawned by DRAFT-029's deployment (F4) |
-DRAFT-037/#7 was drafted, published and executed on 2026-08-11 and has been
-struck from the sequence below. The remaining drafted P0s — DRAFT-028,
-DRAFT-030, DRAFT-031, DRAFT-033, DRAFT-036 — are all still unpublished, and
-DRAFT-031 is now first.
+| DRAFT-001 | [#18](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/18) | DRAFT-032 | [#27](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/27) |
+| DRAFT-002 | [#19](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/19) | DRAFT-015 | [#28](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/28) |
+| DRAFT-003 | [#20](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/20) | DRAFT-016 | [#29](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/29) |
+| DRAFT-004 | [#21](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/21) | DRAFT-028b | [#30](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/30) |
+| DRAFT-005 | [#22](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/22) | DRAFT-030 | [#31](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/31) |
+| DRAFT-027 | [#23](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/23) | DRAFT-033 | [#32](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/32) |
+| DRAFT-028 | [#24](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/24) | DRAFT-036 | [#33](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/33) **open** |
+| DRAFT-031 | [#25](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/25) | DRAFT-026a | [#26](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/26) |
 
-### Next six
+Two were published against their own recorded decision not to be, and each
+issue says so rather than quietly overwriting it: **DRAFT-027** was folded
+into issue #4, and **DRAFT-032** was applied as a documentation-only pass
+that deliberately did not trigger the Stage-2 gate. Their draft files keep
+the original reasoning; only the "never published" clause is superseded.
 
-| # | Draft | Why here |
-|---|---|---|
-| 1 | **DRAFT-013** — **re-scope before working it** | **Shrank to Android-only.** DRAFT-028's deployment already produced the nine-row connectivity matrix with per-rule packet counters, and because `network-setup.sh` matches on interface (`-i xenbr1.+`) rather than anything guest-specific, that result transfers to any OS. What does *not* transfer is the guest's reaction: Android does connectivity probing and may mark a network unvalidated when it cannot reach its gateway, which Ubuntu never checks. Remaining scope is one Android clone boot. |
-| 2 | ~~**DRAFT-029**~~ — **DONE 2026-08-12.** [#9](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/9) closed, [PR #10](https://github.com/evilbootloader/drakvuf-multios-sandbox/pull/10) merged as `aed37af`, deployed and tested on Dom0 (`docs/runbooks/deploy-terminal-chains.md`, steps 0–8). Spawned DRAFT-038 and DRAFT-039 | Its Dom0-service half (NET-02, the `INPUT`-chain gap) landed inside DRAFT-028 at the maintainer's request. `DRAFT-029.md` is now rewritten to match, and the remaining scope **inverted** in the process: `DRAKVUF_INPUT` is already terminal, so setting `-P INPUT`/`-P FORWARD` buys nothing for containment and risks locking the operator out — the fix is to make `DRAKVUF_ISOLATION` terminal instead, and set no policies at all. Retitled accordingly. Also absorbs a fail-open window found while sweeping: the chain is flushed at `network-setup.sh:272` and not repopulated until `:342`, with the whole VLAN loop in between, so any `ip` failure exits leaving it empty behind `-P FORWARD ACCEPT`. |
-| 3 | **DRAFT-030** | Restores `SC2086` coverage, which `.shellcheckrc` currently disables repository-wide — so it should precede the six Android and Windows scripts, not follow them. Also owns the guest-filename normalizer. |
-| 4 | **DRAFT-010** | Moved ahead of DRAFT-036 because it gates it. DRAFT-036's PLAN/CREATE wait on DRAFT-010's C-vs-Python decision, which determines whether the fix is a cross-process lease in `dirwatch.c` or an allocator designed into its replacement. CONF-11 raises its value independently: with engine work near-term, this becomes input to that work. |
-| 5 | **DRAFT-036** | P0 **correctness** defect, not tuning: `slots_busy[]` is process-local and the slot index *is* the VLAN, so a second watcher allocates VLAN 1 too and both clones land on `xenbr1.1`. Per-OS watchers cannot run concurrently until this lands — it is a prerequisite of issue #3's OS-selection mechanism, not a follow-up to it. |
-| 6 | **DRAFT-033** | `clone-ubuntu.pl` is the template `clone-android.pl` is written from and it checks no exit status. Copying first puts the defect in three files. Precedes DRAFT-015. |
+**The rule this establishes:** a draft is published as an issue when work on
+it starts, not after. The three open issues are now the real open list.
 
-**Three items came off this list on 2026-08-11**, all executed the same day:
+**Open issues:**
+[#11](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/11)
+(DRAFT-038, firewall posture),
+[#12](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/12)
+(DRAFT-039, stray VLAN interfaces),
+[#33](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/33)
+(DRAFT-036, admission controller — items 1–2 in PR #15, item 3 not started).
 
-- **DRAFT-037 / #7** — Android template rebuilt. This is what promotes
-  DRAFT-013: with a working template in hand, unverified containment is the
-  nearest thing to a real risk rather than a distant one.
-- **DRAFT-031** — `shellcheck automation/*.sh` exits 0 against the
-  `.shellcheckrc` baseline. Repo side done; the Dom0 pull and one benign
-  analysis run are still outstanding, and CI cannot supply them.
-- **DRAFT-026a** — the static CI tier exists and is green. **026b, the
-  self-hosted Xen integration tier, is untouched** and still drafted.
+**Open pull requests:**
+[#15](https://github.com/evilbootloader/drakvuf-multios-sandbox/pull/15)
+(code, **awaiting a Dom0 build**) and
+[#17](https://github.com/evilbootloader/drakvuf-multios-sandbox/pull/17)
+(docs). #16 merged 2026-08-19.
 
-DRAFT-031 also left a standing constraint: `.shellcheckrc` disables SC2086,
-SC2009 and SC2006 repository-wide, so those checks are **not** protecting
-new Android or Windows scripts. Each names its owning issue, and landing
-**DRAFT-030** is what restores SC2086 coverage before six more scripts are
-written against it.
+### The six tracks
+
+| Track | Contents | Consumes | Blocked by | Unblocks |
+|---|---|---|---|---|
+| **A — Close out what is built** | Dom0 build of `dirwatch.c`; two-watcher test → merge #15 → close #33's items 1–2; Ubuntu regression on the new result layout; Android runbook addendum for the APK-path run already executed | **Dom0** | nothing | everything touching `automation/` |
+| **B — Containment** | #11 firewall posture; #12 stray VLAN interfaces | **Dom0** | nothing hard — see A-before-B below | confidence in every containment claim |
+| **C — Orchestrator architecture** | DRAFT-040 decide → DRAFT-010 (C vs Python) → DRAFT-035 (cancellation) + DRAFT-036 item 3 (anti-starvation) | **Desk** | nothing | F, and the M7 web platform |
+| **D — Windows** | DRAFT-034 Phase 0 — baseline (11 first, 10 fallback), install, profile via `pdbconv.py`, injection anchor, `misc/windows*.cfg`, licensing | **Dom0 + long external waits** | nothing | DRAFT-023 (`tlsmon`), M5 |
+| **E — Legal & governance** | DRAKVUF licence email; DRAFT-022 rescope for a paid service; the entity and ISP questions; DRAFT-024 pin both upstreams | **Desk / external** | nothing | M7/M8 gates |
+| **F — Output quality** | DRAFT-011 `status.json`; DRAFT-018 schema + atomic publication; DRAFT-014 → DRAFT-017 typing; DRAFT-019 capa; DRAFT-026b self-hosted CI | **Mixed** | A | M4 |
+
+### What actually parallelizes, and why
+
+**Parallelism here is bounded by access to one Dom0 and one operator — not
+by dependencies.** Most remaining items have few hard blockers. What
+serializes them is that Dom0 testing is manual, physical and one-at-a-time.
+Ordering this backlog by dependency alone gives a misleading picture: it
+suggests a long chain where there are really a few short ones contending
+for a single machine.
+
+Four practical rules follow:
+
+- **C and E need no Dom0 at all.** They run against A, B and D
+  continuously. C is the long pole in *calendar* terms and the cheapest to
+  start, because it is entirely design work until its last step.
+- **A, B and D contend for one machine.** Sequence them *within* a Dom0
+  session rather than treating them as independent workstreams.
+- **A should precede B.** Not a hard dependency — a sequencing preference
+  with a reason: B measures containment, and A changes `dirwatch` and
+  raises concurrency from 2 clones to as many as `TOTAL_VLANS`. Measuring
+  first means measuring a system about to change underneath the
+  measurement.
+- **D has the longest lead time and no software dependency.** Installation,
+  licensing and profile generation are mostly *waiting*. Starting it early
+  raises throughput even though it ranks below A–C by priority.
+
+### Couplings a dependency list would miss
+
+- **D → C.** Windows at `memory = 6144` costs **6294 MiB** admitted, and
+  admission is greedy. If Windows lands before DRAFT-036 item 3, the first
+  Windows analyses queue behind smaller Ubuntu and Android jobs
+  indefinitely — and every individual admission decision will be correct,
+  so it will present as a hang with nothing in the logs to explain it.
+  Either pull item 3 forward, or accept it knowingly and say so in
+  `docs/checklists/windows.md`.
+- **E → C.** A paid hosted service makes multi-tenancy concrete, which
+  changes what the queue must carry. `owner` and `visibility` are already
+  reserved in the state model; E's entity and ISP answers are direct inputs
+  to DRAFT-040's D3–D5.
+- **D → DRAFT-023.** Windows is what makes `tlsmon` applicable — the
+  project's only working TLS-visibility path, and useless without a Windows
+  guest.
+- **A → F.** `status.json` has more to emit than when DRAFT-011 was
+  drafted: `attempt` and `queue_reason` became real values in PR #15 rather
+  than notional fields.
+
+### Hard edges only
+
+Everything not drawn is independent. The graph is deliberately shown to be
+shallow — the constraint is the machine, not the ordering.
+
+```
+A ──────────────► F              status.json needs the pipeline settled
+
+C: DRAFT-040 ──► DRAFT-010 ──► DRAFT-035
+                           └─► DRAFT-036 item 3
+                                    ▲
+D (Windows) ────────────────────────┘  coupling, not a blocker:
+   └──► DRAFT-023 (tlsmon)             Windows is the starvation case
+
+B   independent
+E   independent
+```
+
+A standing constraint DRAFT-031 left behind, still live: `.shellcheckrc`
+disables `SC2009` and `SC2006` repository-wide, so those checks are **not**
+protecting the Windows scripts still to be written. `SC2086` coverage was
+restored by DRAFT-030/#31.
 
 ### Considered and deliberately not taken (2026-08-11)
 
@@ -601,49 +688,67 @@ revisited:
 **DRAFT-032** was first in this list and is now executed — see the note at
 the end of this section.
 
-### Then
-
-```
-DRAFT-013 → DRAFT-029 → DRAFT-030 → DRAFT-026a → DRAFT-015 → DRAFT-016
-         → DRAFT-024 → DRAFT-034 → DRAFT-014 → DRAFT-017 → DRAFT-011
-         → DRAFT-035 → DRAFT-018 → DRAFT-019 → DRAFT-026b
-```
-
-`DRAFT-030` before `DRAFT-016`: DRAFT-030 owns the guest-filename normalizer
-and the Ubuntu staging retrofit, so writing `preconfig-android.sh` first
-means writing it against SHA-256 staging and rewriting it immediately.
-`DRAFT-024` rises to P1 (see its row above). `DRAFT-012` is obsolete — do not
-draft it.
-
 ### Load-bearing constraints, in one place
 
 These are defect-multiplication rules, not preferences. Violating one costs
-more than the item it reorders:
+more than the item it reorders. Discharged entries are struck rather than
+deleted, so the reasoning survives the constraint.
 
-- **DRAFT-031, DRAFT-033 and DRAFT-030 all precede DRAFT-015/016.** Each is
-  a defect in the template that gets copied into two more files otherwise.
+**Still live:**
+
+- **DRAFT-040 before DRAFT-036 item 3 and before DRAFT-035.** Both need the
+  queue mechanism chosen first. Anti-starvation needs a host-global *order*
+  over jobs, and cancellation needs a queued job to *have a record* — today
+  it is a file in a watch directory plus a worker spinning inside
+  `admission_try_reserve()`, with no id and no field to set, so cancelling
+  it is unexpressible rather than merely unimplemented.
+- **`master` means verified-on-Dom0 for code changes.** Branch, PR, Dom0
+  tests *the branch*, then merge — the pattern the runbooks already used
+  for DRAFT-028 (`git branch --show-current # expect:
+  draft-028-network-isolation`). Docs-only changes merge on review; there
+  is nothing for Dom0 to verify. This keeps master always deployable,
+  which matters because master is what the Dom0 checkout pulls.
+- **Admission constants are per-host.** `DOMAIN_OVERHEAD_MIB = 150` was set
+  against a 112 MiB measurement on the home-lab Dom0. A second host — the
+  production server — needs its own measurement pass; the constant is a
+  property of Xen and the domain config, but the capacity that follows from
+  it is a property of the machine.
 - **Anchor auto-discovery must not key on a process-name grep** (added
-  2026-08-11 by issue #7). The Android anchor is a backgrounded `nano`,
-  chosen so the string `drakvuf` appears nowhere in the guest. A generic
-  name makes `grep` ambiguous and `injector` does not warn, so §7.2's
-  "Resolve the injection anchor PID/TGID automatically / Reject zero or
-  multiple matching anchors" must key on something else. `INJECTION_PID` is
-  a number and always was; only human verification used the name.
-- ~~**DRAFT-028 before DRAFT-013.** Fix before measuring.~~ **Satisfied** —
-  DRAFT-028 deployed 2026-08-11, DRAFT-029 2026-08-12. DRAFT-013 is drafted
-  against the fixed implementation and is unblocked.
+  2026-08-11 by issue #7). The Android anchor is deliberately unremarkable
+  so the string `drakvuf` appears nowhere in the guest. A generic name makes
+  `grep` ambiguous and `injector` does not warn, so §7.2's "resolve the
+  anchor PID/TGID automatically" must key on something else. `INJECTION_PID`
+  is a number and always was; only human verification used the name.
 - **An Android clone must attach to `xenbr1.<vlan>`, never to `xenbr1`**
   (added 2026-08-12 by DRAFT-013's drafting). The isolation rules match the
-  `xenbr1.+` wildcard, which does not match the bare bridge, so a guest on
-  `xenbr1` is covered by no rule at all. `clone-ubuntu.pl:229` rewrites the
-  vif correctly and `clone-android.pl` will inherit that, but the **manual**
-  procedure in `rebuild-android-sandbox.md` step 7 does not — it inherits
-  `bridge=xenbr1` from `misc/android_sandbox.cfg`. Any hand-built test
-  domain must override it.
-- **DRAFT-010 before DRAFT-036.** Publication gate, stated in DRAFT-036.
-- **DRAFT-036 before any concurrent per-OS watcher**, and therefore before
-  DRAFT-035's launch arrangement and before DRAFT-015/016 run alongside
-  Ubuntu.
+  `xenbr1.+` wildcard, which does **not** match the bare bridge, so a guest
+  on `xenbr1` is covered by no rule at all. `clone.pl` rewrites the vif
+  correctly, but the **manual** procedure in `rebuild-android-sandbox.md`
+  step 7 does not — it inherits `bridge=xenbr1` from
+  `misc/android_sandbox.cfg`. Any hand-built test domain must override it.
+
+**Discharged:**
+
+- ~~**DRAFT-031, DRAFT-033 and DRAFT-030 all precede DRAFT-015/016.**~~
+  **Satisfied** — all five landed, in that order, by 2026-08-15. Each was a
+  defect in a template that would otherwise have been copied into two more
+  files.
+- ~~**DRAFT-028 before DRAFT-013.** Fix before measuring.~~ **Satisfied** —
+  DRAFT-028 deployed 2026-08-11, DRAFT-029 2026-08-12, #13 closed
+  2026-08-14.
+- ~~**DRAFT-010 before DRAFT-036.**~~ **Dissolved 2026-08-19, not
+  satisfied** — and the distinction matters. The gate existed because the
+  fix shape depended on the C-vs-Python decision. Making the allocator
+  *out of process* — `flock`'d lease files that `dirwatch` is merely a
+  client of — removed that dependency, because a Python replacement speaks
+  the same protocol without sharing a line of code. **It returns for item
+  3**, where a host-global queue is exactly where the language question
+  bites.
+- ~~**DRAFT-036 before any concurrent per-OS watcher.**~~ **Satisfied by
+  PR #15**, pending the Dom0 build. Both `pgrep` guards are removed; the
+  VLAN comes from a host-global lease.
+
+`DRAFT-012` is obsolete — superseded by DRAFT-026a/#26. Do not draft it.
 
 > **DRAFT-032 status, 2026-08-11.** Applied to the repository without being
 > published as a GitHub issue, as a documentation-only pass. Tables A–E are

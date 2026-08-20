@@ -1,5 +1,12 @@
 # DRAFT-027: Replace HTTP/Apache sample delivery with direct guest injection
 
+**Status:** **[#23](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/23)
+— published and closed 2026-08-19.** Published retroactively, which
+supersedes the "never published as its own issue" clause in the 2026-08-09
+resolution below. That resolution is dated and is left intact rather than
+corrected in place: it records *why* the work was folded into issue #4 at
+the time, which is still true and still the useful part.
+
 > **Resolution 2026-08-09 — implemented for Ubuntu as part of issue #4,
 > never published as its own issue.** Folded in because issue #4's per-OS
 > `/malware_processing/ubuntu` change would otherwise have broken HTTP

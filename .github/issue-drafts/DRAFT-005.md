@@ -1,6 +1,6 @@
 # DRAFT-005: Add CONTRIBUTING.md capturing PLAN→CREATE→TEST→DEPLOY lifecycle + issue template
 
-**Status:** Closed — done 2026-08-07
+**Status:** **[#22](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/22) — published and closed 2026-08-19.** Closed — done 2026-08-07
 **Area:** governance
 **Milestone:** M0
 **Priority:** P1

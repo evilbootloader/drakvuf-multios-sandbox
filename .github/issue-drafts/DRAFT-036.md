@@ -1,6 +1,6 @@
 # DRAFT-036: Replace fixed clone slots with a host-global admission controller — VLAN leases, memory reservation, starvation-free queue
 
-**Status:** Drafted, not published — see "Publication gate" below.
+**Status:** **[#33](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/33) — published, OPEN pending Dom0 verification 2026-08-19.** Drafted, not published — see "Publication gate" below.
 **Area:** core/platform
 **OS:** ALL (shared `dirwatch.c` + `network-setup.sh`)
 **Milestone:** M1

@@ -1,6 +1,6 @@
 # DRAFT-003: Reorganize docs/ into roadmap/architecture/checklists, preserving Android checklist evidence verbatim
 
-**Status:** Closed — done 2026-08-07
+**Status:** **[#20](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/20) — published and closed 2026-08-19.** Closed — done 2026-08-07
 **Area:** governance
 **Milestone:** M0
 **Priority:** P0

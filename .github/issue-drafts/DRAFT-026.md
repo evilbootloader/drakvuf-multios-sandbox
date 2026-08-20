@@ -1,6 +1,6 @@
 # DRAFT-026: Implement GitHub Actions and self-hosted Xen integration runner
 
-**Status:** **026a (static tier) implemented 2026-08-11** —
+**Status:** **[#26](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/26) — 026a published and closed 2026-08-19.** **026a (static tier) implemented 2026-08-11** —
 `.github/workflows/static-checks.yml`, green on run
 [`31505320234`](https://github.com/evilbootloader/drakvuf-multios-sandbox/actions/runs/31505320234).
 Built alongside DRAFT-031, which unblocked it by making `shellcheck` exit 0.

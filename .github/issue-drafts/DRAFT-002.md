@@ -1,6 +1,6 @@
 # DRAFT-002: Add root README.md
 
-**Status:** Closed — done 2026-08-07
+**Status:** **[#19](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/19) — published and closed 2026-08-19.** Closed — done 2026-08-07
 **Area:** governance
 **Milestone:** M0
 **Priority:** P1

@@ -1,6 +1,6 @@
 # DRAFT-016: Implement `preconfig-android.sh` and `drakvuf-android.sh`
 
-**Status:** Drafted, not published — 2026-08-14
+**Status:** **[#29](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/29) — published and closed 2026-08-19.** Drafted, not published — 2026-08-14
 **Area:** android
 **Milestone:** M3 (Android MVP)
 **Priority:** P1

@@ -1,6 +1,6 @@
 # DRAFT-004: Fix checklist doc-reference and provenance-list defects
 
-**Status:** Closed — done 2026-08-07
+**Status:** **[#21](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/21) — published and closed 2026-08-19.** Closed — done 2026-08-07
 **Area:** governance
 **Milestone:** M0
 **Priority:** P2

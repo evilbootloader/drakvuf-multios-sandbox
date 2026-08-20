@@ -1,6 +1,6 @@
 # DRAFT-033: Make `clone-ubuntu.pl` fail safely and lock, before it is copied twice
 
-**Status:** Drafted, not published
+**Status:** **[#32](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/32) — published and closed 2026-08-19.** Drafted, not published
 **Area:** core / ubuntu (template for Android and Windows clone scripts)
 **Milestone:** M1
 **Priority:** P1
