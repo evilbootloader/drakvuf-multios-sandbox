@@ -46,6 +46,7 @@ secrets/
 # reproduced by hand on each machine (shellcheck is not in the base image).
 .claude/
 .devcontainer/
+prompts/
 
 # Evidence archives dropped in the working tree. Diagnostic captures belong
 # in docs/checklists/ or docs/runbooks/ as text, not as tarballs.
