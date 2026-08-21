@@ -287,12 +287,25 @@ Ubuntu analysis runs do execute their samples, which is now
 execution-evidenced (`docs/runbooks/verify-user-placeholder.md`).
 
 **Parity is now maintained by a checkout, not by copying (2026-08-09,
-issue #4).** Dom0 runs a clone of this repository at
-`/root/sandbox_project`, pulled over a read-only deploy key, so the
-question issue #2 needed a whole runbook to answer is now one command:
+issue #4).** Dom0 runs a clone of this repository, pulled over a read-only
+deploy key, so the question issue #2 needed a whole runbook to answer is
+now one command:
 
-    git -C /root/sandbox_project log -1        # what is deployed
-    git -C /root/sandbox_project status --porcelain   # local drift, expect empty
+    git -C <dom0 checkout> log -1        # what is deployed
+    git -C <dom0 checkout> status --porcelain   # local drift, expect empty
+
+**The checkout is at `/root/drakvuf-multios-sandbox`** — observed on Dom0
+2026-08-19. This document said `/root/sandbox_project` until then, and
+every runbook under `docs/runbooks/` still does. Those are dated evidence
+and are **not** edited; read the path in them as "the Dom0 checkout",
+whatever it was called on that date.
+
+Nothing depends on the name. Issue #4's whole point was that every
+repository-owned asset resolves from the invoked script's own location, so
+the checkout can live anywhere and a wrong path in a document is a
+documentation defect rather than a broken deployment. It is recorded here
+because a command pasted from these docs will fail, not because the lab
+would.
 
 The old `/home/user/drakvuf-tools` checkout is renamed to
 `…​.retired-issue4` and kept as the rollback path. Do not edit deployed
@@ -418,10 +431,11 @@ Never operate on:
 unless explicitly instructed.
 
 Repository-owned paths below are relative to the checkout root, which
-resolves at runtime from each script's own location — `/root/sandbox_project`
-is the documented Dom0 location, not a required one. `profiles/*.json` and
-`state/*.bak` are **not git-tracked**; a fresh checkout has neither. See
-`profiles/README.md` and `state/README.md`.
+resolves at runtime from each script's own location —
+`/root/drakvuf-multios-sandbox` is where the Dom0 checkout actually is, not
+a required location. `profiles/*.json` and `state/*.bak` are **not
+git-tracked**; a fresh checkout has neither. See `profiles/README.md` and
+`state/README.md`.
 
 ## Current Android names
 

@@ -26,9 +26,9 @@ All three OS targets are current, at different stages:
 ## Running it
 
 The scripts resolve every repository-owned asset from their own location,
-so the checkout works at any path — `/root/sandbox_project` is the
-documented location, not a required one. Configuration lives in one file
-per OS rather than in the scripts:
+so the checkout works at any path — the Dom0 checkout happens to be at
+`/root/drakvuf-multios-sandbox`, but nothing requires that. Configuration
+lives in one file per OS rather than in the scripts:
 
 ```bash
 $EDITOR automation/pipeline-ubuntu.env   # injection PID, clone count, guest user, ...
