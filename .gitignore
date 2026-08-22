@@ -48,6 +48,13 @@ secrets/
 .devcontainer/
 prompts/
 
+# Python virtualenv for the platform service (issue #35 onward). Recreated
+# from platform/requirements.txt; never tracked -- it holds compiled binary
+# wheels built against this container's interpreter.
+platform/.venv/
+__pycache__/
+*.pyc
+
 # Evidence archives dropped in the working tree. Diagnostic captures belong
 # in docs/checklists/ or docs/runbooks/ as text, not as tarballs.
 *.tar.gz
