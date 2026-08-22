@@ -536,7 +536,18 @@ do not compete with Track D for the machine.
 | DRAFT-044 | MinIO — bucket layout, policy, and presigned access | core/platform | ALL | M1 | P0 | DRAFT-041; pairs with 043 | DRAFT-041 |
 | DRAFT-045 | The web UI — submission, history, and live job status | core/platform | ALL | M1 | P1 | DRAFT-043, DRAFT-044 | DRAFT-041 |
 
-**All five drafted in full** — see the corresponding files.
+**All five drafted in full and published 2026-08-22:**
+
+| Draft | Issue | Draft | Issue |
+|---|---|---|---|
+| DRAFT-041 | [#34](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/34) **open** | DRAFT-044 | [#37](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/37) **open** |
+| DRAFT-042 | [#35](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/35) **open** | DRAFT-045 | [#38](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/38) **open** |
+| DRAFT-043 | [#36](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/36) **open** | | |
+
+Published together rather than one at a time, against the rule that a draft
+is published when work on it starts: #35 is where work starts, and the other
+four are its context. Reading #35 without #34 gives you a schema with no
+argument behind it.
 
 What DRAFT-041 settled, in one place: Postgres holds job state **and** the
 queue; MinIO on the platform host holds samples and results; Dom0 polls an
@@ -605,12 +616,22 @@ the original reasoning; only the "never published" clause is superseded.
 **The rule this establishes:** a draft is published as an issue when work on
 it starts, not after. The three open issues are now the real open list.
 
-**Open issues (2026-08-21):**
+**Open issues (2026-08-22):**
 [#11](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/11)
 (DRAFT-038, firewall posture) and
 [#12](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/12)
-(DRAFT-039, stray VLAN interfaces). Both are Track B containment work and
-are untouched by the redesign.
+(DRAFT-039, stray VLAN interfaces) — Track B containment, untouched by the
+redesign. Plus the platform slice published 2026-08-22:
+[#34](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/34)
+(DRAFT-041, the decision),
+[#35](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/35)
+(DRAFT-042, schema — **in progress**),
+[#36](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/36)
+(DRAFT-043, API),
+[#37](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/37)
+(DRAFT-044, MinIO),
+[#38](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/38)
+(DRAFT-045, web UI).
 
 [#33](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/33)
 (DRAFT-036, admission controller) was **closed as not planned on

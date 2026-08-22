@@ -1,6 +1,6 @@
 # DRAFT-043: The platform API — submission, admission, and the worker channel
 
-**Status:** Drafted, not published.
+**Status:** **[#36](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/36) — published 2026-08-22, OPEN.**
 **Area:** core/platform
 **OS:** ALL
 **Milestone:** M1 → gates M7

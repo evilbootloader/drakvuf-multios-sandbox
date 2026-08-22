@@ -1,6 +1,6 @@
 # DRAFT-041: Decide the analysis platform architecture — web tier, job store, and Dom0
 
-**Status:** Drafted, not published. **Decision issue** — it settles an
+**Status:** **[#34](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/34) — published 2026-08-22, OPEN.** **Decision issue** — it settles an
 architecture question and produces documentation, not automation.
 **Area:** core/platform
 **OS:** ALL

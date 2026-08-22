@@ -1,6 +1,6 @@
 # DRAFT-042: Job schema and the claim query, with head-of-line reservation
 
-**Status:** Drafted, not published.
+**Status:** **[#35](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/35) — published 2026-08-22, OPEN.**
 **Area:** core/platform
 **OS:** ALL
 **Milestone:** M1 → gates M7

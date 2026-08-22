@@ -1,6 +1,6 @@
 # DRAFT-044: MinIO — bucket layout, policy, and presigned access
 
-**Status:** Drafted, not published.
+**Status:** **[#37](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/37) — published 2026-08-22, OPEN.**
 **Area:** core/platform
 **OS:** ALL
 **Milestone:** M1 → gates M7

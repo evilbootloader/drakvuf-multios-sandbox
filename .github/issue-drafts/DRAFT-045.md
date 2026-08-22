@@ -1,6 +1,6 @@
 # DRAFT-045: The web UI — submission, history, and live job status
 
-**Status:** Drafted, not published.
+**Status:** **[#38](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/38) — published 2026-08-22, OPEN.**
 **Area:** core/platform
 **OS:** ALL
 **Milestone:** M1 → gates M7
