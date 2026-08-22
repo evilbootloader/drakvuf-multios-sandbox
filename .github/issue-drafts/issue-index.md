@@ -516,7 +516,53 @@ Python, so an RQ *worker* cannot be C — though `hiredis` makes plain Redis
 from C entirely viable. The constraint is handed to DRAFT-010 rather than
 pre-empted.
 
-## Current order (consolidated 2026-08-19) — six parallel tracks
+> **Answered 2026-08-21 by DRAFT-041.** Neither, for now: Postgres holds the
+> queue as well as the state, so D2 is moot rather than decided, and
+> DRAFT-010's C-vs-Python question falls out as Python. See the annotation in
+> the draft itself for how each of D1–D5 resolved.
+
+## Seventh batch — DRAFT-041 through DRAFT-045
+
+Added 2026-08-21. The direction change and the first buildable slice under
+it. **DRAFT-041 is a decision issue; 042–045 are build issues that need no
+Dom0 at all** — which is why they are the four chosen to start, and why they
+do not compete with Track D for the machine.
+
+| Draft ID | Title | Area | OS | Milestone | Priority | Depends on | Origin |
+|---|---|---|---|---|---|---|---|
+| DRAFT-041 | Decide the analysis platform architecture — web tier, job store, and Dom0 | core/platform | ALL | M1 → gates M7 | P0 | Nothing open | Maintainer, 2026-08-21 |
+| DRAFT-042 | Job schema and the claim query, with head-of-line reservation | core/platform | ALL | M1 | P0 | DRAFT-041 | DRAFT-041 |
+| DRAFT-043 | The platform API — submission, admission, and the worker channel | core/platform | ALL | M1 | P0 | DRAFT-042; pairs with 044 | DRAFT-041 |
+| DRAFT-044 | MinIO — bucket layout, policy, and presigned access | core/platform | ALL | M1 | P0 | DRAFT-041; pairs with 043 | DRAFT-041 |
+| DRAFT-045 | The web UI — submission, history, and live job status | core/platform | ALL | M1 | P1 | DRAFT-043, DRAFT-044 | DRAFT-041 |
+
+**All five drafted in full** — see the corresponding files.
+
+What DRAFT-041 settled, in one place: Postgres holds job state **and** the
+queue; MinIO on the platform host holds samples and results; Dom0 polls an
+HTTPS API and never listens; `sandboxd` in Python replaces `dirwatch.c`; and
+the platform runs in an **unprivileged LXC on L0** rather than a VM,
+proportionate because it never executes a sample and scheduled for
+re-examination at M8.
+
+Three properties are what the slice is measured on, and each is a test in a
+specific draft rather than an aspiration:
+
+- **Head-of-line reservation is one SQL statement** (DRAFT-042). The fit
+  test sits on the outer `UPDATE`, not inside the subquery, so a head that
+  does not fit blocks the queue instead of being skipped. This is the
+  2026-08-20 starvation measurement inverted.
+- **Cancelling a queued job is a single `UPDATE`** (DRAFT-042) — the
+  operation DRAFT-040 recorded as unexpressible rather than unimplemented.
+- **Dom0 holds one scoped token and no credentials** (DRAFT-043, DRAFT-044).
+  Every object access is a presigned URL for one key, issued for a job it
+  currently leases.
+
+Deferred to the pass after this one, in order: `sandboxd`; artifact upload
+and the manifest/publication boundary; cancellation end to end; retiring
+`dirwatch.c` and the three launchers; and the Windows pipeline.
+
+## Current order (consolidated 2026-08-19, revised 2026-08-21) — five tracks
 
 Replaces the 2026-08-11 sequence, which had gone stale in the way this
 project treats as a defect rather than drift: it listed #13 as open (closed
