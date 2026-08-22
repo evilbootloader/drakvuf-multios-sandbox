@@ -1,11 +1,20 @@
 # Windows DRAKVUF Automated Analysis — Implementation Checklist and Command Log
 
-> **Status: current target, no execution evidence yet.** Windows is one of
-> the project's three current OS targets alongside Ubuntu and Android — not
-> a deferred planning exercise. No Windows *automation* has been built and
-> no command in this file has been run, so the checklist is still empty; the
-> difference from "skeleton only" is that the track is open and its design
-> constraints are already fixed (see "Inherited contract" below).
+> **Status: current target. The golden VM exists; no automation does.**
+> Windows is one of the project's three current OS targets alongside Ubuntu
+> and Android — not a deferred planning exercise.
+>
+> **Operator-reported 2026-08-21, not yet backed by command output:**
+> Windows 11 is installed as a Xen HVM on the golden `windows` domain,
+> Microsoft Defender is disabled, and the LV has been cloned to
+> `windows_sandbox`. The boxes below stay unchecked until that is evidenced
+> the way `android.md` evidences its own — a transcript, not a report. What
+> is *not* done: `misc/windows_sandbox.cfg` does not exist, and the LibVMI
+> profile has not been generated (no PDB fetched yet).
+>
+> No Windows *automation* has been built, so the pipeline checklist is still
+> empty; the difference from "skeleton only" is that the track is open and
+> its design constraints are already fixed (see "Inherited contract" below).
 >
 > This file intentionally contains no invented commands, configs, or
 > evidence — populate it only from real work, following the same discipline
@@ -31,8 +40,30 @@
 | Saved state | TBD |
 | Windows baseline (version/build) | **Windows 11 first, Windows 10 as fallback** (direction set 2026-08-19). Exact build not yet recorded — §0.1's profile step keys on one kernel GUID |
 | VM lifecycle model | clone-per-run (current Ubuntu/Android model) — decided by elimination: snapshot-restore (DRAKVUF Sandbox's model) does not work in this nested Xen-inside-Proxmox setup, since `xl save`/`xl restore` leaves the base and cloned disk images read-only; see roadmap "Architecture decisions needing experiments" |
-| Current phase | Phase 0 — baseline selection (DRAFT-034, unpublished) |
-| Current blocker | DRAFT-034 not yet published; no baseline selected |
+| Current phase | Phase 0 — golden VM installed 2026-08-21 (operator-reported); `windows_sandbox.cfg` and the LibVMI profile outstanding |
+| Current blocker | No `misc/windows_sandbox.cfg`; no kernel PDB fetched, so no `profiles/windows.json` |
+
+### Concurrency constraint — read before running a Windows analysis
+
+**A Windows watcher must not share Dom0 with a running Ubuntu or Android
+watcher.** Two constraints stack, and the second is the dangerous one:
+
+1. `dirwatch` derives each clone's VLAN from a process-local worker-slot
+   index, so two watchers collide on VLANs, gateway addresses and isolation
+   rules. Both existing launchers refuse to start if another is running; a
+   Windows launcher must carry the same guard.
+2. Even without the collision, admission is greedy, and greedy admission
+   starves the largest clone. A Windows clone costs **6294 MiB** (`memory =
+   6144` plus the per-host domain overhead) against Ubuntu's and Android's
+   2198 MiB. Measured on Dom0 2026-08-20: 170 consecutive admission holds,
+   zero clones for the large job, seven smaller jobs completing meanwhile.
+
+**The failure mode is not an error.** It is one admission-hold line per
+second, forever, with no clone and nothing in the logs to explain it. Every
+individual decision is correct.
+
+Fixed by DRAFT-041's head-of-line reservation, not before. Until then, run
+Windows alone.
 
 ### Inherited contract (issue #6, 2026-08-10)
 

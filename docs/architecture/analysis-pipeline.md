@@ -499,6 +499,16 @@ convertible into a static CI check later (DRAFT-026a) without being one now.
 `run_analysis-<os>.sh`. The clone step is **not** among them — it is
 shared; see C2.
 
+> **Pending amendment, 2026-08-21 (DRAFT-041).** C1 drops to **three**
+> per-OS files when `dirwatch` is retired: `run_analysis-<os>.sh` collapses
+> into one host-global launcher, because with a single `sandboxd` there is
+> one thread pool, one watch loop and one `network-setup.sh` call, so nothing
+> in a launcher varies by OS. This is the second time C1 has moved a file
+> from per-OS to shared, and for the same reason as DRAFT-015's: nothing in
+> it varied except values. **Not yet applied** — the three launchers still
+> exist and are still what runs. A Windows pipeline written today writes
+> four files.
+
 > **Amended 2026-08-15 (DRAFT-015).** C1 previously required five files,
 > including `clone-<os>.pl`. Writing Android's revealed that
 > `clone-ubuntu.pl` held exactly one OS-specific value — the `-L64G`
@@ -534,6 +544,15 @@ so the environment wins and CI can override without patching files.
 uplink bridge, the subnet prefix, or `VG_NAME`. Those are host-global
 (`platform.env`). A copy here is the exact failure this section exists to
 prevent, and it is greppable.
+
+> **Pending amendment, 2026-08-21 (DRAFT-041).** `MAX_CLONES` and
+> `WATCH_MODE` migrate from C3 to C4 when `dirwatch` is retired. Both are
+> host-global under one `sandboxd` — one pool, one loop — so a per-OS value
+> for either has no referent. They are deliberately left in
+> `pipeline-<os>.env` until then, because moving them now would mean moving
+> them twice; both files say so at the definition. A **per-OS concurrency
+> cap** within the host-global pool is a separate, defensible feature and
+> must not be smuggled in as "keeping `MAX_CLONES` where it was".
 
 **C5 — Guest path.** `<GUEST_STAGING_DIR>/<guest_filename>`. The staging
 directory **pre-exists in that target's saved image** — `writefile` does not
@@ -729,6 +748,18 @@ being treated as Android trivia.
 /malware_incoming/android/   -> dirwatch --origin android_sandbox
 /malware_incoming/windows/   -> dirwatch --origin windows_sandbox
 ```
+
+> **Amended 2026-08-21 (DRAFT-041).** "One `dirwatch` instance per OS" was
+> the *implementation* of the directory rule, not the rule itself, and it is
+> being replaced: one `sandboxd` watches every source and `target_os`
+> becomes a per-job field instead of a per-process constant. Under the web
+> tier the same token arrives as a form field validated against the same
+> closed enum at the submission boundary. **The decision below is unchanged
+> in every respect that matters** — the OS still comes from the submitter,
+> file magic still only reports and never routes, and there is still exactly
+> one untrusted routing input, validated in one place. The number of
+> processes and the OS-selection mechanism are independent, and only the
+> second was ever decided here. See `docs/architecture/platform.md`.
 
 This fits the orchestrator that already exists rather than requiring a new
 one: `dirwatch` hard-codes a single origin domain per invocation
@@ -1084,6 +1115,17 @@ to avoid it.
   contract. Its backlog row records the rescope.
 
 ## Architecture decision: keep `dirwatch.c` in C, or move to Python?
+
+> **Decided 2026-08-21 (DRAFT-041): Python.** Not because Python is easier —
+> that reason is still rejected — but because the work changed. `sandboxd`
+> talks HTTP to a platform API, holds a job state machine, uploads to S3 with
+> retry and backoff, and cancels; those are libraries in Python and
+> hand-written in C. `dirwatch`'s thread pool and `inotify` watcher are most
+> of what is lost, and `inotify` stops being how jobs arrive at all. The
+> callback-contract constraint below **holds and is the reason the change is
+> survivable**: the five worker scripts do not change. See
+> `docs/architecture/platform.md`. The paragraph below is kept because its
+> four carried requirements are now `sandboxd`'s to satisfy.
 
 Not decided. Per project rules, do not rewrite merely because Python is
 easier — the interface/callers above must be fully documented first

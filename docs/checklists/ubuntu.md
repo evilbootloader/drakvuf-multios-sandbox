@@ -146,6 +146,23 @@ Three things the same run surfaced that are **not** fixed:
 > now carries **Dom0 execution evidence** (2026-08-08, issue #2); the others
 > are still source-reading only.
 
+- [ ] **`preconfig-ubuntu.sh` runs at ~54 s against a 60 s guard** (measured
+  on Dom0 2026-08-20). A 6 s margin on a two-injection script is thin, and
+  the failure mode is not a slow run but a `cleanup.sh` and a fresh clone
+  retry — which costs an LVM snapshot and an `xl restore` to recover four
+  seconds of drift. Raise the guard, or find what in the injection pair takes
+  the time. Cf. the standing preference for setting a resource guard above
+  the measured value and keeping both numbers in the comment.
+
+- [ ] **`xl destroy` on a clone whose DRAKVUF is still attached leaves a
+  `(null) --p--d` zombie domain** (observed on Dom0 2026-08-20).
+  Pre-existing behaviour, not introduced by any change in flight at the
+  time. `cleanup.sh` pauses and destroys the domain but does not wait for
+  the trace to detach first, so the domain lands in a state `xl list` shows
+  with a null name and a paused/dying flag pair. Not known to consume a VLAN
+  or an LV, and not known to block a subsequent clone; recorded because it is
+  visible in `xl list` and will otherwise be rediscovered as a mystery.
+
 - [x] **Verify the `drakvuf-ubuntu.sh` `<USER>` bug — DONE 2026-08-08, and
   the premise was wrong.** Execution evidence from Dom0 (full transcript in
   `docs/runbooks/verify-user-placeholder.md`) shows the **deployed** copy at

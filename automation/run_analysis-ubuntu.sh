@@ -65,7 +65,7 @@ done
 
 # --- Concurrency guard --------------------------------------------------
 #
-# KNOWN GAP (DRAFT-036), enforced rather than documented and hoped for.
+# KNOWN GAP (DRAFT-041), enforced rather than documented and hoped for.
 # dirwatch derives each clone's VLAN from its worker-slot index and the
 # slot array is process-local, so a second dirwatch allocates VLANs
 # 1..MAX_CLONES exactly as the first one did. Two pipelines then share
@@ -80,13 +80,19 @@ done
 # A pgrep is a weak check -- it races, and it cannot see a watcher on
 # another host -- but the failure it prevents is silent cross-contamination
 # between two malware analyses. It matches on the shared clone.pl path,
-# which every launcher passes to dirwatch. Remove it when DRAFT-036 lands a
-# host-global VLAN allocator, not before.
+# which every launcher passes to dirwatch.
+#
+# Remove it when this launcher is retired, not before. DRAFT-036 was going
+# to lift the constraint with a host-global VLAN allocator; DRAFT-041
+# removed the reason for one instead -- a single sandboxd owning every
+# clone allocates VLANs from an in-process table, and this file goes with
+# dirwatch. Until then the guard is the only thing preventing the
+# collision. See docs/architecture/platform.md.
 if pgrep -f "[d]irwatch .* $REPO_ROOT/automation/clone.pl" >/dev/null 2>&1; then
     echo "run_analysis-ubuntu.sh: another dirwatch is already running from" >&2
     echo "  this checkout. Its clones use VLANs 1..MAX_CLONES and so would" >&2
     echo "  these -- they would collide on gateway addresses and isolation" >&2
-    echo "  rules, and nothing would report it (DRAFT-036)." >&2
+    echo "  rules, and nothing would report it (DRAFT-041)." >&2
     echo "  Stop the running launcher first." >&2
     exit 1
 fi
@@ -118,7 +124,7 @@ if ! "$SCRIPT_DIR/network-setup.sh" "$MAX_CLONES"; then
 fi
 
 # dirwatch takes 14 positional arguments in a fixed order and validates
-# only the count -- `argc != 15` at automation/dirwatch.c:453, which counts
+# only the count -- `argc != 15` at automation/dirwatch.c:739, which counts
 # argv[0] and is where the docs' "15-argument contract" phrasing comes
 # from. There are no flags and no defaults, so every value below is
 # required and order-sensitive. Issue #4 changed only the values, never

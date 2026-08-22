@@ -34,6 +34,13 @@ Before making architectural changes, read the relevant documents under `docs/`:
   `docs/android-drakvuf-automation-checklist.md` file during the 2026-08-07
   docs reorg; that path no longer exists). `android.md` is the current
   source of truth for Android automation progress.
+- `docs/architecture/platform.md` — **the direction of travel, decided
+  2026-08-21.** Job state and queue in Postgres on a separate platform VM,
+  samples and results in MinIO, Dom0 polling an HTTPS API and never
+  listening, `dirwatch.c` replaced by `sandboxd` in Python. Read it before
+  proposing anything about orchestration, queueing or the web tier — most
+  of what the rest of this file describes about `dirwatch` is what it
+  replaces.
 - `docs/architecture/` — analysis-pipeline, networking, result-schema,
   upstream-drakvuf, and licensing write-ups.
 - `docs/runbooks/` — dated execution transcripts. Append-only evidence.
@@ -73,11 +80,18 @@ subfolders):
   as an **argv vector**, not a formatted command string, and admits or
   rejects the sample filename before claiming a worker slot; rejected
   samples go to `<out_folder>/rejected/`.
-  Two things this still needs before per-OS watchers can run concurrently
-  are tracked as DRAFT-036: memory-based clone admission, and a host-global
-  VLAN allocator (today the thread-slot index *is* the VLAN, and the slot
-  array is process-local, so two instances would collide). See
-  `docs/architecture/analysis-pipeline.md`.
+  **`dirwatch.c` is scheduled for retirement (DRAFT-041, 2026-08-21).** It
+  is replaced by `sandboxd`, a Python orchestrator that takes work from a
+  Postgres queue on a separate platform VM rather than from an `inotify`
+  watch, and the five worker scripts below keep their callback contract
+  unchanged across the change. Until that lands this file is what runs, and
+  it keeps a live constraint: per-OS watchers cannot run concurrently,
+  because the thread-slot index *is* the VLAN and the slot array is
+  process-local, so two instances collide on VLANs, gateway addresses and
+  isolation rules with no symptom but interference. Both launchers refuse to
+  start if another is running. See `docs/architecture/platform.md` for the
+  replacement and `docs/architecture/analysis-pipeline.md` for the pipeline
+  it keeps.
   For each sample it calls back into the worker scripts below, in
   order: `clone.pl` → `preconfig-ubuntu.sh` → `drakvuf-ubuntu.sh` →
   `cleanup.sh`, with `tcpdump.sh` started on a side thread. The preconfig
@@ -267,7 +281,12 @@ re-save (`465aa4d7…`). Treat the APK path as untested code.
 clone's VLAN from a process-local worker-slot index, so two watchers
 allocate the same VLANs and share gateway addresses and isolation rules
 with no symptom but interference. Both launchers now refuse to start if
-another is running (DRAFT-036 owns the real fix, a host-global allocator).
+another is running. DRAFT-036 was going to lift the constraint with a
+host-global VLAN allocator; DRAFT-041 removed the need for one instead —
+a single `sandboxd` owning every clone allocates VLANs from an in-process
+table, and the launchers go with `dirwatch`. Until then the guard is the
+whole mechanism, so a **Windows watcher must not share Dom0 with a running
+Ubuntu or Android watcher** either.
 
 **`automation/` now mirrors the working Dom0 host** as of 2026-08-08: the
 tested production scripts were copied in wholesale, resolving the repo↔host

@@ -150,6 +150,15 @@ re-running idempotent by construction, `iptables -S DRAKVUF_ISOLATION`
 shows the whole containment posture as a unit, and undoing it is three
 flushes rather than a hunt through chains other tools also write to.
 
+> **How not to check containment (observed 2026-08-20).**
+> `iptables -S FORWARD | grep -c xenbr1` returns 0 on a correctly contained
+> host and cannot answer the question at all: the per-VLAN rules live *in*
+> `DRAKVUF_ISOLATION`, and `FORWARD` holds only the jump to it. Any
+> containment check must name the chain — `iptables -S DRAKVUF_ISOLATION` —
+> or it will read a working posture as an absent one. Containment itself was
+> re-verified correct on that date: 9 rules, correct order, terminal in both
+> directions.
+
 This is the source of the `172.16.<VLAN>.1` gateway value used by
 `preconfig-ubuntu.sh`, and of the `xenbr1.<vlan>` interface name
 `clone.pl` attaches clones to and `tcpdump.sh` captures on.

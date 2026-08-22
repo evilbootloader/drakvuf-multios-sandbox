@@ -1,5 +1,32 @@
 # DRAFT-036: Replace fixed clone slots with a host-global admission controller — VLAN leases, memory reservation, starvation-free queue
 
+> **SUPERSEDED 2026-08-21 by DRAFT-041. Issue #33 closed as not planned;
+> PR #15 closed unmerged and its branch deleted.** Nothing here was built on
+> `master`, and none of it will be in this form. All three items assumed the
+> problem was making *three concurrent watcher processes* share one Dom0
+> safely. There will be one orchestrator, and the ordering will not live on
+> Dom0 at all:
+>
+> 1. Memory-based admission → the queue's head-of-line reservation. The
+>    orchestrator polls with its capacity and the API answers with a lease or
+>    a reservation, so the ordering is one SQL query in one place that sees
+>    every job.
+> 2. Host-global VLAN allocator → an in-process table. With one orchestrator
+>    there is no second process to coordinate with, so the `flock` lease files
+>    are not built. The property they existed for — release on death, never on
+>    delay — is served better by a single-instance guard plus startup
+>    reconciliation against `xl list` and `ip link`.
+> 3. Starvation-free queue → the same SQL query as item 1.
+>
+> **The measurement this issue produced is kept**, because it is a property
+> of greedy admission in general rather than of the abandoned prototype: 170
+> consecutive admission holds, 0 clones for a 6294 MiB job, 7 smaller jobs
+> completing meanwhile. It is why head-of-line reservation is in the new
+> design at all. See `docs/architecture/platform.md` and DRAFT-041.
+>
+> Everything below is the original text, kept as the record of what was
+> decided and why.
+
 **Status:** **[#33](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/33) — published, OPEN pending Dom0 verification 2026-08-19.** Drafted, not published — see "Publication gate" below.
 **Area:** core/platform
 **OS:** ALL (shared `dirwatch.c` + `network-setup.sh`)

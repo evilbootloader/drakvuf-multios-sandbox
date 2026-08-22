@@ -559,28 +559,36 @@ the original reasoning; only the "never published" clause is superseded.
 **The rule this establishes:** a draft is published as an issue when work on
 it starts, not after. The three open issues are now the real open list.
 
-**Open issues:**
+**Open issues (2026-08-21):**
 [#11](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/11)
-(DRAFT-038, firewall posture),
+(DRAFT-038, firewall posture) and
 [#12](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/12)
-(DRAFT-039, stray VLAN interfaces),
-[#33](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/33)
-(DRAFT-036, admission controller — items 1–2 in PR #15, item 3 not started).
+(DRAFT-039, stray VLAN interfaces). Both are Track B containment work and
+are untouched by the redesign.
 
-**Open pull requests:**
-[#15](https://github.com/evilbootloader/drakvuf-multios-sandbox/pull/15)
-(code, **awaiting a Dom0 build**) and
-[#17](https://github.com/evilbootloader/drakvuf-multios-sandbox/pull/17)
-(docs). #16 merged 2026-08-19.
+[#33](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/33)
+(DRAFT-036, admission controller) was **closed as not planned on
+2026-08-21** — superseded by DRAFT-041, not completed. All three of its
+items assumed three concurrent watcher processes; there will be one
+orchestrator.
+
+**Open pull requests: none.** #17 (docs, Dom0 checkout path) merged
+2026-08-21. #16 merged 2026-08-19. **#15 was closed unmerged on 2026-08-21**
+and its `vlan-lease` branch deleted — it implemented a C-side orchestrator
+that will not be built. One commit was salvaged onto master first
+(`7af5042`, the Android MVP runbook, 1522 lines of dated Dom0 evidence that
+`CLAUDE.md` already cited). The `<sha256>/<utime>-<vlan>` result-directory
+commit was deliberately declined; see `docs/architecture/result-schema.md`
+for the gap that leaves open.
 
 ### The six tracks
 
 | Track | Contents | Consumes | Blocked by | Unblocks |
 |---|---|---|---|---|
-| **A — Close out what is built** | Dom0 build of `dirwatch.c`; two-watcher test → merge #15 → close #33's items 1–2; Ubuntu regression on the new result layout; Android runbook addendum for the APK-path run already executed | **Dom0** | nothing | everything touching `automation/` |
-| **B — Containment** | #11 firewall posture; #12 stray VLAN interfaces | **Dom0** | nothing hard — see A-before-B below | confidence in every containment claim |
-| **C — Orchestrator architecture** | DRAFT-040 decide → DRAFT-010 (C vs Python) → DRAFT-035 (cancellation) + DRAFT-036 item 3 (anti-starvation) | **Desk** | nothing | F, and the M7 web platform |
-| **D — Windows** | DRAFT-034 Phase 0 — baseline (11 first, 10 fallback), install, profile via `pdbconv.py`, injection anchor, `misc/windows*.cfg`, licensing | **Dom0 + long external waits** | nothing | DRAFT-023 (`tlsmon`), M5 |
+| **A — ~~Close out what is built~~** | **Closed 2026-08-21.** #15 closed unmerged, #33 closed as superseded, the Android runbook salvaged to master. Nothing remains: the `dirwatch.c` build and two-watcher test were verifying code that is no longer going anywhere | — | — | — |
+| **B — Containment** | #11 firewall posture; #12 stray VLAN interfaces | **Dom0** | nothing | confidence in every containment claim. **Now unblocked** — A is closed, and the concurrency change that made "measure first" risky is no longer in flight |
+| **C — Platform architecture** | **DRAFT-041 decided** → DRAFT-042 schema + queue → DRAFT-043 API → DRAFT-044 MinIO → DRAFT-045 web UI → then `sandboxd`, artifacts, cancellation, dirwatch retirement | **Desk** | nothing | F, D's concurrency ceiling, and M7 |
+| **D — Windows** | DRAFT-034 Phase 0 — golden VM **installed 2026-08-21** (operator-reported); outstanding: `misc/windows_sandbox.cfg`, kernel PDB → `profiles/windows.json` via `pdbconv.py`, injection anchor, licensing | **Dom0 + long external waits** | nothing to *build*; a Windows *analysis* on a shared Dom0 needs C's head-of-line reservation | DRAFT-023 (`tlsmon`), M5 |
 | **E — Legal & governance** | DRAKVUF licence email; DRAFT-022 rescope for a paid service; the entity and ISP questions; DRAFT-024 pin both upstreams | **Desk / external** | nothing | M7/M8 gates |
 | **F — Output quality** | DRAFT-011 `status.json`; DRAFT-018 schema + atomic publication; DRAFT-014 → DRAFT-017 typing; DRAFT-019 capa; DRAFT-026b self-hosted CI | **Mixed** | A | M4 |
 
@@ -593,41 +601,48 @@ Ordering this backlog by dependency alone gives a misleading picture: it
 suggests a long chain where there are really a few short ones contending
 for a single machine.
 
-Four practical rules follow:
+Four practical rules follow. *(Revised 2026-08-21: A is closed, which
+retires the A-before-B rule and frees the machine.)*
 
-- **C and E need no Dom0 at all.** They run against A, B and D
-  continuously. C is the long pole in *calendar* terms and the cheapest to
-  start, because it is entirely design work until its last step.
-- **A, B and D contend for one machine.** Sequence them *within* a Dom0
-  session rather than treating them as independent workstreams.
-- **A should precede B.** Not a hard dependency — a sequencing preference
-  with a reason: B measures containment, and A changes `dirwatch` and
-  raises concurrency from 2 clones to as many as `TOTAL_VLANS`. Measuring
-  first means measuring a system about to change underneath the
-  measurement.
-- **D has the longest lead time and no software dependency.** Installation,
-  licensing and profile generation are mostly *waiting*. Starting it early
-  raises throughput even though it ranks below A–C by priority.
+- **C and E need no Dom0 at all.** They run against B and D continuously,
+  and C is now more of the work than it was — DRAFT-042 through 045 are
+  schema, API, object storage and web UI, all buildable and testable on a
+  development container with nothing from the lab.
+- **B and D contend for one machine.** Sequence them *within* a Dom0
+  session rather than treating them as independent workstreams. With A
+  closed there are only two claimants.
+- ~~**A should precede B.**~~ **Discharged.** The rule existed because A
+  changed `dirwatch` and raised concurrency, so measuring containment first
+  meant measuring a system about to move. `dirwatch` is now frozen until
+  `sandboxd` replaces it wholesale, so B measures a stable system and can
+  start immediately.
+- **D has the longest lead time and no software dependency.** The install is
+  done; the PDB fetch and profile generation are mostly *waiting*. Starting
+  it early raises throughput even though it ranks below C by priority.
 
 ### Couplings a dependency list would miss
 
-- **D → C.** Windows at `memory = 6144` costs **6294 MiB** admitted, and
-  admission is greedy. If Windows lands before DRAFT-036 item 3, the first
-  Windows analyses queue behind smaller Ubuntu and Android jobs
-  indefinitely — and every individual admission decision will be correct,
-  so it will present as a hang with nothing in the logs to explain it.
-  Either pull item 3 forward, or accept it knowingly and say so in
-  `docs/checklists/windows.md`.
+- **D → C, now measured.** Windows at `memory = 6144` costs **6294 MiB**
+  admitted, against 2198 for Ubuntu and Android, and admission is greedy.
+  Measured on Dom0 2026-08-20: 170 consecutive holds, zero clones, seven
+  smaller jobs completing meanwhile. Every individual decision was correct.
+  Windows can be *built* without C — the golden VM already exists — but the
+  first Windows *analysis* on a shared Dom0 hangs with correct-looking logs
+  until C's head-of-line reservation lands. Recorded in
+  `docs/checklists/windows.md`; until then, run Windows alone.
 - **E → C.** A paid hosted service makes multi-tenancy concrete, which
   changes what the queue must carry. `owner` and `visibility` are already
-  reserved in the state model; E's entity and ISP answers are direct inputs
-  to DRAFT-040's D3–D5.
+  reserved columns in the schema; E's entity and ISP answers are direct
+  inputs to what the platform must enforce.
 - **D → DRAFT-023.** Windows is what makes `tlsmon` applicable — the
   project's only working TLS-visibility path, and useless without a Windows
   guest.
-- **A → F.** `status.json` has more to emit than when DRAFT-011 was
-  drafted: `attempt` and `queue_reason` became real values in PR #15 rather
-  than notional fields.
+- **C → F.** Reversed on 2026-08-21. This used to read A → F. DRAFT-011's
+  `status.json` and DRAFT-018's atomic publication are both largely absorbed
+  by the platform: job state becomes a database row rather than a file, and
+  publication becomes a committed manifest. F should not start until C's
+  schema (DRAFT-042) is settled, or it will emit a file format nothing
+  reads.
 
 ### Hard edges only
 
@@ -635,17 +650,29 @@ Everything not drawn is independent. The graph is deliberately shown to be
 shallow — the constraint is the machine, not the ordering.
 
 ```
-A ──────────────► F              status.json needs the pipeline settled
+C: DRAFT-041 ──► DRAFT-042 ──► DRAFT-043 ──► DRAFT-045
+   (decided)     schema +       platform      web UI
+                 queue          API
+                    │              │
+                    │              └──► DRAFT-044  MinIO + bucket policy
+                    │
+                    └──► F         schema first, or status.json emits
+                                   a format nothing reads
 
-C: DRAFT-040 ──► DRAFT-010 ──► DRAFT-035
-                           └─► DRAFT-036 item 3
-                                    ▲
-D (Windows) ────────────────────────┘  coupling, not a blocker:
-   └──► DRAFT-023 (tlsmon)             Windows is the starvation case
+                    ▲
+D (Windows) ────────┘  coupling, not a build blocker: the golden VM is
+   └──► DRAFT-023      installed, but the first Windows ANALYSIS on a
+        (tlsmon)       shared Dom0 needs head-of-line reservation
 
-B   independent
+A   closed 2026-08-21
+B   independent — and no longer waits on A
 E   independent
 ```
+
+Deferred to the pass after DRAFT-042–045, in this order: `sandboxd`
+(register/reconcile/claim/heartbeat, driving the five callbacks unchanged),
+artifact upload and the manifest boundary, cancellation, then retiring
+`dirwatch.c` and the three launchers.
 
 A standing constraint DRAFT-031 left behind, still live: `.shellcheckrc`
 disables `SC2009` and `SC2006` repository-wide, so those checks are **not**
@@ -696,12 +723,17 @@ deleted, so the reasoning survives the constraint.
 
 **Still live:**
 
-- **DRAFT-040 before DRAFT-036 item 3 and before DRAFT-035.** Both need the
-  queue mechanism chosen first. Anti-starvation needs a host-global *order*
-  over jobs, and cancellation needs a queued job to *have a record* — today
-  it is a file in a watch directory plus a worker spinning inside
-  `admission_try_reserve()`, with no id and no field to set, so cancelling
-  it is unexpressible rather than merely unimplemented.
+- ~~**DRAFT-040 before DRAFT-036 item 3 and before DRAFT-035.**~~
+  **Discharged 2026-08-21 — the queue mechanism is chosen** (DRAFT-041:
+  Postgres, on a platform host separate from Dom0). The constraint was right
+  and is now satisfied rather than pending. What it protected against still
+  holds as a rule for what follows: **DRAFT-042's schema before anything
+  that reads or writes job state.** Anti-starvation needs a host-global
+  *order* over jobs and cancellation needs a queued job to *have a record* —
+  today it is a file in a watch directory plus a spinning worker, with no id
+  and no field to set, so cancelling it is unexpressible rather than merely
+  unimplemented. Both become properties of the schema, so the schema is the
+  thing that must not be guessed at twice.
 - **`master` means verified-on-Dom0 for code changes.** Branch, PR, Dom0
   tests *the branch*, then merge — the pattern the runbooks already used
   for DRAFT-028 (`git branch --show-current # expect:

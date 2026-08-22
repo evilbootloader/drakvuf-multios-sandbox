@@ -216,9 +216,13 @@ for the fully specified first batch (DRAFT-001 through DRAFT-008).
 
 ## Architecture decisions needing experiments
 
-1. **`dirwatch.c`: keep as C, or move orchestration to Python?** Document
-   current interface/callers first (DRAFT-010); do not rewrite merely
-   because Python is easier.
+1. ~~**`dirwatch.c`: keep as C, or move orchestration to Python?**~~
+   **Decided 2026-08-21 (DRAFT-041): Python.** Not on the "easier" argument,
+   which stays rejected — the work itself changed. `sandboxd` takes jobs from
+   a Postgres queue over an HTTPS API, holds a state machine, uploads to S3
+   with retry, and cancels; `inotify` and a thread pool stop being the
+   problem. The callback contract to the five worker scripts is preserved, so
+   they do not change. See `docs/architecture/platform.md`.
 2. **Sample OS auto-detection contract** (libmagic/MIME + ELF/PE/APK
    parsing) — ambiguous cases (Android ELF vs. Linux ELF) need experiments
    before the classification contract is finalized (DRAFT-014).
@@ -243,6 +247,13 @@ for the fully specified first batch (DRAFT-001 through DRAFT-008).
    does not; and M7 needs both. Deferring now means building a
    filesystem-shaped queue and discarding it — the cost the deferral
    existed to avoid. See `.github/issue-drafts/DRAFT-040.md`.
+   **Answered 2026-08-21 (DRAFT-041): Postgres**, holding both job state and
+   the queue, on a separate platform VM alongside MinIO. Redis was considered
+   and deferred rather than rejected — with the queue in Redis and the state
+   in Postgres, claiming a job and transitioning it stop being one
+   transaction, and cancelling a queued job becomes two writes across two
+   stores. The full reasoning, including what would change the answer, is in
+   `docs/architecture/platform.md`.
 
 ## Test classification
 

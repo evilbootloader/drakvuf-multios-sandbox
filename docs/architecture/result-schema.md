@@ -24,6 +24,23 @@ SHA-256):
   reliability gap noted in `docs/checklists/android.md` §2.10 and carried
   into the Ubuntu modernization plan).
 
+> **KNOWN GAP (DRAFT-041) — MD5 keying collides, and the fix was
+> deliberately declined on 2026-08-21.** Because the directory is named
+> after the sample's *content* digest, two submissions of identical bytes
+> under different filenames write to the same place and overwrite each
+> other, and a trace-timeout retry re-enters with the same key and truncates
+> the previous attempt's logs. Evidenced on Dom0 2026-08-17 as **F8** in
+> `docs/runbooks/verify-android-mvp.md`.
+>
+> A fix existed — `<sha256>/<utime>-<vlan>` per-run directories, on the
+> `vlan-lease` branch — and was **not merged**. `<utime>-<vlan>` is a
+> synthetic analysis id that exists only because `dirwatch` has no job
+> identity; the jobs table in `docs/architecture/platform.md` supplies one,
+> and results are keyed `results/<job_id>/`. Merging it would have built the
+> filesystem-shaped scheme that design deletes. The gap therefore stays open
+> until `sandboxd` lands, and is recorded here so it is not rediscovered as
+> a surprise.
+
 The Android checklist's own "Proposed result layout" (§4.1) uses SHA-256
 instead of MD5 and a much richer structure — this is Candidate/proposed,
 not yet implemented for either OS. Its keying question was settled on
