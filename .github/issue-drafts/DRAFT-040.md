@@ -1,7 +1,19 @@
 # DRAFT-040: Decide the job-queue and web↔Dom0 communication architecture
 
-**Status:** Drafted, not published. **Decision issue** — it settles an
-architecture question and produces no automation of its own.
+> **ANSWERED 2026-08-21 by DRAFT-041.** Every decision this issue framed has
+> been taken; see the annotation under "The decisions" for what each became.
+> The framing here — that anti-starvation, cancellation and the web tier had
+> converged on one mechanism — was correct and is what made the decision
+> takeable. Kept in full as the record of the question, not rewritten to
+> match the answer.
+>
+> One premise did expire: this issue was drafted while PR #15 was expected to
+> land. **PR #15 was closed unmerged on 2026-08-21** and DRAFT-036 superseded,
+> so the "Depends on" line below describes work that no longer exists.
+
+**Status:** **Answered by DRAFT-041 (2026-08-21).** Drafted, never published
+as a GitHub issue. **Decision issue** — it settles an architecture question
+and produces no automation of its own.
 **Area:** core/platform
 **OS:** ALL
 **Milestone:** M1 → gates M7
@@ -103,6 +115,26 @@ The split is therefore by responsibility, not by preference:
 | Artifacts (pcap, memdump, extracted files) | To be decided here | Blobs; a broker is the wrong shape |
 
 # The decisions
+
+> **How each was answered, 2026-08-21 (DRAFT-041).** Recorded here rather
+> than edited into the text below, so the reasoning that produced each answer
+> stays legible.
+>
+> | | Question | Answer |
+> |---|---|---|
+> | **D1** | Job state off the filesystem? | **Yes — Postgres**, holding state *and* queue. The recommendation below stands; what changed is its reasoning. D1 argued that lock files "reimplement a broker badly, **and the result is still single-host**". With one orchestrator the first clause stops applying — you do not need a broker to *order* jobs, only to let a remote web tier *reach* them. So the answer is one store now and a broker only if M7 needs one, not a broker up front. |
+> | **D2** | RQ, or Redis as a plain broker? | **Moot — neither, for now.** Postgres holds the queue via `FOR UPDATE SKIP LOCKED`. Redis was deferred rather than rejected: with the queue in Redis and state in Postgres, claiming a job and transitioning it stop being one transaction, and cancelling a queued job becomes two writes across two stores with no transaction — which is this issue's own acceptance test. Revisit when web-side background work exists. |
+> | **D3** | Where do the store and web tier run? | **Confirmed — separate from Dom0**, but an **unprivileged LXC on L0**, not a VM. Proportionate because the platform never executes a sample. Scheduled for re-examination at M8. |
+> | **D4** | Which side dials? | **Confirmed unchanged — Dom0 dials out, no inbound listener, ever.** Made concrete: Dom0 holds one scoped token for `/api/v1/worker/*` and no database or MinIO credentials at all. |
+> | **D5** | How do artifacts reach the web tier? | **Object storage — MinIO on the platform host**, self-hosted rather than a cloud provider, because most provider terms prohibit storing malware and it would move samples outside the operator's infrastructure. Dom0 uploads via short-lived presigned URLs scoped to a single key. |
+>
+> What this issue said must **not** move — VLAN leases and memory
+> reservations off `flock` — resolved differently than expected and the
+> reasoning is worth keeping: that requirement was about coordinating three
+> watcher processes. With one orchestrator there is no contention for a lease
+> file to mediate, so the files are not built at all. The property they
+> existed for is served by a single-instance guard plus startup
+> reconciliation against `xl list`. See `docs/architecture/platform.md`.
 
 ## D1 — Does job state move off the filesystem?
 
@@ -236,6 +268,44 @@ atomic-publication boundary that is still an open `KNOWN GAP`.
 6. **Correct roadmap decision #6** to point at that document rather than
    at "revisit near M7".
 
+# CREATE
+
+Documentation only. This issue produces one new document under
+`docs/architecture/` and touches no file in `automation/`. Nothing it writes
+changes deployed behaviour, which is what makes the decision reversible right
+up until the first implementation issue starts.
+
+*Delivered by DRAFT-041 as `docs/architecture/platform.md` (2026-08-21).*
+
+# TEST
+
+There is nothing to execute, and saying so is not a formality — a decision
+issue that claims a test it cannot run is worse than one that admits it has
+none. Verification is review against the acceptance criteria below: that each
+decision is recorded with its cost as well as its benefit, that the
+alternatives are stated as alternatives rather than as straw men, and that
+what was explicitly closed is distinguishable from what was left open.
+
+**Two behavioural tests are specified here and executed by the implementation
+that follows.** Both are properties of the design rather than of any one
+commit, and the first is the reason this issue exists at all:
+
+1. **Cancel a job that has no clone yet.** Today this is unexpressible, not
+   merely unimplemented — a queued job is a file in a watch directory plus a
+   worker spinning inside an admission loop, with no id to name it by and no
+   field to set. A design that cannot express the operation has failed
+   regardless of what it can cancel later in the state machine.
+2. **A large job admitted ahead of a queue of smaller ones.** The measured
+   starvation case inverted: a 6294 MiB job at the head must clone rather
+   than hold while 2198 MiB jobs behind it keep being admitted.
+
+# DEPLOY
+
+Nothing to deploy. No `automation/` file changes, no Dom0 action, no service
+starts. The decision becomes deployable only through the implementation
+issues it gates, and each of those carries its own DEPLOY section — the first
+of which stands up a platform host that does not exist yet.
+
 # Acceptance criteria
 
 - [ ] D1, D3, D4 and D5 are decided and recorded with reasoning, in
@@ -258,6 +328,31 @@ atomic-publication boundary that is still an open `KNOWN GAP`.
 - [ ] No `automation/` file changes. This issue decides; it does not
       build.
 
+# Evidence required
+
+A decision issue's evidence is the *inputs* it was decided on, not an
+execution transcript. Three things, and the distinction between them
+matters:
+
+- **Read from source, citable.** `drakvuf-sandbox`'s RQ usage — queue names,
+  worker entry points, how the worker reaches the Xen host, what a job
+  payload carries. Not discharged: `requirements.txt` was read and the
+  dependency set confirmed (`rq==2.9.0`, `Flask==3.0.3`, `boto3`,
+  `karton-core` optional), but the *usage* was never read. Recorded as owed
+  rather than quietly dropped. It matters less now that Redis is deferred,
+  and it becomes owed again the moment Redis is reconsidered.
+- **Measured on the host.** The starvation case: two admission banners
+  establishing 6294 MiB against 2198 MiB, and the counts — 170 consecutive
+  holds, 0 clones for the large job, 7 smaller jobs completing meanwhile.
+  Held. This is what turned "greedy admission would starve the largest
+  clone" from a source-reading prediction into a number.
+- **Prototyped, not on Dom0.** PLAN step 3's toy producer and consumer, to
+  answer whether a crashed worker requeues and how a queued job is
+  cancelled. **Not run.** The questions were instead answered by choosing a
+  store where both are transactional properties rather than emergent ones,
+  which is a legitimate way to discharge them and is recorded as such rather
+  than as a completed step.
+
 # Security considerations
 
 - **Dom0 must not gain an inbound listener.** This is the single hardest
@@ -277,9 +372,31 @@ atomic-publication boundary that is still an open `KNOWN GAP`.
   (DRAFT-022): GDPR exposure through pcaps and memdumps stops being about
   one operator's own samples.
 
+# Documentation changes
+
+- **New:** a document under `docs/architecture/` recording the decision.
+  This is a third architecture concern alongside the analysis pipeline and
+  networking, not a section of either — the split matters because a reader
+  looking for "how does the web tier reach Dom0" should not have to know
+  that it lives inside a pipeline document.
+  *Delivered as `docs/architecture/platform.md` (2026-08-21).*
+- **Updated:** `docs/roadmap/project-roadmap.md` decision #6 — its "low
+  urgency, revisit near M7" premise annotated as expired rather than
+  deleted, and re-pointed at the document above.
+- **Updated:** `.github/issue-drafts/issue-index.md` — the Track C row and
+  the dependency graph, which name this issue as the head of the track.
+- **Deliberately not updated:** `docs/architecture/analysis-pipeline.md`'s
+  state model. This issue chooses where the state model *lives*; it does not
+  change what the states are. Anything that edits the machine itself is a
+  different change.
+
 # Recovery / rollback
 
 Entirely a documentation change. Nothing in `automation/` is touched and
 no deployed behaviour changes, so rollback is reverting a document. The
-decision it records is reversible until DRAFT-036 item 3 or DRAFT-035
-builds on it, which is the argument for taking it now rather than after.
+decision it records is reversible until something builds on it, which is the
+argument for taking it now rather than after.
+
+*(That clause originally named DRAFT-036 item 3 and DRAFT-035 as the
+builders. Both were superseded on 2026-08-21; the successor is DRAFT-042's
+schema, and the argument is unchanged.)*
