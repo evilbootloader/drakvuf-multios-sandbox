@@ -87,6 +87,17 @@ Three things that follow, and must not be lost:
   memdumps are large. Sizing the rootfs and hoping is how this fills up
   silently mid-analysis; give the bucket store a dedicated, deliberately
   sized volume.
+
+  **And a dedicated volume is not sufficient — the storage *pool* is the real
+  constraint.** Observed on L0 2026-08-22
+  (`docs/runbooks/deploy-platform-lxc.md` F1): the LVM thin pool carries
+  6.35 TiB of provisioned volumes against 1.82 TiB of real storage, with no
+  `thin_pool_autoextend_threshold` set. A full pool affects **every** thin
+  volume on it, including the Xen L1 VM's disks. So filling the artifact
+  store with memdumps can stop the analysis lab — which means the platform
+  and Dom0 share a storage failure domain that the trust boundaries below do
+  not describe. Isolation of *access* was designed; isolation of *capacity*
+  was not, and is unresolved.
 - **Revisit at M8, when the web tier becomes internet-facing.** Two surfaces
   argue for a VM eventually and neither is urgent now: the API computes
   SHA-256 and runs `libmagic` over attacker-controlled bytes, and an

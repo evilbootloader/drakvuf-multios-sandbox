@@ -109,6 +109,44 @@ def check_no_transaction_control(path: Path) -> str | None:
     return None
 
 
+def check_encoding(conn: psycopg.Connection) -> str | None:
+    """Refuse to run against a SQL_ASCII database.
+
+    SQL_ASCII is not an encoding, it is the absence of one: Postgres stores
+    and returns bytes with no validation or conversion. psycopg cannot decode
+    text columns and hands back `bytes` instead of `str`, which broke this
+    runner in the quietest way available -- applied() built a dict keyed by
+    b'0001_jobs.sql', `path.name` is str, the `in` test never matched, and
+    EVERY migration looked pending forever. Observed on the platform LXC
+    2026-08-22 and reproduced locally; the container had no UTF-8 locale, so
+    initdb defaulted to SQL_ASCII while the development container was UTF8.
+
+    Refusing rather than coping with bytes is deliberate. The API (#36) and
+    the web UI (#38) would each hit the same wall independently, and this
+    database stores attacker-controlled filenames that will contain UTF-8 --
+    text this project has to compare, index and render, not just echo.
+
+    Note the defensive decode: under SQL_ASCII even `SHOW server_encoding`
+    comes back as bytes, so a naive `== "SQL_ASCII"` silently passes.
+    """
+    value = conn.execute("SHOW server_encoding").fetchone()[0]
+    if isinstance(value, bytes):
+        value = value.decode("ascii", "replace")
+    if value.upper() != "SQL_ASCII":
+        return None
+    return (
+        "database encoding is SQL_ASCII; refusing to run.\n"
+        "       psycopg returns bytes rather than str for every text column,\n"
+        "       so migration bookkeeping silently never matches and each run\n"
+        "       re-applies everything.\n"
+        "       Recreate the database as UTF8 -- while it holds no analyses\n"
+        "       this costs nothing, and after it does it means a dump and\n"
+        "       restore:\n"
+        "         dropdb sandbox_platform\n"
+        "         createdb -O platform -E UTF8 -T template0 sandbox_platform"
+    )
+
+
 def applied(conn: psycopg.Connection) -> dict[str, str]:
     with conn.cursor() as cur:
         cur.execute("SELECT filename, sha256 FROM schema_migrations")
@@ -140,6 +178,10 @@ def main() -> int:
         return 1
 
     with psycopg.connect(dsn) as conn:
+        if problem := check_encoding(conn):
+            print(f"ERROR: {problem}", file=sys.stderr)
+            return 1
+
         conn.execute(BOOTSTRAP)
         conn.commit()
         seen = applied(conn)
