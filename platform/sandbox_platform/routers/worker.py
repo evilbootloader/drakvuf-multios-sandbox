@@ -340,6 +340,34 @@ def heartbeat(job: LeasedJob) -> HeartbeatResponse:
     )
 
 
+class ArtifactRequest(BaseModel):
+    # Relative names under results/<job_id>/. Traversal is refused rather than
+    # normalised: a worker asking for "../" is either broken or compromised,
+    # and quietly rewriting it would hide which.
+    names: list[str] = Field(min_length=1, max_length=64)
+
+
+@router.post("/jobs/{job_id}/artifacts")
+def artifact_urls(job: LeasedJob, req: ArtifactRequest) -> dict[str, str]:
+    """Presigned PUTs for this job's results, one per name.
+
+    One URL per key, never a prefix: a prefix-scoped write capability would
+    let a compromised worker rewrite the whole result set, including other
+    jobs' if the prefix were ever widened by accident.
+    """
+    urls: dict[str, str] = {}
+    for name in req.names:
+        if name.startswith("/") or ".." in name.split("/"):
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST,
+                f"artifact name escapes the job prefix: {name!r}",
+            )
+        urls[name] = objects.presigned_put(
+            f"{objects.result_prefix(job['id'])}{name}"
+        )
+    return urls
+
+
 @router.post("/jobs/{job_id}/complete", status_code=status.HTTP_204_NO_CONTENT)
 def complete(job: LeasedJob, req: CompleteRequest) -> None:
     """Terminal: record the manifest and mark the job completed.

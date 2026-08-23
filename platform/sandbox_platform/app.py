@@ -17,6 +17,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
+from . import events
 from .db import close_pool, connection, open_pool
 from .routers import jobs, worker
 
@@ -31,9 +32,14 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     a module-level one would make the app startable exactly once per process.
     """
     open_pool()
+    # The event listener holds its own connection, outside the pool: LISTEN
+    # occupies one for its whole lifetime, so borrowing a pool slot would
+    # never give it back. See events.py.
+    events.start()
     try:
         yield
     finally:
+        await events.stop()
         close_pool()
 
 

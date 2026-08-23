@@ -19,9 +19,11 @@ from uuid import UUID
 
 import magic
 from fastapi import APIRouter, HTTPException, Path, Query, status
+from fastapi.responses import StreamingResponse
 from psycopg.rows import dict_row
 from pydantic import BaseModel, Field
 
+from .. import events
 from .. import jobs as dal
 from .. import objects
 from ..config import settings
@@ -333,3 +335,21 @@ def cancel_job(job_id: Annotated[UUID, Path()]) -> CancelResponse:
     """
     with connection() as conn:
         return CancelResponse(outcome=dal.cancel(conn, job_id))
+
+@router.get("/{job_id}/events")
+async def job_events(job_id: Annotated[UUID, Path()]) -> StreamingResponse:
+    """Server-sent events for one job, backed by Postgres LISTEN/NOTIFY.
+
+    No Redis, and no polling loop on the server: migration 0002's trigger
+    emits on every state change and events.py fans it out from one connection
+    shared by the whole process.
+
+    `X-Accel-Buffering: no` because a buffering proxy turns a live stream into
+    a stream that arrives all at once when the job finishes -- which looks
+    exactly like the stream not working.
+    """
+    return StreamingResponse(
+        events.stream(job_id),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
