@@ -1,6 +1,6 @@
 # DRAFT-046: Transport security — Cloudflare Tunnel outward, an internal CA inward
 
-**Status:** Drafted, not published.
+**Status:** **[#39](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/39) — published 2026-08-23, OPEN.**
 **Area:** core/platform, security
 **OS:** ALL
 **Milestone:** M1 → gates M7/M8

@@ -31,7 +31,24 @@ os.environ.setdefault("WORKER_TOKEN", "test-worker-token")
 os.environ.setdefault("CLAIM_POLL_SECONDS", "0")
 os.environ.setdefault("CLAIM_POLL_INTERVAL", "0")
 
+# Two endpoints, deliberately DIFFERENT hosts, because that is the property
+# under test: SigV4 covers the Host header, so a URL signed for one is invalid
+# against the other. The public one is never contacted -- signing is local
+# arithmetic -- so it does not need to resolve.
+#
+# `127.0.0.1` and `localhost` are DIFFERENT hosts as far as SigV4 is
+# concerned -- the signature covers the Host header -- while both reach the
+# same local MinIO. So the two-endpoint split stays genuinely under test and
+# uploads still work, which an unresolvable public hostname would not allow.
+os.environ.setdefault("S3_INTERNAL_ENDPOINT", "http://127.0.0.1:9000")
+os.environ.setdefault("S3_PUBLIC_ENDPOINT", "http://localhost:9000")
+os.environ.setdefault("S3_ACCESS_KEY", "devroot")
+os.environ.setdefault("S3_SECRET_KEY", "devrootpass")
+os.environ.setdefault("S3_BUCKET", "analysis")
+os.environ.setdefault("S3_REGION", "eu-central-1")
+
 WORKER_TOKEN = os.environ["WORKER_TOKEN"]
+S3_BUCKET = os.environ["S3_BUCKET"]
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -73,8 +90,34 @@ def conn():
 # this suite tests the queue, and going through an admission path that does
 # not exist yet would test nothing but the fixture.
 
-def enqueue(conn, target_os: str, required_mib: int, filename: str | None = None):
-    """Put one job on the queue and return its id."""
+def _s3():
+    import boto3
+    from botocore.config import Config
+
+    return boto3.client(
+        "s3",
+        endpoint_url=os.environ["S3_INTERNAL_ENDPOINT"],
+        aws_access_key_id=os.environ["S3_ACCESS_KEY"],
+        aws_secret_access_key=os.environ["S3_SECRET_KEY"],
+        region_name=os.environ["S3_REGION"],
+        config=Config(signature_version="s3v4", s3={"addressing_style": "path"}),
+    )
+
+
+def enqueue(conn, target_os: str, required_mib: int, filename: str | None = None,
+            body: bytes | None = None):
+    """Put one job on the queue, with a real object behind it, and return its id.
+
+    The object and its ETag are not decoration. A worker claim verifies that
+    the sample has not been replaced since admission recorded its ETag, and a
+    job with no recorded ETag **fails closed** -- which is correct, because
+    admission always sets one, so a queued job without it should not exist.
+
+    Fabricating a row straight into `queued` with nothing in the bucket would
+    therefore test a state production never reaches, and every claim in this
+    suite would fail for the wrong reason.
+    """
+    name = filename or f"{target_os}-{required_mib}.bin"
     with conn.cursor() as cur:
         cur.execute(
             """
@@ -82,9 +125,21 @@ def enqueue(conn, target_os: str, required_mib: int, filename: str | None = None
             VALUES (%s, %s, %s, 'queued')
             RETURNING id
             """,
-            (target_os, filename or f"{target_os}-{required_mib}.bin", required_mib),
+            (target_os, name, required_mib),
         )
-        return cur.fetchone()[0]
+        job_id = cur.fetchone()[0]
+
+    put = _s3().put_object(
+        Bucket=S3_BUCKET,
+        Key=f"samples/{job_id}/{name}",
+        Body=body if body is not None else b"\x7fELF" + b"\x00" * 60,
+    )
+    with conn.cursor() as cur:
+        cur.execute(
+            "UPDATE jobs SET sample_etag = %s WHERE id = %s",
+            (put["ETag"].strip('"'), job_id),
+        )
+    return job_id
 
 
 def state_of(conn, job_id) -> str:
@@ -115,6 +170,32 @@ def client(conn):
 
     with TestClient(app) as c:
         yield c
+
+
+@pytest.fixture
+def put_object():
+    """Write bytes straight into the bucket, as a browser upload would.
+
+    Bypasses the presigned POST deliberately: what is under test in most of
+    these is admission, and going through the signed form as well would make
+    a failure ambiguous between the two.
+    """
+    import boto3
+    from botocore.config import Config
+
+    s3 = boto3.client(
+        "s3",
+        endpoint_url=os.environ["S3_INTERNAL_ENDPOINT"],
+        aws_access_key_id=os.environ["S3_ACCESS_KEY"],
+        aws_secret_access_key=os.environ["S3_SECRET_KEY"],
+        region_name=os.environ["S3_REGION"],
+        config=Config(signature_version="s3v4", s3={"addressing_style": "path"}),
+    )
+
+    def _put(key: str, body: bytes) -> None:
+        s3.put_object(Bucket=S3_BUCKET, Key=key, Body=body)
+
+    return _put
 
 
 @pytest.fixture

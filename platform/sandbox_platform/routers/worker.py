@@ -26,6 +26,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 
 from .. import jobs as dal
+from .. import objects
 from ..auth import LeasedJob, require_worker_token
 from ..config import settings
 from ..db import connection
@@ -101,6 +102,10 @@ class LeaseResponse(BaseModel):
     required_mib: int
     lease_expires_at: datetime
     attempt: int
+    # Presigned GET for the sample, signed for the LAN endpoint (#39). Dom0
+    # holds no object-store credential; this is the whole of its access, and
+    # it is scoped to one key with a short expiry.
+    sample_url: str
 
 
 class ReservedResponse(BaseModel):
@@ -225,6 +230,32 @@ def claim(req: ClaimRequest):
             )
 
         if isinstance(last, dal.Lease):
+            key = objects.sample_key(last.job_id, last.submitted_filename)
+
+            # The sample must be the one admission looked at.
+            #
+            # The browser's presigned POST outlives admission, so an object
+            # can be replaced after it was hashed and queued. Running the
+            # replacement would mean the trace, the verdict and the recorded
+            # SHA-256 all describe a file that was never executed -- so a
+            # mismatch fails the job loudly instead.
+            with connection() as conn, conn.cursor() as cur:
+                cur.execute(
+                    "SELECT sample_etag FROM jobs WHERE id = %s", (last.job_id,)
+                )
+                expected = cur.fetchone()[0]
+
+            if not objects.etag_unchanged(key, expected):
+                with connection() as conn:
+                    conn.execute(
+                        "UPDATE jobs SET state = %s, failure_stage = %s,"
+                        "       failure_reason = %s, lease_owner = NULL,"
+                        "       lease_expires_at = NULL WHERE id = %s",
+                        (JobState.FAILED.value, JobState.QUEUED.value,
+                         "sample_changed_after_admission", last.job_id),
+                    )
+                continue   # take the next job rather than hand back nothing
+
             return LeaseResponse(
                 job_id=last.job_id,
                 target_os=TargetOs(last.target_os),
@@ -233,6 +264,8 @@ def claim(req: ClaimRequest):
                 required_mib=last.required_mib,
                 lease_expires_at=last.lease_expires_at,
                 attempt=last.attempt,
+                sample_url=objects.presigned_get(key, objects.Audience.WORKER,
+                                                 ttl=settings.lease_seconds),
             )
 
         if time.monotonic() >= deadline:

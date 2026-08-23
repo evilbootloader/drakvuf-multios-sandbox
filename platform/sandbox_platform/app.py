@@ -18,7 +18,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from .db import close_pool, connection, open_pool
-from .routers import worker
+from .routers import jobs, worker
 
 
 @asynccontextmanager
@@ -44,6 +44,7 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+app.include_router(jobs.router)
 app.include_router(worker.router)
 
 
