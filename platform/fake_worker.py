@@ -14,6 +14,13 @@ Anything here that started modelling Xen would be a second implementation of
 the thing it is meant to check.
 
     python fake_worker.py --api http://127.0.0.1:8000 --token dev --once
+
+Against a deployed API, which requires a client certificate at the TLS layer
+(`--ssl-cert-reqs 2`), it needs an identity of its own -- not Dom0's:
+
+    python fake_worker.py --api https://192.168.1.10:8443 \
+        --cacert ca.crt --cert fake-worker.crt --key fake-worker.key \
+        --token "$WORKER_TOKEN" --once
 """
 
 from __future__ import annotations
@@ -33,7 +40,9 @@ ARTIFACTS = {
 
 
 class FakeWorker:
-    def __init__(self, api: str, token: str, worker_id: str, free_mib: int):
+    def __init__(self, api: str, token: str, worker_id: str, free_mib: int,
+                 verify: str | bool = True,
+                 cert: tuple[str, str] | None = None):
         self.api = api.rstrip("/")
         self.worker_id = worker_id
         self.free_mib = free_mib
@@ -42,7 +51,16 @@ class FakeWorker:
             headers={"Authorization": f"Bearer {token}",
                      "X-Worker-Id": worker_id},
             timeout=60.0,
+            verify=verify,
+            cert=cert,
         )
+        # The object store gets a SEPARATE client, carrying neither the bearer
+        # token nor the client certificate. A presigned URL is already
+        # authorised by the signature in its query string, so sending either
+        # one spends a credential on a request that does not need it -- and
+        # the worker token in particular has no business reaching MinIO.
+        # It still verifies, because the internal store is signed by our CA.
+        self.s3 = httpx.Client(timeout=60.0, verify=verify)
 
     def _post(self, path: str, **kw) -> httpx.Response:
         r = self.http.post(path, **kw)
@@ -91,7 +109,7 @@ class FakeWorker:
         # Fetch the sample the way sandboxd will: a presigned GET, no
         # credential of any kind. Discarded immediately -- this worker has no
         # business keeping malware on disk any more than the platform does.
-        sample = httpx.get(lease["sample_url"], timeout=60.0)
+        sample = self.s3.get(lease["sample_url"])
         sample.raise_for_status()
         print(f"  fetched {len(sample.content)} bytes")
 
@@ -108,7 +126,7 @@ class FakeWorker:
         urls = self._post(f"/api/v1/worker/jobs/{job_id}/artifacts",
                           json={"names": list(ARTIFACTS)}).json()
         for name, url in urls.items():
-            httpx.put(url, content=ARTIFACTS[name], timeout=60.0).raise_for_status()
+            self.s3.put(url, content=ARTIFACTS[name]).raise_for_status()
         print(f"  uploaded {len(urls)} artifacts")
 
         # Terminal, and the reason publication is atomic: the artifacts are
@@ -141,9 +159,22 @@ def main() -> int:
     ap.add_argument("--free-mib", type=int, default=12082)
     ap.add_argument("--once", action="store_true",
                     help="take one job and exit, instead of looping")
+    ap.add_argument("--cacert",
+                    help="CA bundle that signed the API and MinIO certificates")
+    ap.add_argument("--cert",
+                    help="client certificate presented to the API; the "
+                         "deployed listener requires one")
+    ap.add_argument("--key", help="private key for --cert")
     args = ap.parse_args()
 
-    w = FakeWorker(args.api, args.token, args.worker_id, args.free_mib)
+    if bool(args.cert) != bool(args.key):
+        ap.error("--cert and --key go together")
+
+    w = FakeWorker(
+        args.api, args.token, args.worker_id, args.free_mib,
+        verify=args.cacert or True,
+        cert=(args.cert, args.key) if args.cert else None,
+    )
     w.register({"ubuntu": 2198, "android": 2198, "windows": 6294})
     w.reconcile()
     print(f"registered as {args.worker_id}, offering {args.free_mib} MiB")
