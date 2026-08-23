@@ -26,30 +26,12 @@ Against a deployed API, which requires a client certificate at the TLS layer
 from __future__ import annotations
 
 import argparse
-import ssl
 import sys
 import time
 
 import httpx
 
-
-def _ssl_context(cacert: str | None,
-                 client_cert: tuple[str, str] | None = None) -> ssl.SSLContext:
-    """Trust anchor, and optionally an identity to present.
-
-    Built here rather than handed to httpx as `verify=<path>` plus
-    `cert=<pair>`, because httpx 0.28's `create_ssl_context` returns early on a
-    string `verify` and never reaches its `cert` branch -- the client
-    certificate is dropped without an error and the connection goes out
-    anonymous. Under TLS 1.3 the server completes the handshake before it
-    validates the client certificate, so the symptom is an unexplained EOF
-    reading the first response, with nothing at all in the server's log.
-    """
-    ctx = (ssl.create_default_context(cafile=cacert) if cacert
-           else ssl.create_default_context())
-    if client_cert:
-        ctx.load_cert_chain(*client_cert)
-    return ctx
+from client_tls import ssl_context
 
 STAGES = ["preparing", "executing", "collecting", "cleaning"]
 ARTIFACTS = {
@@ -71,7 +53,7 @@ class FakeWorker:
             headers={"Authorization": f"Bearer {token}",
                      "X-Worker-Id": worker_id},
             timeout=60.0,
-            verify=_ssl_context(cacert, client_cert),
+            verify=ssl_context(cacert, client_cert),
         )
         # The object store gets a SEPARATE client, carrying neither the bearer
         # token nor the client certificate. A presigned URL is already
@@ -79,7 +61,7 @@ class FakeWorker:
         # one spends a credential on a request that does not need it -- and
         # the worker token in particular has no business reaching MinIO.
         # It still verifies, because the internal store is signed by our CA.
-        self.s3 = httpx.Client(timeout=60.0, verify=_ssl_context(cacert))
+        self.s3 = httpx.Client(timeout=60.0, verify=ssl_context(cacert))
 
     def _post(self, path: str, **kw) -> httpx.Response:
         r = self.http.post(path, **kw)
