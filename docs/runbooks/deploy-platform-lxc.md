@@ -13,10 +13,14 @@
 > started, because the `sed` that derived its unit produced an unparseable
 > one. It is rewritten below and has not been re-run.
 >
-> **Still open after this runbook:** no browser has submitted a job, so
-> the `jobs` router, the presigned upload and the SSE stream are all
-> unexercised; and the two decisions in "What is deliberately not in this
-> runbook".
+> **Step 23 closes the submission path** — create, upload, admit, claim,
+> complete, with the declared-size policy demonstrated as enforced rather
+> than recorded.
+>
+> **Still open after this runbook:** the SSE stream is not yet exercised;
+> nothing has been submitted through the tunnel from a browser; abandoned
+> jobs in state `created` are never cleaned up (see step 23); and the
+> decisions in "What is deliberately not in this runbook".
 >
 > Container **102** runs Postgres 17 on a **UTF-8** cluster with the #35
 > schema applied, reachable only over the Unix socket, holding no password,
@@ -1276,7 +1280,12 @@ systemd-analyze verify /etc/systemd/system/sandbox-api-browser.service
 systemctl daemon-reload
 systemctl enable --now sandbox-api-browser
 systemctl is-active sandbox-api-browser
+sleep 2
 ss -lntp | grep -E "8000|8443"'
+
+active
+LISTEN 0      2048    192.168.1.10:8443       0.0.0.0:*    users:(("python",pid=4674,fd=9))                      
+LISTEN 0      2048    192.168.1.10:8000       0.0.0.0:*    users:(("python",pid=6269,fd=9))    
 ```
 
 `systemd-analyze verify` is what would have caught the `sed` breakage before
@@ -1519,12 +1528,106 @@ Expect `registered as fake-worker, offering 12082 MiB`, then `nothing to do`.
 That alone exercises mTLS, the bearer token, registration, reconcile and the
 claim path.
 
-Then submit a benign file through `sandbox.evilbootloader.com`, run it again,
-and expect the job to reach `completed` with three artifacts.
-
 **If a job is rejected `no_workers`, that is correct**, not a fault —
 admission refuses before any worker has registered, and on a fresh platform
 that is the honest answer. Register first, then submit.
+
+## Step 23 — a submission, end to end
+
+Step 22 proves the worker channel. This proves everything the worker channel
+does not touch: the jobs router, the presigned upload, admission, and artifact
+publication.
+
+`submit.py` is the browser's half of the protocol as `fake_worker.py` is
+Dom0's. Together they close the loop with neither a UI (#38) nor a Xen host.
+
+**Test against the LAN before the tunnel.** The presigned POST is signed for
+`S3_PUBLIC_ENDPOINT`, so going through Cloudflare mixes the platform and the
+tunnel into one result. Set it to `https://192.168.1.10:9000` temporarily,
+restart both listeners, and put it back afterwards.
+
+```bash
+root@pve1:~# pct exec 102 -- su - platform -s /bin/bash -c '
+  cd /opt/platform/src/platform
+  echo "harmless test file" > /tmp/hello.txt
+  .venv/bin/python submit.py \
+      --api https://192.168.1.10:8443 \
+      --cacert /etc/sandbox-platform/tls/ca.crt \
+      --cert   /etc/sandbox-platform/tls/fake-worker.crt \
+      --key    /etc/sandbox-platform/tls/fake-worker.key \
+      --target-os ubuntu --file /tmp/hello.txt
+'
+created 62f31c64-70a2-4979-a875-a21bd28aad71 for hello.txt (19 bytes)
+uploaded to https://192.168.1.10:9000/analysis
+admitted: state=queued sha256=af9c4ea0d7be30203e00346c79d1bdf645568614ab6ced2610fa3dbef406e890 type='ASCII text'
+
+root@pve1:~# pct exec 102 -- su - platform -s /bin/bash -c '
+  cd /opt/platform/src/platform
+  set -a; . /etc/sandbox-platform/api.env; set +a
+  .venv/bin/python fake_worker.py \
+      --api https://192.168.1.10:8443 \
+      --cacert /etc/sandbox-platform/tls/ca.crt \
+      --cert   /etc/sandbox-platform/tls/fake-worker.crt \
+      --key    /etc/sandbox-platform/tls/fake-worker.key \
+      --token "$WORKER_TOKEN" --once
+'
+registered as fake-worker, offering 12082 MiB
+leased 62f31c64-70a2-4979-a875-a21bd28aad71 (ubuntu) 'hello.txt' attempt 1
+  fetched 19 bytes
+  -> preparing
+  -> executing
+  -> collecting
+  -> cleaning
+  uploaded 3 artifacts
+  -> completed
+```
+
+> **PASS 2026-08-23.** Admission computed the digest and the type from the
+> stored object rather than from anything the client declared, the worker
+> fetched the sample with a presigned GET and no credential, and publication
+> was atomic — the artifacts were in the store before the row said so.
+
+### The declared size is enforced, not recorded
+
+The check worth keeping, because it is the one an attacker would try. A client
+declaring a small size and uploading a large file is refused **by the object
+store**, not by the API:
+
+```bash
+root@pve1:~# … submit.py --target-os ubuntu --declare-size 10 --file /tmp/hello.txt
+created b7a83f7b-dfc6-4f60-8848-43931a782210 for hello.txt (19 bytes)
+upload rejected: 400
+<Error><Code>EntityTooLarge</Code><Message>Your proposed upload exceeds the
+maximum allowed object size.</Message>…
+```
+
+`create_job` signs the policy with `min(declared, MAX_SAMPLE_BYTES)`, so
+`content-length-range` is built from the declaration. **Under-declaring
+shrinks the submitter's own allowance; it cannot raise it**, and the refusal
+happens at MinIO before a byte is stored. Editing the size in a proxy after
+signing invalidates the signature instead.
+
+> **FINDING — abandoned jobs are never cleaned up.** `b7a83f7b…` above is
+> still in state `created` and always will be. `reap()` covers **lapsed
+> leases** only; nothing touches the state between `POST /api/v1/jobs` and
+> `/uploaded`. Every rejected or abandoned upload leaves a row.
+>
+> That matters because the browser routes have **no authentication and no
+> rate limit** — anyone who can reach the API can grow that table at no cost.
+> Not urgent while Access fronts the only public path, and not this runbook's
+> to fix: tracked on
+> [#47](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/47).
+
+### Still to run
+
+- **The SSE stream.** `--watch` was not exercised above. It blocks on the
+  event stream, so start it *before* the worker, in a second terminal:
+  `submit.py … --watch --wait 120`, then `fake_worker.py … --once`. Expect one
+  `->` line per state, ending at `completed`.
+- **The tunnel half.** Restore `S3_PUBLIC_ENDPOINT` to
+  `https://objects.evilbootloader.com`, restart, and submit from a browser.
+  Read the Access note in step 17 first — Access on the object-store hostname
+  breaks the cross-origin upload.
 
 Then snapshot:
 
