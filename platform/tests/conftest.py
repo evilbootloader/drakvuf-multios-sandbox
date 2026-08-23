@@ -20,6 +20,19 @@ import pytest
 PLATFORM_DIR = Path(__file__).resolve().parent.parent
 DSN = os.environ.get("TEST_DATABASE_URL", "postgresql:///sandbox_platform_test")
 
+# Set BEFORE any sandbox_platform module is imported: config.Settings reads the
+# environment once, at import, and conftest is imported before test modules.
+#
+# claim_poll_seconds = 0 turns the long poll into a single attempt. In
+# production it is 20s so a worker does not busy-loop; in tests it would just
+# be 20 seconds of sleeping per idle claim.
+os.environ.setdefault("DATABASE_URL", DSN)
+os.environ.setdefault("WORKER_TOKEN", "test-worker-token")
+os.environ.setdefault("CLAIM_POLL_SECONDS", "0")
+os.environ.setdefault("CLAIM_POLL_INTERVAL", "0")
+
+WORKER_TOKEN = os.environ["WORKER_TOKEN"]
+
 
 @pytest.fixture(scope="session", autouse=True)
 def migrated() -> None:
@@ -84,3 +97,31 @@ def count_in_state(conn, state: str) -> int:
     with conn.cursor() as cur:
         cur.execute("SELECT count(*) FROM jobs WHERE state = %s", (state,))
         return cur.fetchone()[0]
+
+
+# --- API fixtures ---------------------------------------------------------
+
+@pytest.fixture
+def client(conn):
+    """A test client against a clean database.
+
+    Depends on `conn` so the TRUNCATE runs first: the API opens its own pooled
+    connections, and a test that truncated afterwards would be deleting rows
+    the request under test had just written.
+    """
+    from fastapi.testclient import TestClient
+
+    from sandbox_platform.app import app
+
+    with TestClient(app) as c:
+        yield c
+
+
+@pytest.fixture
+def worker_headers():
+    """Credentials for the worker channel: the token, plus the worker id that
+    job-scoped routes check the lease against."""
+    return {
+        "Authorization": f"Bearer {WORKER_TOKEN}",
+        "X-Worker-Id": "test-worker",
+    }
