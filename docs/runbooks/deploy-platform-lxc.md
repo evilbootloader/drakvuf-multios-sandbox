@@ -1,8 +1,13 @@
 # Runbook — provision the platform LXC on Proxmox (L0)
 
-> **Status: EXECUTED on L0.** Steps 1–6 on 2026-08-22; steps 7–14 on
-> 2026-08-23, after a rollback to `base-install`. Append-only evidence from
-> here on: annotate, never rewrite.
+> **Status: PARTIALLY EXECUTED.** Steps 1–6 ran on 2026-08-22 and steps
+> 7–14 on 2026-08-23, after a rollback to `base-install`; both carry real
+> output below and are append-only evidence from here on — annotate, never
+> rewrite. **Steps 15–21 (the API, issue #36) are part-run as of 2026-08-23:**
+> the bucket, the CA, the environment file, the mTLS service and its negative
+> checks have all passed on the container, and `cloudflared` is up. Steps
+> 19a/20a/20b/21b were added after the fact — see "Order, and why it is this
+> way" — and **step 22 has not run.**
 >
 > Container **102** runs Postgres 17 on a **UTF-8** cluster with the #35
 > schema applied, reachable only over the Unix socket, holding no password,
@@ -664,7 +669,682 @@ thaw guest filesystem
 ```
 
 The thin-pool warnings are **not** noise — see F1.
+
 ---
+
+
+---
+
+# Deploying the API — issue [#36](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/36)
+
+Steps 15–22.
+
+> **Read this before starting: the browser routes have no authentication.**
+> Anything that can reach the API can read, cancel and stream every job,
+> including presigned URLs for every artifact. `owner` and `visibility` exist
+> as columns and nothing populates them.
+>
+> That is a deployment constraint, not a bug to work around:
+> **Cloudflare Access must admit only people who may see everything.**
+> [#47](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/47)
+> closes it.
+
+## Order, and why it is this way
+
+Three things must exist before the API can be configured at all, and two are
+produced somewhere other than this container.
+
+| # | What | Produced | Needed by |
+|---|---|---|---|
+| 15 | MinIO bucket + service account | **on the container** (#37) | Step 18 — there is no `S3_ACCESS_KEY` until this exists |
+| 16 | Internal CA + certificates | **on your workstation** (#39) | Step 19 — and the CA key must never come here |
+| 17 | Tunnel hostnames | **Cloudflare dashboard** (#39) | Step 18 — `S3_PUBLIC_ENDPOINT` must be the real name |
+
+**The tunnel does not have to be running yet**, only decided. The API *signs*
+URLs for the public hostname and never connects to it — signing is local
+arithmetic — so `cloudflared` starts at step 20, once there is an origin for
+it to reach.
+
+Then, in order:
+
+| # | What | Why here |
+|---|---|---|
+| 18 | The environment file | Needs the keys from 15 and the hostname from 17 |
+| 19 | TLS material onto the container | The API cannot start without its own certificate |
+| **19a** | **MinIO on TLS, on the LAN address** | Step 20's tunnel config and step 22's presigned URLs both assume it |
+| 20 | The API service (mTLS, `8443`) | Dom0's listener |
+| **20a** | **Install `cloudflared`, create the tunnel** | The config file in step 20 is inert without a binary and a unit |
+| **20b** | **The browser listener (`8000`)** | `cloudflared` cannot present a client certificate to an mTLS origin |
+| 21 | Verify, negatives first | |
+| **21b** | **Pre-flight for step 22** | Four things that fail at request time, not at startup |
+| 22 | A real job, end to end | |
+
+**Steps 19a, 20a, 20b and 21b were missing** and were added 2026-08-23, after
+step 20 was reached and `systemctl enable --now cloudflared` failed with no
+such unit. They are lettered rather than renumbered so that the executed
+evidence below, which cites step numbers, stays readable.
+
+## Step 15 — the bucket and the API's service account
+
+Full policy, CORS and TTL decisions belong to
+[#37](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/37).
+This is the minimum that unblocks the API.
+
+```bash
+root@pve1:~# pct exec 102 -- bash -lc '
+  curl -fsSLo /usr/local/bin/mc https://dl.min.io/client/mc/release/linux-amd64/mc
+  chmod +x /usr/local/bin/mc
+  set -a; . /etc/minio/minio.env; set +a
+  mc alias set local http://127.0.0.1:9000 "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD"
+  mc mb --ignore-existing local/analysis
+  mc ls local
+'
+Added `local` successfully.
+Bucket created successfully `local/analysis`.
+[2026-08-23 10:09:24 UTC]     0B analysis/
+
+```
+
+**`MINIO_SITE_REGION` must be `eu-central-1`** and must match `S3_REGION` in
+step 18. The region is part of the SigV4 signing scope, so a mismatch fails
+every presigned URL with a 403 that talks about the signature and never
+mentions regions.
+
+The policy, derived from what the code actually does rather than from what it
+might need:
+
+```bash
+pct exec 102 -- bash -lc 'cat > /tmp/api-policy.json <<EOF
+{
+  "Version": "2012-10-17",
+  "Statement": [{
+    "Effect": "Allow",
+    "Action": ["s3:GetObject", "s3:PutObject"],
+    "Resource": ["arn:aws:s3:::analysis/*"]
+  }]
+}
+EOF
+mc admin user svcacct add --policy /tmp/api-policy.json local "$MINIO_ROOT_USER"
+rm /tmp/api-policy.json'
+```
+
+Record the access key and secret it prints — they go into step 18 and are not
+recoverable afterwards.
+
+**Why exactly those two actions.** The API itself makes only `head_object` and
+`get_object` calls, during admission; it never uploads. But it *signs*
+presigned PUTs for the browser and the worker, **and a presigned URL carries
+the signer's permissions** — so without `PutObject` here every upload fails at
+use time rather than at signing time, which is a confusing place to find out.
+
+Deliberately absent: **no `ListBucket`**, so a compromised API cannot
+enumerate a store holding live malware, and **no `DeleteObject`**, because
+nothing in the current design deletes an artifact and the capability should
+not exist until retention is designed and grants it.
+
+**Root credentials stop here.** They created the bucket and the service
+account; they must not appear in any application config.
+
+## Step 16 — the CA, on your workstation
+
+> **THIS STEP DOES NOT RUN ON L0 OR ON THE CONTAINER**, unlike everything else
+> in this runbook. The CA root key is the highest-value key in the system
+> precisely because it can mint identities — including a Dom0 client
+> certificate — so it lives on a machine that is not part of the platform.
+> `issue-cert.sh init` refuses to run somewhere that looks like the container,
+> but the rule is yours to keep.
+
+```bash
+# on your workstation, in a checkout of this repository
+./tls/issue-cert.sh init
+
+./tls/issue-cert.sh server api   192.168.1.10 platform.lan
+./tls/issue-cert.sh server minio 192.168.1.10 platform.lan
+./tls/issue-cert.sh client dom0-lab
+./tls/issue-cert.sh client fake-worker
+
+./tls/issue-cert.sh verify api
+```
+
+**`fake-worker` is a separate identity from `dom0-lab` on purpose.** Step 22
+runs the fake worker on the container, and `dom0-lab` is the one pair that
+must never leave Dom0 (see step 19). Two identities also mean the `workers`
+table records which of them did what, and the test one can be revoked without
+touching the real worker.
+
+Record the expiry dates somewhere they will be read. With manual issuance and
+no monitoring, the failure mode is the platform stopping on a date nobody
+wrote down.
+
+Back up `tls/ca/ca.key` somewhere that is **not** the platform and not Dom0.
+Losing it means reissuing every certificate and reinstalling the trust anchor.
+
+## Step 17 — tunnel hostnames
+
+Create the tunnel and route two hostnames to it. `cloudflared` is configured
+in step 20; this step only fixes the names, because they go into the API's
+configuration and the browser's upload URLs are signed against them.
+
+- `sandbox.evilbootloader.com` → the API
+- `objects.evilbootloader.com` → MinIO
+
+These names are not cosmetic. `S3_PUBLIC_ENDPOINT` in step 18 must be the
+second one **exactly**, because SigV4 signs the Host header — a URL signed for
+one name and presented at another fails with a 403 about the signature.
+
+**Put Cloudflare Access on both before the first submission.** Without it they
+are public, and the second fronts a store holding live malware.
+
+## Step 18 — the environment file
+
+```bash
+pct exec 102 -- bash -lc 'install -d -m 700 -o platform -g platform /etc/sandbox-platform'
+pct exec 102 -- bash -lc 'cat > /etc/sandbox-platform/api.env <<EOF
+DATABASE_URL=postgresql:///sandbox_platform
+
+# TWO endpoints, and they are not interchangeable. SigV4 signs the Host
+# header, so a URL signed for one host is rejected at the other. Dom0 reaches
+# MinIO over the LAN; browsers reach it through the tunnel.
+S3_INTERNAL_ENDPOINT=https://192.168.1.10:9000
+S3_PUBLIC_ENDPOINT=https://objects.evilbootloader.com
+S3_BUCKET=analysis
+S3_REGION=eu-central-1
+S3_ACCESS_KEY=<from step 15>
+S3_SECRET_KEY=<from step 15>
+S3_CA_BUNDLE=/etc/sandbox-platform/tls/ca.crt
+
+# The only credential Dom0 ever holds. Generate it: openssl rand -hex 32
+WORKER_TOKEN=<generated>
+EOF
+chmod 600 /etc/sandbox-platform/api.env
+chown platform:platform /etc/sandbox-platform/api.env'
+```
+
+`0600` and owned by `platform`, because this file holds every credential on
+the platform in one place. That concentration is deliberate — it is what buys
+the narrow blast radius on Dom0 — and it is what makes this file the thing to
+protect.
+
+## Step 19 — TLS material onto the container
+
+Copy in the certificates from step 16. **Note which files travel and which do
+not.**
+
+```bash
+pct push 102 tls/ca/ca.crt   /etc/sandbox-platform/tls/ca.crt
+pct push 102 tls/ca/api.crt  /etc/sandbox-platform/tls/api.crt
+pct push 102 tls/ca/api.key  /etc/sandbox-platform/tls/api.key
+pct exec 102 -- bash -lc '
+  chown -R platform:platform /etc/sandbox-platform/tls
+  chmod 600 /etc/sandbox-platform/tls/api.key
+'
+```
+
+`dom0-lab.crt`/`dom0-lab.key` go to Dom0 and nowhere else.
+`fake-worker.crt`/`fake-worker.key` go to the container, for step 22:
+
+```bash
+pct push 102 tls/ca/fake-worker.crt /etc/sandbox-platform/tls/fake-worker.crt
+pct push 102 tls/ca/fake-worker.key /etc/sandbox-platform/tls/fake-worker.key
+pct exec 102 -- bash -lc '
+  chown platform:platform /etc/sandbox-platform/tls/fake-worker.*
+  chmod 600 /etc/sandbox-platform/tls/fake-worker.key
+'
+```
+
+`minio.crt`/`minio.key` are step 19a.
+
+Then assert the property the whole design rests on:
+
+```bash
+pct exec 102 -- bash -lc 'find / -name "ca.key" 2>/dev/null | grep . && echo FAIL || echo "no CA key on the platform -- correct"'
+```
+
+## Step 19a — MinIO on TLS, on the LAN address
+
+**This step was missing, and steps 20 and 22 both assume it has run.** Step 4
+brings MinIO up on plain HTTP bound to loopback, which is right for step 15's
+bucket creation and wrong for everything after it:
+
+- **Dom0 cannot reach loopback.** `S3_INTERNAL_ENDPOINT` is *Dom0's* endpoint —
+  the presigned sample URL is signed against it and then fetched from Dom0. A
+  URL naming `127.0.0.1` tells Dom0 to fetch from itself.
+- **Step 20 points `cloudflared` at `https://127.0.0.1:9000`**, which fails
+  against an HTTP listener.
+
+MinIO looks for `public.crt` and `private.key` by those exact names — it does
+not take a path to an arbitrary pair:
+
+```bash
+pct exec 102 -- bash -lc 'install -d -m 700 -o minio-user -g minio-user /etc/minio/certs'
+pct push 102 tls/ca/minio.crt /etc/minio/certs/public.crt
+pct push 102 tls/ca/minio.key /etc/minio/certs/private.key
+pct exec 102 -- bash -lc '
+  chown minio-user:minio-user /etc/minio/certs/public.crt /etc/minio/certs/private.key
+  chmod 600 /etc/minio/certs/private.key
+'
+```
+
+Then bind it to the LAN address and pin the region, in `/etc/minio/minio.env`:
+
+```bash
+MINIO_VOLUMES="/srv/minio/data"
+MINIO_OPTS="--address 192.168.1.10:9000 --console-address 127.0.0.1:9001 --certs-dir /etc/minio/certs"
+MINIO_SITE_REGION=eu-central-1
+```
+
+**The console stays on loopback.** It is an administrative interface to a store
+holding live malware and has no reason to be reachable from the LAN; reach it
+over an SSH tunnel when you need it.
+
+`MINIO_SITE_REGION` must equal `S3_REGION` in step 18. The region is part of
+the SigV4 signing scope, so a mismatch fails every presigned URL with a 403
+that talks about the signature and never mentions regions.
+
+```bash
+pct exec 102 -- systemctl restart minio
+pct exec 102 -- ss -lntp | grep 9000
+# expect: 192.168.1.10:9000 -- NOT 127.0.0.1:9000
+```
+
+Re-point `mc` at the new address, since step 15's alias still says `http://`:
+
+```bash
+pct exec 102 -- bash -lc '
+  set -a; . /etc/minio/minio.env; set +a
+  mc alias set local https://192.168.1.10:9000 "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD" \
+     --api S3v4
+  mc ls local
+'
+```
+
+If `mc` rejects the certificate, it does not trust the internal CA yet:
+`mc --insecure` proves that is the only problem, then install `ca.crt` into
+`~/.mc/certs/CAs/` rather than leaving `--insecure` in a command someone will
+copy.
+
+## Step 20 — the API service (mTLS, for Dom0)
+
+```bash
+pct exec 102 -- bash -lc 'cat > /etc/systemd/system/sandbox-api.service <<EOF
+[Unit]
+Description=DRAKVUF sandbox platform API
+After=network.target postgresql.service
+Wants=postgresql.service
+
+[Service]
+User=platform
+Group=platform
+WorkingDirectory=/opt/platform/src/platform
+EnvironmentFile=/etc/sandbox-platform/api.env
+ExecStart=/opt/platform/src/platform/.venv/bin/python -m uvicorn \\
+    sandbox_platform.app:app \\
+    --host 192.168.1.10 --port 8443 \\
+    --ssl-certfile /etc/sandbox-platform/tls/api.crt \\
+    --ssl-keyfile  /etc/sandbox-platform/tls/api.key \\
+    --ssl-ca-certs /etc/sandbox-platform/tls/ca.crt \\
+    --ssl-cert-reqs 2
+Restart=on-failure
+RestartSec=5
+
+# The service reads a sample only as a stream and writes none.
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target
+EOF
+systemctl daemon-reload
+systemctl enable --now sandbox-api
+systemctl status sandbox-api --no-pager | head -5'
+```
+
+`--ssl-cert-reqs 2` is `CERT_REQUIRED`: **a connection without a client
+certificate signed by our CA is refused at the TLS layer**, before any handler
+runs. That is what makes mTLS real rather than nominal, and it is why step 21
+looks for a refused handshake rather than a 401.
+
+## Step 20a — install cloudflared and create the tunnel
+
+**This step was missing too.** The config file below is useless without a
+binary, a tunnel, its credentials, and a systemd unit — and `systemctl enable
+--now cloudflared` fails with no such unit until one exists.
+
+```bash
+pct exec 102 -- bash -lc '
+  curl -fsSL https://pkg.cloudflare.com/cloudflare-main.gpg \
+    -o /usr/share/keyrings/cloudflare-main.gpg
+  echo "deb [signed-by=/usr/share/keyrings/cloudflare-main.gpg] https://pkg.cloudflare.com/cloudflared any main" \
+    > /etc/apt/sources.list.d/cloudflared.list
+  apt-get update && apt-get install -y cloudflared
+'
+```
+
+Authenticate and create the tunnel. `tunnel login` prints a URL to open in a
+browser; it writes `~/.cloudflared/cert.pem`, which authorises *creating*
+tunnels and is not what the tunnel runs on:
+
+```bash
+pct exec 102 -- cloudflared tunnel login
+pct exec 102 -- cloudflared tunnel create sandbox-platform
+pct exec 102 -- cloudflared tunnel route dns sandbox-platform sandbox.evilbootloader.com
+pct exec 102 -- cloudflared tunnel route dns sandbox-platform objects.evilbootloader.com
+```
+
+`tunnel create` prints the UUID and writes `~/.cloudflared/<UUID>.json`. Move
+it where the config below expects it:
+
+```bash
+pct exec 102 -- bash -lc '
+  install -d -m 750 /etc/cloudflared
+  mv ~/.cloudflared/<UUID>.json /etc/cloudflared/
+  chmod 600 /etc/cloudflared/<UUID>.json
+'
+```
+
+The service unit. `cloudflared service install` will write one for you, as
+root; this is the same thing running as a dedicated account, because the
+process binds no privileged port and makes only outbound connections:
+
+```bash
+pct exec 102 -- bash -lc '
+  useradd --system --no-create-home --shell /usr/sbin/nologin cloudflared || true
+  cp /etc/sandbox-platform/tls/ca.crt /etc/cloudflared/ca.crt
+  chown -R cloudflared:cloudflared /etc/cloudflared
+
+cat > /etc/systemd/system/cloudflared.service <<EOF
+[Unit]
+Description=Cloudflare Tunnel (browser-facing ingress)
+After=network-online.target sandbox-api.service
+Wants=network-online.target
+
+[Service]
+Type=notify
+User=cloudflared
+Group=cloudflared
+ExecStart=/usr/bin/cloudflared --no-autoupdate --config /etc/cloudflared/config.yml tunnel run
+Restart=on-failure
+RestartSec=5
+TimeoutStartSec=0
+
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
+EOF
+systemctl daemon-reload'
+```
+
+Two details that are not decoration:
+
+- **`--no-autoupdate`.** The default is a self-updating binary that restarts
+  itself. Under `ProtectSystem=strict` it cannot write anyway, but the real
+  objection is an unannounced binary change on the host fronting a malware
+  store.
+- **`ca.crt` is copied into `/etc/cloudflared/`** rather than referenced at
+  `/etc/sandbox-platform/tls/ca.crt`. That directory is `0700 platform:platform`
+  from step 18, so a non-root `cloudflared` cannot read it. The CA certificate
+  is public material, so copying costs nothing and avoids loosening a
+  directory that holds every credential on the platform.
+
+Now the tunnel config, which reaches both origins over **loopback** so the
+browser path never depends on the LAN certificate matching a public name:
+
+```bash
+pct exec 102 -- bash -lc 'cat > /etc/cloudflared/config.yml <<EOF
+tunnel: 9d7675c5-fd3d-492a-8e7d-625981d8150d
+credentials-file: /etc/cloudflared/9d7675c5-fd3d-492a-8e7d-625981d8150d.json
+ingress:
+  - hostname: sandbox.evilbootloader.com
+    service: https://192.168.1.10:8000
+    originRequest:
+      caPool: /etc/cloudflared/ca.crt
+  - hostname: objects.evilbootloader.com
+    service: https://192.168.1.10:9000
+    originRequest:
+      caPool: /etc/cloudflared/ca.crt
+  - service: http_status:404
+EOF
+chown cloudflared:cloudflared /etc/cloudflared/config.yml
+cloudflared --config /etc/cloudflared/config.yml tunnel ingress validate
+systemctl enable --now cloudflared
+systemctl status cloudflared --no-pager | head -5'
+```
+
+`ingress validate` parses the rules before you have a service flapping in a
+restart loop.
+
+> **The origins are the LAN address, not loopback, and the API one is port
+> 8000 rather than 8443.** Both are corrections to what this step said
+> originally, and both are consequences of the same thing:
+>
+> - **uvicorn binds `192.168.1.10` only** (see the `ss` output in step 21), so
+>   nothing answers on `127.0.0.1:8443`. Connecting to the container's own LAN
+>   address never reaches the wire — the kernel routes it locally — so nothing
+>   is lost.
+> - **`cloudflared` cannot present a client certificate to an origin.**
+>   `originRequest` can *verify* an origin (`caPool`, `originServerName`,
+>   `noTLSVerify`) but has no option to send one. The API's mTLS listener
+>   answers `--ssl-cert-reqs 2` — `CERT_REQUIRED` — so the browser path cannot
+>   traverse it at all. Port **8000** is the second listener added in step 20b.
+
+## Step 20b — the browser listener
+
+The mTLS listener on `8443` is for Dom0. `cloudflared` needs its own origin,
+and splitting them buys more than a working tunnel:
+
+| Listener | Reached by | Authenticated by | Mounts |
+|---|---|---|---|
+| `192.168.1.10:8443` | Dom0 | client certificate **and** worker token | `/api/v1/worker/*` |
+| `192.168.1.10:8000` | `cloudflared` | Cloudflare Access, at the edge | `/api/v1/jobs/*` |
+
+**Separating them means a Cloudflare Access bypass still cannot reach the
+worker channel, and a leaked Dom0 key cannot enumerate job history.** Neither
+holds while one process serves both to everyone who gets past its front door.
+
+> **NOT YET IMPLEMENTED.** `app.py` mounts both routers unconditionally, so
+> today the split is by *listener* only and both listeners expose both
+> routers. Per-listener mounting needs a code change — tracked with
+> [#47](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/47),
+> which owns the browser-auth gap generally. Until it lands, the table above
+> describes intent and **Cloudflare Access is the only thing keeping the
+> browser side closed.**
+
+```bash
+pct exec 102 -- bash -lc 'sed -e s/8443/8000/ \
+    -e "/ssl-cert-reqs/d" \
+    -e "s/sandbox platform API/sandbox platform API (browser)/" \
+    /etc/systemd/system/sandbox-api.service \
+    > /etc/systemd/system/sandbox-api-browser.service
+systemctl daemon-reload
+systemctl enable --now sandbox-api-browser
+ss -lntp | grep -E "8000|8443"'
+```
+
+Dropping `--ssl-cert-reqs` leaves TLS on with client certificates optional,
+which is what `cloudflared` needs. The listener is still on the LAN address,
+so **`192.168.1.10:8000` is reachable from Dom0 and from anything else on that
+segment without a certificate** — that is the exposure #47 closes, and it is
+why Access on the tunnel is load-bearing rather than convenient.
+
+**The `Host` header must reach MinIO unchanged.** Presigned URLs are signed
+for `objects.evilbootloader.com`, and MinIO recomputes the signature from the Host it
+receives — so if `cloudflared` rewrites it, every browser upload fails with a
+403 about the signature. If that happens, check this first.
+
+## Step 21 — verify, negatives first
+
+The positive cases prove it runs. **These prove it is doing anything.**
+
+```bash
+# 1. no client certificate -> refused at TLS, NOT a 401
+openssl s_client -connect 192.168.1.10:8443 </dev/null 2>&1 | tail -3
+# expect: a handshake failure. A 401 here would mean mTLS is not configured.
+
+# 2. with the client certificate -> works
+curl --cacert ca.crt --cert dom0-lab.crt --key dom0-lab.key \
+     https://192.168.1.10:8443/healthz
+# expect: {"status":"ok"}
+
+# 3. TLS 1.1 refused (decision 8 of #39)
+openssl s_client -connect 192.168.1.10:8443 -tls1_1 </dev/null 2>&1 | tail -2
+
+# 4. a valid certificate is NOT authorisation
+curl --cacert ca.crt --cert dom0-lab.crt --key dom0-lab.key \
+     -X POST https://192.168.1.10:8443/api/v1/worker/claim \
+     -H 'Content-Type: application/json' \
+     -d '{"worker_id":"x","free_mib":1,"free_vlans":1,"free_slots":1}'
+# expect: 401
+
+# 5. the tunnel opened no inbound port
+pct exec 102 -- ss -lntp | grep -v 127.0.0.1
+
+# Evidence
+user@personal:~/QubesIncoming/vault/tls/ca$ openssl s_client -connect 192.168.1.10:8443 </dev/null 2>&1 | tail -3
+Verify return code: 19 (self-signed certificate in certificate chain)
+---
+DONE
+user@personal:~/QubesIncoming/vault/tls/ca$ curl --cacert ca.crt --cert dom0-lab.crt --key dom0-lab.key \
+     https://192.168.1.10:8443/healthz
+{"status":"ok"}user@personal:~/QubesIncomingopenssl s_client -connect 192.168.1.10:8443 -tls1_1 </dev/null 2>&1 | tail -2 2>&1 | tail -2
+Verify return code: 0 (ok)
+---
+user@personal:~/QubesIncoming/vault/tls/ca$ curl --cacert ca.crt --cert dom0-lab.crt --key dom0-lab.key \
+     -X POST https://192.168.1.10:8443/api/v1/worker/claim \
+     -H 'Content-Type: application/json' \
+     -d '{"worker_id":"x","free_mib":1,"free_vlans":1,"free_slots":1}'
+{"detail":"worker token required"}
+
+root@pve1:~# pct exec 102 -- ss -lntp | grep -v 127.0.0.1
+State  Recv-Q Send-Q Local Address:Port  Peer Address:PortProcess                                                
+LISTEN 0      2048    192.168.1.10:8443       0.0.0.0:*    users:(("python",pid=2198,fd=7))                      
+LISTEN 0      4096               *:22               *:*    users:(("sshd",pid=118,fd=3),("systemd",pid=1,fd=117))
+LISTEN 0      100            [::1]:25            [::]:*    users:(("master",pid=269,fd=14))                      
+LISTEN 0      4096           [::1]:9000          [::]:*    users:(("minio",pid=543,fd=7))      
+```
+
+## Step 21b — before step 22
+
+Four things step 22 needs that earlier steps do not produce. Check each rather
+than assuming, because three of them fail at *request* time rather than at
+startup and the symptom is a traceback in the middle of an otherwise working
+run.
+
+**1. The code on the container is current.** The checkout is the deployment
+mechanism, so a code change reaches the container by pull and nothing else:
+
+```bash
+pct exec 102 -- su - platform -s /bin/bash -c '
+  cd /opt/platform/src && git pull --ff-only && git log -1 --oneline
+  cd platform && .venv/bin/pip install -r requirements.txt
+  set -a; . /etc/sandbox-platform/api.env; set +a
+  .venv/bin/python migrations/run.py
+'
+pct exec 102 -- systemctl restart sandbox-api
+```
+
+> **If `git pull` refuses** with *"local changes would be overwritten"* or
+> *"untracked working tree files would be overwritten"*, the container has a
+> build that did not come from git — the drift CLAUDE.md warns about. Confirm
+> the working tree matches the pushed commit before discarding anything:
+>
+> ```bash
+> pct exec 102 -- su - platform -s /bin/bash -c '
+>   cd /opt/platform/src && git fetch origin
+>   git add -A && git diff --cached --stat origin/master; git reset -q'
+> ```
+>
+> Empty output means only the bookkeeping is behind, and
+> `git reset --hard origin/master && git clean -fd` is safe — but run
+> `git clean -fdn` first and check `.venv` is not in the list.
+>
+> **Encountered 2026-08-23.** The container held the whole of #36 as untracked
+> files while `origin/master` had none of it, because the commits existed only
+> on the workstation. `git pull` reported *"Already up to date"*, which was
+> true and useless. The `--ff-only` refusal is the guard working.
+
+**2. The migration state is what you think.** `run.py` printing `up to date`
+proves it applied nothing, not that everything is applied:
+
+```bash
+pct exec 102 -- su - platform -s /bin/bash -c "psql -d sandbox_platform <<'SQL'
+SELECT filename, applied_at FROM schema_migrations ORDER BY filename;
+SQL"
+# expect three rows, including 0003_sample_etag.sql
+```
+
+**3. The API's S3 block is present and correct.** Every S3 setting in
+`config.py` has a default — *including empty credentials* — so a missing block
+starts cleanly and fails on the first request that touches MinIO:
+
+```bash
+pct exec 102 -- grep -cE '^S3_(ACCESS|SECRET)_KEY=.' /etc/sandbox-platform/api.env
+# expect: 2
+
+pct exec 102 -- grep -E '^S3_(INTERNAL|PUBLIC)_ENDPOINT|^S3_REGION' /etc/sandbox-platform/api.env
+```
+
+`S3_INTERNAL_ENDPOINT` must be the address **Dom0** can reach
+(`https://192.168.1.10:9000` after step 19a), not loopback. `S3_REGION` must
+equal MinIO's `MINIO_SITE_REGION`.
+
+*The fake worker runs on the container, so a loopback `S3_INTERNAL_ENDPOINT`
+will still pass step 22 and then fail against real Dom0. Fix it here rather
+than discovering it once `sandboxd` exists.*
+
+**4. The fake worker has a certificate.** Issued at step 16, pushed at step
+19. Confirm both halves arrived:
+
+```bash
+pct exec 102 -- ls -l /etc/sandbox-platform/tls/fake-worker.crt /etc/sandbox-platform/tls/fake-worker.key
+```
+
+## Step 22 — a real job, end to end
+
+`fake_worker.py` is in the repository for exactly this. It analyses nothing:
+no clone, no VLAN, no execution. It proves the platform works before Dom0 is
+involved, and afterwards it is what tells a platform fault from a Dom0 one.
+
+```bash
+pct exec 102 -- su - platform -s /bin/bash -c '
+  cd /opt/platform/src/platform
+  set -a; . /etc/sandbox-platform/api.env; set +a
+  .venv/bin/python fake_worker.py \
+      --api https://192.168.1.10:8443 \
+      --cacert /etc/sandbox-platform/tls/ca.crt \
+      --cert   /etc/sandbox-platform/tls/fake-worker.crt \
+      --key    /etc/sandbox-platform/tls/fake-worker.key \
+      --token "$WORKER_TOKEN" --once
+'
+```
+
+**`192.168.1.10:8443`, not `127.0.0.1`** — uvicorn binds the LAN address only.
+The three TLS flags are not optional against the deployed listener: it
+requires a client certificate at the handshake, so without them the worker
+fails before it sends a request.
+
+Expect `registered as fake-worker, offering 12082 MiB`, then `nothing to do`.
+That alone exercises mTLS, the bearer token, registration, reconcile and the
+claim path.
+
+Then submit a benign file through `sandbox.evilbootloader.com`, run it again,
+and expect the job to reach `completed` with three artifacts.
+
+**If a job is rejected `no_workers`, that is correct**, not a fault —
+admission refuses before any worker has registered, and on a fresh platform
+that is the honest answer. Register first, then submit.
+
+Then snapshot:
+
+```bash
+pct snapshot 102 api-deployed --description 'API on 8443 with mTLS, tunnel up'
+```
+
 
 ## F2 — the database was created SQL_ASCII, and the runner failed silently
 
