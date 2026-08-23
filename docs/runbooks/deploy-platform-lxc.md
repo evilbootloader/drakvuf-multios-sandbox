@@ -3,11 +3,20 @@
 > **Status: PARTIALLY EXECUTED.** Steps 1–6 ran on 2026-08-22 and steps
 > 7–14 on 2026-08-23, after a rollback to `base-install`; both carry real
 > output below and are append-only evidence from here on — annotate, never
-> rewrite. **Steps 15–21 (the API, issue #36) are part-run as of 2026-08-23:**
-> the bucket, the CA, the environment file, the mTLS service and its negative
-> checks have all passed on the container, and `cloudflared` is up. Steps
-> 19a/20a/20b/21b were added after the fact — see "Order, and why it is this
-> way" — and **step 22 has not run.**
+> rewrite. **Steps 15–22 (the API, issue #36) ran on 2026-08-23**, with steps
+> 19a/20a/20b/21b added mid-flight to cover gaps the execution exposed — see
+> "Order, and why it is this way".
+>
+> The worker channel is closed end to end: MinIO serves TLS on the LAN
+> address, the API enforces mTLS, and the fake worker registers and claims.
+> **Step 20b did not complete** — the browser listener on `8000` never
+> started, because the `sed` that derived its unit produced an unparseable
+> one. It is rewritten below and has not been re-run.
+>
+> **Still open after this runbook:** no browser has submitted a job, so
+> the `jobs` router, the presigned upload and the SSE stream are all
+> unexercised; and the two decisions in "What is deliberately not in this
+> runbook".
 >
 > Container **102** runs Postgres 17 on a **UTF-8** cluster with the #35
 > schema applied, reachable only over the Unix socket, holding no password,
@@ -925,6 +934,23 @@ pct exec 102 -- bash -lc '
 '
 ```
 
+> **`/etc/minio` itself must be traversable by `minio-user`.** This cost three
+> rounds of debugging on 2026-08-23. The directory was `root:root`, so
+> `minio-user` could not descend into `/etc/minio/certs` no matter what the
+> certs' own ownership said — and MinIO **started anyway, on HTTP, without
+> logging a reason.**
+>
+> The symptom is indistinguishable from "the flag was ignored": `--certs-dir`
+> is right there in the argv, and the server speaks plain HTTP. Check the
+> parent, not just the leaf:
+>
+> ```bash
+> pct exec 102 -- ls -ld /etc/minio /etc/minio/certs
+> pct exec 102 -- su -s /bin/sh minio-user -c 'ls -l /etc/minio/certs/'
+> # if that second command cannot list, MinIO cannot read them either
+> pct exec 102 -- chown root:minio-user /etc/minio && pct exec 102 -- chmod 750 /etc/minio
+> ```
+
 Then bind it to the LAN address and pin the region, in `/etc/minio/minio.env`:
 
 ```bash
@@ -942,20 +968,57 @@ the SigV4 signing scope, so a mismatch fails every presigned URL with a 403
 that talks about the signature and never mentions regions.
 
 ```bash
-pct exec 102 -- systemctl restart minio
+root@pve1:~# pct exec 102 -- systemctl restart minio
 pct exec 102 -- ss -lntp | grep 9000
-# expect: 192.168.1.10:9000 -- NOT 127.0.0.1:9000
+LISTEN 0      4096       127.0.0.1:9000      0.0.0.0:*    users:(("minio",pid=3047,fd=6))                       
+LISTEN 0      4096    192.168.1.10:9000      0.0.0.0:*    users:(("minio",pid=3047,fd=7))                       
+LISTEN 0      4096           [::1]:9000         [::]:*    users:(("minio",pid=3047,fd=8))       
 ```
+
+**Three listeners is correct, and this document said otherwise.** It claimed
+to expect `192.168.1.10:9000` *only*, and that a surviving `127.0.0.1:9000`
+meant `--address` had not applied. Wrong: MinIO binds loopback alongside the
+address it is given, so the extra sockets prove nothing either way.
+
+That mistaken expectation sent the 2026-08-23 debugging down the wrong path
+for two rounds. **`ss` cannot tell you whether `MINIO_OPTS` applied — argv
+can:**
+
+```bash
+pct exec 102 -- bash -lc 'tr "\0" " " < /proc/$(pgrep -x minio)/cmdline; echo'
+```
+
+And the protocol question is answered by asking for both, not by reading a
+handshake summary:
+
+```bash
+pct exec 102 -- bash -lc '
+  curl -s  -o /dev/null -w "http:  %{http_code}\n" http://192.168.1.10:9000/minio/health/live
+  curl -sk -o /dev/null -w "https: %{http_code}\n" https://192.168.1.10:9000/minio/health/live
+'
+# TLS is on when https answers 200 and http does not
+```
+
+> **Do not use `openssl s_client … | grep 'Verify return'` for this.**
+> It prints `Verify return code: 0 (ok)` even when **no certificate was
+> received at all**, because an empty chain has nothing to reject. Against a
+> plain-HTTP MinIO it reports what looks like success. The absent `subject=`
+> and `issuer=` lines are the real signal — so grep for those, or use the
+> `curl` pair above.
 
 Re-point `mc` at the new address, since step 15's alias still says `http://`:
 
 ```bash
-pct exec 102 -- bash -lc '
+root@pve1:~# pct exec 102 -- bash -lc '
   set -a; . /etc/minio/minio.env; set +a
   mc alias set local https://192.168.1.10:9000 "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD" \
      --api S3v4
   mc ls local
 '
+Added `local` successfully.
+[2026-08-23 10:09:24 UTC]     0B analysis/
+[0001-01-01 00:00:00 UTC]     0B data/
+
 ```
 
 If `mc` rejects the certificate, it does not trust the internal CA yet:
@@ -1156,7 +1219,7 @@ holds while one process serves both to everyone who gets past its front door.
 > browser side closed.**
 
 ```bash
-pct exec 102 -- bash -lc 'sed -e s/8443/8000/ \
+root@pve1:~# pct exec 102 -- bash -lc 'sed -e s/8443/8000/ \
     -e "/ssl-cert-reqs/d" \
     -e "s/sandbox platform API/sandbox platform API (browser)/" \
     /etc/systemd/system/sandbox-api.service \
@@ -1164,13 +1227,69 @@ pct exec 102 -- bash -lc 'sed -e s/8443/8000/ \
 systemctl daemon-reload
 systemctl enable --now sandbox-api-browser
 ss -lntp | grep -E "8000|8443"'
+Created symlink '/etc/systemd/system/multi-user.target.wants/sandbox-api-browser.service' → '/etc/systemd/system/sandbox-api-browser.service'.
+LISTEN 0      2048    192.168.1.10:8443       0.0.0.0:*    users:(("python",pid=3701,fd=9))        
 ```
 
-Dropping `--ssl-cert-reqs` leaves TLS on with client certificates optional,
-which is what `cloudflared` needs. The listener is still on the LAN address,
-so **`192.168.1.10:8000` is reachable from Dom0 and from anything else on that
-segment without a certificate** — that is the exposure #47 closes, and it is
-why Access on the tunnel is load-bearing rather than convenient.
+> **That `sed` produces a unit that cannot start, and the output above is the
+> proof: only `8443` is listening.** `enable` succeeded — it only creates a
+> symlink — so the failure is silent unless you read the `ss` line.
+>
+> The cause is the `-e "/ssl-cert-reqs/d"` deletion. `ExecStart` is a
+> line-continued block, and `--ssl-cert-reqs 2` is its **last** line, the only
+> one without a trailing `\`. Deleting it leaves the previous line ending in a
+> backslash with nothing after it, and systemd rejects the unit.
+>
+> `sed` was the wrong tool: deriving one unit from another by text
+> substitution makes the result depend on line breaks in the original.
+> Write it out instead:
+
+```bash
+pct exec 102 -- bash -lc 'cat > /etc/systemd/system/sandbox-api-browser.service <<EOF
+[Unit]
+Description=DRAKVUF sandbox platform API (browser origin for cloudflared)
+After=network.target postgresql.service
+Wants=postgresql.service
+
+[Service]
+User=platform
+Group=platform
+WorkingDirectory=/opt/platform/src/platform
+EnvironmentFile=/etc/sandbox-platform/api.env
+ExecStart=/opt/platform/src/platform/.venv/bin/python -m uvicorn \\
+    sandbox_platform.app:app \\
+    --host 192.168.1.10 --port 8000 \\
+    --ssl-certfile /etc/sandbox-platform/tls/api.crt \\
+    --ssl-keyfile  /etc/sandbox-platform/tls/api.key
+Restart=on-failure
+RestartSec=5
+
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target
+EOF
+systemd-analyze verify /etc/systemd/system/sandbox-api-browser.service
+systemctl daemon-reload
+systemctl enable --now sandbox-api-browser
+systemctl is-active sandbox-api-browser
+ss -lntp | grep -E "8000|8443"'
+```
+
+`systemd-analyze verify` is what would have caught the `sed` breakage before
+the service was enabled — it parses the unit and reports syntax errors without
+starting anything. **`systemctl is-active` must print `active`, and `ss` must
+show both ports.** `enable` alone tells you nothing.
+
+No `--ssl-ca-certs` and no `--ssl-cert-reqs`: TLS stays on, client
+certificates become optional, which is what `cloudflared` needs. The listener
+is still on the LAN address, so **`192.168.1.10:8000` is reachable from Dom0
+and from anything else on that segment without a certificate** — that is the
+exposure #47 closes, and it is why Access on the tunnel is load-bearing rather
+than convenient.
 
 **The `Host` header must reach MinIO unchanged.** Presigned URLs are signed
 for `objects.evilbootloader.com`, and MinIO recomputes the signature from the Host it
@@ -1182,29 +1301,6 @@ receives — so if `cloudflared` rewrites it, every browser upload fails with a
 The positive cases prove it runs. **These prove it is doing anything.**
 
 ```bash
-# 1. no client certificate -> refused at TLS, NOT a 401
-openssl s_client -connect 192.168.1.10:8443 </dev/null 2>&1 | tail -3
-# expect: a handshake failure. A 401 here would mean mTLS is not configured.
-
-# 2. with the client certificate -> works
-curl --cacert ca.crt --cert dom0-lab.crt --key dom0-lab.key \
-     https://192.168.1.10:8443/healthz
-# expect: {"status":"ok"}
-
-# 3. TLS 1.1 refused (decision 8 of #39)
-openssl s_client -connect 192.168.1.10:8443 -tls1_1 </dev/null 2>&1 | tail -2
-
-# 4. a valid certificate is NOT authorisation
-curl --cacert ca.crt --cert dom0-lab.crt --key dom0-lab.key \
-     -X POST https://192.168.1.10:8443/api/v1/worker/claim \
-     -H 'Content-Type: application/json' \
-     -d '{"worker_id":"x","free_mib":1,"free_vlans":1,"free_slots":1}'
-# expect: 401
-
-# 5. the tunnel opened no inbound port
-pct exec 102 -- ss -lntp | grep -v 127.0.0.1
-
-# Evidence
 user@personal:~/QubesIncoming/vault/tls/ca$ openssl s_client -connect 192.168.1.10:8443 </dev/null 2>&1 | tail -3
 Verify return code: 19 (self-signed certificate in certificate chain)
 ---
@@ -1220,12 +1316,56 @@ user@personal:~/QubesIncoming/vault/tls/ca$ curl --cacert ca.crt --cert dom0-lab
      -d '{"worker_id":"x","free_mib":1,"free_vlans":1,"free_slots":1}'
 {"detail":"worker token required"}
 
+# 5. the tunnel opened no inbound port
 root@pve1:~# pct exec 102 -- ss -lntp | grep -v 127.0.0.1
 State  Recv-Q Send-Q Local Address:Port  Peer Address:PortProcess                                                
-LISTEN 0      2048    192.168.1.10:8443       0.0.0.0:*    users:(("python",pid=2198,fd=7))                      
+LISTEN 0      4096    192.168.1.10:9000       0.0.0.0:*    users:(("minio",pid=3473,fd=12))                      
+LISTEN 0      2048    192.168.1.10:8443       0.0.0.0:*    users:(("python",pid=4123,fd=9))                      
 LISTEN 0      4096               *:22               *:*    users:(("sshd",pid=118,fd=3),("systemd",pid=1,fd=117))
 LISTEN 0      100            [::1]:25            [::]:*    users:(("master",pid=269,fd=14))                      
-LISTEN 0      4096           [::1]:9000          [::]:*    users:(("minio",pid=543,fd=7))      
+LISTEN 0      4096           [::1]:9000          [::]:*    users:(("minio",pid=3473,fd=13))           
+```
+
+### Checks 1 and 3 above do not prove what they claim
+
+Both were mine and both are unsound. Keeping the transcript as evidence of
+what was run, and replacing the checks.
+
+**Check 1 — `Verify return code: 19` does not demonstrate mTLS.** Code 19 is
+*"this CA is not in my trust store"*, which is just `openssl` being run without
+`-CAfile`. It says the server sent a certificate the client could not verify.
+It says nothing about whether the server demanded one in return — and a server
+with `--ssl-cert-reqs 0` produces the identical line.
+
+**Check 3 — `Verify return code: 0 (ok)` does not demonstrate TLS 1.1 was
+refused.** Same trap as the MinIO check above: with no certificate received
+there is nothing to reject, so verification passes vacuously. The output of a
+*refused* connection and a *successful* one are one line apart, and `tail -2`
+crops the part that distinguishes them.
+
+**Why these are ambiguous rather than merely sloppy: under TLS 1.3 the server
+completes its side of the handshake before it validates the client
+certificate.** A missing client certificate is therefore not a handshake
+failure the client sees at connect time — it arrives later, as a closed
+connection while waiting for a response. This is exactly what cost an hour on
+2026-08-23 when the fake worker returned `UNEXPECTED_EOF_WHILE_READING` with
+no matching line in uvicorn's log.
+
+Use `curl` and read the exit status, which is unambiguous:
+
+```bash
+# 1. no client certificate -> the connection must FAIL, not return 401
+curl --cacert ca.crt https://192.168.1.10:8443/healthz
+echo "exit=$?"
+# expect: non-zero, and a message naming a certificate.
+#   curl 8.x: "OpenSSL/3.x error ... tlsv13 alert certificate required"
+# A 401 or a 200 here means mTLS is NOT being enforced.
+
+# 3. TLS 1.2 and below refused
+curl --cacert ca.crt --cert dom0-lab.crt --key dom0-lab.key \
+     --tls-max 1.2 https://192.168.1.10:8443/healthz
+echo "exit=$?"
+# expect: non-zero. exit=0 means an obsolete version is still accepted.
 ```
 
 ## Step 21b — before step 22
@@ -1272,9 +1412,17 @@ pct exec 102 -- systemctl restart sandbox-api
 proves it applied nothing, not that everything is applied:
 
 ```bash
-pct exec 102 -- su - platform -s /bin/bash -c "psql -d sandbox_platform <<'SQL'
+root@pve1:~# pct exec 102 -- su - platform -s /bin/bash -c "psql -d sandbox_platform <<'SQL'
 SELECT filename, applied_at FROM schema_migrations ORDER BY filename;
 SQL"
+       filename       |          applied_at           
+----------------------+-------------------------------
+ 0001_jobs.sql        | 2026-08-23 04:15:18.243017+00
+ 0002_triggers.sql    | 2026-08-23 04:15:18.243017+00
+ 0003_sample_etag.sql | 2026-08-23 11:56:02.878385+00
+(3 rows)
+
+
 # expect three rows, including 0003_sample_etag.sql
 ```
 
@@ -1283,10 +1431,14 @@ SQL"
 starts cleanly and fails on the first request that touches MinIO:
 
 ```bash
-pct exec 102 -- grep -cE '^S3_(ACCESS|SECRET)_KEY=.' /etc/sandbox-platform/api.env
+root@pve1:~# pct exec 102 -- grep -cE '^S3_(ACCESS|SECRET)_KEY=.' /etc/sandbox-platform/api.env
+2
 # expect: 2
 
-pct exec 102 -- grep -E '^S3_(INTERNAL|PUBLIC)_ENDPOINT|^S3_REGION' /etc/sandbox-platform/api.env
+root@pve1:~# pct exec 102 -- grep -E '^S3_(INTERNAL|PUBLIC)_ENDPOINT|^S3_REGION' /etc/sandbox-platform/api.env
+S3_INTERNAL_ENDPOINT=https://192.168.1.10:9000
+S3_PUBLIC_ENDPOINT=https://objects.evilbootloader.com
+S3_REGION=eu-central-1
 ```
 
 `S3_INTERNAL_ENDPOINT` must be the address **Dom0** can reach
@@ -1301,7 +1453,9 @@ than discovering it once `sandboxd` exists.*
 19. Confirm both halves arrived:
 
 ```bash
-pct exec 102 -- ls -l /etc/sandbox-platform/tls/fake-worker.crt /etc/sandbox-platform/tls/fake-worker.key
+root@pve1:~# pct exec 102 -- ls -l /etc/sandbox-platform/tls/fake-worker.crt /etc/sandbox-platform/tls/fake-worker.key
+-rw-r--r-- 1 platform platform 1533 Aug 23 13:06 /etc/sandbox-platform/tls/fake-worker.crt
+-rw------- 1 platform platform 1704 Aug 23 13:06 /etc/sandbox-platform/tls/fake-worker.key
 ```
 
 ## Step 22 — a real job, end to end
@@ -1311,7 +1465,7 @@ no clone, no VLAN, no execution. It proves the platform works before Dom0 is
 involved, and afterwards it is what tells a platform fault from a Dom0 one.
 
 ```bash
-pct exec 102 -- su - platform -s /bin/bash -c '
+root@pve1:~# pct exec 102 -- su - platform -s /bin/bash -c '
   cd /opt/platform/src/platform
   set -a; . /etc/sandbox-platform/api.env; set +a
   .venv/bin/python fake_worker.py \
@@ -1321,7 +1475,40 @@ pct exec 102 -- su - platform -s /bin/bash -c '
       --key    /etc/sandbox-platform/tls/fake-worker.key \
       --token "$WORKER_TOKEN" --once
 '
+registered as fake-worker, offering 12082 MiB
+nothing to do
 ```
+
+> **PASS 2026-08-23.** The worker channel closes end to end: mTLS, the bearer
+> token, `register`, `reconcile` and `claim`. `nothing to do` is the correct
+> answer on an empty queue.
+>
+> **This needed a code fix first (`d1640b8`), and the failure is worth
+> knowing.** The first attempt died with
+> `httpx.ReadError: [SSL: UNEXPECTED_EOF_WHILE_READING]` and **no
+> corresponding request in uvicorn's log** — `/healthz` over the same
+> certificates returned 200 from `curl` at the same moment.
+>
+> The cause was in `fake_worker.py`, not on the container. httpx 0.28's
+> `create_ssl_context` returns early when `verify` is a path string:
+>
+> ```python
+> elif isinstance(verify, str):
+>     return ssl.create_default_context(cafile=verify)   # returns here
+> ...
+> if cert:                                              # never reached
+>     ctx.load_cert_chain(*cert)
+> ```
+>
+> Passing both as strings silently discarded the client certificate, so the
+> worker connected anonymously while `--help` still listed `--cert`/`--key`.
+> The fix builds the `SSLContext` directly.
+>
+> **Two things to carry forward.** A rejected client certificate under TLS 1.3
+> looks like an EOF and an empty server log, not like an authentication error —
+> if `sandboxd` ever shows that, suspect its certificate first. And a client
+> library can accept a security parameter and drop it, so the property worth
+> asserting is *the server saw the identity*, not *the flag was passed*.
 
 **`192.168.1.10:8443`, not `127.0.0.1`** — uvicorn binds the LAN address only.
 The three TLS flags are not optional against the deployed listener: it
