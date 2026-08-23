@@ -23,6 +23,12 @@ secrets/
 *.key
 *.pem
 
+# The internal CA (issue #46). *.key above already covers the private halves;
+# the whole directory is ignored so a stray .crt or the CAcreateserial file
+# cannot be committed either. The root key must never reach this repository,
+# the platform container, or Dom0 -- see tls/README.md.
+tls/ca/
+
 # OS / editor cruft
 .DS_Store
 *.swp

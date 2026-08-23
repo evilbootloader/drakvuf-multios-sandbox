@@ -573,6 +573,47 @@ Deferred to the pass after this one, in order: `sandboxd`; artifact upload
 and the manifest/publication boundary; cancellation end to end; retiring
 `dirwatch.c` and the three launchers; and the Windows pipeline.
 
+## Eighth batch — DRAFT-046
+
+Added 2026-08-23, while building #36. Transport security spans #36 and #37
+and is owned by neither, which is the reason it is separate: folding it into
+either would leave the CA — the most security-relevant component on the
+platform — belonging to nobody.
+
+| Draft ID | Title | Area | OS | Milestone | Priority | Depends on | Origin |
+|---|---|---|---|---|---|---|---|
+| DRAFT-046 | Transport security — Cloudflare Tunnel outward, an internal CA inward | core/platform, security | ALL | M1 → gates M7/M8 | P0 | DRAFT-041 | Maintainer, 2026-08-23 |
+
+**The topology has two trust domains, not one**, and that is the finding
+that shaped it. Browsers reach the platform through a **Cloudflare Tunnel**,
+so public TLS is Cloudflare's — no inbound port, no public DNS, no ACME, and
+no browser-facing certificate for this project to issue. Dom0 stays on the
+**LAN** with mTLS against an internal CA, because routing the worker channel
+through a third party would make local analysis depend on someone else's
+uptime and put the worker token through their edge.
+
+Three things it settles that are worth reading even if the rest waits:
+
+- **The CA root key never touches the platform container.** A CA mints
+  identities, so one held there would let a platform compromise issue itself
+  a Dom0 client certificate and enter the worker channel — turning credential
+  theft into identity forgery. Held offline, an attacker gets the
+  certificates already on that host and cannot produce more.
+- **Executable artifacts are served as password-protected archives, wrapped
+  on Dom0.** Cloudflare terminates TLS, and their terms prohibit using the
+  service to *distribute* malicious code — a clause that bites on the
+  download path, since `fileextractor` output is files the malware wrote. The
+  wrapping happens on Dom0 rather than in the API because archiving there
+  would stream sample bytes through the process holding every credential,
+  giving up the property that made direct-to-MinIO upload worth its routing
+  complexity.
+- **There is no `dhparam.pem`, deliberately.** Raised in review. Forward
+  secrecy is a property of the protocol — TLS 1.3 removed static RSA key
+  exchange and 1.2 negotiates ECDHE by default — while `openssl dhparam`
+  supplies parameters for finite-field DHE that nothing here enables. What
+  the question did surface is a real gap, now decision 8: pin a TLS 1.2 floor
+  explicitly, so a package upgrade cannot re-enable 1.0 or 1.1 unnoticed.
+
 ## Current order (consolidated 2026-08-19, revised 2026-08-21) — five tracks
 
 Replaces the 2026-08-11 sequence, which had gone stale in the way this

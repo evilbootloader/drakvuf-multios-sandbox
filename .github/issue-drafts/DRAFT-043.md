@@ -140,6 +140,23 @@ client certificate says *which host*, the token says *what it may do*. Either
 alone is weaker — a stolen token replays from anywhere, and a certificate
 alone makes revocation a PKI operation.
 
+> **Amended 2026-08-23 (DRAFT-046, issue #46).** Two refinements from
+> designing the transport layer properly.
+>
+> **The certificate is a transport gate, not an identity source.** The
+> sentence above says it "says which host", which overstates it: nothing
+> authorises against the certificate subject. `X-Worker-Id` plus the token
+> say which worker, and `lease_owner` bounds which jobs it may touch. The
+> certificate only proves the connection came from a holder of a CA-signed
+> key. That distinction is what lets **uvicorn terminate TLS directly** —
+> extracting a subject and mapping it to an identity is the part that wants a
+> reverse proxy, and this design does not need one at M1.
+>
+> **The browser side does not use this CA at all.** It reaches the platform
+> through a Cloudflare Tunnel, so public TLS is Cloudflare's and there is no
+> certificate here to issue or renew for it. The CA covers only the LAN links
+> Dom0 uses. See DRAFT-046.
+
 The token's scope is the whole point: valid **only** for `/api/v1/worker/*`,
 and every job-scoped route additionally requires that the job's
 `lease_owner` matches the caller. A compromised Dom0 cannot read a job it
