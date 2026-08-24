@@ -46,7 +46,11 @@ import httpx
 
 from client_tls import ssl_context
 
-TERMINAL = {"completed", "failed", "rejected", "cancelled"}
+# Must match enums.TERMINAL_STATES on the server, `interrupted` included --
+# the SSE stream closes when it reaches one of these, so a client with a
+# narrower set would report "closed before a terminal state" on a job that
+# really had finished.
+TERMINAL = {"completed", "failed", "rejected", "cancelled", "interrupted"}
 
 
 class Submitter:
@@ -131,7 +135,7 @@ class Submitter:
             r.raise_for_status()
             for line in r.iter_lines():
                 if time.monotonic() > deadline:
-                    raise SystemExit(f"timed out after {timeout}s")
+                    self._explain_timeout(job_id, timeout)
                 if not line.startswith("data: "):
                     continue
                 event = json.loads(line[6:])
@@ -139,6 +143,31 @@ class Submitter:
                 if event["state"] in TERMINAL:
                     return self.get(job_id)
         raise SystemExit("event stream closed before a terminal state")
+
+    def _explain_timeout(self, job_id: str, timeout: float) -> None:
+        """Say what the job was waiting on, not just that it waited.
+
+        `timed out after 300.0s` cost an evening on 2026-08-24. The job was
+        `queued` behind a backlog the whole time -- `fake_worker --once` claims
+        the HEAD of the queue by queue_seq, not the job you just submitted, so
+        each run drained an older entry while the new submission sat still.
+
+        The API already knows this: `reserved_ahead` is in the detail response.
+        Not printing it turned an ordinary queue into a mystery.
+        """
+        job = self.get(job_id)
+        why = f"timed out after {timeout}s in state {job['state']!r}"
+        if job.get("reserved_ahead"):
+            why += ("\n  another job is reserved ahead of this one -- it is "
+                    "queued, not stuck.\n  Drain the backlog (run the worker "
+                    "without --once) or wait.")
+        elif job["state"] == "queued":
+            why += ("\n  nothing is ahead of it: no worker has claimed it. "
+                    "Check a worker is running\n  and that its free_mib covers "
+                    "this target's required_mib.")
+        if job.get("queue_reason"):
+            why += f"\n  queue_reason: {job['queue_reason']}"
+        raise SystemExit(why)
 
     def poll(self, job_id: str, timeout: float) -> dict:
         deadline = time.monotonic() + timeout
@@ -151,7 +180,7 @@ class Submitter:
             if job["state"] in TERMINAL:
                 return job
             time.sleep(1.0)
-        raise SystemExit(f"timed out after {timeout}s in state {last}")
+        self._explain_timeout(job_id, timeout)
 
 
 def main() -> int:

@@ -99,18 +99,61 @@ async def stop() -> None:
         _listener = None
 
 
+def _snapshot(job_id: UUID) -> dict | None:
+    """The job's current state, shaped like a NOTIFY payload."""
+    from .db import connection
+
+    with connection() as conn:
+        row = conn.execute(
+            "SELECT id, state FROM jobs WHERE id = %s", (job_id,)
+        ).fetchone()
+    return {"id": str(row[0]), "state": row[1]} if row else None
+
+
 async def stream(job_id: UUID) -> AsyncIterator[str]:
-    """SSE frames for one job, until the client disconnects.
+    """SSE frames for one job: its current state, then every change.
+
+    **The first frame is a snapshot, and without it this stream loses races it
+    cannot win.** NOTIFY only reaches subscribers that already exist, so a
+    client that connects after the job finished would wait forever for an event
+    that already happened. That is not hypothetical -- `submit.py` subscribes
+    *after* `/uploaded` returns, and a worker long-polling on /claim can take a
+    job from queued to completed inside that gap, because a fake or fast worker
+    walks the state machine at HTTP round-trip speed.
+
+    Reproduced 2026-08-24 by inserting 3s between admission and subscription:
+    the job reached `completed` and `--watch` then hung for its whole budget.
+    On the LAN the gap was sub-millisecond and the race was won by luck; #37's
+    tunnel put Cloudflare, an Access check and a TLS handshake in it and the
+    luck ran out.
+
+    **Order matters here.** The queue is registered BEFORE the snapshot is
+    read, so a change landing between the two is queued rather than dropped.
+    The cost is a possible duplicate frame, which is harmless: these are states,
+    not increments, and a client applying the same state twice is unchanged.
+
+    The stream then ENDS on a terminal state rather than keeping a connection
+    open on a job that can never change again.
 
     A keepalive comment goes out on idle so proxies -- Cloudflare included --
     do not close what looks like a dead connection. Without it the stream dies
-    silently and the page freezes on a stale state, which is
-    indistinguishable from a stuck analysis.
+    silently and the page freezes on a stale state, which is indistinguishable
+    from a stuck analysis.
     """
+    from .enums import TERMINAL_STATES, JobState
+
     key = str(job_id)
     q: asyncio.Queue[dict] = asyncio.Queue(maxsize=_QUEUE_DEPTH)
     _subscribers.setdefault(key, set()).add(q)
     try:
+        # A blocking read on the pooled connection, in a thread, so one small
+        # SELECT does not stall the event loop for every other subscriber.
+        snapshot = await asyncio.to_thread(_snapshot, job_id)
+        if snapshot is not None:
+            yield f"data: {json.dumps(snapshot)}\n\n"
+            if JobState(snapshot["state"]) in TERMINAL_STATES:
+                return
+
         while True:
             try:
                 payload = await asyncio.wait_for(q.get(), timeout=15.0)
@@ -118,6 +161,8 @@ async def stream(job_id: UUID) -> AsyncIterator[str]:
                 yield ": keepalive\n\n"
                 continue
             yield f"data: {json.dumps(payload)}\n\n"
+            if payload.get("state") in {s.value for s in TERMINAL_STATES}:
+                return
     finally:
         watchers = _subscribers.get(key)
         if watchers is not None:

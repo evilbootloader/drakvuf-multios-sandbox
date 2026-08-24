@@ -5,11 +5,12 @@ Issue #36 (DRAFT-043), with the two-endpoint split from #39.
 
 from __future__ import annotations
 
+import json
 import uuid
 
 import pytest
 
-from conftest import WORKER_TOKEN, state_of
+from conftest import WORKER_TOKEN, enqueue, state_of
 
 WINDOWS_MIB = 6294
 SMALL_MIB = 2198
@@ -580,3 +581,68 @@ def test_windows_still_accepts_ordinary_names(client, name):
         "target_os": "windows", "filename": name, "size_bytes": 4,
     })
     assert r.status_code == 201, (name, r.text[:200])
+
+
+# --- the SSE stream --------------------------------------------------------
+
+def _stream_frames(client, job_id, limit=3):
+    """Read up to `limit` data frames, then let the context close the stream."""
+    frames = []
+    with client.stream("GET", f"/api/v1/jobs/{job_id}/events") as r:
+        assert r.status_code == 200
+        for line in r.iter_lines():
+            if line.startswith("data: "):
+                frames.append(json.loads(line[6:]))
+                if len(frames) >= limit:
+                    break
+    return frames
+
+
+def test_the_stream_opens_with_the_current_state(client, conn):
+    """Without this frame the stream loses a race it cannot win.
+
+    NOTIFY only reaches subscribers that already exist, and submit.py
+    subscribes AFTER /uploaded returns. A worker long-polling on /claim can
+    take a job from queued to completed inside that gap -- a fake or fast
+    worker walks the whole state machine at HTTP round-trip speed.
+
+    Reproduced 2026-08-24 by inserting 3s between admission and subscription:
+    the job reached `completed` and `--watch` then hung for its full budget.
+    On the LAN the gap was sub-millisecond and the race was won by luck; the
+    tunnel put Cloudflare, an Access check and a TLS handshake in it.
+    """
+    job_id = conn.execute(
+        "INSERT INTO jobs (target_os, submitted_filename, state) "
+        "VALUES ('ubuntu', 'x.bin', 'completed') RETURNING id"
+    ).fetchone()[0]
+
+    frames = _stream_frames(client, job_id)
+
+    assert frames, "a subscriber that connects after the job finished got nothing"
+    assert frames[0]["state"] == "completed"
+    assert frames[0]["id"] == str(job_id)
+
+
+def test_the_stream_ends_at_a_terminal_state(client, conn):
+    """Rather than holding a connection open on a job that cannot change.
+
+    submit.py relies on this: it returns when the stream closes, so a stream
+    that never closes is a client that never exits.
+    """
+    job_id = conn.execute(
+        "INSERT INTO jobs (target_os, submitted_filename, state) "
+        "VALUES ('ubuntu', 'x.bin', 'failed') RETURNING id"
+    ).fetchone()[0]
+
+    with client.stream("GET", f"/api/v1/jobs/{job_id}/events") as r:
+        lines = list(r.iter_lines())     # returns only because the server closes
+
+    assert any('"failed"' in line for line in lines)
+
+
+# Live delivery -- a snapshot followed by real NOTIFY frames -- is NOT tested
+# here. TestClient is synchronous, so reading a stream that stays open needs a
+# concurrent writer, and breaking out of iter_lines() mid-stream deadlocks it
+# (observed 2026-08-24: the run hung until it was killed). That path is
+# covered end to end by `submit.py --watch` against a running worker, which is
+# step 23 of the deploy runbook.
