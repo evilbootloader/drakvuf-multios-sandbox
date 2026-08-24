@@ -2,6 +2,7 @@ boto3==1.43.78
 botocore==1.43.78
 fastapi==0.141.1
 httpx==0.28.1
+pyjwt[crypto]==2.10.1
 psycopg==3.3.4
 psycopg-binary==3.3.4
 psycopg-pool==3.3.1

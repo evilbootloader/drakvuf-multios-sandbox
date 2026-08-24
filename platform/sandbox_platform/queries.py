@@ -142,6 +142,37 @@ RETURNING id, lease_owner, failure_stage
 """
 
 # --------------------------------------------------------------------------
+# ABANDON -- submissions whose upload never happened.
+#
+# A job enters 'received' when the row and its presigned policy are created,
+# and leaves it when /uploaded is called. If the submitter never uploads --
+# closes the tab, is refused by the policy, or never existed -- the row stays
+# there forever. Nothing else in this schema expires it.
+#
+# The clock is the UPLOAD POLICY's lifetime, not an arbitrary age. Once the
+# policy has expired the submitter *cannot* complete the upload even by
+# returning, so the row is provably dead rather than merely old. The margin
+# above it exists so a client uploading at the very edge of its window is
+# never swept out from under itself mid-request.
+#
+# Terminal state is 'rejected' rather than a new 'abandoned': 'rejected' is
+# already what a job that did not pass admission becomes, and an upload that
+# never completed never reached admission. failure_reason carries the detail.
+# A new state would mean amending the CHECK, the state machine in
+# docs/architecture/analysis-pipeline.md, and test_schema.py's agreement
+# between them -- for a distinction the reason string already makes.
+# --------------------------------------------------------------------------
+ABANDON = """
+UPDATE jobs
+   SET state          = 'rejected',
+       failure_stage  = 'received',
+       failure_reason = 'upload_not_completed'
+ WHERE state = 'received'
+   AND created_at < now() - %(grace)s::interval
+RETURNING id
+"""
+
+# --------------------------------------------------------------------------
 # RECONCILE -- what sandboxd declares at startup.
 #
 # Any job this worker holds a lease on that is NOT in the list it sent is a

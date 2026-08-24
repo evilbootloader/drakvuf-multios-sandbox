@@ -112,5 +112,37 @@ class Settings:
     claim_poll_seconds: float = float(os.environ.get("CLAIM_POLL_SECONDS", 20))
     claim_poll_interval: float = float(os.environ.get("CLAIM_POLL_INTERVAL", 1.0))
 
+    # --- maintenance ------------------------------------------------------
+    # How often the sweep in maintenance.py runs. 0 disables it, which is
+    # right for tests and wrong everywhere else: with it off, the lease TTL
+    # does not expire and abandoned submissions accumulate.
+    maintenance_interval: float = float(os.environ.get("MAINTENANCE_INTERVAL", 30))
+
+    # Added to upload_ttl before a `received` job is abandoned. Margin over a
+    # measured boundary rather than the boundary itself: a client that starts
+    # its upload at second 899 is still mid-request when the policy expires.
+    abandon_margin: int = _int("ABANDON_MARGIN_SECONDS", 300)
+
+    # --- browser identity -------------------------------------------------
+    #
+    # Cloudflare Access authenticates the human and forwards a signed JWT in
+    # `Cf-Access-Jwt-Assertion`. Verifying it here is what gives the browser
+    # routes an identity at all -- see auth.access_identity.
+    #
+    # REQUIRE_ACCESS_JWT is set PER LISTENER, in the systemd unit rather than
+    # in api.env, because the two listeners have different front doors: the
+    # browser one sits behind Access, and the mTLS one is gated by a client
+    # certificate at the TLS layer before any handler runs. Enforcing it on
+    # both would lock out Dom0 and the command-line tools, which hold
+    # certificates and not browser sessions.
+    require_access_jwt: bool = os.environ.get("REQUIRE_ACCESS_JWT", "") == "1"
+
+    # e.g. https://yourteam.cloudflareaccess.com -- where the signing keys live.
+    access_team_domain: str = os.environ.get("ACCESS_TEAM_DOMAIN", "").rstrip("/")
+
+    # The Access application's AUD tag. Checked on every token: without it a
+    # valid JWT for ANY application in the account would be accepted here.
+    access_aud: str = os.environ.get("ACCESS_AUD", "")
+
 
 settings = Settings()

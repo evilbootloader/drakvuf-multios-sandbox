@@ -17,7 +17,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
-from . import events
+from . import events, maintenance
 from .db import close_pool, connection, open_pool
 from .routers import jobs, worker
 
@@ -36,9 +36,14 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     # occupies one for its whole lifetime, so borrowing a pool slot would
     # never give it back. See events.py.
     events.start()
+    # Nothing else triggers the lease TTL or expires abandoned submissions.
+    # Both were implemented and never invoked until this call existed --
+    # see maintenance.py.
+    maintenance.start()
     try:
         yield
     finally:
+        await maintenance.stop()
         await events.stop()
         close_pool()
 

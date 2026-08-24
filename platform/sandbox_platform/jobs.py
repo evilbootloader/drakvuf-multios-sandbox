@@ -129,6 +129,13 @@ def reap(conn: psycopg.Connection) -> list[UUID]:
         return [r[0] for r in cur.fetchall()]
 
 
+def abandon(conn: psycopg.Connection, *, grace_seconds: int) -> list[UUID]:
+    """Reject submissions whose upload never completed. See queries.ABANDON."""
+    with conn.cursor() as cur:
+        cur.execute(queries.ABANDON, {"grace": f"{grace_seconds} seconds"})
+        return [r[0] for r in cur.fetchall()]
+
+
 def reconcile(
     conn: psycopg.Connection, *, worker_id: str, live_job_ids: list[UUID]
 ) -> list[UUID]:

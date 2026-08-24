@@ -18,11 +18,12 @@ from typing import Annotated, Literal
 from uuid import UUID
 
 import magic
-from fastapi import APIRouter, HTTPException, Path, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Path, Query, status
 from fastapi.responses import StreamingResponse
 from psycopg.rows import dict_row
 from pydantic import BaseModel, Field
 
+from .. import auth
 from .. import events
 from .. import jobs as dal
 from .. import objects
@@ -30,7 +31,11 @@ from ..config import settings
 from ..db import connection
 from ..enums import JobState, RejectReason, TargetOs
 
-router = APIRouter(prefix="/api/v1/jobs", tags=["jobs"])
+# The identity dependency is attached to the ROUTER, not to routes, so a
+# route added later cannot forget it. It is a no-op unless
+# REQUIRE_ACCESS_JWT is set for this listener -- see auth.access_identity.
+router = APIRouter(prefix="/api/v1/jobs", tags=["jobs"],
+                   dependencies=[Depends(auth.access_identity)])
 
 
 # --- models ---------------------------------------------------------------
@@ -90,7 +95,8 @@ class CancelResponse(BaseModel):
 # --- submission -----------------------------------------------------------
 
 @router.post("", status_code=status.HTTP_201_CREATED)
-def create_job(req: CreateJobRequest) -> CreateJobResponse:
+def create_job(req: CreateJobRequest,
+               owner: auth.Identity = None) -> CreateJobResponse:
     """Create a job record and hand back an upload capability.
 
     `size_bytes` is checked before the URL is issued, so an oversized sample
@@ -107,12 +113,13 @@ def create_job(req: CreateJobRequest) -> CreateJobResponse:
     with connection() as conn, conn.cursor() as cur:
         cur.execute(
             """
-            INSERT INTO jobs (target_os, submitted_filename, size_bytes, state)
-            VALUES (%s, %s, %s, %s)
+            INSERT INTO jobs (target_os, submitted_filename, size_bytes,
+                              state, owner)
+            VALUES (%s, %s, %s, %s, %s)
             RETURNING id
             """,
             (req.target_os.value, req.filename, req.size_bytes,
-             JobState.RECEIVED.value),
+             JobState.RECEIVED.value, owner),
         )
         job_id = cur.fetchone()[0]
 

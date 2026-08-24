@@ -19,16 +19,23 @@ cannot forget it.
 
 from __future__ import annotations
 
+import logging
 import secrets
+import threading
+import time
 from typing import Annotated
 from uuid import UUID
 
+import httpx
+import jwt
 from fastapi import Depends, Header, HTTPException, Path, status
 from psycopg.rows import dict_row
 
 from .config import settings
 from .db import connection
 from .enums import LEASED_STATES
+
+log = logging.getLogger(__name__)
 
 # Every value below reaches SQL as a bound parameter -- `%s` with the values
 # passed separately, never `%`-formatting, an f-string or concatenation.
@@ -118,3 +125,108 @@ def leased_job(
 
 
 LeasedJob = Annotated[dict, Depends(leased_job)]
+
+
+# --- browser identity -----------------------------------------------------
+#
+# Cloudflare Access authenticates the human at its edge and forwards a signed
+# JWT in `Cf-Access-Jwt-Assertion`. Verifying it here is what gives the browser
+# routes an identity; before this, anything that reached the API could read,
+# cancel and stream every job.
+#
+# **Verifying the signature is the whole point.** The header is attacker-
+# controlled on any path that does not traverse Cloudflare, so trusting its
+# claims -- or trusting the plainer `Cf-Access-Authenticated-User-Email`
+# header, which carries no signature at all -- would be authentication by
+# assertion. That is why this fetches Cloudflare's public keys rather than
+# decoding with `verify_signature=False`.
+
+_JWKS_TTL = 3600.0
+_jwks_lock = threading.Lock()
+_jwks: tuple[float, dict] | None = None      # (fetched_at, keys by kid)
+
+
+def _signing_key(token: str):
+    """Cloudflare's public key for this token's `kid`, cached for an hour.
+
+    Refetched once on an unknown `kid` so that a key rotation recovers by
+    itself rather than at the next restart -- but only once per call, because
+    an unknown kid is also what a forged token looks like and that path must
+    not become a way to make the API hammer Cloudflare.
+    """
+    global _jwks
+    kid = jwt.get_unverified_header(token).get("kid")
+
+    with _jwks_lock:
+        fresh = _jwks is not None and time.monotonic() - _jwks[0] < _JWKS_TTL
+        if fresh and kid in _jwks[1]:
+            return _jwks[1][kid]
+
+        url = f"{settings.access_team_domain}/cdn-cgi/access/certs"
+        keys = {
+            k["kid"]: jwt.PyJWK(k).key
+            for k in httpx.get(url, timeout=10.0).raise_for_status().json()["keys"]
+        }
+        _jwks = (time.monotonic(), keys)
+
+    if kid not in keys:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "unknown signing key")
+    return keys[kid]
+
+
+def access_identity(
+    cf_access_jwt_assertion: Annotated[str | None, Header()] = None,
+) -> str | None:
+    """The authenticated submitter's email, or None where Access is not in play.
+
+    Attached to the jobs router as a whole rather than to individual routes,
+    for the same reason the worker token is: something added later cannot
+    forget it.
+
+    `require_access_jwt` is set **per listener** in the systemd unit. The
+    browser listener sits behind Access and requires a token; the mTLS
+    listener is already gated by a client certificate at the TLS layer, and
+    demanding a browser session there would lock out Dom0 and the
+    command-line tools. Two front doors, two proofs of identity.
+    """
+    if not settings.require_access_jwt:
+        return None
+
+    if not cf_access_jwt_assertion:
+        raise HTTPException(
+            status.HTTP_401_UNAUTHORIZED, "access token required"
+        )
+
+    if not settings.access_team_domain or not settings.access_aud:
+        # Refuse rather than fall through. A missing AUD would otherwise mean
+        # accepting a valid token issued for ANY application in the account.
+        log.error("REQUIRE_ACCESS_JWT is set but ACCESS_TEAM_DOMAIN/ACCESS_AUD "
+                  "are not; refusing rather than accepting unverified tokens")
+        raise HTTPException(
+            status.HTTP_500_INTERNAL_SERVER_ERROR, "access verification misconfigured"
+        )
+
+    try:
+        claims = jwt.decode(
+            cf_access_jwt_assertion,
+            key=_signing_key(cf_access_jwt_assertion),
+            algorithms=["RS256"],
+            audience=settings.access_aud,
+            issuer=settings.access_team_domain,
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        # The reason is logged and NOT returned: which check failed is a hint
+        # to whoever is probing.
+        log.warning("Access JWT rejected: %s", exc)
+        raise HTTPException(
+            status.HTTP_401_UNAUTHORIZED, "invalid access token"
+        ) from exc
+
+    # Service tokens authenticate a machine and carry `common_name` instead of
+    # an email. Accepted, and recorded as what they are.
+    return claims.get("email") or f"service:{claims.get('common_name', 'unknown')}"
+
+
+Identity = Annotated[str | None, Depends(access_identity)]

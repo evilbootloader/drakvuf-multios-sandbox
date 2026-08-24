@@ -40,6 +40,11 @@ os.environ.setdefault("CLAIM_POLL_INTERVAL", "0")
 # concerned -- the signature covers the Host header -- while both reach the
 # same local MinIO. So the two-endpoint split stays genuinely under test and
 # uploads still work, which an unresolvable public hostname would not allow.
+# The sweep is driven directly in test_maintenance.py rather than waited on.
+# A background task expiring leases mid-test would make the queue tests
+# nondeterministic in a way that looks like a bug in the claim query.
+os.environ.setdefault("MAINTENANCE_INTERVAL", "0")
+
 os.environ.setdefault("S3_INTERNAL_ENDPOINT", "http://127.0.0.1:9000")
 os.environ.setdefault("S3_PUBLIC_ENDPOINT", "http://localhost:9000")
 os.environ.setdefault("S3_ACCESS_KEY", "devroot")
