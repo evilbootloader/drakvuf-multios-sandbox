@@ -845,8 +845,71 @@ These names are not cosmetic. `S3_PUBLIC_ENDPOINT` in step 18 must be the
 second one **exactly**, because SigV4 signs the Host header — a URL signed for
 one name and presented at another fails with a 403 about the signature.
 
-**Put Cloudflare Access on both before the first submission.** Without it they
-are public, and the second fronts a store holding live malware.
+### Access goes on one hostname, not both
+
+This said "put Access on both" until 2026-08-23. **That is wrong, and it would
+have broken every upload** in a way that looks like a signing bug.
+
+| Hostname | Cloudflare Access | Instead |
+|---|---|---|
+| `sandbox.evilbootloader.com` | **Yes** | — |
+| `objects.evilbootloader.com` | **No** | Path-restricted ingress, step 20a |
+
+**Why Access cannot go on the object store.** The browser uploads by POSTing a
+presigned form **cross-origin**, from a page on `sandbox.*` to `objects.*`.
+Access issues its authorisation cookie **per hostname**, so a user who
+authenticated to `sandbox.*` has none for `objects.*`. Access answers that
+POST with a 302 to its login page, and a cross-origin redirect to an HTML
+login fails CORS. The browser reports a CORS error that never mentions Access.
+
+**What leaving it off does and does not expose.** It does **not** make the
+store readable: every object request needs a valid SigV4 signature, MinIO has
+no anonymous bucket policy, and forging one means forging HMAC-SHA256. What it
+exposes is MinIO's *other* surface — `/minio/admin/v3/*` reachable from the
+internet, `/minio/health/*` unauthenticated by design, and version
+fingerprinting from response headers. On a container holding live malware,
+Postgres and the API's credentials, that is the part worth removing, and the
+path rule in step 20a removes it without touching the upload path.
+
+It also means **a leaked presigned URL is sufficient on its own**, with no
+second factor. Containment is the TTL — 300s for artifacts, 900s for uploads —
+and it matters because Cloudflare logs the full URL including the query
+string, as does every other intermediary.
+
+**Access on `sandbox.*` is what makes that acceptable.** Without a way to reach
+`POST /api/v1/jobs`, an attacker cannot mint upload policies or list jobs to
+discover artifact URLs in the first place. The API has **no application-layer
+authentication of its own** ([#47](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/47)),
+so Access there is not defence in depth — it is the only gate.
+
+### Sharing the Access JWT with the object store — deferred, not rejected
+
+Raised 2026-08-24: can the `sandbox.*` session be reused against `objects.*`,
+so Access protects both without breaking the upload?
+
+**Yes, and it would close the leaked-URL gap** — but only with four things
+lined up, and each fails as a CORS error that names none of them:
+
+1. **One Access application spanning both hostnames**, or a wildcard. Access
+   scopes `CF_Authorization` to the application and puts that application's AUD
+   in the JWT's `aud` claim; two applications means two cookies, and
+   `sandbox.*`'s is not valid for `objects.*`. *Verify the cookie's actual
+   domain in the dashboard rather than assuming the wildcard behaviour.*
+2. **The preflight must bypass Access.** A cross-origin `fetch` carrying any
+   custom header triggers an `OPTIONS` preflight, and **preflights never carry
+   credentials** — so Access sees it unauthenticated and 302s it, killing the
+   upload before the POST is sent. Access has a per-application CORS section
+   for this. A presigned POST needs no custom header, so the preflight can be
+   avoided entirely; that is easy to lose later.
+3. **The client must opt in**: `fetch(url, {credentials: 'include'})`. The
+   default omits the cookie cross-origin.
+4. **MinIO's own CORS** must allow the `sandbox.*` origin with credentials.
+
+**Deferred to [#38](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/38)**,
+because three of the four live in the web page that does not exist yet, and
+testing them without one means hand-rolling the exact request a browser would
+send. The path rule below is the part that can be done now, has no client-side
+dependency, and removes the surface that actually worries me.
 
 ## Step 18 — the environment file
 
@@ -1111,6 +1174,25 @@ pct exec 102 -- bash -lc '
 '
 ```
 
+> **Three credentials live in `/etc/cloudflared/` and they are not
+> interchangeable.** Confusing them is easy because two are called
+> "certificates":
+>
+> | File | What it is | Used by |
+> |---|---|---|
+> | `cert.pem` | Your **Cloudflare account** credential, from `tunnel login` | `tunnel create`, `route dns`, `tunnel delete` — management only |
+> | `<UUID>.json` | The **tunnel's own** credential | `tunnel run`, at runtime |
+> | `ca.crt` | **Our internal CA** | Verifying the origin's certificate |
+>
+> `originRequest.caPool` answers *"who signed the certificate that
+> `192.168.1.10:9000` presents?"* — our CA, so `ca.crt`. Pointing it at
+> `cert.pem` makes `cloudflared` reject the origin: that file is a credential
+> *for* Cloudflare, not a trust anchor for anything here.
+>
+> `cert.pem` is not needed at runtime. Once the tunnel exists and its
+> hostnames are routed, it can be removed and the tunnel keeps running —
+> it is only required again to change the tunnel's registration.
+
 The service unit. `cloudflared service install` will write one for you, as
 root; this is the same thing running as a dedicated account, because the
 process binds no privileged port and makes only outbound connections:
@@ -1171,10 +1253,23 @@ ingress:
     service: https://192.168.1.10:8000
     originRequest:
       caPool: /etc/cloudflared/ca.crt
+
+  # Only the bucket is published. Everything else MinIO serves --
+  # /minio/admin/v3/*, /minio/health/* -- stops existing from the internet's
+  # point of view. See step 17: Access cannot go on this hostname without
+  # breaking the cross-origin upload, so this rule is what replaces it.
+  #
+  # (/|$) rather than a bare /analysis/ because the presigned POST targets
+  # /analysis exactly, with no trailing slash -- and because ^/analysis alone
+  # would also match a bucket named "analysis-something".
   - hostname: objects.evilbootloader.com
+    path: ^/analysis(/|$)
     service: https://192.168.1.10:9000
     originRequest:
       caPool: /etc/cloudflared/ca.crt
+  - hostname: objects.evilbootloader.com
+    service: http_status:404
+
   - service: http_status:404
 EOF
 chown cloudflared:cloudflared /etc/cloudflared/config.yml
