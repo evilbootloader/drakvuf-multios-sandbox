@@ -149,7 +149,10 @@ def main() -> int:
     ap.add_argument("--target-os", required=True,
                     choices=["ubuntu", "android", "windows"])
     ap.add_argument("--cacert",
-                    help="CA bundle that signed the API and MinIO certificates")
+                    help="CA bundle for the LAN path. REPLACES system trust "
+                         "rather than adding to it, so do not pass it when "
+                         "reaching the API through the Cloudflare tunnel -- "
+                         "the public certificate would have no path to a root")
     ap.add_argument("--cert", help="client certificate, if the API requires one")
     ap.add_argument("--key", help="private key for --cert")
     ap.add_argument("--watch", action="store_true",
