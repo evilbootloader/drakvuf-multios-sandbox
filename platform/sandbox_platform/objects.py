@@ -146,18 +146,33 @@ def presigned_get(key: str, audience: Audience, ttl: int | None = None) -> str:
     )
 
 
-def presigned_put(key: str, ttl: int | None = None) -> str:
-    """Write one artifact. Worker audience only.
+def presigned_artifact_upload(key: str, max_bytes: int,
+                              ttl: int | None = None) -> UploadTicket:
+    """Write one artifact, size-capped. Worker audience only.
 
-    A PUT is acceptable here where it was not for uploads: the size is not
-    knowable in advance, and the uploader is already authenticated by lease
-    rather than by holding the URL alone.
+    **POST rather than PUT, and this reverses DRAFT-044's original call.** That
+    draft kept artifacts on a presigned PUT because "the size is not knowable in
+    advance". It is: `POST /worker/jobs/{id}/artifacts` is called *after* the
+    trace finishes, when the files are already on Dom0's disk, so the worker
+    knows every size exactly. An unbounded write capability was being handed out
+    for no gain.
+
+    So the browser's arrangement applies unchanged -- `min(declared, cap)`,
+    with a declaration above the cap refused before a URL exists, so a claim can
+    only ever tighten the bound.
+
+    **The range starts at 0, where a sample's starts at 1.** An empty artifact
+    is a real result: `capture.pcap` with no bytes means the clone generated no
+    traffic. An empty sample is only ever a failed upload.
     """
-    return _client(Audience.WORKER).generate_presigned_url(
-        "put_object",
-        Params={"Bucket": settings.s3_bucket, "Key": key},
+    signed = _client(Audience.WORKER).generate_presigned_post(
+        Bucket=settings.s3_bucket,
+        Key=key,
+        Conditions=[["content-length-range", 0, max_bytes], {"key": key}],
         ExpiresIn=ttl or settings.upload_ttl,
     )
+    return UploadTicket(url=signed["url"], fields=signed["fields"],
+                        expires_in=ttl or settings.upload_ttl)
 
 
 # --- reading, without keeping ---------------------------------------------
@@ -177,7 +192,7 @@ def head(key: str) -> tuple[int, str] | None:
 
     The ETag is the store's own identity for the bytes. Recorded at admission
     and re-checked when a worker claims the job, because the browser's upload
-    capability outlives admission -- see `etag_unchanged`.
+    capability outlives admission -- see `sample_status`.
     """
     client = _client(Audience.WORKER)
     try:
@@ -187,26 +202,37 @@ def head(key: str) -> tuple[int, str] | None:
         return None
 
 
-def etag_unchanged(key: str, expected: str | None) -> bool:
-    """Has this object been replaced since admission looked at it?
+def sample_status(key: str, expected: str | None) -> str:
+    """Is this object still the one admission looked at? One HEAD.
 
-    The presigned POST issued at submission stays valid for its whole TTL, so
-    an object can be overwritten AFTER admission hashed it and queued the job.
-    Demonstrated 2026-08-23: a benign ELF was admitted, the same upload URL
-    then accepted different bytes, and the stored object no longer matched the
-    recorded digest.
+    Returns `"ok"`, `"missing"` or `"changed"` -- three outcomes rather than a
+    boolean, because they have different causes and a worker's `failure_reason`
+    is diagnostic. Collapsing them was harmless until retention landed
+    (issue #37): a job queued past the expiry window loses its sample to
+    MinIO's lifecycle rule, and reporting that as "changed after admission"
+    sends whoever reads it hunting for a tamper that never happened.
 
-    What that costs is not a corrupt file. It is Dom0 executing bytes that
-    were never admitted while the trace, the verdict and the SHA-256 all
-    describe the file that was replaced -- a sandbox that can be made to
-    analyse one thing and report another.
+    **Why `changed` matters.** The presigned POST issued at submission stays
+    valid for its whole TTL, so an object can be overwritten AFTER admission
+    hashed it and queued the job. Demonstrated 2026-08-23: a benign ELF was
+    admitted, the same upload URL then accepted different bytes, and the stored
+    object no longer matched the recorded digest.
 
-    One HEAD, checked before the sample URL is handed to a worker.
+    What that costs is not a corrupt file. It is Dom0 executing bytes that were
+    never admitted while the trace, the verdict and the SHA-256 all describe
+    the file that was replaced -- a sandbox that can be made to analyse one
+    thing and report another.
+
+    `expected is None` is `"changed"`, not `"ok"`: admission always records an
+    ETag, so a queued job without one should not exist, and the safe reading of
+    an impossible state is to refuse it.
     """
-    if expected is None:
-        return False
     current = head(key)
-    return current is not None and current[1] == expected
+    if current is None:
+        return "missing"
+    if expected is None or current[1] != expected:
+        return "changed"
+    return "ok"
 
 
 def _chunks(key: str, chunk_size: int = 1 << 20) -> Iterator[bytes]:

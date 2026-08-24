@@ -370,14 +370,80 @@ def test_cancel_while_running_is_a_request(registered, worker_headers, put_objec
 # --- input hostility ------------------------------------------------------
 
 @pytest.mark.parametrize("name", [
-    '"; rm -rf / #', "$(whoami).sh", "`id`.bin", "'; DROP TABLE jobs; --",
-    "<script>alert(1)</script>.exe", "a b c.exe",
+    '"; rm -rf ~ #', "$(whoami).sh", "`id`.bin", "'; DROP TABLE jobs; --",
+    "<img src=x onerror=alert(1)>.exe", "a b c.exe",
+    # Unclosed tags, which carry no slash and are therefore admissible. A
+    # different shape from the attribute payload above: an unterminated tag
+    # swallows whatever markup follows it, which is how a name breaks out of a
+    # template even where closing tags are filtered.
+    "<script>alert(1)", '"><script>alert(1)', "<!--",
 ])
 def test_hostile_filenames_round_trip_through_submission(registered, put_object, name):
-    """Byte-exact from submission, through the object key, to the worker."""
+    """Byte-exact from submission, through the object key, to the worker.
+
+    **Every name here is deliberately ADMITTED.** They are legal filenames, and
+    a sample really can be called any of them; refusing them would be
+    sanitising, and a sanitised name analyses something the submitter did not
+    send (DRAFT-030). The defence against the XSS ones is escaping on OUTPUT,
+    which belongs to the web UI -- DRAFT-045 names it explicitly. This test
+    pins the contract that UI has to work against: what comes out is what went
+    in, byte for byte, however hostile.
+
+    These are `/`-free by necessity. Two used to carry a slash (`rm -rf /`,
+    `</script>`) and were changed on 2026-08-24 when submission started
+    refusing separators; the hostility they exist to test is the
+    metacharacters, not the slash, and the slash cases moved to
+    `test_a_filename_that_cannot_be_a_path_component_is_refused` below.
+    """
     job_id, detail = upload_and_admit(registered, put_object, filename=name)
     assert detail["submitted_filename"] == name
     assert detail["state"] == "queued"
+
+
+@pytest.mark.parametrize("name", [
+    "../../../etc/passwd",       # out of the bucket prefix entirely
+    "../results/other/trace.log",  # into another job's results
+    "a/b.exe",                   # any separator at all: the guest path moves
+    "/absolute.exe",
+    ".",
+    "..",
+    "sample\x00.exe",            # NUL: a truncation point in any C layer
+    "sample\n.exe",              # forges a log line
+    "a" * 513,                   # over the byte ceiling
+    "é" * 300,              # 600 bytes: max_length in CHARS missed this
+])
+def test_a_filename_that_cannot_be_a_path_component_is_refused(client, name):
+    """Refused at submission, before a row exists or a URL is signed.
+
+    Mirrors `sample_name_admissible()` in `automation/dirwatch.c:250` on
+    purpose -- the API is now the boundary that inotify watch used to be.
+
+    Not a live escape today: MinIO refuses `..` components itself with
+    XMinioInvalidObjectName (checked 2026-08-24). It is refused here because
+    that is MinIO's behaviour and not S3's, because the name also becomes the
+    guest staging path, and because a rejected key still leaves a `received`
+    row behind that only the abandon sweep clears.
+    """
+    r = client.post("/api/v1/jobs", json={
+        "target_os": "ubuntu", "filename": name, "size_bytes": 4,
+    })
+    assert r.status_code == 422, (name, r.text[:200])
+
+
+def test_a_refused_filename_leaves_no_job_row(client, conn):
+    """422 before the INSERT, not after.
+
+    `create_job` writes the row and *then* mints the URL, so validation that
+    ran later would leave a row nothing can ever upload to -- a free
+    row-insertion primitive for anyone who can reach the API.
+    """
+    before = conn.execute("SELECT count(*) FROM jobs").fetchone()[0]
+
+    client.post("/api/v1/jobs", json={
+        "target_os": "ubuntu", "filename": "../../etc/passwd", "size_bytes": 4,
+    })
+
+    assert conn.execute("SELECT count(*) FROM jobs").fetchone()[0] == before
 
 
 def test_the_browser_never_receives_a_credential(client):
@@ -388,3 +454,66 @@ def test_the_browser_never_receives_a_credential(client):
 
     assert settings.s3_secret_key not in created["upload_url"]
     assert settings.s3_secret_key not in str(created["upload_fields"])
+
+
+# --- retention -------------------------------------------------------------
+#
+# Issue #37. MinIO expires objects on a lifecycle rule; the job row is
+# permanent. Everything below is about that asymmetry.
+
+def _completed_with_artifacts(conn, age_days: int) -> uuid.UUID:
+    """A finished job of a given age, with a manifest and no objects.
+
+    No objects on purpose: what is under test is whether the API offers links,
+    not whether the store can serve them.
+    """
+    return conn.execute(
+        """
+        INSERT INTO jobs (target_os, submitted_filename, state, manifest,
+                          created_at)
+        VALUES ('ubuntu', 'x.bin', 'completed', '{"artifacts": ["trace.log"]}',
+                now() - %s::interval)
+        RETURNING id
+        """,
+        (f"{age_days} days",),
+    ).fetchone()[0]
+
+
+def test_a_job_past_retention_offers_no_download_links(client, conn):
+    """The link would 404: MinIO removed the object days ago."""
+    job_id = _completed_with_artifacts(conn, age_days=45)
+
+    detail = client.get(f"/api/v1/jobs/{job_id}").json()
+
+    assert detail["artifacts_expired"] is True
+    assert detail["artifacts"] == {}
+    # The manifest survives, and that is the point -- a reader can still tell
+    # "this run collected a trace, and it is gone" from "it collected nothing".
+    assert detail["manifest"]["artifacts"] == ["trace.log"]
+
+
+def test_a_job_inside_the_window_still_offers_links(client, conn):
+    job_id = _completed_with_artifacts(conn, age_days=1)
+
+    detail = client.get(f"/api/v1/jobs/{job_id}").json()
+
+    assert detail["artifacts_expired"] is False
+    assert "trace.log" in detail["artifacts"]
+
+
+def test_retention_disabled_never_expires_anything(client, conn, monkeypatch):
+    """RETENTION_DAYS=0 means MinIO has no lifecycle rule, so nothing is
+    removed and withholding links would be wrong."""
+    import dataclasses
+
+    from sandbox_platform.routers import jobs as jobs_router
+
+    monkeypatch.setattr(jobs_router, "settings",
+                        dataclasses.replace(jobs_router.settings,
+                                            retention_days=0))
+    job_id = _completed_with_artifacts(conn, age_days=3650)
+
+    detail = client.get(f"/api/v1/jobs/{job_id}").json()
+
+    assert detail["artifacts_expired"] is False
+    assert "trace.log" in detail["artifacts"]

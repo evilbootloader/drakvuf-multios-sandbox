@@ -39,6 +39,17 @@ class Settings:
     # tunnel (issue #39). Each audience therefore needs a URL signed for its
     # own hostname, which means two clients over the same bucket.
     #
+    # PUBLIC is the API's OWN hostname, not a second one (issue #37). MinIO
+    # uses path-style addressing, so every object URL begins `/analysis/`, and
+    # cloudflared routes that path to MinIO while everything else goes to the
+    # API. One origin, so the browser upload needs no CORS -- and the store
+    # inherits the same Cloudflare Access application rather than sitting on a
+    # hostname outside it, which is where it was until 2026-08-24.
+    #
+    # The cost of sharing a namespace: no API or UI route may ever begin
+    # `/analysis`, or cloudflared sends it to MinIO and the route silently
+    # disappears. Asserted in tests/test_objects.py.
+    #
     # INTERNAL is also the only one that makes real network calls -- HEAD and
     # GET during admission. PUBLIC only ever signs, and signing is a local
     # computation, so the API never has to reach the tunnel.
@@ -74,6 +85,25 @@ class Settings:
     upload_ttl: int = _int("S3_UPLOAD_TTL", 900)        # 15 min
     artifact_get_ttl: int = _int("S3_ARTIFACT_GET_TTL", 300)   # 5 min
 
+    # How long MinIO keeps an object before its lifecycle rule expires it
+    # (issue #37). **This does not enforce anything** -- MinIO does the
+    # deleting, from the rule `minio/provision.sh` installs. It exists so the
+    # API knows the policy, and it MUST match RETENTION_DAYS there.
+    #
+    # Why the API needs to know: a job row is permanent and its objects are
+    # not, so past this window `GET /jobs/{id}` would hand out presigned URLs
+    # for objects MinIO has already removed -- a download link that 404s, with
+    # nothing to tell a reader whether the artifact was lost or never existed.
+    #
+    # Age is an approximation of expiry, deliberately erring toward "gone":
+    # lifecycle scans run on MinIO's own schedule, so an object may briefly
+    # outlive the window. Withholding a link that would have worked is a much
+    # smaller cost than offering one that will not.
+    #
+    # 0 disables it -- objects are kept indefinitely and nothing reclaims the
+    # store but the quota refusing writes.
+    retention_days: int = _int("RETENTION_DAYS", 30)
+
     # --- admission --------------------------------------------------------
     #
     # Refused before a URL is issued, then re-checked against the object's
@@ -91,6 +121,51 @@ class Settings:
     # `injector` round-tripping 12 MB byte-exact, and APKs go well beyond
     # that.
     max_sample_bytes: int = _int("MAX_SAMPLE_BYTES", 512 * 1024 * 1024)
+
+    # Ceiling on a SINGLE uploaded artifact, bound into the presigned POST
+    # policy the same way max_sample_bytes is (issue #37).
+    #
+    # **This number is not measured.** `sandboxd` has never run, so no real
+    # result set from this lab has been sized. 2 GiB is a ceiling well above
+    # any single file the pipeline plausibly produces -- a dropped executable
+    # or a pcap over a 180s trace -- not a size anything was observed to need.
+    #
+    # It caps ONE object and does not bound a job, which is a different
+    # question: `memdump` dumps the memory regions a process writes, so a run
+    # yields many small files rather than one large one, and `max_length` on
+    # the request bounds names per call rather than per job -- a worker may
+    # call the endpoint repeatedly. `max_job_result_bytes` below is the bound
+    # that matters.
+    #
+    # Neither this nor a presigned PUT can carry an object past S3's 5 GB
+    # single-request limit. Anything larger needs multipart upload, which
+    # neither form provides.
+    max_artifact_bytes: int = _int("MAX_ARTIFACT_BYTES", 2 * 1024 * 1024 * 1024)
+
+    # Total result bytes one attempt may be issued upload tickets for, summed
+    # in DECLARED sizes and enforced when a ticket is minted -- before the
+    # bytes land, not after.
+    #
+    # **This exists because the bucket quota is not a prompt guard.** Measured
+    # 2026-08-24: 3 MiB was written into a 1 MiB quota with every write
+    # accepted, because MinIO enforces quotas against usage statistics its
+    # background scanner refreshes rather than at write time. The same bucket
+    # refused ~45s later. So the quota stops accumulation over days and permits
+    # an overshoot bounded by write rate times scanner interval -- which is not
+    # a documented contract and should not be leaned on.
+    #
+    # Declared sizes are sound accounting here: the presigned POST policy binds
+    # each upload to the size it was declared with, so a worker cannot declare
+    # one byte and upload a gigabyte.
+    #
+    # 4 GiB is unmeasured, like max_artifact_bytes -- no real result set from
+    # this lab has been sized. Set it from the arithmetic that actually
+    # matters: (jobs expected inside the retention window) x (this value)
+    # should stay under the bucket quota, or the store fills before retention
+    # reclaims anything.
+    max_job_result_bytes: int = _int(
+        "MAX_JOB_RESULT_BYTES", 4 * 1024 * 1024 * 1024
+    )
 
     # How much of a sample libmagic sees. It needs a header, not a file, and
     # this bounds what an attacker-controlled parse costs in the process that

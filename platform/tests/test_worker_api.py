@@ -274,17 +274,265 @@ def test_reconcile_interrupts_only_unlisted_jobs(client, worker_headers, conn):
     assert state_of(conn, uuid.UUID(b)) == "interrupted"
 
 
+# --- artifact upload tickets ----------------------------------------------
+#
+# Issue #37. This route shipped with #36 and had no test at all, so neither
+# the URLs it minted nor the traversal check it carried were ever exercised.
+
+def leased_and_cleaning(client, headers, conn) -> str:
+    """A job held by this worker and far enough along to have results."""
+    enqueue(conn, "ubuntu", SMALL_MIB)
+    job_id = claim(client, headers, free_mib=FREE_MIB).json()["job_id"]
+    for nxt in ("preparing", "executing", "collecting", "cleaning"):
+        client.post(f"/api/v1/worker/jobs/{job_id}/state",
+                    headers=headers, json={"state": nxt})
+    return job_id
+
+
+def test_an_artifact_ticket_uploads_and_the_bytes_come_back(
+        client, worker_headers, conn, read_object):
+    """The whole loop against a real MinIO, including an EMPTY artifact.
+
+    `capture.pcap` with no bytes is a real result -- it means the clone
+    generated no traffic. The sample policy's range starts at 1, so reusing it
+    here would have refused a legitimate result on the first run.
+
+    Read back with credentials rather than through the ticket: a POST ticket is
+    a write capability and cannot verify its own effect.
+    """
+    import httpx
+
+    job_id = leased_and_cleaning(client, worker_headers, conn)
+    bodies = {"trace.log": b"syscall trace\n", "capture.pcap": b"",
+              "memdump/0x7ffd_rwx.bin": b"\x90" * 4096}
+
+    tickets = client.post(
+        f"/api/v1/worker/jobs/{job_id}/artifacts", headers=worker_headers,
+        json={"artifacts": {n: len(b) for n, b in bodies.items()}},
+    ).json()
+
+    for name, body in bodies.items():
+        up = httpx.post(tickets[name]["url"], data=tickets[name]["fields"],
+                        files={"file": (name, body)})
+        assert up.status_code in (200, 201, 204), (name, up.text[:400])
+
+    for name, body in bodies.items():
+        assert read_object(f"results/{job_id}/{name}") == body, name
+
+
+def test_the_declared_size_binds_the_artifact_policy(
+        client, worker_headers, conn):
+    """A worker held to what it said, exactly as a browser is.
+
+    Without this the ticket is an unbounded write primitive -- which is what
+    the presigned PUT it replaced actually was.
+    """
+    import httpx
+
+    job_id = leased_and_cleaning(client, worker_headers, conn)
+    ticket = client.post(
+        f"/api/v1/worker/jobs/{job_id}/artifacts", headers=worker_headers,
+        json={"artifacts": {"trace.log": 10}},
+    ).json()["trace.log"]
+
+    over = httpx.post(ticket["url"], data=ticket["fields"],
+                      files={"file": ("trace.log", b"x" * 2000)})
+
+    assert over.status_code == 400
+    assert "EntityTooLarge" in over.text
+
+
+def test_an_oversized_declaration_never_gets_a_ticket(
+        client, worker_headers, conn):
+    """Refused before signing, so the transfer never starts."""
+    from sandbox_platform.config import settings
+
+    job_id = leased_and_cleaning(client, worker_headers, conn)
+    r = client.post(
+        f"/api/v1/worker/jobs/{job_id}/artifacts", headers=worker_headers,
+        json={"artifacts": {"memdump/huge.bin": settings.max_artifact_bytes + 1}},
+    )
+    assert r.status_code == 413
+
+
+@pytest.mark.parametrize("name", [
+    "../../etc/passwd",          # the obvious one
+    "/etc/passwd",               # absolute
+    "memdump/../../../escape",   # traversal below a legitimate prefix
+    "a//b",                      # empty component
+    "trace.log/",                # trailing separator
+    ".",                         # the prefix itself
+    "..",
+    "..\\..\\windows",           # backslash, ambiguous to a Windows reader
+    "trace\x00.log",             # NUL: a truncation point in any C layer
+    "trace\n.log",               # control character
+    "",                          # empty
+])
+def test_an_artifact_name_cannot_leave_the_job_prefix(
+        client, worker_headers, conn, name):
+    """`extracted/` names come from what the SAMPLE dropped, so these are
+    untrusted on the same footing as a submitted filename."""
+    job_id = leased_and_cleaning(client, worker_headers, conn)
+    r = client.post(
+        f"/api/v1/worker/jobs/{job_id}/artifacts", headers=worker_headers,
+        json={"artifacts": {name: 10}},
+    )
+    assert r.status_code == 422, (name, r.text[:200])
+
+
+@pytest.mark.parametrize("name", [
+    "50%off.exe",                 # percent-encoding is NOT traversal here
+    "..%2f..%2fetc%2fpasswd",     # nor is it when it looks like traversal
+    "extracted/a b c.dll",
+    "extracted/dropped‮gnp.exe",
+    "memdump/0x7ffd_rwx.bin",
+    # XSS shapes, admitted on purpose -- escaping is the UI's job (DRAFT-045),
+    # and these names come from files the sample dropped. The unclosed one has
+    # no slash and so would pass even the stricter SAMPLE rule; the closed one
+    # is admissible here and refused there, which is the intended difference
+    # between the two validators.
+    "extracted/<script>alert(1)",
+    "extracted/<script>alert(1)</script>.dll",
+])
+def test_a_hostile_but_contained_artifact_name_is_admitted(
+        client, worker_headers, conn, name):
+    """Refuse structure, not characters.
+
+    An S3 key is an opaque byte string that nothing resolves as a path, so
+    `%2f` is a literal name and not a separator -- and a dropped file really
+    can be called `50%off.exe`. Sanitising these would store the wrong
+    evidence under a plausible name.
+    """
+    job_id = leased_and_cleaning(client, worker_headers, conn)
+    r = client.post(
+        f"/api/v1/worker/jobs/{job_id}/artifacts", headers=worker_headers,
+        json={"artifacts": {name: 10}},
+    )
+    assert r.status_code == 200, (name, r.text[:200])
+    assert r.json()[name]["fields"]["key"] == f"results/{job_id}/{name}"
+
+
+def test_a_job_cannot_exceed_its_result_budget(client, worker_headers, conn):
+    """One job cannot fill the store, and the bucket quota is not what stops it.
+
+    Measured 2026-08-24: MinIO accepted 3 MiB into a 1 MiB quota and only
+    refused ~45s later, because quotas are enforced against usage statistics a
+    background scanner refreshes rather than at write time. `memdump` produces
+    many small files and a worker may ask for tickets repeatedly, so without
+    this a job's total was bounded by nothing prompt.
+
+    Refused when the TICKET is minted -- the capability never exists, so the
+    bytes never travel.
+    """
+    from sandbox_platform.config import settings
+
+    job_id = leased_and_cleaning(client, worker_headers, conn)
+    half = settings.max_job_result_bytes // 2
+
+    first = client.post(
+        f"/api/v1/worker/jobs/{job_id}/artifacts", headers=worker_headers,
+        json={"artifacts": {"memdump/a.bin": half}})
+    assert first.status_code == 200
+
+    # Same size again: fits on its own, does not fit on top of the first.
+    # The per-artifact cap cannot catch this, which is the whole point.
+    second = client.post(
+        f"/api/v1/worker/jobs/{job_id}/artifacts", headers=worker_headers,
+        json={"artifacts": {"memdump/b.bin": half + 1}})
+    assert second.status_code == 413
+
+    assert conn.execute(
+        "SELECT results_bytes FROM jobs WHERE id = %s", (job_id,)
+    ).fetchone()[0] == half, "a refused request must not be charged"
+
+
+def test_the_budget_is_charged_across_requests(client, worker_headers, conn):
+    """Accumulated, not per-call: max_length bounds names per request only."""
+    job_id = leased_and_cleaning(client, worker_headers, conn)
+
+    for _ in range(3):
+        client.post(f"/api/v1/worker/jobs/{job_id}/artifacts",
+                    headers=worker_headers,
+                    json={"artifacts": {"extracted/x.bin": 1000}})
+
+    assert conn.execute(
+        "SELECT results_bytes FROM jobs WHERE id = %s", (job_id,)
+    ).fetchone()[0] == 3000
+
+
+def test_a_job_is_claimed_only_once(client, worker_headers, conn):
+    """The budget needs no reset, and this is why.
+
+    Nothing returns a claimed job to 'queued': `reap` marks an expired lease
+    'interrupted' and leaves it for sandboxd's reconciliation to judge. A retry
+    is a new job with a new id and its own results/<job_id>/ prefix.
+
+    An earlier version of the budget reset `results_bytes` on re-claim and had
+    a test that forced a job back to 'queued' by hand to prove it. That state
+    is unreachable, so the test asserted behaviour production never produces --
+    both are gone, and this stands in their place.
+    """
+    enqueue(conn, "ubuntu", SMALL_MIB)
+    first = claim(client, worker_headers, free_mib=FREE_MIB).json()
+    assert first["status"] == "leased"
+    assert first["attempt"] == 1
+
+    # Expire the lease and sweep it, the only route out of an in-flight state.
+    conn.execute("UPDATE jobs SET lease_expires_at = now() - interval '1s'"
+                 " WHERE id = %s", (first["job_id"],))
+    from sandbox_platform import maintenance
+    maintenance.sweep()
+
+    assert state_of(conn, uuid.UUID(first["job_id"])) == "interrupted"
+    assert claim(client, worker_headers, free_mib=FREE_MIB).json()["status"] \
+        != "leased", "an interrupted job must not be handed out again"
+
+
+# --- retention meets the queue --------------------------------------------
+
+def test_a_sample_removed_before_the_claim_says_so_precisely(
+        client, worker_headers, conn, remove_object):
+    """A job queued past the retention window loses its sample.
+
+    Issue #37. Both this and a post-admission swap make the ETag check fail,
+    and until retention landed they shared one `failure_reason`. Reporting an
+    expired sample as "changed after admission" sends whoever reads it hunting
+    for a tamper that never happened -- so the two are kept apart.
+
+    The job still fails CLOSED, which is the part that must not regress: a
+    sample that cannot be verified is never handed to a worker.
+    """
+    job_id = enqueue(conn, "ubuntu", SMALL_MIB)
+    remove_object(f"samples/{job_id}/ubuntu-{SMALL_MIB}.bin")
+
+    claim_r = claim(client, worker_headers, free_mib=FREE_MIB).json()
+
+    assert claim_r["status"] != "leased"
+    assert state_of(conn, job_id) == "failed"
+    reason = conn.execute(
+        "SELECT failure_reason FROM jobs WHERE id = %s", (job_id,)
+    ).fetchone()[0]
+    assert reason == "sample_expired_or_removed"
+
+
 # --- input hostility ------------------------------------------------------
 
 @pytest.mark.parametrize("name", [
-    '"; rm -rf / #', "$(whoami).sh", "`id`.bin", "'; DROP TABLE jobs; --",
-    "<script>alert(1)</script>.exe", "a b\tc.exe", "‮exe.txt",
+    '"; rm -rf ~ #', "$(whoami).sh", "`id`.bin", "'; DROP TABLE jobs; --",
+    "<img src=x onerror=alert(1)>.exe", "a b\tc.exe", "‮exe.txt",
+    "<script>alert(1)", "<!--",   # unclosed: no slash, so admissible
 ])
 def test_hostile_filenames_survive_the_http_layer(client, worker_headers, conn, name):
     """Byte-exact from the database, through JSON, to the worker.
 
     The name must reach the guest unchanged -- DRAFT-030's reason for
     abandoning hash-named guest files. Serialisation must not normalise it.
+
+    `/`-free since 2026-08-24: submission refuses separators, so a name
+    carrying one can no longer reach this table through the API and testing it
+    here would assert something about a state production cannot produce. The
+    tab and the RTL override stay -- both are admissible and both are exactly
+    what a careless downstream parser mishandles.
     """
     enqueue(conn, "windows", WINDOWS_MIB, filename=name)
     body = claim(client, worker_headers, free_mib=WINDOWS_MIB).json()

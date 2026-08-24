@@ -13,7 +13,7 @@ object-store credentials.
 from __future__ import annotations
 
 import json
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 from typing import Annotated, Literal
 from uuid import UUID
 
@@ -21,7 +21,7 @@ import magic
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, status
 from fastapi.responses import StreamingResponse
 from psycopg.rows import dict_row
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from .. import auth
 from .. import events
@@ -40,14 +40,70 @@ router = APIRouter(prefix="/api/v1/jobs", tags=["jobs"],
 
 # --- models ---------------------------------------------------------------
 
+# An S3 key caps at 1024 BYTES and `samples/<uuid>/` spends 45 of them, so the
+# ceiling is 979. 512 leaves room and is far above any real sample name.
+#
+# Bytes, not characters: pydantic's max_length counts characters, so the
+# previous `max_length=1024` admitted a multi-byte name that minted a key S3
+# cannot store -- the submitter got a 201 and a URL that could only ever fail.
+# `dirwatch.c`'s MAX_SAMPLE_NAME is 200; it is a buffer limit there, not this
+# constraint, so the numbers differ on purpose.
+_MAX_SAMPLE_NAME = 512
+
+
+def _reject_unsafe_filename(name: str) -> str:
+    """Refuse a submitted filename that cannot be a safe path component.
+
+    This mirrors `sample_name_admissible()` in `automation/dirwatch.c:250`,
+    deliberately: the API is now the submission boundary that `dirwatch`'s
+    inotify watch used to be, and the two must not disagree about what a
+    sample may be called.
+
+    Three distinct things depend on it, and only the first is about this
+    process:
+
+    - **The object key.** `samples/<job_id>/<name>` must stay inside its
+      prefix. MinIO happens to refuse `..` components itself
+      (`XMinioInvalidObjectName`, checked 2026-08-24), so this is not a live
+      escape today -- but that is MinIO's behaviour, not S3's. On real S3 a key
+      is fully opaque and `samples/<job>/../../x` is a legal, distinct key, so
+      the object would land outside the prefix the whole model assumes.
+      DRAFT-044 calls moving to real S3 "a configuration change, not a
+      redesign", which is exactly why this cannot rest on the store.
+    - **The guest staging path.** `preconfig-*.sh` writes to
+      `$GUEST_STAGING_DIR/<submitted filename>` and `drakvuf-*.sh` executes it.
+      A `/` in the name moves that path.
+    - **Every log line and parser downstream.** A newline in a name forges log
+      entries, which is `dirwatch`'s stated reason for the same rule.
+
+    Refused, never sanitised. The submitted name is part of what is being
+    analysed -- DRAFT-030 -- so a rewritten name would analyse something the
+    submitter did not send.
+    """
+    if len(name.encode()) > _MAX_SAMPLE_NAME:
+        raise ValueError(f"filename exceeds {_MAX_SAMPLE_NAME} bytes")
+    if "/" in name:
+        raise ValueError(f"filename contains a path separator: {name!r}")
+    if name in (".", ".."):
+        raise ValueError(f"filename is a directory entry, not a sample: {name!r}")
+    if any(ord(c) < 0x20 or ord(c) == 0x7F for c in name):
+        raise ValueError(f"filename contains a control character: {name!r}")
+    return name
+
+
 class CreateJobRequest(BaseModel):
     # target_os is parsed into the enum HERE, and this is the only place it is
     # validated. Issue #3: the submitter chooses the OS, it is checked against
     # a closed set at exactly one boundary, and file magic never selects it.
     # An unknown value is a 422 before any handler code runs.
     target_os: TargetOs
-    filename: str = Field(min_length=1, max_length=1024)
+    filename: str = Field(min_length=1, max_length=_MAX_SAMPLE_NAME)
     size_bytes: int = Field(gt=0)
+
+    @field_validator("filename")
+    @classmethod
+    def _filename_is_a_safe_component(cls, v: str) -> str:
+        return _reject_unsafe_filename(v)
 
 
 class CreateJobResponse(BaseModel):
@@ -86,6 +142,13 @@ class JobDetail(JobSummary):
     cancel_requested: bool
     manifest: dict | None
     artifacts: dict[str, str] = {}
+
+    # True once the job is older than the store's retention window, at which
+    # point `artifacts` is empty because MinIO has expired the objects behind
+    # it (issue #37). The manifest still lists what the run produced, so a
+    # reader can tell "this analysis collected a pcap, and it is gone" from
+    # "this analysis collected nothing" -- which one empty dict alone cannot.
+    artifacts_expired: bool = False
 
     # Deliberately absent: blocking_job_id and need_mib.
     #
@@ -254,8 +317,18 @@ def _detail(conn, job_id: UUID) -> JobDetail:
     if row is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "no such job")
 
+    # Past the retention window MinIO has expired the objects, so minting URLs
+    # would produce download links that 404. Computed from age rather than a
+    # HEAD per artifact: a detail view would otherwise cost one round trip per
+    # file to learn something the policy already determines.
+    expired = bool(
+        settings.retention_days
+        and row["created_at"] < datetime.now(UTC)
+        - timedelta(days=settings.retention_days)
+    )
+
     artifacts: dict[str, str] = {}
-    if row["manifest"]:
+    if row["manifest"] and not expired:
         manifest = row["manifest"]
         if isinstance(manifest, str):
             manifest = json.loads(manifest)
@@ -288,6 +361,7 @@ def _detail(conn, job_id: UUID) -> JobDetail:
         manifest=row["manifest"] if isinstance(row["manifest"], dict) else None,
         artifacts=artifacts,
         reserved_ahead=reserved_ahead,
+        artifacts_expired=expired,
     )
 
 

@@ -124,11 +124,23 @@ class FakeWorker:
             self._state(job_id, stage)
             print(f"  -> {stage}")
 
-        urls = self._post(f"/api/v1/worker/jobs/{job_id}/artifacts",
-                          json={"names": list(ARTIFACTS)}).json()
-        for name, url in urls.items():
-            self.s3.put(url, content=ARTIFACTS[name]).raise_for_status()
-        print(f"  uploaded {len(urls)} artifacts")
+        # Declare each size, because the API binds it into the upload policy
+        # (issue #37). The files already exist by now -- that is the whole
+        # reason artifacts can be size-capped where the draft assumed not.
+        tickets = self._post(
+            f"/api/v1/worker/jobs/{job_id}/artifacts",
+            json={"artifacts": {n: len(b) for n, b in ARTIFACTS.items()}},
+        ).json()
+        for name, ticket in tickets.items():
+            # Policy fields BEFORE the file part: S3 stops reading at the file,
+            # so anything after it is not seen. httpx emits `data=` before
+            # `files=`, which is the ordering that matters. Same as submit.py.
+            self.s3.post(
+                ticket["url"],
+                data=ticket["fields"],
+                files={"file": (name, ARTIFACTS[name])},
+            ).raise_for_status()
+        print(f"  uploaded {len(tickets)} artifacts")
 
         # Terminal, and the reason publication is atomic: the artifacts are
         # already in the store, but nothing serves them as finished until this

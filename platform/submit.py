@@ -22,6 +22,14 @@ public certificates and the identity is the Access token:
         --target-os ubuntu --file ./hello.txt \\
         --access-token "$(cloudflared access token -app=https://sandbox.evilbootloader.com)"
 
+**The LAN invocation above also needs `--access-token` now** (issue #37).
+`presigned_upload` always signs for the browser audience, so even an mTLS
+submission gets an upload URL on the public hostname -- and since the object
+store moved behind Access, reaching it needs a session. The upload therefore
+leaves the LAN and comes back through Cloudflare. Picking the audience from how
+the request arrived would fix that; it is a change to the route contract and is
+not this issue's.
+
 **Never point this at a real sample.** It uploads whatever it is given to a
 store that a worker will fetch and execute.
 """
@@ -46,20 +54,24 @@ class Submitter:
                  client_cert: tuple[str, str] | None = None,
                  access_token: str | None = None):
         self.api = api.rstrip("/")
-        # The Access token goes on the API client ONLY. It authenticates a
-        # person to Cloudflare, and the object store is not behind Access --
-        # sending it there would hand a session credential to a server that
-        # has no use for it. Same reasoning as the certificate split below.
         headers = {"cf-access-token": access_token} if access_token else {}
         self.http = httpx.Client(base_url=self.api, timeout=60.0,
                                  headers=headers,
                                  verify=ssl_context(cacert, client_cert))
-        # The object store is a separate client, exactly as in fake_worker.py:
-        # the presigned POST carries its own authorisation in the policy, so
-        # nothing else should travel with it. Here it also matters that no
-        # client certificate is presented -- a browser has none, and this
-        # script is the reference for what a browser does.
-        self.s3 = httpx.Client(timeout=300.0, verify=ssl_context(cacert))
+        # The object store stays a SEPARATE client, but it now carries the
+        # Access token too (issue #37).
+        #
+        # It did not until 2026-08-24, when the store lived on its own
+        # hostname outside Access and sending a session credential there would
+        # have spent it on a server with no use for it. The store is now
+        # path-routed under the API's own hostname, so it sits behind the same
+        # Access application -- without the token, the upload gets a login
+        # redirect rather than a 204.
+        #
+        # What it still must NOT carry is the client certificate. A browser has
+        # none, and this script is the reference for what a browser does.
+        self.s3 = httpx.Client(timeout=300.0, headers=headers,
+                               verify=ssl_context(cacert))
 
     def create(self, target_os: str, filename: str, size: int) -> dict:
         """Reserve a job row and get an upload capability for it.

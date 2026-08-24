@@ -204,6 +204,44 @@ def put_object():
 
 
 @pytest.fixture
+def read_object():
+    """Read a key back with credentials, or None if it is not there.
+
+    The counterpart to `put_object`, and the only way to check what a presigned
+    POST actually stored: a POST ticket is a write capability, so it cannot be
+    used to verify its own effect.
+    """
+    from botocore.exceptions import ClientError
+
+    s3 = _s3()
+
+    def _read(key: str) -> bytes | None:
+        try:
+            return s3.get_object(Bucket=S3_BUCKET, Key=key)["Body"].read()
+        except ClientError:
+            return None
+
+    return _read
+
+
+@pytest.fixture
+def remove_object():
+    """Delete a key, standing in for MinIO's lifecycle rule.
+
+    Retention expiry cannot be waited for in a test -- the shortest lifecycle
+    period S3 expresses is one day, and MinIO scans on its own schedule. What
+    is under test is how the platform behaves once an object is gone, not
+    MinIO's scanner, so the object is removed directly.
+    """
+    s3 = _s3()
+
+    def _remove(key: str) -> None:
+        s3.delete_object(Bucket=S3_BUCKET, Key=key)
+
+    return _remove
+
+
+@pytest.fixture
 def worker_headers():
     """Credentials for the worker channel: the token, plus the worker id that
     job-scoped routes check the lease against."""

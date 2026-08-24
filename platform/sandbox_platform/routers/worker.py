@@ -23,7 +23,7 @@ from typing import Annotated, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from .. import jobs as dal
 from .. import objects
@@ -245,14 +245,20 @@ def claim(req: ClaimRequest):
                 )
                 expected = cur.fetchone()[0]
 
-            if not objects.etag_unchanged(key, expected):
+            status_ = objects.sample_status(key, expected)
+            if status_ != "ok":
+                # "missing" and "changed" are kept apart because they have
+                # different causes: retention expiring a long-queued sample
+                # (#37) versus the upload URL being reused after admission.
+                reason = ("sample_expired_or_removed" if status_ == "missing"
+                          else "sample_changed_after_admission")
                 with connection() as conn:
                     conn.execute(
                         "UPDATE jobs SET state = %s, failure_stage = %s,"
                         "       failure_reason = %s, lease_owner = NULL,"
                         "       lease_expires_at = NULL WHERE id = %s",
                         (JobState.FAILED.value, JobState.QUEUED.value,
-                         "sample_changed_after_admission", last.job_id),
+                         reason, last.job_id),
                     )
                 continue   # take the next job rather than hand back nothing
 
@@ -340,32 +346,147 @@ def heartbeat(job: LeasedJob) -> HeartbeatResponse:
     )
 
 
+class ArtifactTicket(BaseModel):
+    """A presigned POST: the URL, plus the form fields carrying the policy."""
+
+    url: str
+    fields: dict[str, str]
+    expires_in: int
+
+
+# S3 keys cap at 1024 bytes UTF-8 and `results/<uuid>/` spends 45 of them.
+# Refused rather than truncated: a truncated artifact name is a wrong one, and
+# `extracted/` names are evidence of what the sample wrote.
+_MAX_ARTIFACT_NAME = 900
+
+
+def _reject_unsafe_name(name: str) -> str:
+    """Refuse an artifact name that could escape `results/<job_id>/`.
+
+    **These names are attacker-influenced.** `trace.log` and `capture.pcap` are
+    ours, but `extracted/` is named after files the *sample* dropped, so this is
+    untrusted input on the same footing as a submitted filename.
+
+    Refuse, never sanitise. Rewriting `../x` to `x` would silently store the
+    wrong evidence under a plausible name, and a worker sending one is either
+    broken or compromised -- both worth surfacing.
+
+    On percent-encoded traversal (`..%2f..`): it is not a bypass, and the reason
+    is worth stating rather than defending against twice. An S3 key is an opaque
+    byte string that nothing here resolves as a filesystem path. In the POST
+    ticket the key travels in a form field, undecoded; in a presigned GET URL
+    boto3 escapes `%` to `%25`, so one decode by the server yields the literal
+    name back, not a separator. What *would* traverse is a real `..` path
+    component, which is what the component check below refuses.
+
+    `%`, quotes, spaces and unicode are all admitted deliberately -- a dropped
+    file really can be called `50%off.exe`, and byte-exactness of that name is
+    the point of collecting it.
+    """
+    if not name:
+        raise ValueError("artifact name is empty")
+    if len(name.encode()) > _MAX_ARTIFACT_NAME:
+        raise ValueError(f"artifact name exceeds {_MAX_ARTIFACT_NAME} bytes")
+    if name.startswith("/"):
+        raise ValueError(f"artifact name is absolute: {name!r}")
+    if "\\" in name:
+        # Not a separator on Linux, so this is not a traversal fix. It is
+        # refused because a key that means one thing here and another on a
+        # Windows reader is ambiguous evidence.
+        raise ValueError(f"artifact name contains a backslash: {name!r}")
+    if any(ord(c) < 0x20 or ord(c) == 0x7F for c in name):
+        # NUL in particular: harmless in Python, a truncation point in any C
+        # layer this key later passes through.
+        raise ValueError(f"artifact name contains a control character: {name!r}")
+    for part in name.split("/"):
+        # "" catches `a//b` and a trailing slash; "." and ".." catch traversal
+        # and the prefix itself.
+        if part in ("", ".", ".."):
+            raise ValueError(f"artifact name escapes the job prefix: {name!r}")
+    return name
+
+
 class ArtifactRequest(BaseModel):
-    # Relative names under results/<job_id>/. Traversal is refused rather than
-    # normalised: a worker asking for "../" is either broken or compromised,
-    # and quietly rewriting it would hide which.
-    names: list[str] = Field(min_length=1, max_length=64)
+    # Relative names under results/<job_id>/, each mapped to the size the
+    # worker is about to upload.
+    #
+    # max_length bounds names PER CALL, not per job -- a worker may call this
+    # endpoint again. See config.max_artifact_bytes for what actually bounds a
+    # job's total, which is the bucket quota and not anything here.
+    artifacts: dict[str, Annotated[int, Field(ge=0)]] = Field(
+        min_length=1, max_length=64
+    )
+
+    @field_validator("artifacts")
+    @classmethod
+    def _names_stay_in_the_prefix(cls, v: dict[str, int]) -> dict[str, int]:
+        for name in v:
+            _reject_unsafe_name(name)
+        return v
 
 
 @router.post("/jobs/{job_id}/artifacts")
-def artifact_urls(job: LeasedJob, req: ArtifactRequest) -> dict[str, str]:
-    """Presigned PUTs for this job's results, one per name.
+def artifact_urls(job: LeasedJob,
+                  req: ArtifactRequest) -> dict[str, ArtifactTicket]:
+    """Size-capped presigned POSTs for this job's results, one per name.
 
-    One URL per key, never a prefix: a prefix-scoped write capability would
+    One ticket per key, never a prefix: a prefix-scoped write capability would
     let a compromised worker rewrite the whole result set, including other
     jobs' if the prefix were ever widened by accident.
     """
-    urls: dict[str, str] = {}
-    for name in req.names:
-        if name.startswith("/") or ".." in name.split("/"):
-            raise HTTPException(
-                status.HTTP_400_BAD_REQUEST,
-                f"artifact name escapes the job prefix: {name!r}",
-            )
-        urls[name] = objects.presigned_put(
-            f"{objects.result_prefix(job['id'])}{name}"
+    # Charge the whole request against the job's budget FIRST, in one
+    # statement, so two concurrent requests cannot both read the old total and
+    # both pass. A job is leased by one worker, so this is belt-and-braces
+    # rather than a live race -- but the alternative is a read-then-write that
+    # is wrong by construction.
+    #
+    # Charged when the ticket is minted, not when bytes land, because the API
+    # is not in the upload path -- the worker POSTs straight to MinIO. The
+    # point is to refuse the CAPABILITY, which is the only moment refusing
+    # still prevents anything.
+    #
+    # So a ticket the worker never uses is still charged, and asking twice for
+    # the same name charges twice. Both over-count rather than under-count,
+    # which is the safe direction. Never reset: a job_id is analysed once and a
+    # retry is a new job.
+    total = sum(req.artifacts.values())
+    with connection() as conn:
+        charged = conn.execute(
+            """
+            UPDATE jobs
+               SET results_bytes = results_bytes + %(delta)s
+             WHERE id = %(id)s
+               AND results_bytes + %(delta)s <= %(cap)s
+            RETURNING results_bytes
+            """,
+            {"delta": total, "id": job["id"],
+             "cap": settings.max_job_result_bytes},
+        ).fetchone()
+
+    if charged is None:
+        raise HTTPException(
+            status.HTTP_413_CONTENT_TOO_LARGE,
+            f"job would exceed its {settings.max_job_result_bytes} byte result "
+            f"budget; requested {total} more",
         )
-    return urls
+
+    tickets: dict[str, ArtifactTicket] = {}
+    for name, size in req.artifacts.items():
+        # Names were validated by ArtifactRequest, which refuses anything that
+        # could leave this prefix -- see _reject_unsafe_name.
+        if size > settings.max_artifact_bytes:
+            raise HTTPException(
+                status.HTTP_413_CONTENT_TOO_LARGE,
+                f"artifact {name!r} exceeds the "
+                f"{settings.max_artifact_bytes} byte limit",
+            )
+        ticket = objects.presigned_artifact_upload(
+            f"{objects.result_prefix(job['id'])}{name}",
+            min(size, settings.max_artifact_bytes),
+        )
+        tickets[name] = ArtifactTicket(url=ticket.url, fields=ticket.fields,
+                                       expires_in=ticket.expires_in)
+    return tickets
 
 
 @router.post("/jobs/{job_id}/complete", status_code=status.HTTP_204_NO_CONTENT)
