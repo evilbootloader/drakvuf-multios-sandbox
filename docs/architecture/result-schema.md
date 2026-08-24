@@ -40,6 +40,21 @@ SHA-256):
 > filesystem-shaped scheme that design deletes. The gap therefore stays open
 > until `sandboxd` lands, and is recorded here so it is not rediscovered as
 > a surprise.
+>
+> **2026-08-24 (#37): the replacement now exists, and the gap is still
+> open.** `results/<job_id>/` is implemented and tested in the object store —
+> `sandbox_platform/objects.py:result_prefix`, with byte-exact round trips
+> through hostile names in `platform/tests/test_objects.py`. So the keying is
+> no longer a proposal.
+>
+> But **nothing analysing samples uses it yet.** `dirwatch` still writes
+> `$OUTPUTFOLDER/$MD5/` on Dom0, so both collisions above are live in the
+> running system exactly as before. Only `sandboxd` closes this.
+>
+> DRAFT-044 claims this issue "closes the MD5-collision gap ... as F8". It
+> does not, and that sentence should be read as describing the object-store
+> layout rather than the pipeline. Recorded here rather than corrected there,
+> per the annotate-never-rewrite rule.
 
 The Android checklist's own "Proposed result layout" (§4.1) uses SHA-256
 instead of MD5 and a much richer structure — this is Candidate/proposed,

@@ -264,6 +264,15 @@ Bucket, policy, service account and CORS are **not** here — they belong to
 which also decides the presigned-URL TTLs and the deliberately absent
 `DeleteObject` capability.
 
+> **2026-08-24 (#37): that is now step 25**, and it also adds a quota and a
+> 30-day lifecycle rule. Size the volume with those in mind.
+>
+> **Two paths, both correct.** `/srv/minio` here is the `mp0` **mount point**;
+> `MINIO_VOLUMES` in step 19a is `/srv/minio/data`, a directory **inside** it.
+> `df -h /srv/minio` therefore still reports the mp0 volume, which is what the
+> check below is for. Step 4 does not create the `data` subdirectory — step
+> 19a's MinIO does, on first start.
+
 ## Step 5 — network reachability, both directions
 
 The design requires an asymmetry, and this is where to confirm it rather
@@ -2095,7 +2104,8 @@ never a reset.
 
 ## What is deliberately not in this runbook
 
-- **Bucket creation, policy, service account, CORS** — #37.
+- ~~**Bucket creation, policy, service account, CORS** — #37.~~ Now steps
+  25–26, along with the quota, retention and the origin collapse.
 - **TLS certificates and the mTLS trust anchor** — #36, which is where the
   worker token and the client certificate are defined together.
 - **Backups.** Real work, and separate. Losing `/srv/minio` loses collected
@@ -2103,6 +2113,260 @@ never a reset.
 - **Proxmox firewall rules.** Named as a prerequisite in `platform.md` and
   parked by the maintainer on 2026-08-21. Step 5 *observes* the posture; it
   does not enforce it.
+
+# The object store — issue [#37](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/37)
+
+> **CANDIDATE. Nothing below has been executed on the deployment.** Every
+> command was exercised against a local MinIO
+> (`RELEASE.2025-09-07`) and the platform test suite on 2026-08-24, and the
+> measurements quoted are real, but this section is a proposal until its
+> output is pasted back in. Steps 1–24 above are evidence; this is not, yet.
+
+Steps 4 and 15 stood up the minimum object store that unblocked the API and
+said so, deferring policy, CORS and TTLs here. They are dated evidence of what
+ran on 2026-08-23 and are **not** edited — this section supersedes them.
+
+## Step 25 — provision the object store deliberately
+
+The bucket, the policy, the service account, CORS, the quota and retention now
+come from a script in the repository rather than from `mc` commands pasted out
+of this document. That is the point: a policy that exists only as a heredoc in
+a runbook has no copy a test can load and no way to be re-applied after a
+rebuild. See `platform/minio/README.md` for the reasoning behind each grant.
+
+Migration first — the per-job result budget needs its column:
+
+```bash
+pct exec 102 -- bash -lc '
+  su - platform -c "cd /opt/sandbox-platform && git pull --ff-only"
+  su - platform -c "cd /opt/sandbox-platform/platform && \
+      DATABASE_URL=postgresql:///sandbox_platform .venv/bin/python migrations/run.py"
+'
+# expect: applied  0004_results_bytes.sql
+```
+
+`mc` needs to be present; step 15 installed it. Then:
+
+```bash
+pct exec 102 -- bash -lc '
+  set -a; . /etc/minio/minio.env; set +a
+  BROWSER_ORIGIN=https://sandbox.evilbootloader.com \
+  BUCKET_QUOTA=200GiB \
+  RETENTION_DAYS=30 \
+    /opt/sandbox-platform/platform/minio/provision.sh
+'
+```
+
+**Size `BUCKET_QUOTA` below the data volume**, so the store refuses writes
+before the filesystem does — a full filesystem surfaces as a truncated
+artifact at the end of an analysis that has already been paid for. `df -h
+/srv/minio` from step 4 showed 251G (that is the `mp0` mount point; MinIO's
+data directory is `/srv/minio/data` inside it, per step 19a). 200GiB leaves
+headroom for the quota's own lag — see below.
+
+The script is idempotent: re-running it after a partial failure is the
+recovery path, not a hazard. It prints the service-account credentials **once**
+and they are not recoverable — put them into `api.env` and add the two new
+settings:
+
+```bash
+pct exec 102 -- bash -lc '
+  cat >> /etc/sandbox-platform/api.env <<EOF
+
+# Must match RETENTION_DAYS in step 25. The API does no deleting -- it uses
+# this to know when NOT to offer a download link, because a job row is
+# permanent and its objects are not.
+RETENTION_DAYS=30
+
+# Total result bytes one job may be issued upload tickets for.
+MAX_JOB_RESULT_BYTES=4294967296
+EOF
+  # replace the step-15 service account with the one provision.sh minted
+  sed -i "s|^S3_ACCESS_KEY=.*|S3_ACCESS_KEY=sandbox-platform-api|" \
+      /etc/sandbox-platform/api.env
+  # S3_SECRET_KEY: paste by hand. It contains + and / from base64.
+  systemctl restart sandbox-api sandbox-api-browser
+'
+```
+
+### Why the bucket quota is not the guard it looks like
+
+Measured 2026-08-24 against a local MinIO: **3 MiB was written into a 1 MiB
+quota and every write was accepted.** The same bucket refused ~45s later with
+`XMinioAdminBucketQuotaExceeded`.
+
+MinIO enforces quotas against usage statistics its background scanner
+refreshes, not at write time. So the quota stops accumulation over days —
+which is the real failure mode, results piling up — and permits an overshoot
+bounded by write rate times scanner interval, which is not a documented
+contract.
+
+`MAX_JOB_RESULT_BYTES` is the prompt guard. It is checked when an upload
+*ticket* is minted, before any bytes travel, because the API is not in the
+upload path at all — the worker POSTs straight to MinIO. Keep the arithmetic
+in view: **(jobs expected inside the retention window) × MAX_JOB_RESULT_BYTES
+should stay under BUCKET_QUOTA**, or the store fills before retention reclaims
+anything.
+
+### Retention is lifecycle expiry, not object lock
+
+The two are opposites sharing a word. **Object lock prevents deletion** for a
+period and is asserted *off* by the script, because it would make retention
+undecidable later — you cannot delete what is locked. **Lifecycle expiry
+deletes** after one, and is what `RETENTION_DAYS` installs.
+
+One rule over the whole bucket, not a shorter period for `samples/` and a
+longer one for `results/`. That split is tempting and does not work:
+`results/<job_id>/extracted/` is malware too, S3 lifecycle prefixes are
+literal rather than globs, so `results/*/extracted/` cannot be expressed, and a
+longer results period would keep dropped executables longer than the sample
+they came from.
+
+**The API is still delete-less.** MinIO does the expiring on its own schedule,
+so retention costs the service account no destructive capability —
+`DeleteObject` stays absent from `api-policy.json`.
+
+### Verify
+
+```bash
+# the policy denies what it should. As the SERVICE ACCOUNT, not root.
+pct exec 102 -- bash -lc '
+  mc alias set svc https://192.168.1.10:9000 sandbox-platform-api "<secret>"
+  mc ls svc/analysis         ; echo "list  exit=$?  (expect NON-zero)"
+  mc cp /etc/hostname svc/analysis/samples/probe/x
+  echo "write exit=$?  (expect 0)"
+  mc rm svc/analysis/samples/probe/x ; echo "del   exit=$?  (expect NON-zero)"
+  mc alias rm svc
+'
+
+# retention and quota are installed
+pct exec 102 -- bash -lc 'mc ilm rule ls local/analysis; mc quota info local/analysis'
+
+# the region probe that actually works. `mc admin config get local region`
+# reports EMPTY for an env-set value and is NOT a probe -- that is what made
+# MINIO_SITE_REGION look unset through two investigations.
+pct exec 102 -- bash -lc 'mc admin config get local site'
+# expect a commented line: # MINIO_SITE_REGION=eu-central-1
+```
+
+## Step 26 — one origin: retire `objects.evilbootloader.com`
+
+Step 17a gave MinIO its own hostname and step 20a routed it. That is dated
+evidence and stays. This replaces it, and the reason is CORS.
+
+**CORS keys on origin — scheme + hostname + port — not on host.** MinIO, the
+API and the web UI all live on `192.168.1.10`, but a browser seeing
+`sandbox.evilbootloader.com` and `objects.evilbootloader.com` has no idea they
+are one container. Two names, two origins, and the browser upload becomes a
+cross-origin request whose failure mode is nasty: it is CORS-safelisted, so
+there is no preflight, so a wrong origin does not *prevent* the upload — MinIO
+stores the object and answers 204 and the browser then refuses to expose the
+response. The page reports a network error for an upload that succeeded.
+
+MinIO uses **path-style** addressing, so every object URL already begins
+`/analysis/`. Routing that path on the API's own hostname makes the whole flow
+same-origin and deletes the problem rather than configuring around it:
+
+```yaml
+# /etc/cloudflared/config.yml
+ingress:
+  # bucket FIRST -- cloudflared matches in order
+  - hostname: sandbox.evilbootloader.com
+    path: ^/analysis(/|$)
+    service: https://192.168.1.10:9000
+    originRequest:
+      caPool: /etc/cloudflared/ca.crt
+  - hostname: sandbox.evilbootloader.com
+    service: https://192.168.1.10:8000
+    originRequest:
+      caPool: /etc/cloudflared/ca.crt
+  - service: http_status:404
+```
+
+`(/|$)` rather than a bare `/analysis/`, because the presigned POST targets
+`/analysis` exactly — path-style POST carries the key in a form field, not the
+path — and because `^/analysis` alone would also match a bucket named
+`analysis-something`. Step 20a already reasoned this out; it carries over.
+
+```bash
+pct exec 102 -- bash -lc '
+  cloudflared --config /etc/cloudflared/config.yml tunnel ingress validate
+  sed -i "s|^S3_PUBLIC_ENDPOINT=.*|S3_PUBLIC_ENDPOINT=https://sandbox.evilbootloader.com|" \
+      /etc/sandbox-platform/api.env
+  systemctl restart cloudflared sandbox-api sandbox-api-browser
+'
+```
+
+Then remove the `objects` public hostname from the tunnel and its DNS record
+in the Cloudflare dashboard. **Do that last**, after the checks below pass.
+
+### What this buys beyond deleting the CORS problem
+
+**The store moves behind Access.** `objects.evilbootloader.com` was
+internet-reachable, gated only by the path rule. Under one hostname the store
+inherits the existing Access application — same app, same policy, **same
+AUD**, nothing new to configure — so a presigned URL leaked outside the policy
+is no longer usable through the tunnel at all.
+
+Access was deliberately kept *off* the objects hostname in step 17 because a
+cross-origin preflight would have received a 302 to the login page. Same-origin,
+that objection disappears, which is why these two changes go together.
+
+**The cost is a shared namespace.** No API or UI route may ever begin
+`/analysis`, or cloudflared routes it to MinIO and the route silently stops
+existing — in deployment only, surfacing as a 403 from MinIO about a
+signature. `tests/test_objects.py::test_no_api_route_claims_the_bucket_prefix`
+asserts this so #38 cannot introduce one.
+
+### Verify
+
+```bash
+TOKEN=$(cloudflared access token -app=https://sandbox.evilbootloader.com)
+
+curl -sI https://objects.evilbootloader.com/analysis   # expect: DNS failure
+curl -so /dev/null -w '%{http_code}\n' \
+     https://sandbox.evilbootloader.com/analysis       # expect: 302 to login
+curl -so /dev/null -w '%{http_code}\n' -H "cf-access-token: $TOKEN" \
+     https://sandbox.evilbootloader.com/analysis       # expect: 403 from MinIO
+```
+
+**403 is the PASS on the third.** It means Access let the request through and
+MinIO refused it unsigned, which is exactly right. A 302 there means the path
+rule is not matching and the request reached the API instead.
+
+```bash
+# CORS is scoped, not reflected. Defence in depth now rather than the fix:
+# same-origin needs no CORS, but MinIO's default reflects ANY origin with
+# Allow-Credentials: true, which would let a page at attacker.example holding
+# a LEAKED presigned URL read the response.
+curl -si -X OPTIONS https://sandbox.evilbootloader.com/analysis \
+     -H "cf-access-token: $TOKEN" -H "Origin: https://evil.example" \
+     -H "Access-Control-Request-Method: POST" \
+  | grep -i access-control-allow-origin        # expect: NOTHING
+```
+
+It does **not** stop `curl` with the same leaked URL. Nothing does, until the
+TTL expires.
+
+### The whole path, end to end
+
+```bash
+# submission. --access-token now covers the upload leg too, because the store
+# is behind Access. This is also true of a LAN submission: presigned_upload
+# always signs for the browser audience, so an mTLS submission's upload still
+# leaves the LAN and returns through Cloudflare.
+python submit.py --api https://sandbox.evilbootloader.com --target-os ubuntu \
+    --file ./hello.txt --watch --wait 300 --access-token "$TOKEN"
+
+# and the worker half, which uploads artifacts by size-capped presigned POST
+python fake_worker.py --api https://192.168.1.10:8443 --token "$WORKER_TOKEN" \
+    --cacert ca.crt --cert dom0.crt --key dom0.key --once
+```
+
+Confirm `capture.pcap` lands at **0 bytes**. An empty capture is a real result
+— it means the clone generated no traffic — and the artifact upload policy
+starts its size range at 0 for exactly that reason, where the sample policy
+starts at 1.
 
 ## Rollback
 

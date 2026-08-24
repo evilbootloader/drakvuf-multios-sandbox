@@ -279,3 +279,110 @@ Configuration rollback does not touch the data volume. Losing the volume
 loses collected artifacts, which are reproducible by re-running an analysis
 but not by any other means — so backups are real work and are deliberately
 not claimed by this issue.
+---
+
+# Annotation — 2026-08-24, during implementation
+
+Appended rather than rewritten, per the annotate-never-rewrite rule. The
+reasoning above is the record of what was decided in advance; this is what
+measurement changed.
+
+## Four claims above that measurement contradicted
+
+**1. "Presigned PUT versus POST — the size-cap question."** The section is
+right about browser uploads and wrong about artifacts. It keeps them on a
+presigned PUT because "the size is not knowable in advance" — but
+`POST /worker/jobs/{id}/artifacts` is called *after* the trace finishes, when
+the files are already on Dom0's disk, so the worker knows every size exactly.
+An unbounded write capability was being issued for nothing. Artifacts now use
+a size-capped POST, with the range starting at **0** rather than 1: an empty
+`capture.pcap` is a real result meaning the clone generated no traffic.
+
+**2. "CORS ... The bucket allows `PUT`/`POST` from the platform's own origin
+only."** Two problems. Per-bucket CORS **does not exist** on this build —
+`mc cors set` and boto3's `put_bucket_cors` both return `NotImplemented`
+against `RELEASE.2025-09-07` — so the only mechanism is the server-wide
+`cors_allow_origin`, which applies immediately with no restart.
+
+More importantly the whole problem was removable. MinIO uses path-style
+addressing, so every object URL begins `/analysis/`; routing that path on the
+API's own hostname makes the browser upload **same-origin** and retires
+`objects.evilbootloader.com` entirely. The store then inherits the existing
+Access application rather than sitting on a hostname outside it. CORS is still
+set, as defence in depth against a *leaked presigned URL* being read by a page
+at another origin — MinIO's default reflects any origin with
+`Allow-Credentials: true`.
+
+**3. "A full volume fails loudly" (TEST 9) — via the bucket quota.** The quota
+does not fail promptly. Measured: **3 MiB written into a 1 MiB quota, every
+write accepted**; the same bucket refused ~45s later with
+`XMinioAdminBucketQuotaExceeded`. MinIO enforces quotas against usage
+statistics its background scanner refreshes, not at write time. So the quota
+stops accumulation over days and permits an overshoot bounded by write rate
+times scanner interval — not a documented contract, and not testable
+deterministically.
+
+`MAX_JOB_RESULT_BYTES` (`jobs.results_bytes`, migration 0004) is the prompt
+guard, charged when a ticket is minted because the API is not in the upload
+path. Note this also corrects a premise in "Bucket layout": `max_artifact_bytes`
+caps one object, but `memdump` dumps the memory regions a process writes, so a
+run produces many small files and a per-object cap bounds a job at nothing.
+
+**4. "This is also what closes the MD5-collision gap ... as F8."** It does not.
+`results/<job_id>/` is implemented and tested, but nothing analysing samples
+uses it — `dirwatch` still writes `$OUTPUTFOLDER/$MD5/` on Dom0, so both
+collisions remain live. Only `sandboxd` closes F8. Recorded in
+`docs/architecture/result-schema.md`.
+
+## Scope taken beyond this draft
+
+- **Retention decided, provisionally: 30 days, lifecycle expiry over the whole
+  bucket.** "Out of scope" above still holds in spirit — the *policy* question
+  is DRAFT-022's — but leaving the store with no expiry at all was the worse
+  default. Not split by prefix: `results/<job_id>/extracted/` is malware too and
+  S3 lifecycle prefixes are literal rather than globs.
+- **Input validation on both upload paths.** The draft says nothing about it.
+  `filename` had only length bounds, and its `max_length=1024` counted
+  *characters* against an S3 key limit measured in *bytes*. Sample names now
+  mirror `dirwatch.c`'s `sample_name_admissible()` (no separators at all);
+  artifact names allow subpaths but refuse traversal, because `extracted/` names
+  come from what the sample dropped.
+- **Sample names are validated against the GUEST's filesystem, per
+  `target_os`.** The name does not only become an object key — it becomes
+  `$GUEST_STAGING_DIR/<name>`, written by `injector -m writefile`. Ubuntu and
+  Android are ext4/f2fs and forbid only `/` and NUL; **Windows is NTFS** and
+  forbids `<>:"/\|?*`, the DOS device names (`CON`, `NUL`, `COM1`–`COM9`,
+  `LPT1`–`LPT9`, extension or not), and a trailing dot or space.
+
+  `:` is the one that matters. `sample.exe:payload` on NTFS is not a file with
+  that name — it is an **alternate data stream** on `sample.exe`, so the
+  sample would be staged under one name and executed from another. Extension
+  dispatch and `argv[0]` self-checks are already live evasion surface
+  (DRAFT-030); an ADS is somewhere to put the payload outright.
+
+  Per-target rather than a lowest common denominator: every one of those names
+  is ordinary on ext4, and refusing them for an Ubuntu sample would discard
+  evidence to satisfy a constraint that does not apply to it. `target_os`
+  arrives in the same request, so the check costs nothing. macOS is not a
+  target of this project and has no branch; if one is added, `:` is again the
+  character to look at.
+
+  No Windows pipeline exists yet, which is *why* this landed now — the API has
+  accepted `target_os=windows` since #36, and fixing the contract before
+  `preconfig-windows.sh` is written is cheaper than after.
+- **A per-job result budget**, per finding 3.
+
+## Decisions confirmed unchanged
+
+Anonymous access denied; no `ListBucket`; no `DeleteObject`; `job_id` keying;
+versioning and object lock off; the four TTLs; one bucket. All now asserted by
+`platform/tests/test_objects.py` rather than read off the policy.
+
+## The probe that was wrong twice
+
+`mc admin config get <alias> region` reports **empty for an env-provided
+value** and is not a probe. `MINIO_SITE_REGION` set in `minio.env` is in effect
+but appears only as a commented line under `... config get <alias> site`. This
+was reported twice during #36 as "the region is not being enforced"; it always
+was. The behavioural check is that a wrong-region signature is refused with
+`400 AuthorizationHeaderMalformed`.

@@ -290,7 +290,22 @@ directories, because the submitted name is part of what is being analysed.
 `sha256` is an indexed column for search and dedup reporting; it is not the
 storage key.
 
-Artifacts upload **directly to MinIO** via presigned PUTs requested from the
+> **Amended 2026-08-24 (#37): presigned POSTs, not PUTs.** DRAFT-044 kept
+> artifacts on a presigned PUT because "the size is not knowable in advance".
+> It is — `POST /worker/jobs/<id>/artifacts` runs *after* the trace, when the
+> files are on Dom0's disk — so an unbounded write capability was being issued
+> for no gain. The worker now declares each size and the API binds it into the
+> policy, the same arrangement the browser upload has had since #36.
+>
+> **What bounds a job's total is `MAX_JOB_RESULT_BYTES`, not the bucket
+> quota.** Measured 2026-08-24: MinIO accepted 3 MiB into a 1 MiB quota and
+> refused only ~45s later, because quotas are enforced against usage
+> statistics a background scanner refreshes rather than at write time. The
+> quota is the store-wide backstop; the per-job budget in `jobs.results_bytes`
+> is the prompt one, charged when a ticket is minted because the API is not in
+> the upload path and that is the last moment refusing prevents anything.
+
+Artifacts upload **directly to MinIO** via presigned POSTs requested from the
 API — never through the API itself. Then one terminal call:
 
 ```text
@@ -342,6 +357,34 @@ This is the concrete benefit of choosing the HTTPS API over letting Dom0
 speak to Postgres directly. The database is reachable only by the API
 process, so the blast radius of a compromised Dom0 is the set of jobs it is
 currently leasing.
+
+### What the API holds — and what it deliberately cannot do (#37)
+
+One MinIO service account, `GetObject` and `PutObject` on `analysis/*`. The
+policy is tracked at `platform/minio/api-policy.json` and applied by
+`platform/minio/provision.sh`; both absences below are asserted by
+`platform/tests/test_objects.py` rather than read off the file.
+
+| Absent | What that costs an attacker who takes the API |
+|---|---|
+| `s3:ListBucket` | Cannot enumerate a store of live malware. It also keeps anonymous misses answering 403 rather than 404 — with `ListBucket` granted, S3 turns "no such key" into a 404 and unauthenticated requests become an existence oracle over submitted filenames |
+| `s3:DeleteObject` | Cannot destroy evidence. Retention is done by MinIO's own lifecycle rule, so this capability buys nothing operationally |
+
+**Retention is decided, provisionally: 30 days, lifecycle expiry over the whole
+bucket.** Not object-lock retention, which is the opposite — it *prevents*
+deletion and would have made this decision unmakeable later. Not split by
+prefix either: `results/<job_id>/extracted/` is malware too, and S3 lifecycle
+prefixes are literal rather than globs, so `results/*/extracted/` cannot be
+expressed and a longer results period would outlive the sample it came from.
+
+This bounds DRAFT-022's exposure, which unbounded retention did not: pcaps
+carry third-party traffic and memdumps carry whatever was in guest memory.
+
+**A job row outlives its objects**, and the API knows it: past the window
+`GET /jobs/{id}` returns `artifacts_expired` and mints no URLs, rather than
+handing out download links for objects MinIO removed. The manifest still lists
+what the run produced, so "collected a trace, and it is gone" stays
+distinguishable from "collected nothing".
 
 ### Why there are no VLAN or memory lease files
 
