@@ -21,7 +21,7 @@ import magic
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, status
 from fastapi.responses import StreamingResponse
 from psycopg.rows import dict_row
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, model_validator
 
 from .. import auth
 from .. import events
@@ -51,8 +51,66 @@ router = APIRouter(prefix="/api/v1/jobs", tags=["jobs"],
 _MAX_SAMPLE_NAME = 512
 
 
-def _reject_unsafe_filename(name: str) -> str:
+# Characters NTFS refuses outright, and `:` is the dangerous one rather than
+# the noisy one: `sample.exe:payload` is not a file called that, it is an
+# ALTERNATE DATA STREAM on `sample.exe`. `injector -m writefile` would create
+# the stream, and what `drakvuf-windows.sh` then executes is ambiguous -- a
+# sample could be staged under one name and run from another. Extension
+# dispatch and argv[0] self-checks are already live evasion surface (DRAFT-030);
+# an ADS is a place to hide the payload entirely.
+_WINDOWS_FORBIDDEN = set('<>:"/\\|?*')
+
+# DOS device names, still special on every modern Windows. Writing to `CON`
+# writes to the console rather than to a file, so the sample never lands and
+# the failure looks like a broken injector. Reserved WITH an extension too:
+# `CON.txt` is CON.
+_WINDOWS_RESERVED = frozenset(
+    {"CON", "PRN", "AUX", "NUL"}
+    | {f"COM{d}" for d in range(1, 10)}
+    | {f"LPT{d}" for d in range(1, 10)}
+)
+
+
+def _reject_for_windows_guest(name: str) -> None:
+    """NTFS rules, applied only when the sample is bound for a Windows guest.
+
+    Per-target rather than a lowest common denominator, because `target_os`
+    arrives in the same request and the submitted name is part of what is being
+    analysed. `payload:1.bin` is a legal Linux filename; refusing it for an
+    Ubuntu sample would discard evidence to satisfy a constraint that does not
+    apply to it.
+    """
+    bad = sorted(_WINDOWS_FORBIDDEN & set(name))
+    if bad:
+        raise ValueError(
+            f"filename contains {''.join(bad)!r}, which NTFS refuses: {name!r}"
+        )
+    if name.split(".")[0].upper() in _WINDOWS_RESERVED:
+        raise ValueError(f"filename is a reserved Windows device name: {name!r}")
+    if name[-1] in ". ":
+        # Windows strips these silently, so the staged file would not have the
+        # name that was submitted and the SHA-256 would describe a file at a
+        # path nothing wrote.
+        raise ValueError(f"filename ends with a dot or space: {name!r}")
+
+
+def _reject_unsafe_filename(name: str, target: TargetOs | None = None) -> str:
     """Refuse a submitted filename that cannot be a safe path component.
+
+    Two layers. The universal rules below hold for every target; the
+    Windows-only rules are in `_reject_for_windows_guest`, because the guest's
+    filesystem is what the name ultimately has to survive:
+
+    | Guest | Staging path | Forbidden |
+    |---|---|---|
+    | Ubuntu | `/home/<user>/Desktop` (ext4) | `/`, NUL |
+    | Android | `/data/local/tmp` (ext4/f2fs) | `/`, NUL |
+    | Windows | NTFS | `<>:"/\\|?*`, device names, trailing dot/space |
+
+    macOS is not a target of this project (CLAUDE.md names three), so no APFS
+    branch exists. If one is ever added, `:` is the character to look at --
+    legal in POSIX APIs but the historic HFS separator, which Finder still
+    renders as `/`.
 
     This mirrors `sample_name_admissible()` in `automation/dirwatch.c:250`,
     deliberately: the API is now the submission boundary that `dirwatch`'s
@@ -88,6 +146,8 @@ def _reject_unsafe_filename(name: str) -> str:
         raise ValueError(f"filename is a directory entry, not a sample: {name!r}")
     if any(ord(c) < 0x20 or ord(c) == 0x7F for c in name):
         raise ValueError(f"filename contains a control character: {name!r}")
+    if target is TargetOs.WINDOWS:
+        _reject_for_windows_guest(name)
     return name
 
 
@@ -100,10 +160,12 @@ class CreateJobRequest(BaseModel):
     filename: str = Field(min_length=1, max_length=_MAX_SAMPLE_NAME)
     size_bytes: int = Field(gt=0)
 
-    @field_validator("filename")
-    @classmethod
-    def _filename_is_a_safe_component(cls, v: str) -> str:
-        return _reject_unsafe_filename(v)
+    # A model validator rather than a field one, because the rules depend on
+    # `target_os` and a field validator cannot see a sibling field.
+    @model_validator(mode="after")
+    def _filename_suits_the_target(self) -> CreateJobRequest:
+        _reject_unsafe_filename(self.filename, self.target_os)
+        return self
 
 
 class CreateJobResponse(BaseModel):

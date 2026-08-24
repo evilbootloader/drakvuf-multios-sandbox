@@ -517,3 +517,66 @@ def test_retention_disabled_never_expires_anything(client, conn, monkeypatch):
 
     assert detail["artifacts_expired"] is False
     assert "trace.log" in detail["artifacts"]
+
+
+# --- the guest's filesystem, not just ours ---------------------------------
+#
+# The filename becomes $GUEST_STAGING_DIR/<name> inside the analysis guest, so
+# what it must survive is the GUEST's filesystem. Validated per target_os,
+# which arrives in the same request.
+
+@pytest.mark.parametrize("name", [
+    "payload:1.bin",              # ADS on NTFS; an ordinary name on ext4
+    'quote".bin',
+    "wild*card.exe", "who?.exe", "pipe|d.exe", "lt<gt>.exe",
+    "back\\slash.exe",
+    "CON", "con.txt", "NUL.exe", "COM1", "lpt9.dll",   # DOS device names
+    "trailing.exe.", "trailing ",
+])
+def test_a_name_ntfs_refuses_is_refused_for_windows(client, name):
+    """Refused at submission, because it could never be staged.
+
+    `:` is the one that matters rather than the noisiest: on NTFS
+    `sample.exe:payload` is not a file, it is an alternate data stream on
+    `sample.exe`. `injector -m writefile` would create the stream and what
+    the trace then executes is ambiguous -- a sample staged under one name and
+    run from another, which is a place to hide a payload outright.
+
+    The device names are the quiet ones: writing to `CON` writes to the
+    console, so the sample never lands and it looks like a broken injector.
+    """
+    r = client.post("/api/v1/jobs", json={
+        "target_os": "windows", "filename": name, "size_bytes": 4,
+    })
+    assert r.status_code == 422, (name, r.text[:200])
+
+
+@pytest.mark.parametrize("target", ["ubuntu", "android"])
+@pytest.mark.parametrize("name", [
+    "payload:1.bin", 'quote".bin', "wild*card.exe", "back\\slash.exe",
+    "CON", "trailing.exe.", "trailing ",
+])
+def test_the_same_names_are_legal_on_a_linux_guest(client, target, name):
+    """Per-target, not a lowest common denominator.
+
+    Every name above is a perfectly ordinary ext4 filename. Refusing them for
+    an Ubuntu or Android sample would discard evidence -- the submitted name is
+    part of what is being analysed (DRAFT-030) -- to satisfy a constraint that
+    does not apply to that guest.
+    """
+    r = client.post("/api/v1/jobs", json={
+        "target_os": target, "filename": name, "size_bytes": 4,
+    })
+    assert r.status_code == 201, (target, name, r.text[:200])
+
+
+@pytest.mark.parametrize("name", ["sample.exe", "CONSOLE.exe", "COM10.dll",
+                                  "not-con.exe", "a.CON"])
+def test_windows_still_accepts_ordinary_names(client, name):
+    """The rules must not over-refuse. `CONSOLE` merely starts with `CON`,
+    `COM10` is not a device (only COM1-COM9 are), and `a.CON` has `CON` as an
+    extension rather than as the stem."""
+    r = client.post("/api/v1/jobs", json={
+        "target_os": "windows", "filename": name, "size_bytes": 4,
+    })
+    assert r.status_code == 201, (name, r.text[:200])
