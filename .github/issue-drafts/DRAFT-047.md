@@ -1,6 +1,8 @@
 # DRAFT-047: Per-user isolation, using the identity Cloudflare Access already establishes
 
-**Status:** Drafted, not published.
+**Status:** Published as [#40](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/40), 2026-08-24.
+JWT verification and `owner` landed early, in #36; the read-path
+scoping and the quota did not.
 **Area:** core/platform, security
 **OS:** ALL
 **Milestone:** M1 → replaces part of M8

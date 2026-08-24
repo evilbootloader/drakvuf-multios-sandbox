@@ -72,7 +72,7 @@ class JobSummary(BaseModel):
     #
     # Every reader sees every submitter. That matches the current posture --
     # Access admits only people who may see everything -- and is precisely
-    # what #47 has to revisit once `visibility` means something.
+    # what #40 has to revisit once `visibility` means something.
     owner: str | None = None
 
 

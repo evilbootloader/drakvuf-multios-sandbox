@@ -542,7 +542,7 @@ do not compete with Track D for the machine.
 |---|---|---|---|
 | DRAFT-041 | [#34](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/34) **open** | DRAFT-044 | [#37](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/37) **open** |
 | DRAFT-042 | [#35](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/35) **open** | DRAFT-045 | [#38](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/38) **open** |
-| DRAFT-043 | [#36](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/36) **open** | | |
+| DRAFT-043 | [#36](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/36) **CLOSED 2026-08-24** | | |
 
 Published together rather than one at a time, against the rule that a draft
 is published when work on it starts: #35 is where work starts, and the other
@@ -583,6 +583,28 @@ platform — belonging to nobody.
 | Draft ID | Title | Area | OS | Milestone | Priority | Depends on | Origin |
 |---|---|---|---|---|---|---|---|
 | DRAFT-046 | Transport security — Cloudflare Tunnel outward, an internal CA inward | core/platform, security | ALL | M1 → gates M7/M8 | P0 | DRAFT-041 | Maintainer, 2026-08-23 |
+
+## Ninth batch — DRAFT-047
+
+| Draft ID | Title | Area | OS | Milestone | Priority | Depends on | Origin |
+|---|---|---|---|---|---|---|---|
+| DRAFT-047 | Per-user isolation, using the identity Cloudflare Access already establishes | core/platform, security | ALL | M1 → replaces part of M8 | P0 | DRAFT-043, DRAFT-046 | Maintainer, 2026-08-23 |
+
+| Draft | Issue |
+|---|---|
+| DRAFT-047 | [#40](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/40) **open** |
+
+**Published 2026-08-24, at the point its absence became a defect.** The
+runbook, the code comments and #36's closing comment had all been citing
+`#47` — the draft number — as though it were an issue. It was not: numbering
+had only reached 39, so every one of those references pointed at nothing.
+Publishing it made the number real, and it is **#40**, not #47.
+
+Half of it landed early. Verifying the Access JWT and populating `owner`
+were done inside #36, because closing that issue honestly meant the browser
+routes could not stay anonymous. What remains is the half that matters: no
+read path filters on `owner` or `visibility`, so every authenticated user
+still sees every job.
 
 **The topology has two trust domains, not one**, and that is the finding
 that shaped it. Browsers reach the platform through a **Cloudflare Tunnel**,

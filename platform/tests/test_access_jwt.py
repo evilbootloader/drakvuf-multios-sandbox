@@ -1,6 +1,6 @@
 """Cloudflare Access identity on the browser routes.
 
-Issue #36 / #47. Before this, anything that reached the API could read,
+Issue #36 / #40. Before this, anything that reached the API could read,
 cancel and stream every job -- Access at the edge was the only gate and the
 API had no way to know who was calling.
 

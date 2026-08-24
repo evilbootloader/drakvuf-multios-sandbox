@@ -20,7 +20,7 @@
 > never expired; and the browser routes had no identity at all.
 >
 > **Still open after this runbook**, all on
-> [#47](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/47):
+> [#40](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/40):
 > no rate limit or quota on job creation; every reader sees every submitter's
 > jobs, because `visibility` is still a column nothing populates; and
 > `reserved_ahead` reports plain queue position rather than the reservation
@@ -704,7 +704,7 @@ Steps 15–22.
 >
 > That is a deployment constraint, not a bug to work around:
 > **Cloudflare Access must admit only people who may see everything.**
-> [#47](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/47)
+> [#40](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/40)
 > closes it.
 
 ## Order, and why it is this way
@@ -986,7 +986,7 @@ string, as does every other intermediary.
 **Access on `sandbox.*` is what makes that acceptable.** Without a way to reach
 `POST /api/v1/jobs`, an attacker cannot mint upload policies or list jobs to
 discover artifact URLs in the first place. The API has **no application-layer
-authentication of its own** ([#47](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/47)),
+authentication of its own** ([#40](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/40)),
 so Access there is not defence in depth — it is the only gate.
 
 ### Sharing the Access JWT with the object store — deferred, not rejected
@@ -1419,7 +1419,7 @@ holds while one process serves both to everyone who gets past its front door.
 > **NOT YET IMPLEMENTED.** `app.py` mounts both routers unconditionally, so
 > today the split is by *listener* only and both listeners expose both
 > routers. Per-listener mounting needs a code change — tracked with
-> [#47](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/47),
+> [#40](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/40),
 > which owns the browser-auth gap generally. Until it lands, the table above
 > describes intent and **Cloudflare Access is the only thing keeping the
 > browser side closed.**
@@ -1499,7 +1499,7 @@ No `--ssl-ca-certs` and no `--ssl-cert-reqs`: TLS stays on, client
 certificates become optional, which is what `cloudflared` needs. The listener
 is still on the LAN address, so **`192.168.1.10:8000` is reachable from Dom0
 and from anything else on that segment without a certificate** — that is the
-exposure #47 closes, and it is why Access on the tunnel is load-bearing rather
+exposure #40 closes, and it is why Access on the tunnel is load-bearing rather
 than convenient.
 
 **The `Host` header must reach MinIO unchanged.** Presigned URLs are signed
@@ -1818,7 +1818,7 @@ signing invalidates the signature instead.
 > rate limit** — anyone who can reach the API can grow that table at no cost.
 > Not urgent while Access fronts the only public path, and not this runbook's
 > to fix: tracked on
-> [#47](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/47).
+> [#40](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/40).
 
 ### The SSE stream
 
