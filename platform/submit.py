@@ -14,6 +14,14 @@ what a failing page gets compared against.
         --file ./hello.txt --cacert ca.crt \\
         --cert fake-worker.crt --key fake-worker.key --watch
 
+Through the Cloudflare tunnel instead of the LAN, which is the path a browser
+takes -- no internal CA and no client certificate, because both ends present
+public certificates and the identity is the Access token:
+
+    python submit.py --api https://sandbox.evilbootloader.com \\
+        --target-os ubuntu --file ./hello.txt \\
+        --access-token "$(cloudflared access token -app=https://sandbox.evilbootloader.com)"
+
 **Never point this at a real sample.** It uploads whatever it is given to a
 store that a worker will fetch and execute.
 """
@@ -35,9 +43,16 @@ TERMINAL = {"completed", "failed", "rejected", "cancelled"}
 
 class Submitter:
     def __init__(self, api: str, cacert: str | None = None,
-                 client_cert: tuple[str, str] | None = None):
+                 client_cert: tuple[str, str] | None = None,
+                 access_token: str | None = None):
         self.api = api.rstrip("/")
+        # The Access token goes on the API client ONLY. It authenticates a
+        # person to Cloudflare, and the object store is not behind Access --
+        # sending it there would hand a session credential to a server that
+        # has no use for it. Same reasoning as the certificate split below.
+        headers = {"cf-access-token": access_token} if access_token else {}
         self.http = httpx.Client(base_url=self.api, timeout=60.0,
+                                 headers=headers,
                                  verify=ssl_context(cacert, client_cert))
         # The object store is a separate client, exactly as in fake_worker.py:
         # the presigned POST carries its own authorisation in the policy, so
@@ -144,6 +159,9 @@ def main() -> int:
     ap.add_argument("--declare-size", type=int, metavar="BYTES",
                     help="declare a size other than the file's own, to check "
                          "that the server measures rather than believes")
+    ap.add_argument("--access-token", metavar="JWT",
+                    help="Cloudflare Access token for the tunnel path. Get one "
+                         "with: cloudflared access token -app=<api url>")
     args = ap.parse_args()
 
     if bool(args.cert) != bool(args.key):
@@ -152,7 +170,8 @@ def main() -> int:
         ap.error(f"{args.file} is not a file")
 
     s = Submitter(args.api, args.cacert,
-                  (args.cert, args.key) if args.cert else None)
+                  (args.cert, args.key) if args.cert else None,
+                  access_token=args.access_token)
 
     real = args.file.stat().st_size
     created = s.create(args.target_os, args.file.name,
