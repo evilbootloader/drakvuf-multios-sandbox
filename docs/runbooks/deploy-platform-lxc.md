@@ -13,14 +13,19 @@
 > started, because the `sed` that derived its unit produced an unparseable
 > one. It is rewritten below and has not been re-run.
 >
-> **Step 23 closes the submission path** — create, upload, admit, claim,
-> complete, with the declared-size policy demonstrated as enforced rather
-> than recorded.
+> **Steps 22–24 close #36.** The worker channel, the submission path, the SSE
+> stream and the tunnel path are all evidenced. Three gaps found while closing
+> it were fixed rather than recorded: `jobs.reap` had never been called, so
+> the lease TTL did not run; submissions whose upload never completed were
+> never expired; and the browser routes had no identity at all.
 >
-> **Still open after this runbook:** the SSE stream is not yet exercised;
-> nothing has been submitted through the tunnel from a browser; abandoned
-> jobs in state `created` are never cleaned up (see step 23); and the
-> decisions in "What is deliberately not in this runbook".
+> **Still open after this runbook**, all on
+> [#47](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/47):
+> no rate limit or quota on job creation; every reader sees every submitter's
+> jobs, because `visibility` is still a column nothing populates; and
+> `reserved_ahead` reports plain queue position rather than the reservation
+> its name promises. Also the decisions in "What is deliberately not in this
+> runbook".
 >
 > Container **102** runs Postgres 17 on a **UTF-8** cluster with the #35
 > schema applied, reachable only over the Unix socket, holding no password,
@@ -832,11 +837,23 @@ wrote down.
 Back up `tls/ca/ca.key` somewhere that is **not** the platform and not Dom0.
 Losing it means reissuing every certificate and reinstalling the trust anchor.
 
-## Step 17 — tunnel hostnames
+## Step 17 — Cloudflare: hostnames, Zero Trust, and the AUD
 
-Create the tunnel and route two hostnames to it. `cloudflared` is configured
-in step 20; this step only fixes the names, because they go into the API's
-configuration and the browser's upload URLs are signed against them.
+**This step is entirely in the Cloudflare dashboard.** It produces three
+values the rest of the runbook needs, and it is worth doing in one sitting
+because two of them are easy to look for in the wrong place later:
+
+| Produces | Needed by |
+|---|---|
+| The two tunnel hostnames | Step 18 (`S3_PUBLIC_ENDPOINT`), step 20a (ingress) |
+| `ACCESS_TEAM_DOMAIN` | Step 24 |
+| `ACCESS_AUD` | Step 24 |
+
+### 17a — the hostnames
+
+`cloudflared` is configured in step 20a; this only fixes the names, because
+they go into the API's configuration and the browser's upload URLs are signed
+against them.
 
 - `sandbox.evilbootloader.com` → the API
 - `objects.evilbootloader.com` → MinIO
@@ -844,6 +861,96 @@ configuration and the browser's upload URLs are signed against them.
 These names are not cosmetic. `S3_PUBLIC_ENDPOINT` in step 18 must be the
 second one **exactly**, because SigV4 signs the Host header — a URL signed for
 one name and presented at another fails with a 403 about the signature.
+
+### 17b — the Zero Trust team domain
+
+**Zero Trust → Settings → Custom Pages** (also under **Settings → General**).
+It is your organisation name, and it makes `<team-name>.cloudflareaccess.com`.
+On a first visit, the onboarding asks you to choose it.
+
+**Pick it once.** Changing it later invalidates every Access session and every
+`ACCESS_TEAM_DOMAIN` configured against it.
+
+Verify it from the container rather than from the dashboard, because this is
+the exact URL the API will fetch signing keys from:
+
+```bash
+pct exec 102 -- curl -s https://<team-name>.cloudflareaccess.com/cdn-cgi/access/certs | head -c 200
+# expect JSON with a "keys" array. HTML or a 404 means the name is wrong.
+```
+
+`ACCESS_TEAM_DOMAIN` is that URL **with `https://` and no trailing slash** —
+it is used both to fetch keys and as the expected `iss` claim, so a mismatch
+fails every token.
+
+### 17c — a login method
+
+**Zero Trust → Settings → Authentication → Login methods → Add new.**
+
+**One-time PIN has to be added as an identity provider; it is not there by
+default.** Earlier drafts of this step said it was built in and always
+present — on this account (2026-08-24) the list was empty until it was
+created, and there is nothing to select in step 17d until one exists. It
+needs no configuration beyond adding it, and emails a code.
+
+GitHub or Google OAuth is a better long-term answer, because OTP proves only
+that someone can read a mailbox. It adds a setup step you do not need to get
+this working.
+
+### 17d — the Access application
+
+**Zero Trust → Access → Applications → Add an application → Self-hosted.**
+
+- **Public hostname**: `sandbox.evilbootloader.com` — **and only that one.**
+  Not `objects.*`; see the next section for why that breaks every upload.
+- **Session duration**: 24h is reasonable.
+- **Authentication → Accept all available identity providers**: **off.**
+  Select One-time PIN explicitly. Identical today, since it is the only
+  provider — the difference appears when a provider is added later for
+  something unrelated and silently extends *this* application, the one
+  fronting a malware store. An explicit list has to be edited on purpose.
+- **Apply instant authentication**: on. Convenience only; it skips a chooser
+  screen with one option.
+- **Authenticate with Cloudflare One Client**: off. That is WARP device auth,
+  which is a second way to satisfy authentication for no benefit here.
+
+Then the **policy**, which is the part that actually gates:
+
+- **Action**: Allow
+- **Include** → **Emails** → your address
+
+**The authentication section does not decide who gets in; the policy does.**
+One-time PIN with `Include: Everyone` means anyone on the internet, because
+OTP will happily mail a code to whatever address is typed. Use an explicit
+email list, and prefer it over **Emails ending in** unless you genuinely want
+everyone at that domain.
+
+Prove it rather than assume it, because this is the only gate in front of the
+control plane. In a private window, open `https://sandbox.evilbootloader.com`
+and enter an address that is **not** in the policy.
+
+> **Tested 2026-08-24: no email is sent at all.** Access evaluates the policy
+> *before* issuing a code, rather than authenticating first and refusing
+> after. Stronger than expected — this step originally predicted the code
+> would arrive and the refusal would come later.
+>
+> It also means the OTP mailbox is never touched for an address that could
+> not have been admitted, so the login page is not usable as a way to send
+> mail to arbitrary recipients.
+
+**If a code does arrive for an address you did not list, stop and fix the
+policy.** OTP authenticates anyone who can read the mailbox they named; the
+policy is the only thing turning that into a refusal.
+
+### 17e — the AUD
+
+Save the application, reopen it, and read **Application Audience (AUD) Tag**
+from the **Overview** tab. That is `ACCESS_AUD` in step 24.
+
+It is what stops a valid token issued for any *other* Access application in
+the account from authenticating here. The API refuses to start the check at
+all when it is unset, rather than skipping it — `test_access_jwt.py` covers
+both the wrong-application token and the misconfiguration.
 
 ### Access goes on one hostname, not both
 
@@ -1244,6 +1351,15 @@ Two details that are not decoration:
 Now the tunnel config, which reaches both origins over **loopback** so the
 browser path never depends on the LAN certificate matching a public name:
 
+Only the bucket is published. Everything else MinIO serves --
+/minio/admin/v3/*, /minio/health/* -- stops existing from the internet's
+point of view. See step 17: Access cannot go on this hostname without
+breaking the cross-origin upload, so this rule is what replaces it.
+
+(/|$) rather than a bare /analysis/ because the presigned POST targets
+/analysis exactly, with no trailing slash -- and because ^/analysis alone
+would also match a bucket named "analysis-something".
+
 ```bash
 pct exec 102 -- bash -lc 'cat > /etc/cloudflared/config.yml <<EOF
 tunnel: 9d7675c5-fd3d-492a-8e7d-625981d8150d
@@ -1253,15 +1369,6 @@ ingress:
     service: https://192.168.1.10:8000
     originRequest:
       caPool: /etc/cloudflared/ca.crt
-
-  # Only the bucket is published. Everything else MinIO serves --
-  # /minio/admin/v3/*, /minio/health/* -- stops existing from the internet's
-  # point of view. See step 17: Access cannot go on this hostname without
-  # breaking the cross-origin upload, so this rule is what replaces it.
-  #
-  # (/|$) rather than a bare /analysis/ because the presigned POST targets
-  # /analysis exactly, with no trailing slash -- and because ^/analysis alone
-  # would also match a bucket named "analysis-something".
   - hostname: objects.evilbootloader.com
     path: ^/analysis(/|$)
     service: https://192.168.1.10:9000
@@ -1713,21 +1820,162 @@ signing invalidates the signature instead.
 > to fix: tracked on
 > [#47](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/47).
 
-### Still to run
+### The SSE stream
 
-- **The SSE stream.** `--watch` was not exercised above. It blocks on the
-  event stream, so start it *before* the worker, in a second terminal:
-  `submit.py … --watch --wait 120`, then `fake_worker.py … --once`. Expect one
-  `->` line per state, ending at `completed`.
-- **The tunnel half.** Restore `S3_PUBLIC_ENDPOINT` to
-  `https://objects.evilbootloader.com`, restart, and submit from a browser.
-  Read the Access note in step 17 first — Access on the object-store hostname
-  breaks the cross-origin upload.
+`--watch` follows the job over `LISTEN`/`NOTIFY` instead of polling. It blocks
+on the stream, so start it *before* the worker, in a second terminal.
+
+```bash
+root@pve1:~# … submit.py … --target-os ubuntu --file /tmp/hello.txt --watch --wait 120
+created 1e4991a2-cb4a-49d4-905c-1506b322e7ed for hello.txt (19 bytes)
+admitted: state=queued sha256=af9c4ea0d7be30203e00346c79d1bdf645568614ab6ced2610fa3dbef406e890 type='ASCII text'
+  -> cloning
+  -> preparing
+  -> executing
+  -> collecting
+  -> cleaning
+  -> completed
+```
+
+> **PASS 2026-08-23.** Note `cloning`: the polled run in the previous section
+> never saw that state, because it came and went between two one-second polls.
+> That difference is the argument for the stream over polling, and it is why
+> `X-Accel-Buffering: no` matters — a buffering proxy turns this into six
+> lines arriving at once when the job finishes, which looks identical to a
+> stalled analysis.
+
+## Step 24 — the tunnel path, with Access
+
+Steps 22 and 23 prove the platform over the LAN. This proves the path a
+browser actually takes: Cloudflare, Access, JWT verification, and a presigned
+upload signed for the **public** hostname.
+
+Set `S3_PUBLIC_ENDPOINT=https://objects.evilbootloader.com` in `api.env` and
+restart both listeners. Then configure Access per step 17 and wire it into the
+**browser listener only** — a drop-in rather than `api.env`, because the two
+listeners have different front doors:
+
+```bash
+pct exec 102 -- bash -lc '
+  mkdir -p /etc/systemd/system/sandbox-api-browser.service.d
+  cat > /etc/systemd/system/sandbox-api-browser.service.d/access.conf <<EOF
+[Service]
+Environment=REQUIRE_ACCESS_JWT=1
+Environment=ACCESS_TEAM_DOMAIN=https://<team-name>.cloudflareaccess.com
+Environment=ACCESS_AUD=<Application Audience tag>
+EOF
+  systemctl daemon-reload
+  systemctl restart sandbox-api-browser'
+```
+
+> **`daemon-reload` is not enough — the unit must be restarted.** A drop-in
+> reaches a *running* process only on restart, and the symptom is the check
+> below returning 200 with everything looking correctly configured. Cost a
+> round on 2026-08-24.
+
+Verify the drop-in landed, and that it did **not** land on the mTLS unit:
+
+```bash
+root@pve1:~# pct exec 102 -- systemctl show sandbox-api-browser -p Environment --no-pager
+Environment=REQUIRE_ACCESS_JWT=1 ACCESS_TEAM_DOMAIN=https://REDACTED.cloudflareaccess.com ACCESS_AUD=REDACTED
+root@pve1:~# pct exec 102 -- systemctl show sandbox-api -p Environment --no-pager
+Environment=
+```
+
+**The second one must be empty.** If `REQUIRE_ACCESS_JWT` leaks onto `8443`,
+Dom0 and every command-line tool are locked out — they hold certificates, not
+browser sessions.
+
+### The check that matters
+
+```bash
+root@pve1:~# curl -s -o /dev/null -w "%{http_code}\n" https://sandbox.evilbootloader.com/api/v1/jobs
+302
+root@pve1:~# curl -s -H 'Cf-Access-Jwt-Assertion: garbage' \
+     -o /dev/null -w "%{http_code}\n" https://192.168.1.10:8000/api/v1/jobs --insecure
+401
+```
+
+The 302 only proves **Cloudflare** is doing its job. It says nothing about the
+API, which is reachable on the LAN at `:8000` without traversing Cloudflare at
+all — so the forged-header check on the second line is the one that proves the
+signature is verified rather than the header believed.
+
+### A submission through the tunnel
+
+```bash
+root@pve1:~# pct exec 102 -- su - platform -s /bin/bash -c 'cloudflared access login https://sandbox.evilbootloader.com'
+Successfully fetched your token
+
+root@pve1:~# pct exec 102 -- su - platform -s /bin/bash -c '
+  cd /opt/platform/src/platform
+  .venv/bin/python submit.py \
+      --api https://sandbox.evilbootloader.com \
+      --target-os ubuntu --file /tmp/hello.txt \
+      --access-token "$(cloudflared access token -app=https://sandbox.evilbootloader.com)"
+'
+created ea349f49-dd9e-4ed4-9f61-b154b782e822 for hello.txt (19 bytes)
+uploaded to https://objects.evilbootloader.com/analysis
+admitted: state=queued sha256=af9c4ea0d7be30203e00346c79d1bdf645568614ab6ced2610fa3dbef406e890 type='ASCII text'
+```
+
+> **PASS 2026-08-24.** Three things this establishes that nothing on the LAN
+> path could:
+>
+> 1. **`uploaded to https://objects.evilbootloader.com/analysis`** — the
+>    presigned POST was signed for the public host and accepted there. SigV4
+>    signs the Host header, so this is the check every earlier step warned
+>    about and none of them ran.
+> 2. **The `^/analysis(/|$)` path rule passes live traffic.** `tunnel ingress
+>    rule` only evaluates the matcher offline.
+> 3. **The Access JWT verifies and its identity is recorded.**
+
+**No `--cacert` on this path.** Both hostnames present public Cloudflare
+certificates, and `--cacert` **replaces** system trust rather than adding to
+it — so passing the internal CA fails with `CERTIFICATE_VERIFY_FAILED` and an
+error that names nothing useful. The LAN path still needs it, and that
+asymmetry is the point of the two-endpoint design.
+
+### The identity reaches the record
+
+```bash
+root@pve1:~# pct exec 102 -- su - platform -s /bin/bash -c "psql -d sandbox_platform <<'SQL'
+SELECT substr(id::text,1,8) AS id, state, owner FROM jobs ORDER BY created_at;
+SQL"
+    id    |   state   |          owner
+----------+-----------+--------------------------
+ 62f31c64 | completed |
+ b7a83f7b | rejected  |
+ 1e4991a2 | completed |
+ 8e8c8ae4 | completed |
+ 08cc90bd | queued    |
+ ea349f49 | queued    | evilbootloader@proton.me
+(6 rows)
+```
+
+Only the job submitted through the tunnel has an owner. **The empty ones are
+correct, not a defect**: those went over mTLS on `8443`, where a client
+certificate identifies a *machine*. `owner` is for a person, and there isn't
+one on that path.
+
+`b7a83f7b` as `rejected` is the maintenance sweep — it sat in `received`
+after its upload was refused by the size policy, and nothing expired it until
+`maintenance.py` existed.
 
 Then snapshot:
 
 ```bash
-pct snapshot 102 api-deployed --description 'API on 8443 with mTLS, tunnel up'
+root@pve1:~# pct snapshot 102 api-deployed --description 'API on 8443 mTLS + 8000 behind Access, tunnel up'
+freeze guest filesystem
+  WARNING: You have not turned on protection against thin pools running out of space.
+  WARNING: Set activation/thin_pool_autoextend_threshold below 100 to trigger automatic extension of thin pools before they get full.
+  Logical volume "snap_vm-102-disk-0_api-deployed" created.
+  WARNING: Sum of all thin volume sizes (6.36 TiB) exceeds the size of thin pool pve/data and the size of whole volume group (<1.82 TiB).
+  WARNING: You have not turned on protection against thin pools running out of space.
+  WARNING: Set activation/thin_pool_autoextend_threshold below 100 to trigger automatic extension of thin pools before they get full.
+  Logical volume "snap_vm-102-disk-1_api-deployed" created.
+  WARNING: Sum of all thin volume sizes (6.61 TiB) exceeds the size of thin pool pve/data and the size of whole volume group (<1.82 TiB).
+thaw guest filesystem
 ```
 
 

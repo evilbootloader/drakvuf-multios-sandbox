@@ -147,3 +147,43 @@ def test_misconfiguration_refuses_rather_than_falls_through(monkeypatch, issuer)
     with pytest.raises(Exception) as exc:
         auth.access_identity(issuer())
     assert exc.value.status_code == 500
+
+# --- the identity reaches the record ---------------------------------------
+
+def test_owner_is_recorded_and_returned(client, issuer):
+    """End to end: a verified token becomes jobs.owner and comes back out.
+
+    Without the response field the column is write-only -- which is how it
+    shipped on 2026-08-24, recorded on the deployment and invisible to every
+    caller.
+
+    Every request carries the header, including the reads: the dependency is
+    on the ROUTER, so a token is required to look at a job as much as to
+    create one.
+    """
+    hdrs = {"Cf-Access-Jwt-Assertion": issuer()}
+
+    created = client.post(
+        "/api/v1/jobs",
+        json={"target_os": "ubuntu", "filename": "x.bin", "size_bytes": 4},
+        headers=hdrs,
+    )
+    assert created.status_code == 201
+    job_id = created.json()["job_id"]
+
+    assert client.get(f"/api/v1/jobs/{job_id}", headers=hdrs).json()["owner"] \
+        == "analyst@example.test"
+    listed = {j["id"]: j["owner"]
+              for j in client.get("/api/v1/jobs", headers=hdrs).json()}
+    assert listed[job_id] == "analyst@example.test"
+
+
+def test_owner_is_null_without_access(client):
+    """The mTLS path records no owner, because a certificate is not a person."""
+    created = client.post(
+        "/api/v1/jobs",
+        json={"target_os": "ubuntu", "filename": "y.bin", "size_bytes": 4},
+    )
+    assert created.status_code == 201
+    job_id = created.json()["job_id"]
+    assert client.get(f"/api/v1/jobs/{job_id}").json()["owner"] is None

@@ -66,6 +66,15 @@ class JobSummary(BaseModel):
     sha256: str | None
     size_bytes: int | None
 
+    # The authenticated submitter, from the Access JWT's email claim. NULL on
+    # anything submitted over the mTLS listener: a client certificate
+    # identifies a machine, and this column is for a person.
+    #
+    # Every reader sees every submitter. That matches the current posture --
+    # Access admits only people who may see everything -- and is precisely
+    # what #47 has to revisit once `visibility` means something.
+    owner: str | None = None
+
 
 class JobDetail(JobSummary):
     updated_at: datetime
@@ -274,6 +283,7 @@ def _detail(conn, job_id: UUID) -> JobDetail:
             "id", "created_at", "updated_at", "target_os", "submitted_filename",
             "state", "sha256", "size_bytes", "detected_type", "queue_reason",
             "failure_stage", "failure_reason", "attempt", "cancel_requested",
+            "owner",
         )},
         manifest=row["manifest"] if isinstance(row["manifest"], dict) else None,
         artifacts=artifacts,
@@ -316,7 +326,7 @@ def list_jobs(
     # caller-supplied text ever enters the statement. Every VALUE is bound.
     sql = (
         "SELECT id, created_at, target_os, submitted_filename, state, sha256,"
-        "       size_bytes FROM jobs"
+        "       size_bytes, owner FROM jobs"
         f" WHERE {' AND '.join(clauses)}"
         " ORDER BY created_at DESC LIMIT %s"
     )
