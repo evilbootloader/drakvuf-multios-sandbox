@@ -2116,11 +2116,17 @@ never a reset.
 
 # The object store — issue [#37](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/37)
 
-> **CANDIDATE. Nothing below has been executed on the deployment.** Every
-> command was exercised against a local MinIO
-> (`RELEASE.2025-09-07`) and the platform test suite on 2026-08-24, and the
-> measurements quoted are real, but this section is a proposal until its
-> output is pasted back in. Steps 1–24 above are evidence; this is not, yet.
+> **EXECUTED on the deployment, 2026-08-24.** This section was written as a
+> CANDIDATE — every command exercised first against a local MinIO
+> (`RELEASE.2025-09-07`) and the platform test suite — and the transcripts
+> below are the real run, all commands included. It is evidence now, on the
+> same footing as steps 1–24.
+>
+> **Two of those checks pass by producing nothing**: the `objects` DNS
+> negative and the CORS negative. They were run and they passed, but silence
+> is a weak record — a reader later cannot tell an empty result from a command
+> that was skipped. Both now carry an `exit=` echo so a re-run says so out
+> loud. The empty transcripts below are the original, correct output.
 
 Steps 4 and 15 stood up the minimum object store that unblocked the API and
 said so, deferring policy, CORS and TTLs here. They are dated evidence of what
@@ -2137,24 +2143,106 @@ rebuild. See `platform/minio/README.md` for the reasoning behind each grant.
 Migration first — the per-job result budget needs its column:
 
 ```bash
-pct exec 102 -- bash -lc '
-  su - platform -c "cd /opt/sandbox-platform && git pull --ff-only"
-  su - platform -c "cd /opt/sandbox-platform/platform && \
-      DATABASE_URL=postgresql:///sandbox_platform .venv/bin/python migrations/run.py"
-'
-# expect: applied  0004_results_bytes.sql
+root@pve1:~# pct exec 102 -- bash -lc '
+  su - platform -s /bin/bash -c "cd /opt/platform/src/ && git pull --ff-only"
+  su - platform -s /bin/bash -c "cd /opt/platform/src/platform && \
+      DATABASE_URL=postgresql:///sandbox_platform .venv/bin/python migrations/run.py"                                                                           '
+remote: Enumerating objects: 98, done.
+remote: Counting objects: 100% (98/98), done.
+remote: Compressing objects: 100% (26/26), done.
+remote: Total 71 (delta 52), reused 64 (delta 45), pack-reused 0 (from 0)
+Unpacking objects: 100% (71/71), 59.58 KiB | 635.00 KiB/s, done.
+From github.com:evilbootloader/drakvuf-multios-sandbox
+   fde4eff..1a1f027  master     -> origin/master
+Updating fde4eff..1a1f027
+Fast-forward
+ .github/issue-drafts/DRAFT-044.md           | 109 +++++-
+ .github/issue-drafts/DRAFT-047.md           |   4 +-
+ .github/issue-drafts/issue-index.md         |  24 +-
+ docs/architecture/platform.md               |  45 ++-
+ docs/architecture/result-schema.md          |  15 +
+ docs/runbooks/deploy-platform-lxc.md        | 584 ++++++++++++++++++++++++++--
+ platform/fake_worker.py                     |  22 +-
+ platform/migrations/0004_results_bytes.sql  |  45 +++
+ platform/minio/README.md                    | 120 ++++++
+ platform/minio/api-policy.json              |  15 +
+ platform/minio/provision.sh                 | 228 +++++++++++
+ platform/sandbox_platform/config.py         |  75 ++++
+ platform/sandbox_platform/objects.py        |  76 ++--
+ platform/sandbox_platform/routers/jobs.py   | 156 +++++++-
+ platform/sandbox_platform/routers/worker.py | 157 +++++++-
+ platform/submit.py                          |  32 +-
+ platform/tests/conftest.py                  |  38 ++
+ platform/tests/test_access_jwt.py           |  44 ++-
+ platform/tests/test_jobs_api.py             | 198 +++++++++-
+ platform/tests/test_objects.py              | 302 ++++++++++++++
+ platform/tests/test_worker_api.py           | 252 +++++++++++-
+ 21 files changed, 2431 insertions(+), 110 deletions(-)
+ create mode 100644 platform/migrations/0004_results_bytes.sql
+ create mode 100644 platform/minio/README.md
+ create mode 100644 platform/minio/api-policy.json
+ create mode 100755 platform/minio/provision.sh
+ create mode 100644 platform/tests/test_objects.py
+applied  0004_results_bytes.sql
+
 ```
 
 `mc` needs to be present; step 15 installed it. Then:
 
 ```bash
-pct exec 102 -- bash -lc '
+root@pve1:~# pct exec 102 -- bash -lc '
   set -a; . /etc/minio/minio.env; set +a
   BROWSER_ORIGIN=https://sandbox.evilbootloader.com \
   BUCKET_QUOTA=200GiB \
   RETENTION_DAYS=30 \
-    /opt/sandbox-platform/platform/minio/provision.sh
+    /opt/platform/src/platform/minio/provision.sh
 '
+
+== alias -> https://127.0.0.1:9000
+ok
+
+== bucket analysis
+Bucket created successfully `local/analysis`.
+
+== anonymous access
+Access permission for `local/analysis` is `private`
+
+== versioning
+local/analysis is un-versioned
+
+== object lock
+not enabled
+
+== quota 200GiB
+Bucket `analysis` has hard quota of 200 GiB
+
+== retention: expire after 30 days
+Lifecycle configuration imported successfully to `local/analysis`.
+┌─────────────────────────────────────────────────────────────────────────────────────────────┐
+│ Expiration for latest version (Expiration)                                                  │
+├────────────────────────────┬─────────┬────────┬──────┬────────────────┬─────────────────────┤
+│ ID                         │ STATUS  │ PREFIX │ TAGS │ DAYS TO EXPIRE │ EXPIRE DELETEMARKER │
+├────────────────────────────┼─────────┼────────┼──────┼────────────────┼─────────────────────┤
+│ sandbox-platform-retention │ Enabled │ -      │ -    │             30 │ false               │
+└────────────────────────────┴─────────┴────────┴──────┴────────────────┴─────────────────────┘
+
+RETENTION_DAYS must match RETENTION_DAYS in api.env, or the job
+detail view will offer download links for objects MinIO has removed.
+
+== CORS -> https://sandbox.evilbootloader.com
+cors_allow_origin=https://sandbox.evilbootloader.com
+
+== service account sandbox-platform-api
+created. These go into /etc/sandbox-platform/api.env and are NOT
+recoverable afterwards:
+
+  S3_ACCESS_KEY=sandbox-platform-api
+  S3_SECRET_KEY=REDACTED
+
+== region
+MINIO_SITE_REGION=eu-central-1
+
+== done. S3_REGION in api.env must match the region above.
 ```
 
 **Size `BUCKET_QUOTA` below the data volume**, so the store refuses writes
@@ -2230,22 +2318,40 @@ so retention costs the service account no destructive capability —
 
 ```bash
 # the policy denies what it should. As the SERVICE ACCOUNT, not root.
-pct exec 102 -- bash -lc '
-  mc alias set svc https://192.168.1.10:9000 sandbox-platform-api "<secret>"
+root@pve1:~# pct exec 102 -- bash -lc '
+  mc alias set svc https://192.168.1.10:9000 sandbox-platform-api "REDACTED"
   mc ls svc/analysis         ; echo "list  exit=$?  (expect NON-zero)"
   mc cp /etc/hostname svc/analysis/samples/probe/x
   echo "write exit=$?  (expect 0)"
   mc rm svc/analysis/samples/probe/x ; echo "del   exit=$?  (expect NON-zero)"
   mc alias rm svc
 '
+Added `svc` successfully.
+mc: <ERROR> Unable to list folder. Access Denied.
+list  exit=1  (expect NON-zero)
+/etc/hostname: 9 B / 9 B ┃▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓┃ 911 B/s 0swrite exit=0  (expect 0)
+mc: <ERROR> Failed to remove `svc/analysis/samples/probe/x`. Access Denied.
+del   exit=1  (expect NON-zero)
+Removed `svc` successfully.
+
 
 # retention and quota are installed
-pct exec 102 -- bash -lc 'mc ilm rule ls local/analysis; mc quota info local/analysis'
+root@pve1:~# pct exec 102 -- bash -lc 'mc ilm rule ls local/analysis; mc quota info local/analysis'
+┌─────────────────────────────────────────────────────────────────────────────────────────────┐
+│ Expiration for latest version (Expiration)                                                  │
+├────────────────────────────┬─────────┬────────┬──────┬────────────────┬─────────────────────┤
+│ ID                         │ STATUS  │ PREFIX │ TAGS │ DAYS TO EXPIRE │ EXPIRE DELETEMARKER │
+├────────────────────────────┼─────────┼────────┼──────┼────────────────┼─────────────────────┤
+│ sandbox-platform-retention │ Enabled │ -      │ -    │             30 │ false               │
+└────────────────────────────┴─────────┴────────┴──────┴────────────────┴─────────────────────┘
+Bucket `analysis` has hard quota of 200 GiB
 
 # the region probe that actually works. `mc admin config get local region`
 # reports EMPTY for an env-set value and is NOT a probe -- that is what made
 # MINIO_SITE_REGION look unset through two investigations.
-pct exec 102 -- bash -lc 'mc admin config get local site'
+root@pve1:~# pct exec 102 -- bash -lc 'mc admin config get local site'
+# MINIO_SITE_REGION=eu-central-1
+site name= region= 
 # expect a commented line: # MINIO_SITE_REGION=eu-central-1
 ```
 
@@ -2289,12 +2395,14 @@ path — and because `^/analysis` alone would also match a bucket named
 `analysis-something`. Step 20a already reasoned this out; it carries over.
 
 ```bash
-pct exec 102 -- bash -lc '
+root@pve1:~# pct exec 102 -- bash -lc '
   cloudflared --config /etc/cloudflared/config.yml tunnel ingress validate
   sed -i "s|^S3_PUBLIC_ENDPOINT=.*|S3_PUBLIC_ENDPOINT=https://sandbox.evilbootloader.com|" \
       /etc/sandbox-platform/api.env
   systemctl restart cloudflared sandbox-api sandbox-api-browser
 '
+Validating rules from /etc/cloudflared/config.yml
+OK
 ```
 
 Then remove the `objects` public hostname from the tunnel and its DNS record
@@ -2321,13 +2429,17 @@ asserts this so #38 cannot introduce one.
 ### Verify
 
 ```bash
-TOKEN=$(cloudflared access token -app=https://sandbox.evilbootloader.com)
+root@platform:/etc/sandbox-platform# TOKEN=$(cloudflared access token -app=https://sandbox.evilbootloader.com)
+root@platform:/etc/sandbox-platform# curl -sI https://objects.evilbootloader.com/analysis; echo "exit=$?  (expect 6)"
+exit=6  (expect 6)
 
-curl -sI https://objects.evilbootloader.com/analysis   # expect: DNS failure
-curl -so /dev/null -w '%{http_code}\n' \
+root@platform:/etc/sandbox-platform# curl -so /dev/null -w '%{http_code}\n' \
      https://sandbox.evilbootloader.com/analysis       # expect: 302 to login
-curl -so /dev/null -w '%{http_code}\n' -H "cf-access-token: $TOKEN" \
+302
+root@platform:/etc/sandbox-platform# curl -so /dev/null -w '%{http_code}\n' -H "cf-access-token: $TOKEN" \
      https://sandbox.evilbootloader.com/analysis       # expect: 403 from MinIO
+403
+
 ```
 
 **403 is the PASS on the third.** It means Access let the request through and
@@ -2335,7 +2447,7 @@ MinIO refused it unsigned, which is exactly right. A 302 there means the path
 rule is not matching and the request reached the API instead.
 
 ```bash
-# CORS is scoped, not reflected. Defence in depth now rather than the fix:
+root@platform:/etc/sandbox-platform# # CORS is scoped, not reflected. Defence in depth now rather than the fix:
 # same-origin needs no CORS, but MinIO's default reflects ANY origin with
 # Allow-Credentials: true, which would let a page at attacker.example holding
 # a LEAKED presigned URL read the response.
@@ -2343,10 +2455,66 @@ curl -si -X OPTIONS https://sandbox.evilbootloader.com/analysis \
      -H "cf-access-token: $TOKEN" -H "Origin: https://evil.example" \
      -H "Access-Control-Request-Method: POST" \
   | grep -i access-control-allow-origin        # expect: NOTHING
+
 ```
 
-It does **not** stop `curl` with the same leaked URL. Nothing does, until the
-TTL expires.
+### That check proved less than it looked like, and the follow-up found why
+
+Run with the **allowed** origin instead of `evil.example`, the tunnel returns
+nothing either:
+
+```bash
+root@platform:/opt/platform/src/platform# curl -si -X OPTIONS https://sandbox.evilbootloader.com/analysis \
+     -H "cf-access-token: $TOKEN" \
+     -H "Origin: https://sandbox.evilbootloader.com" \
+     -H "Access-Control-Request-Method: POST" \
+  | grep -i access-control-allow-origin
+root@platform:/opt/platform/src/platform#
+```
+
+So the negative above was never evidence that `cors_allow_origin` was set —
+**a typo in it would have passed identically.** Asking MinIO directly, on the
+LAN, settles it:
+
+```bash
+root@platform:/opt/platform/src/platform# curl -si -X OPTIONS https://192.168.1.10:9000/analysis \
+     --cacert /etc/sandbox-platform/tls/ca.crt \
+     -H "Origin: https://sandbox.evilbootloader.com" \
+     -H "Access-Control-Request-Method: POST" \
+  | grep -i 'HTTP/\|access-control'
+HTTP/1.1 204 No Content
+Access-Control-Allow-Credentials: true
+Access-Control-Allow-Methods: POST
+Access-Control-Allow-Origin: https://sandbox.evilbootloader.com
+Vary: Origin, Access-Control-Request-Method, Access-Control-Request-Headers
+```
+
+**`cors_allow_origin` is correctly set and working at the origin.** What is
+happening is that **Cloudflare Access answers the `OPTIONS` preflight itself**
+— it must, or a preflight would receive a login redirect — and its reply does
+not carry the origin's CORS headers. They never reach the browser.
+
+Three consequences, and none of them is a problem today:
+
+- **The effective posture through the tunnel is stricter than origin-scoped.**
+  No `Access-Control-Allow-Origin` for *any* origin means a browser refuses
+  every cross-origin read of the store.
+- **Nothing in the current design depends on it.** #37 made the flow
+  same-origin, so the browser sends no preflight and consults no CORS headers.
+- **`cors_allow_origin` still earns its place**, but at the origin rather than
+  through the tunnel: anything reaching `192.168.1.10:9000` directly — a
+  browser on the LAN — gets the scoped header instead of MinIO's reflect-any
+  default.
+
+> **Carry this into [#38](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/38):
+> CORS headers do not survive this tunnel.** If the web UI is ever served from
+> a different hostname than the store, it will not work, and the failure will
+> look like a network error rather than a configuration one. Keep it
+> same-origin.
+
+It does **not** stop `curl` with a leaked presigned URL. Nothing does, until
+the TTL expires — CORS is a control on which *pages* may read a response, not
+on who may make the request.
 
 ### The whole path, end to end
 
@@ -2355,18 +2523,92 @@ TTL expires.
 # is behind Access. This is also true of a LAN submission: presigned_upload
 # always signs for the browser audience, so an mTLS submission's upload still
 # leaves the LAN and returns through Cloudflare.
-python submit.py --api https://sandbox.evilbootloader.com --target-os ubuntu \
-    --file ./hello.txt --watch --wait 300 --access-token "$TOKEN"
+root@platform:/opt/platform/src/platform# .venv/bin/python submit.py --api https://sandbox.evilbootloader.com --target-os ubuntu     --file /tmp/hello.txt --watch --wait 300 --access-token "$TOKEN"
+created 8b1d9e23-9798-44a8-97bd-35a53c33ab0e for hello.txt (19 bytes)
+uploaded to https://sandbox.evilbootloader.com/analysis
+admitted: state=queued sha256=af9c4ea0d7be30203e00346c79d1bdf645568614ab6ced2610fa3dbef406e890 type='ASCII text'
+  -> cloning
+  -> preparing
+  -> executing
+  -> collecting
+  -> cleaning
+  -> completed
+{
+  "id": "8b1d9e23-9798-44a8-97bd-35a53c33ab0e",
+  "created_at": "2026-08-24T19:48:01.824406Z",
+  "target_os": "ubuntu",
+  "submitted_filename": "hello.txt",
+  "state": "completed",
+  "sha256": "af9c4ea0d7be30203e00346c79d1bdf645568614ab6ced2610fa3dbef406e890",
+  "size_bytes": 19,
+  "owner": "evilbootloader@proton.me",
+  "updated_at": "2026-08-24T19:48:02.674731Z",
+  "detected_type": "ASCII text",
+  "queue_reason": null,
+  "failure_stage": null,
+  "failure_reason": null,
+  "attempt": 1,
+  "cancel_requested": false,
+  "manifest": {
+    "artifacts": [
+      "trace.log",
+      "capture.pcap",
+      "manifest.json"
+    ]
+  },
+  "artifacts": {
+    "trace.log": "https://sandbox.evilbootloader.com/analysis/results/8b1d9e23-9798-44a8-97bd-35a53c33ab0e/trace.log?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=sandbox-platform-api%2F20260824%2Feu-central-1%2Fs3%2Faws4_request&X-Amz-Date=20260824T194802Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=4269f7d40651260753f524999901216b0c448342c8c85d1862877086b375ada4",
+    "capture.pcap": "https://sandbox.evilbootloader.com/analysis/results/8b1d9e23-9798-44a8-97bd-35a53c33ab0e/capture.pcap?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=sandbox-platform-api%2F20260824%2Feu-central-1%2Fs3%2Faws4_request&X-Amz-Date=20260824T194802Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=bf5cc46c703dab40a0c9628c956cfdfa69a0344952c2291edc8ad38654428eaf",
+    "manifest.json": "https://sandbox.evilbootloader.com/analysis/results/8b1d9e23-9798-44a8-97bd-35a53c33ab0e/manifest.json?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=sandbox-platform-api%2F20260824%2Feu-central-1%2Fs3%2Faws4_request&X-Amz-Date=20260824T194802Z&X-Amz-Expires=300&X-Amz-SignedHeaders=host&X-Amz-Signature=8c625990b97e633da767cbd81b887e662c1704ebf45c9666802da2c9a12e11e6"
+  },
+  "artifacts_expired": false,
+  "reserved_ahead": false
+}
 
-# and the worker half, which uploads artifacts by size-capped presigned POST
-python fake_worker.py --api https://192.168.1.10:8443 --token "$WORKER_TOKEN" \
-    --cacert ca.crt --cert dom0.crt --key dom0.key --once
+
+
+root@platform:/etc/sandbox-platform# . api.env; /opt/platform/src/platform/.venv/bin/python /opt/platform/src/platform/fake_worker.py --api https://192.168.1.10:8443 --token "$WORKER_TOKEN"     --cacert tls/ca.crt --cert tls/fake-worker.crt --key tls/fake-worker.key --once
+registered as fake-worker, offering 12082 MiB
+leased 8b1d9e23-9798-44a8-97bd-35a53c33ab0e (ubuntu) 'hello.txt' attempt 1
+  fetched 19 bytes
+  -> preparing
+  -> executing
+  -> collecting
+  -> cleaning
+  uploaded 3 artifacts
+  -> completed
+
 ```
 
 Confirm `capture.pcap` lands at **0 bytes**. An empty capture is a real result
 — it means the clone generated no traffic — and the artifact upload policy
 starts its size range at 0 for exactly that reason, where the sample policy
 starts at 1.
+
+### Run the worker WITHOUT `--once` when you are testing a submission
+
+`--once` claims the **head of the queue** by `queue_seq`, not the job you just
+submitted. With anything queued from an earlier session, each run drains a
+backlog entry while the new submission waits behind it — which on 2026-08-24
+looked exactly like a broken `--watch` and cost an evening. Two submissions
+timed out at 300s and completed normally once the backlog cleared.
+
+Drop `--once` and the worker long-polls, taking each job as it arrives:
+
+```bash
+. api.env; /opt/platform/src/platform/.venv/bin/python \
+  /opt/platform/src/platform/fake_worker.py --api https://192.168.1.10:8443 \
+  --token "$WORKER_TOKEN" --cacert tls/ca.crt \
+  --cert tls/fake-worker.crt --key tls/fake-worker.key
+```
+
+**Five consecutive submissions with `--watch --wait 300` completed cleanly
+against that**, 2026-08-24, after the SSE snapshot fix in `a0ddb21`.
+
+`submit.py` now says which of the two is happening rather than printing a bare
+`timed out after 300.0s`: it names the state, and distinguishes "another job
+is reserved ahead of this one" from "nothing is ahead and no worker claimed
+it". The queue was never the bug; the silence was.
 
 ## Rollback
 

@@ -313,6 +313,27 @@ set, as defence in depth against a *leaked presigned URL* being read by a page
 at another origin — MinIO's default reflects any origin with
 `Allow-Credentials: true`.
 
+**Amended after deployment, 2026-08-24: CORS headers do not survive the
+tunnel at all.** Verified on the deployment: MinIO returns
+`Access-Control-Allow-Origin: https://sandbox.evilbootloader.com` when asked
+directly on the LAN, and the same preflight through the tunnel returns no CORS
+headers for *any* origin — because **Cloudflare Access answers `OPTIONS`
+itself**, as it must, or a preflight would receive a login redirect.
+
+The acceptance criterion is met (the setting is origin-scoped, not `*`, and
+evidenced at the origin), and the effective posture is *stricter* than
+intended: with no `Access-Control-Allow-Origin` reaching the browser, every
+cross-origin read is refused. Nothing depends on it either way, because the
+flow is same-origin.
+
+Two lessons worth more than the setting. **The negative test proved nothing:**
+"no header for `evil.example`" is exactly what a typo'd `cors_allow_origin`
+also produces, so it could not distinguish a working control from an absent
+one. Only the positive case — run afterwards, and returning nothing — exposed
+that. **And #38 must stay same-origin**: a UI served from a different hostname
+than the store cannot work through this tunnel, and would fail as a network
+error rather than a configuration one.
+
 **3. "A full volume fails loudly" (TEST 9) — via the bucket quota.** The quota
 does not fail promptly. Measured: **3 MiB written into a 1 MiB quota, every
 write accepted**; the same bucket refused ~45s later with
