@@ -1,0 +1,18 @@
+{#
+  Facts, no verdict. Deliberate: a threat score is a claim about detection
+  quality this project cannot back, and experience says the number gets
+  quoted while the caveat does not. When capa lands (DRAFT-019) its ATT&CK
+  and MBC rule metadata fills the technique list below -- still observations,
+  not a judgement.
+#}
+<dl class="dl">
+  <dt>Detected type</dt><dd>{{ job.detected_type or 'not yet determined' }}</dd>
+  <dt>Plugins</dt>
+  <dd class="mono">{{ plugins | join(' ') if plugins else 'pipeline defaults' }}</dd>
+</dl>
+
+<div class="empty" style="margin-top:1rem">
+  <strong>No techniques mapped yet.</strong>
+  ATT&amp;CK and MBC come from capa's rule metadata over the DRAKVUF log —
+  DRAFT-019. This tab shows what was observed and offers no score.
+</div>

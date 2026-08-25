@@ -20,6 +20,7 @@ from fastapi import FastAPI
 from . import events, maintenance
 from .db import close_pool, connection, open_pool
 from .routers import jobs, worker
+from .ui import router as ui_router, static as ui_static
 
 
 @asynccontextmanager
@@ -57,6 +58,13 @@ app = FastAPI(
 
 app.include_router(jobs.router)
 app.include_router(worker.router)
+
+# The operator UI (#38). Mounted under /ui, behind the same Access dependency
+# as the JSON routes. Deliberately NOT at "/" -- the object store is
+# path-routed at /analysis on this same hostname (#37), so the root namespace
+# is shared and a catch-all here would be a collision waiting to happen.
+app.include_router(ui_router)
+app.mount("/ui/static", ui_static, name="ui-static")
 
 
 @app.get("/healthz", tags=["ops"])

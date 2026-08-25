@@ -443,6 +443,20 @@ def list_jobs(
     without bound, and OFFSET degrades quietly -- page 1 is fast and page 400
     scans everything before it.
     """
+    return query_jobs(state=state, target_os=target_os, sha256=sha256,
+                      before=before, limit=limit)
+
+
+def _filters(state, target_os, sha256, sha256_prefix, before):
+    """WHERE fragments and their bound values.
+
+    One builder, used by both the page query and the count. Two copies of this
+    logic is the classic way a paginated list ends up claiming "412 results"
+    while showing a different set -- the count and the page must be able to
+    disagree only about LIMIT.
+
+    Every fragment is a literal; no caller-supplied text enters the statement.
+    """
     clauses, params = ["TRUE"], []
     if state:
         clauses.append("state = %s")
@@ -453,22 +467,78 @@ def list_jobs(
     if sha256:
         clauses.append("sha256 = %s")
         params.append(sha256)
+    if sha256_prefix:
+        # Anchored at the START, and both reasons matter.
+        #
+        # Nobody holds the middle of a digest. You have the whole thing,
+        # because a tool emitted it, or its opening characters, because a UI
+        # truncated it -- this history shows twelve. A substring search would
+        # serve a way of working that does not exist.
+        #
+        # And it would be unindexable forever. `LIKE '%abc%'` cannot use a
+        # btree at all; `LIKE 'abc%'` can, once this table is large enough to
+        # warrant `CREATE INDEX ... (sha256 text_pattern_ops)` -- needed
+        # because the database collates C.UTF-8 rather than C, so a plain
+        # btree will not answer a pattern match. That index is NOT created
+        # yet: the table holds thousands of kilobyte rows and a sequential
+        # scan over it is free. Anchoring now keeps adding it later a pure
+        # addition rather than a search that silently narrows.
+        clauses.append("sha256 LIKE %s")
+        params.append(f"{sha256_prefix}%")
     if before:
         clauses.append("created_at < %s")
         params.append(before)
-    params.append(limit)
+    return clauses, params
 
-    # The WHERE clause is assembled from a fixed set of literal fragments; no
-    # caller-supplied text ever enters the statement. Every VALUE is bound.
+
+def query_jobs(*, state=None, target_os=None, sha256=None,
+               sha256_prefix=None, before=None, offset=0, limit=50):
+    """The route body as a plain function, so other callers can reuse it.
+
+    The UI (#38) renders the same history, and calling the route directly
+    would pass FastAPI's `Query(...)` sentinels through as if they were
+    values -- which psycopg then tries to bind, failing with "cannot adapt
+    type 'Query'". One query, two callers, no second copy of this SQL.
+
+    `sha256` is exact; `sha256_prefix` matches from the start. The JSON API
+    exposes only the first, deliberately: it is a stable contract others may
+    script against, and turning an equality filter into a fuzzy one later
+    would break callers silently. The UI's search box uses the second.
+
+    **Two pagination schemes, and they are not redundant.** `before` is a
+    keyset cursor and stays the API's: it is O(1) at any depth and cannot skip
+    or repeat a row when the table is written to mid-scan. `offset` exists for
+    the UI's numbered pages, which keyset cannot express -- you cannot jump to
+    page 7 without knowing where page 6 ended. OFFSET re-scans what it skips,
+    which is free at this table's size and would stay so to roughly a million
+    rows; past that the UI moves to next/previous links rather than this
+    function changing.
+    """
+    clauses, params = _filters(state, target_os, sha256, sha256_prefix, before)
+    params.extend([limit, offset])
     sql = (
         "SELECT id, created_at, target_os, submitted_filename, state, sha256,"
         "       size_bytes, owner FROM jobs"
         f" WHERE {' AND '.join(clauses)}"
-        " ORDER BY created_at DESC LIMIT %s"
+        " ORDER BY created_at DESC LIMIT %s OFFSET %s"
     )
     with connection() as conn, conn.cursor(row_factory=dict_row) as cur:
         cur.execute(sql, params)
         return [JobSummary(**row) for row in cur.fetchall()]
+
+
+def count_jobs(*, state=None, target_os=None, sha256=None,
+               sha256_prefix=None, before=None) -> int:
+    """How many rows the same filters match, for the page links.
+
+    A second query rather than `count(*) OVER ()` alongside the page: that
+    window returns no row at all on a page past the end, which is exactly when
+    the UI most needs the total -- to send someone back to a page that exists.
+    """
+    clauses, params = _filters(state, target_os, sha256, sha256_prefix, before)
+    sql = f"SELECT count(*) FROM jobs WHERE {' AND '.join(clauses)}"
+    with connection() as conn:
+        return conn.execute(sql, params).fetchone()[0]
 
 
 @router.get("/{job_id}")

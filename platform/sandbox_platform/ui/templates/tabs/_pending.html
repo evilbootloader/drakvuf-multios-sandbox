@@ -1,0 +1,16 @@
+{#
+  Every tab whose data source does not exist yet. It names the issue rather
+  than saying "coming soon", because a dead end with no pointer is how a
+  reader concludes the page is broken.
+#}
+<div class="empty">
+  <strong>Not collected.</strong>
+  {{ tab.label }} data for a {{ job.target_os.value }} guest comes from
+  {% if tab.sources %}
+    {% for s in tab.sources %}<code>{{ s }}</code>{% if not loop.last %}, {% endif %}{% endfor %},
+    which {{ 'is' if tab.sources | length == 1 else 'are' }} not enabled on this run.
+  {% else %}
+    analysis that runs on the platform rather than in the guest.
+  {% endif %}
+  {% if tab.owner %}<br>Owned by {{ tab.owner }}.{% endif %}
+</div>

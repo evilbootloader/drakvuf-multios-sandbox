@@ -1,0 +1,67 @@
+{% extends "base.html" %}
+{% block title %}{{ job.submitted_filename }} — DRAKVUF MultiOS Sandbox{% endblock %}
+
+{% block content %}
+
+<h2 class="filename">{{ job.submitted_filename }}</h2>
+
+<dl class="dl">
+  <dt>State</dt>
+  <dd>
+    <span class="state" data-state="{{ job.state.value }}">{{ job.state.value }}</span>
+    {% if job.attempt and job.attempt > 1 %}<span class="mono">attempt {{ job.attempt }}</span>{% endif %}
+  </dd>
+  <dt>Target</dt><dd>{{ job.target_os.value }}</dd>
+  <dt>Type</dt><dd>{{ job.detected_type or '—' }}</dd>
+  <dt>SHA-256</dt><dd class="mono">{{ job.sha256 or '—' }}</dd>
+  <dt>Size</dt>
+  <dd class="mono">{% if job.size_bytes is not none %}{{ job.size_bytes | filesizeformat(binary=True) }}{% if job.size_bytes >= 1024 %} <span class="dim">({{ "{:,}".format(job.size_bytes) }} bytes)</span>{% endif %}{% else %}—{% endif %}</dd>
+  <dt>Submitted</dt><dd class="mono">{{ job.created_at.strftime('%Y-%m-%d %H:%M:%S') }}</dd>
+  <dt>Owner</dt><dd>{{ job.owner or '—' }}</dd>
+</dl>
+
+{#
+  `queued` is not a failure and must not read as one. The measured failure
+  mode this whole architecture exists to remove was a silent hold with
+  correct-looking logs; a UI that showed a normal wait as an error would be
+  the same mistake in the opposite colour.
+#}
+{% if job.state.value == 'queued' %}
+<p class="note">
+  {% if job.reserved_ahead %}
+    Waiting — another job is reserved ahead of this one.
+  {% else %}
+    Waiting for an analysis host to pick this up.
+  {% endif %}
+  {% if job.queue_reason %}<br><span class="mono">{{ job.queue_reason }}</span>{% endif %}
+</p>
+{% endif %}
+
+{% if job.failure_reason %}
+<p class="note danger">
+  {# Verbatim: a reason the operator cannot see is a reason that costs a Dom0
+     session to rediscover. #}
+  Failed at <span class="mono">{{ job.failure_stage or '?' }}</span> —
+  <span class="mono">{{ job.failure_reason }}</span>
+</p>
+{% endif %}
+
+<nav class="tabs">
+  {% for tab in tabs %}
+  {# Tabs with no data yet are dimmed and marked, rather than looking
+     identical to filled ones. #38 ships with most of them empty on purpose,
+     and a tab you can only discover is empty by clicking reads as a fault. #}
+  <a href="/ui/jobs/{{ job.id }}?tab={{ tab.slug }}"
+     hx-get="/ui/jobs/{{ job.id }}/tab/{{ tab.slug }}"
+     hx-target="#tab-body"
+     {% if tab.slug not in filled %}data-empty="1"
+       title="No data collected for this tab yet{% if tab.owner %} — {{ tab.owner }}{% endif %}"{% endif %}
+     {% if tab.slug == active %}aria-selected="true"{% endif %}>{{ tab.label }}</a>
+  {% endfor %}
+</nav>
+
+<div class="tab-body" id="tab-body">
+  {% include body_template %}
+</div>
+
+{% endblock %}

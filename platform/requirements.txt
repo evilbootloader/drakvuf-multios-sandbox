@@ -2,6 +2,12 @@ boto3==1.43.78
 botocore==1.43.78
 fastapi==0.141.1
 httpx==0.28.1
+# The UI (#38). Server-rendered, so the escaping rule is structural:
+# autoescape is on by default and the dangerous thing becomes an explicit
+# `| safe` a reviewer can grep for. htmx is vendored, not fetched -- a strict
+# CSP blocks external hosts, and a malware-analysis platform is the last place
+# to introduce an npm dependency tree.
+jinja2==3.1.6
 pyjwt[crypto]==2.10.1
 psycopg==3.3.4
 psycopg-binary==3.3.4
@@ -9,6 +15,11 @@ psycopg-pool==3.3.1
 pydantic==2.13.4
 pydantic_core==2.46.4
 pytest==9.1.1
+# Browser-level tests for the UI (#38). These assert what a source-reading
+# test cannot: that a hostile filename does not EXECUTE, judged by an engine
+# that parses HTML the way an attacker's target does. Needs a browser:
+#   playwright install chromium
+pytest-playwright==0.9.0
 python-magic==0.4.27
 starlette==1.6.0
 uvicorn==0.52.4

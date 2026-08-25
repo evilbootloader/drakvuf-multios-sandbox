@@ -1,0 +1,150 @@
+{% extends "base.html" %}
+{% block title %}History — DRAKVUF MultiOS Sandbox{% endblock %}
+
+{% block content %}
+<h2>History</h2>
+
+{#
+  A GET form, so a search is a URL: shareable, bookmarkable, and back/forward
+  work with no JavaScript at all. The digest search matches from the START of
+  the hash, and the `%` is applied server-side -- the field accepts hex only,
+  so a user cannot type one and cannot turn the query into a match-everything.
+#}
+<form class="filters" method="get" action="/ui/jobs">
+  <label>
+    <span>SHA-256</span>
+    <input type="search" name="q" value="{{ q }}" maxlength="64"
+           placeholder="a full digest, or the characters it starts with"
+           pattern="[0-9a-fA-F]*" spellcheck="false" autocomplete="off">
+  </label>
+  <label>
+    <span>State</span>
+    <select name="state">
+      <option value="">any</option>
+      {% for s in states %}
+      <option value="{{ s }}" {% if state and state.value == s %}selected{% endif %}>{{ s }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  <label>
+    <span>Target</span>
+    <select name="target_os">
+      <option value="">any</option>
+      {% for o in target_oses %}
+      <option value="{{ o }}" {% if target_os and target_os.value == o %}selected{% endif %}>{{ o }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  <button type="submit">Search</button>
+  {% if q or state or target_os %}<a href="/ui/jobs" class="clear">clear</a>{% endif %}
+</form>
+
+{% if bad_query %}
+<p class="note danger">
+  {# Said, rather than returning an empty list: "no results" for a malformed
+     digest is indistinguishable from "no such sample", and only one of those
+     is worth acting on. #}
+  <span class="filename">{{ q }}</span> is not a SHA-256. A digest is
+  hexadecimal — 0–9 and a–f — and at most 64 characters.
+</p>
+{% elif not jobs %}
+<div class="empty">
+  {% if q or state or target_os %}
+    <strong>Nothing matches.</strong> Try a shorter digest, or clear the filters.
+  {% else %}
+    Nothing submitted yet.
+  {% endif %}
+</div>
+{% else %}
+
+{% if one_sample and total > 1 %}
+{#
+  Same bytes, several runs. Worth stating outright: DRAFT-030 makes identical
+  bytes under different names SEPARATE jobs, because the submitted name is
+  part of what is analysed -- extension dispatch and argv[0] self-checks are
+  real evasion surface. So this is the expected shape, not a duplicate, and
+  the columns below are exactly what differs between the runs.
+#}
+<p class="note sample-banner">
+  <strong>{{ total }} analyses of these bytes.</strong>
+  <span class="mono">{{ one_sample }}</span><br>
+  The same sample can be run more than once — under a different name, against
+  a different guest, or simply again. Choose one to open its report.
+</p>
+{% endif %}
+
+<div class="scroll-x">
+<table class="rows">
+  <thead>
+    <tr>
+      <th>Submitted</th><th>Target</th><th>Filename</th>
+      <th>State</th><th>SHA-256</th><th>Owner</th>
+    </tr>
+  </thead>
+  <tbody>
+  {% for job in jobs %}
+    <tr>
+      <td class="mono"><a href="/ui/jobs/{{ job.id }}">{{ job.created_at.strftime('%Y-%m-%d %H:%M') }}</a></td>
+      <td>{{ job.target_os.value }}</td>
+      {#
+        Attacker-controlled, rendered verbatim and autoescaped. `.filename`
+        isolates bidi overrides so a name containing U+202E cannot reverse the
+        rest of the row -- which is a display attack, not an escaping one, and
+        would survive any amount of HTML escaping.
+      #}
+      <td class="filename"><a href="/ui/jobs/{{ job.id }}">{{ job.submitted_filename }}</a></td>
+      <td><span class="state" data-state="{{ job.state.value }}">{{ job.state.value }}</span></td>
+      {# Truncated with an explicit ellipsis and the full digest in the
+         tooltip -- a silently-cut hash invites someone to compare a prefix
+         against a full one and conclude they differ.
+
+         Clicking searches for the whole digest, which is the common next
+         question: "what else came from these bytes?" DRAFT-030 makes that a
+         real question rather than a rhetorical one, since identical bytes
+         submitted under two names are deliberately two separate jobs. #}
+      <td class="mono">
+        {% if job.sha256 %}
+        <a href="/ui/jobs?q={{ job.sha256 }}" title="{{ job.sha256 }}">{{ job.sha256[:12] }}…</a>
+        {% else %}—{% endif %}
+      </td>
+      <td>{{ job.owner or '—' }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+
+{#
+  Numbered pages, with the range spelled out. "31–60 of 412" answers the two
+  questions a bare page number does not: how far in am I, and is there more.
+  Every link carries the current filters, or paging would silently drop them
+  and land you on page 2 of everything.
+#}
+<nav class="pager">
+  <span class="range">{{ first }}–{{ last }} of {{ total }}</span>
+  {% if pages > 1 %}
+    {% if page > 1 %}
+    <a href="?page={{ page - 1 }}{% if querystring %}&{{ querystring }}{% endif %}">← newer</a>
+    {% endif %}
+    {% if 1 not in window %}
+    <a href="?page=1{% if querystring %}&{{ querystring }}{% endif %}">1</a>
+    <span class="gap">…</span>
+    {% endif %}
+    {% for n in window %}
+      {% if n == page %}
+      <span class="here" aria-current="page">{{ n }}</span>
+      {% else %}
+      <a href="?page={{ n }}{% if querystring %}&{{ querystring }}{% endif %}">{{ n }}</a>
+      {% endif %}
+    {% endfor %}
+    {% if pages not in window %}
+    <span class="gap">…</span>
+    <a href="?page={{ pages }}{% if querystring %}&{{ querystring }}{% endif %}">{{ pages }}</a>
+    {% endif %}
+    {% if page < pages %}
+    <a href="?page={{ page + 1 }}{% if querystring %}&{{ querystring }}{% endif %}">older →</a>
+    {% endif %}
+  {% endif %}
+</nav>
+{% endif %}
+{% endblock %}

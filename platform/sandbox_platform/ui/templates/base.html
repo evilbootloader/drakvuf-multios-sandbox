@@ -1,0 +1,36 @@
+{#
+  Issue #38.
+
+  Jinja autoescapes by default, and that is the whole reason this is
+  server-rendered rather than a SPA: the escaping rule becomes STRUCTURAL.
+  The dangerous thing becomes an explicit escape-disabling filter, which a
+  reviewer can grep for, instead of an absent escape call nobody notices.
+
+  There are none in this template set. test_ui.py counts them, so adding
+  one is a deliberate act that fails a test until it is justified.
+#}
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block title %}DRAKVUF MultiOS Sandbox{% endblock %}</title>
+<link rel="stylesheet" href="/ui/static/app.css">
+<script src="/ui/static/htmx.min.js" defer></script>
+</head>
+<body>
+
+<header class="masthead">
+  <h1><span class="mark">▍</span> DRAKVUF MultiOS Sandbox</h1>
+  <nav>
+    <a href="/ui/submit" {% if view == 'submit' %}aria-current="page"{% endif %}>Submit</a>
+    <a href="/ui/jobs" {% if view == 'jobs' %}aria-current="page"{% endif %}>History</a>
+  </nav>
+</header>
+
+<main>
+{% block content %}{% endblock %}
+</main>
+
+</body>
+</html>

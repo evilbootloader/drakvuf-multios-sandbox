@@ -1,0 +1,77 @@
+{#
+  The plugin picker, swapped by htmx when the target OS changes.
+
+  Three states per plugin, and showing all three is the point. "Available" and
+  "evidenced" are different claims, and a form that presented them identically
+  would be inventing evidence -- most visibly on Windows, where nothing has
+  ever run. See sandbox_platform/catalogue.py.
+#}
+{# The OS is stated as data AND as text. As data because a test needs an
+   unambiguous signal that the swap completed -- waiting on a plugin NAME does
+   not work, since unsupported ones are listed by name too. As text because
+   after an htmx swap there is otherwise nothing on screen saying which guest
+   this list belongs to. #}
+<p data-os="{{ os }}" class="note">
+  Plugins available for a <strong>{{ os }}</strong> guest.
+</p>
+
+<p class="note danger">
+  <strong>Nothing here takes effect yet.</strong> The plugin list is fixed in
+  <code>drakvuf-{{ os }}.sh</code>, and applying it per job needs
+  <code>sandboxd</code> — DRAFT-052. The selection is not sent, not stored and
+  not honoured; this is the control's shape, shown so the catalogue can be
+  reviewed before anything depends on it.
+</p>
+
+<table>
+  <thead>
+    <tr><th></th><th>Plugin</th><th>Collects</th><th>Evidence</th></tr>
+  </thead>
+  <tbody>
+  {% for plugin, support in plugins %}
+    {% if support.value != 'unsupported' %}
+    <tr>
+      <td>
+        <input type="checkbox" name="plugins" value="{{ plugin.name }}"
+               {% if plugin.default %}checked{% endif %}>
+      </td>
+      <td class="mono">{{ plugin.name }}{% if plugin.heavy %} <span title="slow; may not finish inside the trace window">▲</span>{% endif %}</td>
+      <td>{{ plugin.describes }}</td>
+      <td><span class="state" data-state="{{ 'completed' if support.value == 'proven' else '' }}">{{ support.value }}</span></td>
+    </tr>
+    {% endif %}
+  {% endfor %}
+  </tbody>
+</table>
+
+{% set unsupported = plugins | selectattr('1.value', 'equalto', 'unsupported') | list %}
+{% if unsupported %}
+<p class="note">
+  Not available on {{ os }}:
+  {% for plugin, _ in unsupported %}<code>{{ plugin.name }}</code>{% if not loop.last %}, {% endif %}{% endfor %}.
+  {# Said out loud rather than silently omitted: "why is there no registry
+     tab" is a question worth answering on the page. #}
+  DRAKVUF does not implement these for this guest's OS family.
+</p>
+{% endif %}
+
+<fieldset>
+  <legend>Trace budget</legend>
+  <label>
+    Timeout (seconds)
+    <input type="number" name="timeout" value="{{ budget.timeout }}" min="10" max="600">
+  </label>
+  {% if budget.linux %}
+  <label>
+    <input type="checkbox" name="disable_sysret" {% if budget.disable_sysret %}checked{% endif %}>
+    <code>--disable-sysret</code> — faster, but loses syscall return values
+  </label>
+  <p class="note">
+    With this on you see that the sample called <code>openat</code> and with
+    what arguments, but not whether it succeeded. Android needs it to finish
+    at all: an idle BlissOS clone emits thousands of events before anything is
+    analysed. Turn it off when an analysis has to tell a successful open from
+    a refused one.
+  </p>
+  {% endif %}
+</fieldset>

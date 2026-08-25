@@ -248,3 +248,136 @@ UI; the pipeline runs headless.
 
 Stateless; rollback is redeploying the previous version. No migration, no
 data change. The pipeline is unaffected by the UI being down.
+
+---
+
+# Annotation — 2026-08-24, rescoped before implementation
+
+Appended rather than rewritten. Everything above stands as the record of what
+was decided in advance; this is what changed and why.
+
+## The scope this draft argued for is kept, and inverted at the same time
+
+The draft's central claim — *"the risk here is scope, not difficulty"* — is
+still right, and it is now the reason for the shape below rather than an
+argument against capability.
+
+The ask changed: absorb as much as possible from the commercial sandboxes
+compared in `Malware Sandbox Capability Comparison — 2026.md` — an
+operator-supplied reference kept **untracked**, because it is a working
+input rather than a project document and it carries errors recorded in
+`docs/roadmap/project-roadmap.md` risk #8 and
+`docs/architecture/upstream-drakvuf.md`. Both survive:
+
+- **#38 builds the shell.** Layout, theme, submit, history, live status, and a
+  **tab framework with empty tabs**.
+- **Each capability is its own issue** that fills one tab and carries its own
+  evidence. No tab renders before the data behind it exists.
+
+That is not a compromise, it is forced by the plugin matrix. A Registry tab
+cannot exist on Ubuntu — `regmon` is Windows-only. `ebpfmon` cannot exist on
+Windows. **The tab list is computed from the job's OS and the plugin
+catalogue, not fixed**, or an Ubuntu report becomes a wall of tabs that can
+never be filled.
+
+## Decisions taken on top of this draft
+
+| | |
+|---|---|
+| Verdict / score | **None.** Facts only — no threat score, no signature verdict. A score is a claim about detection quality we cannot back, and experience says the number gets quoted while the caveat does not |
+| Public access | **Per-report opt-in public link**, revocable. Uses the `visibility` column #40 reserved. DRAFT-053 |
+| Packaging | Downloadable executables as ZIP with the conventional password **`infected`** — which stops the browser, the OS and any scanner in between from executing or quarantining mid-download |
+| Trace storage | **Object store only.** capa reads the raw log, so it persists as an object; Postgres holds a summary and no event rows. Cross-job event hunting is given up deliberately |
+| Plugin selection | Per-job from the UI, defaults applied automatically, changing them behind an **advanced disclosure**. **Blocked on `sandboxd`** — the plugin list is hard-coded in `drakvuf-<os>.sh:181` and the scripts are being retired. DRAFT-052 |
+| Interaction | `hidsim`, screenshots and live VNC all wanted, each as its own issue (DRAFT-054/055/056) |
+
+## The rendering decision holds, with one addition
+
+Server-rendered Jinja stays, for the reason the draft gives: autoescaping
+makes the escaping rule **structural**, so the dangerous thing is an explicit
+`| safe` a reviewer can grep for. **htmx** is added for tab swapping and live
+updates — no build step, no `package.json`, no npm dependency tree entering a
+malware-analysis platform, and CSP unchanged.
+
+## What the escaping rule now has behind it
+
+The draft states the rule; since #37 there are tests that pin it. `<script>
+alert(1)`, `"><script>alert(1)` and `<!--` are **admitted** at submission and
+asserted byte-exact through the object key — see
+`platform/tests/test_jobs_api.py`. They are unclosed deliberately: an
+unterminated tag carries no `/`, so it survives the separator rule the sample
+filename validator applies, and it swallows the markup that follows it.
+
+**Those names are the contract this UI has to satisfy**, and rendering them is
+the first thing built, before anything is built on top.
+
+## Theme
+
+Gray, black and red, as CSS custom properties on `:root`. Dark-first with an
+explicit light fallback, one stylesheet, no framework.
+
+Red is **reserved**, and this is the part worth keeping if the palette ever
+changes. It marks failure and danger only — `failed`, `rejected`,
+`interrupted`, and anything that hands over live malware. Never decoration: a
+page where red means "heading" cannot also use red to mean "this download is a
+sample".
+
+`queued` is deliberately **not** red. The measured failure mode this whole
+architecture exists to remove was a silent hold with correct-looking logs;
+rendering a normal wait in the failure colour would be the same mistake
+wearing the opposite coat.
+
+## Searching by digest — added during implementation
+
+The history filters on state, target and SHA-256. Two decisions in it:
+
+**Anchored at the start of the hash, not a substring.** Nobody holds the
+middle of a digest — a tool gives you all 64 characters, the history gives you
+the first twelve. Matching anywhere would serve a way of working that does not
+exist, and it would be **unindexable forever**: `LIKE '%abc%'` can never use a
+btree, while `LIKE 'abc%'` can, once the table is large enough to want
+`CREATE INDEX … (sha256 text_pattern_ops)`. That index is not created — the
+table holds thousands of kilobyte rows and the scan is free — and anchoring
+now is what keeps adding it later a pure addition rather than a search that
+silently narrows under people already using it.
+
+**The `%` is applied server-side and the field accepts hex only**, so a user
+cannot type a wildcard and turn the query into a match-everything. The value
+is a bound parameter regardless; the alphabet restriction is the second line,
+not the first. A malformed digest is *named* rather than returning an empty
+list, because "no results" and "that is not a hash" are different answers and
+only one is worth acting on.
+
+**The JSON API keeps `sha256` exact.** It is a contract others may script
+against, and quietly turning an equality filter fuzzy would break callers
+without telling them. The prefix search is `query_jobs(sha256_prefix=…)`, used
+only by the UI.
+
+## What browser tests proved that source-reading tests could not
+
+`tests/test_ui.py` reads the HTML and checks `<script>` came out as
+`&lt;script&gt;` — a statement about bytes. `tests/test_ui_browser.py` drives
+Chromium with dialogs, page errors and an `alert` override all trapped, then
+loads pages full of hostile names. Only the second can answer *did anything
+execute*, and the two differ in exactly the cases attackers use.
+
+It caught two real defects that the source tests passed:
+
+- **The submit form was broken by CORS**, and reported the browser's bare
+  `Failed to fetch` — the "looks like a network error rather than a
+  configuration one" trap #37 exists to remove. `submit.js` now detects a
+  cross-origin target and says which.
+- **htmx was never vendored.** The placeholder was a comment file, so tab
+  swapping silently fell back to full page loads and nothing failed.
+
+## Deviations from this draft, recorded
+
+- **htmx is vendored**, pinned at 2.0.4 with its SHA-256 in
+  `platform/sandbox_platform/ui/static/VENDOR.md`. It is the only third-party
+  front-end code in the project, and that file records why one was accepted:
+  the swap target is server-rendered HTML, and a hand-rolled `innerHTML`
+  swapper is precisely where an escaping rule gets lost.
+- **`submit.js` is hand-written**, because the submission sequence — reserve,
+  upload to the object store, admit — is not a declarative swap and would need
+  custom code under any framework. It uses `textContent` throughout: it is the
+  one place in this UI that Jinja's autoescaping does not cover.

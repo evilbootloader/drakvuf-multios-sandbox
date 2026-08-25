@@ -1,0 +1,36 @@
+{% if not job.artifacts %}
+<div class="empty">
+  {% if job.state.value == 'completed' %}
+    <strong>This run produced no artifacts.</strong>
+  {% elif job.artifacts_expired %}
+    <strong>Artifacts have expired.</strong>
+    Objects are removed after the store's retention window; the manifest below
+    records what the run produced.
+  {% else %}
+    <strong>Not collected yet.</strong> Artifacts appear when the run completes.
+  {% endif %}
+</div>
+{% else %}
+<p class="note danger">
+  Executable artifacts download as ZIP with the password <code>infected</code>.
+  That is the convention every analyst and tool expects, and it stops the
+  browser, the OS and any scanner in between from executing or quarantining
+  the file mid-download.
+</p>
+<table>
+  <thead><tr><th>Artifact</th><th></th></tr></thead>
+  <tbody>
+  {% for name, url in job.artifacts.items() %}
+    <tr>
+      <td class="filename">{{ name }}</td>
+      <td><a href="{{ url }}" rel="noopener nofollow">download</a></td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+
+{% if job.manifest %}
+<h2 style="margin-top:1.5rem">Manifest</h2>
+<div class="scroll-x"><pre class="mono">{{ job.manifest | tojson(indent=2) }}</pre></div>
+{% endif %}

@@ -1,0 +1,307 @@
+/* Issue #38. Gray, black and red. One stylesheet, no framework.
+ *
+ * Dark-first: this is an operator console for a malware lab, usually read in
+ * a terminal-adjacent context, and every reference sandbox is dark. The light
+ * fallback is explicit rather than absent so a viewer forcing light mode gets
+ * a designed page instead of black text on a dark token.
+ *
+ * Red is reserved. It marks FAILURE and DANGER only -- failed and rejected
+ * states, and anything that hands over live malware. It is never decoration,
+ * because a page where red means "heading" cannot also use red to mean
+ * "this download is a live sample".
+ */
+
+:root {
+    color-scheme: dark;
+
+    --bg:        #0b0b0c;
+    --bg-raised: #141416;
+    --bg-inset:  #1b1b1e;
+    --line:      #2a2a2e;
+    --line-soft: #212125;
+
+    --fg:        #e6e6e8;
+    --fg-muted:  #9a9aa2;
+    --fg-faint:  #6a6a72;
+
+    --red:       #e5484d;
+    --red-dim:   #7d2226;
+    --red-wash:  #1e0f11;
+
+    --mono: ui-monospace, "SFMono-Regular", "JetBrains Mono", Menlo, monospace;
+    --sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+
+    --gap: 1rem;
+    --radius: 3px;
+}
+
+@media (prefers-color-scheme: light) {
+    :root:not([data-theme="dark"]) {
+        color-scheme: light;
+        --bg:        #f6f6f7;
+        --bg-raised: #ffffff;
+        --bg-inset:  #eeeef0;
+        --line:      #d4d4d8;
+        --line-soft: #e4e4e7;
+        --fg:        #18181b;
+        --fg-muted:  #52525b;
+        --fg-faint:  #8b8b93;
+        --red:       #c62a2f;
+        --red-dim:   #f0b4b6;
+        --red-wash:  #fdf0f0;
+    }
+}
+
+* { box-sizing: border-box; }
+
+body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--fg);
+    font: 15px/1.55 var(--sans);
+}
+
+a { color: var(--fg); text-decoration-color: var(--fg-faint); }
+a:hover { text-decoration-color: var(--red); }
+
+code, .mono, pre { font-family: var(--mono); font-size: 0.9em; }
+
+/* --- chrome ------------------------------------------------------------ */
+
+.masthead {
+    display: flex;
+    align-items: baseline;
+    gap: var(--gap);
+    padding: 0.85rem 1.25rem;
+    background: var(--bg-raised);
+    border-bottom: 1px solid var(--line);
+}
+.masthead h1 {
+    margin: 0;
+    font-size: 0.95rem;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+}
+.masthead h1 .mark { color: var(--red); }
+.masthead nav { display: flex; gap: 1rem; margin-left: auto; }
+.masthead nav a { color: var(--fg-muted); text-decoration: none; font-size: 0.9rem; }
+.masthead nav a:hover, .masthead nav a[aria-current="page"] { color: var(--fg); }
+
+main { max-width: 76rem; margin: 0 auto; padding: 1.5rem 1.25rem 4rem; }
+
+/* The submit view is a form, not a table, so it does not want the full
+ * measure. Centred rather than left-aligned inside it -- at 2560px a 34rem
+ * form pinned to the left edge reads as a rendering fault. */
+.narrow { max-width: 48rem; margin-inline: auto; }
+
+h2 { font-size: 1.05rem; font-weight: 600; margin: 0 0 0.75rem; }
+
+/* --- state ------------------------------------------------------------- */
+/*
+ * `queued` is deliberately NOT styled as a problem. The failure mode this
+ * whole architecture exists to remove was a silent hold that looked like
+ * everything was fine; rendering a normal wait as an error would be the same
+ * mistake wearing the opposite colour.
+ */
+
+.state {
+    display: inline-block;
+    padding: 0.1rem 0.5rem;
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    background: var(--bg-inset);
+    color: var(--fg-muted);
+    font: 500 0.78rem/1.6 var(--mono);
+    text-transform: lowercase;
+}
+.state[data-state="completed"] { color: var(--fg); border-color: var(--fg-faint); }
+.state[data-state="failed"],
+.state[data-state="rejected"],
+.state[data-state="interrupted"] {
+    color: var(--red);
+    border-color: var(--red-dim);
+    background: var(--red-wash);
+}
+.state[data-state="executing"],
+.state[data-state="cloning"],
+.state[data-state="preparing"],
+.state[data-state="collecting"],
+.state[data-state="cleaning"] { color: var(--fg); }
+
+.note {
+    border-left: 2px solid var(--line);
+    padding: 0.4rem 0 0.4rem 0.75rem;
+    color: var(--fg-muted);
+    font-size: 0.9rem;
+}
+.note.danger { border-left-color: var(--red); color: var(--fg); }
+
+/* --- filters ----------------------------------------------------------- */
+
+.filters {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-end;
+    gap: 0.75rem;
+    margin: 0 0 1.25rem;
+    max-width: 100%;
+}
+.filters label { display: flex; flex-direction: column; gap: 0.25rem; margin: 0; }
+.filters label span {
+    color: var(--fg-faint);
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+.filters input[type="search"] {
+    /* Wide enough for a full 64-character digest without scrolling: pasting
+     * one and not being able to see it is a small thing that reads as broken. */
+    width: 34rem;
+    max-width: 100%;
+    font-family: var(--mono);
+}
+.filters input, .filters select {
+    background: var(--bg-inset);
+    color: var(--fg);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    padding: 0.4rem 0.5rem;
+    font-size: 0.9rem;
+}
+.filters input:focus, .filters select:focus { outline: 1px solid var(--fg-faint); }
+.filters .clear { color: var(--fg-muted); font-size: 0.85rem; padding-bottom: 0.5rem; }
+
+/* --- tables ------------------------------------------------------------ */
+
+table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
+th {
+    text-align: left;
+    font-weight: 500;
+    color: var(--fg-faint);
+    font-size: 0.78rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    padding: 0 0.6rem 0.4rem;
+    border-bottom: 1px solid var(--line);
+}
+td { padding: 0.5rem 0.6rem; border-bottom: 1px solid var(--line-soft); }
+tr:hover td { background: var(--bg-raised); }
+
+.scroll-x { overflow-x: auto; }
+
+/* Filenames are attacker-controlled and rendered verbatim. They may contain
+ * RTL overrides, tabs and very long runs without spaces, so they are boxed
+ * and isolated rather than allowed to reflow the layout around them. */
+.filename {
+    font-family: var(--mono);
+    unicode-bidi: isolate;
+    word-break: break-all;
+}
+
+.sample-banner { margin: 0 0 1rem; }
+.sample-banner .mono { color: var(--fg-faint); word-break: break-all; }
+
+/* Every row opens a report, so the whole row reacts rather than only the one
+ * cell that happens to hold a link. */
+table.rows tr:hover td { background: var(--bg-raised); }
+table.rows td a { text-decoration: none; }
+table.rows tr:hover td a { text-decoration: underline; text-decoration-color: var(--red); }
+
+/* --- pager ------------------------------------------------------------- */
+
+.pager {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    margin: 1rem 0 0;
+    font-size: 0.85rem;
+    flex-wrap: wrap;
+}
+.pager .range { color: var(--fg-faint); margin-right: auto; font-family: var(--mono); }
+.pager a, .pager .here {
+    padding: 0.2rem 0.55rem;
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    text-decoration: none;
+    color: var(--fg-muted);
+}
+.pager a:hover { color: var(--fg); border-color: var(--fg-faint); }
+.pager .here { color: var(--fg); border-color: var(--red-dim); background: var(--red-wash); }
+.pager .gap { color: var(--fg-faint); padding: 0 0.1rem; }
+
+/* --- tabs -------------------------------------------------------------- */
+
+.tabs {
+    display: flex;
+    gap: 0.25rem;
+    border-bottom: 1px solid var(--line);
+    margin: 1.25rem 0 0;
+    overflow-x: auto;
+}
+.tabs a {
+    padding: 0.45rem 0.8rem;
+    color: var(--fg-muted);
+    text-decoration: none;
+    font-size: 0.9rem;
+    border-bottom: 2px solid transparent;
+    white-space: nowrap;
+}
+.tabs a:hover { color: var(--fg); }
+.tabs a[aria-selected="true"] { color: var(--fg); border-bottom-color: var(--red); }
+/* A tab with nothing behind it yet. Still reachable -- the empty state names
+ * the issue that will fill it -- but visibly distinct, so the shell reads as
+ * unfinished rather than broken. */
+.tabs a[data-empty] { color: var(--fg-faint); }
+.tabs a[data-empty]::after {
+    content: "·";
+    margin-left: 0.35rem;
+    color: var(--fg-faint);
+}
+.tabs a[data-empty][aria-selected="true"] { color: var(--fg-muted); }
+
+.dim { color: var(--fg-faint); }
+
+.tab-body { padding-top: 1.25rem; }
+
+.empty {
+    border: 1px dashed var(--line);
+    border-radius: var(--radius);
+    padding: 1.5rem;
+    color: var(--fg-muted);
+    font-size: 0.9rem;
+}
+.empty strong { color: var(--fg); font-weight: 600; }
+
+/* --- forms ------------------------------------------------------------- */
+
+form { max-width: 100%; }
+fieldset { border: 1px solid var(--line); border-radius: var(--radius); padding: 0.9rem 1rem; margin: 0 0 1rem; }
+legend { padding: 0 0.4rem; color: var(--fg-muted); font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.04em; }
+label { display: block; margin: 0.3rem 0; }
+input[type="file"] { color: var(--fg-muted); font-size: 0.9rem; }
+
+button {
+    background: var(--bg-inset);
+    color: var(--fg);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    padding: 0.45rem 1rem;
+    font: 500 0.9rem var(--sans);
+    cursor: pointer;
+}
+button:hover { border-color: var(--fg-faint); }
+button[type="submit"] { border-color: var(--red-dim); }
+button[type="submit"]:hover { background: var(--red-wash); border-color: var(--red); }
+
+details.advanced { margin: 0 0 1rem; }
+details.advanced > summary {
+    cursor: pointer;
+    color: var(--fg-muted);
+    font-size: 0.88rem;
+    padding: 0.3rem 0;
+}
+details.advanced > summary:hover { color: var(--fg); }
+
+.dl { display: grid; grid-template-columns: max-content 1fr; gap: 0.35rem 1rem; font-size: 0.9rem; }
+.dl dt { color: var(--fg-faint); }
+.dl dd { margin: 0; }
