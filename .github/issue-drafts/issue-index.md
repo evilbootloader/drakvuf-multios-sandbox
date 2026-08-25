@@ -918,3 +918,54 @@ deleted, so the reasoning survives the constraint.
 > already resolved by later work and needed no change. Nothing in
 > `automation/` or `misc/` was touched and no issue body was edited, so
 > `CONTRIBUTING.md`'s Stage 2 gate was not triggered.
+
+## Tenth batch — DRAFT-019, DRAFT-048 through DRAFT-060
+
+Drafted 2026-08-25 while planning the web UI (#38). **Nothing published** —
+Stage 2 gate not yet passed.
+
+| Draft ID | Title | Area | OS | Milestone | Priority | Depends on | Origin |
+|---|---|---|---|---|---|---|---|
+| DRAFT-019 | Integrate capa against DRAKVUF logs | enrichment | ALL | M4 | P1 | DRAFT-018 | Indexed from the start, **never written until now** |
+| DRAFT-048 | Static analysis of the submitted sample (FLOSS, YARA, per-format) | enrichment | ALL | M4 | P1 | #37 | Capability comparison, 2026-08-25 |
+| DRAFT-049 | Network processing — read the pcap we already capture | enrichment | ALL | M4 | P1 | #37, DRAFT-050 | Capability comparison |
+| DRAFT-050 | Audit all 45 DRAKVUF plugins and evidence the ones that earn it | core | ALL | M4 | P0 | Nothing | `plugins.h`, 2026-08-24 |
+| DRAFT-051 | Memory and payload extraction — YARA over dumps, family configs | enrichment | ALL | M5 | P2 | DRAFT-022 (licence), DRAFT-048 | Capability comparison |
+| DRAFT-052 | Per-job plugin selection and trace budget | core/platform | ALL | M5 | P2 | **DRAFT-060** | Maintainer, 2026-08-24 |
+| DRAFT-053 | Public report links, and the `infected` packaging that makes them safe | core/platform | ALL | M5 | P2 | #37, #39, borrows #40's `visibility` | Maintainer, 2026-08-24 |
+| DRAFT-054 | Screenshots — a filmstrip from the Xen framebuffer | enrichment | ALL | M5 | P2 | DRAFT-060 | Maintainer, 2026-08-24 |
+| DRAFT-055 | `hidsim` — synthetic mouse and keyboard, no inbound channel | core | ALL | M5 | P2 | DRAFT-050, DRAFT-052 | `plugins.h` + maintainer |
+| DRAFT-056 | Live interactive analysis — noVNC over a relay we own | core/platform | ALL | M6 | P3 | DRAFT-060, #39, #40 | Maintainer, 2026-08-25 |
+| DRAFT-057 | Egress routing — offline, direct, or through an exit we choose | platform/security | ALL | M2 | **P0** | DRAFT-022 | `ideas.md` + roadmap risk #13 |
+| DRAFT-058 | Guest locale and keyboard layout as an analysis control | core | ALL | M5 | P2 | DRAFT-052, golden images | `ideas.md` |
+| DRAFT-059 | Archive submission — password-protected archives and multi-file samples | core/platform | ALL | M4 | P1 | #36, #37, DRAFT-060 | Maintainer, 2026-08-25 |
+| DRAFT-060 | `sandboxd` — the analysis orchestrator, and argv instead of shell | core/platform | ALL | M2 → gates M7 | **P0** | #35, #36, #37 | DRAFT-041, **never drafted until now** |
+
+### What this batch is, and why it is shaped this way
+
+#38 was rescoped rather than enlarged. It builds the **shell** — layout,
+theme, submit, history, live status, a tab framework — and each capability
+became its own issue filling one tab with its own evidence. Forced by the
+plugin matrix as much as chosen: a Registry tab cannot exist on Ubuntu, so the
+tab list is computed per guest rather than fixed.
+
+### Two P0s that were nobody's
+
+- **DRAFT-060 (`sandboxd`)** — named in `platform.md` since 2026-08-21,
+  carried in this index as "deferred", **never given a draft**, while three
+  capability tracks queued behind it. It is now the critical path.
+- **DRAFT-057 (egress routing)** — `offline` was proposed in
+  `networking.md`, recorded in the roadmap as undecided M2 work, and left
+  unowned. It is the only issue here that gates whether real malware can be
+  detonated at all; everything else assumes a sample already ran.
+
+### Ten indexed drafts still have no file
+
+DRAFT-019 was one of them until this batch. The others remain:
+**DRAFT-011, 012, 014, 017, 018, 020, 021, 023, 024, 035.** DRAFT-019
+references DRAFT-018 (the result schema), so at least one is a live dependency
+of written work.
+
+This is the same defect class as `#47` in the ninth batch — the index
+promising more than exists, and other documents citing it as though it did.
+Worth a pass of its own.
