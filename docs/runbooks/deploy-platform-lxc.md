@@ -2742,6 +2742,24 @@ curl -so /dev/null -w '/analysis  %{http_code}  (expect 403 from MinIO)\n' \
 let the request through and MinIO refused it unsigned. A 302 there would mean
 the path rule stopped matching and the UI had swallowed the prefix.
 
+### The bare hostname
+
+`/` was a 404 when this step was first run — cloudflared routes everything
+except `/analysis*` to the API, and the API had no root of its own, so typing
+the hostname produced an error page from a service that was working perfectly.
+It now redirects:
+
+```bash
+curl -so /dev/null -w '/ -> %{redirect_url}  (%{http_code})\n' \
+     -H "cf-access-token: $TOKEN" https://sandbox.evilbootloader.com/
+# expect: https://sandbox.evilbootloader.com/ui  (302)
+```
+
+**302 rather than 308**, deliberately. A permanent redirect is cached hard by
+browsers and would make `/` awkward to reclaim later — for a landing page, or
+a public report index (DRAFT-053). One redirect per visit, decision
+reversible.
+
 Confirm the vendored htmx is the file that was reviewed:
 
 ```bash

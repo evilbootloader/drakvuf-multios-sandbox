@@ -16,6 +16,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
+from fastapi.responses import RedirectResponse
 
 from . import events, maintenance
 from .db import close_pool, connection, open_pool
@@ -65,6 +66,28 @@ app.include_router(worker.router)
 # is shared and a catch-all here would be a collision waiting to happen.
 app.include_router(ui_router)
 app.mount("/ui/static", ui_static, name="ui-static")
+
+
+@app.get("/", include_in_schema=False)
+def root() -> RedirectResponse:
+    """Send the bare hostname to the UI.
+
+    Without this `/` is a 404: cloudflared routes everything except
+    `/analysis*` here, and the API has no root of its own — so someone typing
+    the hostname gets an error page from a service that is working perfectly.
+
+    **302, not 308.** A permanent redirect is cached hard by browsers and
+    would make `/` difficult to reclaim later — for a landing page, a public
+    report index, or anything else. This costs one redirect per visit and
+    keeps the decision reversible.
+
+    Deliberately not carrying the Access dependency the routers do. Cloudflare
+    intercepts before this is reached on the browser path, so an
+    unauthenticated visitor sees the login page rather than this route at all;
+    adding auth here would only affect the LAN path, where it would turn a
+    helpful redirect into a 401.
+    """
+    return RedirectResponse("/ui", status_code=302)
 
 
 @app.get("/healthz", tags=["ops"])

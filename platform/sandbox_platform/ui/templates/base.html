@@ -16,6 +16,9 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{% block title %}DRAKVUF MultiOS Sandbox{% endblock %}</title>
 <link rel="stylesheet" href="/ui/static/app.css">
+{# No defer: the stored theme must apply before the first paint,
+   or a dark-mode reader gets a white flash on every page. #}
+<script src="/ui/static/theme.js"></script>
 <script src="/ui/static/htmx.min.js" defer></script>
 </head>
 <body>
@@ -25,6 +28,7 @@
   <nav>
     <a href="/ui/submit" {% if view == 'submit' %}aria-current="page"{% endif %}>Submit</a>
     <a href="/ui/jobs" {% if view == 'jobs' %}aria-current="page"{% endif %}>History</a>
+    <button type="button" id="theme-toggle" title="Theme">auto</button>
   </nav>
 </header>
 

@@ -363,3 +363,100 @@ def test_a_filename_the_api_refuses_is_reported_verbatim(strict_page, server):
 
     strict_page.wait_for_selector("#result .note.danger", timeout=20000)
     assert "path separator" in strict_page.locator("#result .note").inner_text()
+
+
+# --- the form, driven as a person drives it --------------------------------
+
+def test_searching_with_every_filter_on_any_works(strict_page, server, seed):
+    """The test that would have caught the 422.
+
+    An HTML <select> on "any" submits `state=` — present and empty — and
+    FastAPI refused to parse "" into the enum, so the UNFILTERED search was the
+    one case that broke. Reported from the deployment 2026-08-25.
+
+    The source-level tests missed it because they passed either a real value or
+    nothing at all. Only submitting the actual form sends an empty one.
+    """
+    seed("hello.bin")
+
+    strict_page.goto(f"{server}/ui/jobs")
+    strict_page.get_by_role("button", name="Search").click()
+    strict_page.wait_for_url("**/ui/jobs?**")
+
+    assert "hello.bin" in strict_page.locator("body").inner_text()
+    assert "Input should be" not in strict_page.locator("body").inner_text()
+    assert strict_page.fired == [], strict_page.fired
+
+
+def test_searching_with_a_filter_selected_works(strict_page, server, seed):
+    seed("linux.bin", target_os="ubuntu")
+    seed("win.exe", target_os="windows")
+
+    strict_page.goto(f"{server}/ui/jobs")
+    strict_page.select_option("select[name=target_os]", "windows")
+    strict_page.get_by_role("button", name="Search").click()
+    strict_page.wait_for_url("**target_os=windows**")
+
+    body = strict_page.locator("body").inner_text()
+    assert "win.exe" in body and "linux.bin" not in body
+
+
+# --- the theme toggle ------------------------------------------------------
+
+def _bg(page):
+    return page.evaluate("getComputedStyle(document.body).backgroundColor")
+
+
+def test_the_toggle_forces_light_on_a_dark_system(strict_page, server):
+    """The direction that did not work at first.
+
+    The media query alone cannot force light on a dark system, so a toggle
+    without an explicit `[data-theme="light"]` rule works one way only — dark
+    users could never reach light.
+    """
+    strict_page.emulate_media(color_scheme="dark")
+    strict_page.goto(f"{server}/ui/jobs")
+    dark = _bg(strict_page)
+
+    strict_page.click("#theme-toggle")          # auto -> dark
+    strict_page.click("#theme-toggle")          # dark -> light
+
+    assert strict_page.locator("html").get_attribute("data-theme") == "light"
+    assert _bg(strict_page) != dark
+
+
+def test_the_toggle_forces_dark_on_a_light_system(strict_page, server):
+    strict_page.emulate_media(color_scheme="light")
+    strict_page.goto(f"{server}/ui/jobs")
+    light = _bg(strict_page)
+
+    strict_page.click("#theme-toggle")          # auto -> dark
+
+    assert strict_page.locator("html").get_attribute("data-theme") == "dark"
+    assert _bg(strict_page) != light
+
+
+def test_the_choice_survives_navigation(strict_page, server, seed):
+    """Stored, and applied before the first paint — otherwise every page load
+    flashes the wrong theme."""
+    seed("x.bin")
+    strict_page.emulate_media(color_scheme="dark")
+    strict_page.goto(f"{server}/ui/jobs")
+    strict_page.click("#theme-toggle")
+    strict_page.click("#theme-toggle")          # light
+
+    strict_page.goto(f"{server}/ui/submit")
+
+    assert strict_page.locator("html").get_attribute("data-theme") == "light"
+
+
+def test_the_third_click_returns_to_following_the_system(strict_page, server):
+    """Three states, not two. `auto` is not the same as whichever the system
+    currently is — it keeps following when the system changes."""
+    strict_page.goto(f"{server}/ui/jobs")
+
+    for _ in range(3):
+        strict_page.click("#theme-toggle")
+
+    assert strict_page.locator("html").get_attribute("data-theme") is None
+    assert strict_page.locator("#theme-toggle").inner_text() == "auto"

@@ -440,3 +440,60 @@ def test_the_count_and_the_page_cannot_disagree(client, conn):
 
     assert "1–30 of 40" in page
     assert page.count('<td class="filename">') == 30
+
+
+def test_the_bare_hostname_redirects_to_the_ui(client):
+    """`/` is otherwise a 404 from a service that is working perfectly —
+    cloudflared routes everything but `/analysis*` to the API, and the API has
+    no root of its own."""
+    r = client.get("/", follow_redirects=False)
+
+    assert r.status_code == 302
+    assert r.headers["location"] == "/ui"
+
+
+def test_the_redirect_is_not_permanent(client):
+    """308 would be cached hard and make `/` difficult to reclaim later — for
+    a landing page, a public report index, or anything else."""
+    assert client.get("/", follow_redirects=False).status_code not in (301, 308)
+
+
+def test_healthz_is_not_swallowed_by_the_redirect(client):
+    """The one deliberately unauthenticated endpoint, and the one a reverse
+    proxy polls. A root route that shadowed it would be a quiet outage."""
+    r = client.get("/healthz")
+
+    assert r.status_code == 200
+    assert r.json() == {"status": "ok"}
+
+
+@pytest.mark.parametrize("qs", [
+    "state=&target_os=",              # what the form sends with both on "any"
+    "q=&state=&target_os=",
+    "state=&target_os=windows",
+    "q=af9c&state=&target_os=",
+])
+def test_empty_filter_values_mean_unfiltered(client, conn, qs):
+    """An HTML <select> whose "any" option has value="" submits `state=`.
+
+    The parameter is PRESENT and empty, not omitted — so FastAPI tried to
+    parse "" into the enum and the *unfiltered* search was the one case that
+    returned 422. Reported from the deployment 2026-08-25.
+
+    Missed by the earlier tests because they passed either a real value or
+    nothing at all, never an empty string. They tested the API contract; this
+    tests what a form actually sends.
+    """
+    _hashed(conn, "wanted.bin", HASH)
+
+    r = client.get(f"/ui/jobs?{qs}")
+
+    assert r.status_code == 200, r.text[:300]
+
+
+def test_a_bad_filter_value_is_still_refused(client):
+    """The closed set is untouched. Only the EMPTY value became permissive —
+    `state=linux` is still a 422, which is issue #3's rule and the reason
+    these are enums at all."""
+    assert client.get("/ui/jobs?state=linux").status_code == 422
+    assert client.get("/ui/jobs?target_os=freebsd").status_code == 422

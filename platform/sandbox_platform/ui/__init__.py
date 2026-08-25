@@ -33,7 +33,10 @@ from pathlib import Path
 from urllib.parse import urlencode
 from uuid import UUID
 
+from typing import Annotated
+
 from fastapi import APIRouter, Depends, HTTPException, Path as PathParam, Query
+from pydantic import BeforeValidator
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -107,6 +110,28 @@ def plugin_picker(request: Request,
 _HEX = re.compile(r"\A[0-9a-f]{1,64}\Z")
 
 
+def _blank_is_absent(v: object) -> object:
+    """Treat an empty query value as an absent one.
+
+    An HTML `<select>` whose "any" option has `value=""` submits `state=` --
+    the parameter is PRESENT and empty, not omitted. FastAPI then tried to
+    parse `""` into the enum, so the *unfiltered* search was the one case that
+    returned 422. Reported from the deployment 2026-08-25.
+
+    The closed-set check is untouched for every non-empty value: `state=linux`
+    is still a 422, which is issue #3's rule and the reason these are enums at
+    all.
+    """
+    return None if v == "" else v
+
+
+# Query-only, and deliberately not applied to the JSON API. A client sending
+# `state=` there has made a mistake worth being told about; a browser sending
+# it is just how forms work.
+BlankableState = Annotated[JobState | None, BeforeValidator(_blank_is_absent)]
+BlankableOs = Annotated[TargetOs | None, BeforeValidator(_blank_is_absent)]
+
+
 # 30 a page. Small enough that a page is scannable without scrolling, and it
 # is the number the operator asked for.
 PAGE = 30
@@ -115,8 +140,8 @@ PAGE = 30
 @router.get("/jobs", response_class=HTMLResponse)
 def jobs_view(request: Request,
               q: str = Query("", max_length=64),
-              state: JobState | None = None,
-              target_os: TargetOs | None = None,
+              state: BlankableState = None,
+              target_os: BlankableOs = None,
               page: int = Query(1, ge=1)) -> HTMLResponse:
     """History, with a search over the sample digest.
 

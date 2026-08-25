@@ -35,6 +35,13 @@
     --radius: 3px;
 }
 
+/* The light palette, defined once and applied from two places: when the
+ * system asks for it and no explicit choice overrides, and when the toggle
+ * asks for it regardless of the system.
+ *
+ * Both are needed. The media query alone cannot force light on a dark system,
+ * so a toggle without the second rule works in one direction only -- which is
+ * how it shipped on 2026-08-25 until someone tried it. */
 @media (prefers-color-scheme: light) {
     :root:not([data-theme="dark"]) {
         color-scheme: light;
@@ -50,6 +57,21 @@
         --red-dim:   #f0b4b6;
         --red-wash:  #fdf0f0;
     }
+}
+
+:root[data-theme="light"] {
+    color-scheme: light;
+    --bg:        #f6f6f7;
+    --bg-raised: #ffffff;
+    --bg-inset:  #eeeef0;
+    --line:      #d4d4d8;
+    --line-soft: #e4e4e7;
+    --fg:        #18181b;
+    --fg-muted:  #52525b;
+    --fg-faint:  #8b8b93;
+    --red:       #c62a2f;
+    --red-dim:   #f0b4b6;
+    --red-wash:  #fdf0f0;
 }
 
 * { box-sizing: border-box; }
@@ -86,6 +108,16 @@ code, .mono, pre { font-family: var(--mono); font-size: 0.9em; }
 .masthead nav { display: flex; gap: 1rem; margin-left: auto; }
 .masthead nav a { color: var(--fg-muted); text-decoration: none; font-size: 0.9rem; }
 .masthead nav a:hover, .masthead nav a[aria-current="page"] { color: var(--fg); }
+
+#theme-toggle {
+    background: none;
+    border: 1px solid var(--line);
+    color: var(--fg-muted);
+    padding: 0.15rem 0.5rem;
+    font-size: 0.85rem;
+    line-height: 1.4;
+}
+#theme-toggle:hover { color: var(--fg); border-color: var(--fg-faint); }
 
 main { max-width: 76rem; margin: 0 auto; padding: 1.5rem 1.25rem 4rem; }
 
