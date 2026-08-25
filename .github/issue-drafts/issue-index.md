@@ -321,7 +321,7 @@ Not yet drafted in full — titles only, from `docs/roadmap/project-roadmap.md`:
 | DRAFT-017 | Implement Android sample classification (checklist §2.6) | android | M3 | P1 | DRAFT-014 |
 | DRAFT-018 | Define artifact/result schema | core | M4 | P1 | DRAFT-008 |
 | DRAFT-019 | Integrate capa against DRAKVUF logs (native v7.2.0 extractor) | enrichment | M4 | P2 | DRAFT-018 |
-| DRAFT-020 | Windows baseline selection + clone-per-run confirmation | windows | M5 | P2 | DRAFT-008 |
+| DRAFT-020 | ~~Windows baseline selection + clone-per-run confirmation~~ → **What is installed in the guests — coverage, and not looking like a sandbox** *(retitled 2026-08-25; the old title described DRAFT-034's work)* | core | M5 | **P1** | DRAFT-034 |
 | DRAFT-021 | Licensing review write-up | governance | M0 | P1 | — |
 | ~~DRAFT-022~~ | **Drafted in full 2026-08-11 — see `.github/issue-drafts/DRAFT-022.md`.** Retitled "Establish the legal and compliance position for networked malware analysis (Spain/EU)"; priority raised P2 → **P1**, because DRAFT-028 confirmed the lab has working deliberate Internet egress today | compliance | M2 → M8 | **P1** | — |
 | DRAFT-023 | TLS-visibility research spike for Linux/Android (tlsmon confirmed N/A) | networking | M2 | P3 | DRAFT-013 |
@@ -981,13 +981,63 @@ scripts against the live API at `sandbox.evilbootloader.com`, the way
 That is most of the capability set. Only **050, 052, 054, 055, 056, 057, 058
 and 060** need Dom0 at all, and 060 gates several of those.
 
-### Ten indexed drafts still have no file
+### The ten fileless index rows, triaged 2026-08-25
 
-DRAFT-019 was one of them until this batch. The others remain:
-**DRAFT-011, 012, 014, 017, 018, 020, 021, 023, 024, 035.** DRAFT-019
-references DRAFT-018 (the result schema), so at least one is a live dependency
-of written work.
+Maintainer went through them. Most were not gaps at all — they were rows
+describing work that has since been decided elsewhere, and the index simply
+never caught up.
 
-This is the same defect class as `#47` in the ninth batch — the index
-promising more than exists, and other documents citing it as though it did.
-Worth a pass of its own.
+**Superseded — strike from the index, do not write:**
+
+| Draft | Why it is gone |
+|---|---|
+| DRAFT-011 | Structured status output. **Superseded by the web UI.** `status.json` existed so an operator could see state, queue reason and failure stage; #38 renders all three from the job row, live over SSE |
+| DRAFT-012 | Static CI. Already superseded by DRAFT-026, recorded years-of-index ago and never struck |
+| DRAFT-014 | Sample OS auto-detection contract. **Already decided, and shipped.** Issue #3 settled it: the *operator* selects the target, and libmagic only judges whether the sample is appropriate for it. That is `_contradicts()` in `routers/jobs.py` — detection rejects a mismatch and never routes |
+| DRAFT-017 | Android sample classification. Same decision, and `drakvuf-android.sh` already selects APK-vs-ELF structurally from the sample's own bytes |
+| DRAFT-035 | Job control channel. **Superseded in three pieces** — see below |
+
+**DRAFT-035, piece by piece**, because it is the one worth being precise about:
+
+- **Cancellation** — done. #36 delivers it in the heartbeat *response*
+  (`cancel_requested`), which is what keeps Dom0 from needing an inbound
+  listener.
+- **Retry guard** — **decided, and it is a divergence from `dirwatch`.**
+  `dirwatch.c` retries internally on timeout, spawning a fresh clone for the
+  same sample. The platform has **no requeue path**: `reap` marks an expired
+  lease `interrupted` and nothing returns a job to `queued`. That is
+  deliberate. A retry is a **new job with a new id**, submitted by an
+  operator who decided to — not a loop the daemon runs on its own.
+  **#41 must preserve this rather than port `dirwatch`'s behaviour across.**
+- **Per-OS watch-directory admission** — largely moot. `dirwatch`'s one
+  directory per OS *was* the routing mechanism; the API's `POST /jobs` with a
+  validated `target_os` replaced it. Whether anything remains here is the one
+  open question in the row.
+
+**Deferred — real, but not before a basic sandbox runs end to end:**
+
+DRAFT-021 (licensing write-up), DRAFT-023 (TLS-visibility spike for
+Linux/Android), DRAFT-024 (pin and mirror both DRAKVUF upstreams).
+
+DRAFT-024 is the one to revisit first when the time comes: the 2026-08-24
+`plugins.h` read narrowed what actually needs mirroring from "Linux/Android
+plugin support" to **two plugins**, so the job is smaller and better specified
+than when it was written.
+
+**Still needed:**
+
+- **DRAFT-018** — the result schema. The only fileless row that is a live
+  dependency of written work: DRAFT-019 declares it, and every capability
+  draft writes a `*.json` into a schema nobody has specified. Not urgent
+  because each draft defines its own output, and that is precisely how the
+  outputs drift apart.
+- **DRAFT-020** — **now written**, and its row title was wrong. "Windows
+  baseline selection + clone-per-run confirmation" describes DRAFT-034's work
+  (which says so, and supersedes that half) plus a question already closed
+  (clone-per-run, by elimination). What was actually unwritten is **what
+  software is installed in the guests** — Office, a browser, a PDF reader, the
+  .NET and VC++ runtimes, and an unpacker that DRAFT-059 hard-depends on;
+  plus the realism settings that stop the guest announcing itself. Windows
+  first, measured with Pafish before and after, then the same method
+  elsewhere. Maintainer, 2026-08-25.
+

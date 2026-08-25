@@ -147,8 +147,13 @@ window.
 2. **Every want-verdict plugin starts** against each guest it claims.
 3. **Output is attributable to the sample**, shown by running each plugin
    against an idle clone and against one running a known sample, and diffing.
-4. **`cpuidmon` sees a deliberate CPUID probe** — a fixture that queries the
-   hypervisor bit and exits.
+4. **`cpuidmon` sees a deliberate CPUID probe.** **Pafish is the fixture** —
+   it exists to run exactly these checks, so a trace of it with `cpuidmon`
+   enabled should record the hypervisor probes it makes. Better than a
+   hand-written fixture, because it probes the way real malware does rather
+   than the way we imagine it does. Pairs with DRAFT-020, which uses the same
+   binary from the other side: Pafish reports what the guest revealed,
+   `cpuidmon` reports that we watched it ask.
 5. **`procmon` produces a tree** with a known parent/child shape.
 6. **Cost is recorded** per plugin per guest, and any combination that cannot
    finish in 180s is named.
