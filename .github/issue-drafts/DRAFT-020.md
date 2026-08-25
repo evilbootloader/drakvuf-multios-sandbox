@@ -160,8 +160,26 @@ change reliably, because the checks are identical between runs. It cannot tell
 you the image is undetectable, because it has known nothing new since 2025.
 
 So: **Pafish for the before/after number; al-khaser as a second, maintained
-opinion** with a much larger check set. If they disagree, al-khaser is the one
-to believe about current techniques.
+opinion** with a much larger check set.
+
+**When they disagree, the detection wins — always, whichever tool made it**
+(maintainer, 2026-08-25). Not "believe the newer tool". Two reasons:
+
+- **They mostly test different things, not the same things differently.** A
+  disagreement is usually one tool checking an artifact the other never looks
+  at, so the union of their findings is the real answer and the intersection
+  is meaningless. Pafish being archived does not make its existing checks
+  wrong — an artifact it detected in 2019 is still an artifact in 2026 if
+  nobody removed it.
+- **The costs are asymmetric.** A false *detected* costs some wasted hardening
+  effort, and you find out when you go looking. A false *clean* means shipping
+  an image that malware fingerprints, and **you never find out** — the samples
+  simply do nothing and the reports look unremarkable.
+
+So the score is the number of checks flagged by **either** tool, and a check
+only counts as fixed when **both** stop flagging it. That rule generalises
+past these two: any future detection suite joins the union rather than
+replacing an existing one.
 
 `hidsim` (DRAFT-055) interacts here: several of Pafish's generic checks look
 for mouse movement and user activity, so a run with input injection should
@@ -220,8 +238,10 @@ unnoticed.
 - [ ] Realism settings applied and recorded.
 - [ ] The PV driver decision made explicitly, either way, with its reason.
 - [ ] An unpacker present on all three guests, satisfying DRAFT-059.
-- [ ] Pafish run before and after, both logs kept, with the changed checks
-      named individually rather than only a total.
+- [ ] Pafish and al-khaser both run before and after, all four logs kept, with
+      the changed checks named individually rather than only a total.
+- [ ] The score is the UNION of their detections; a check counts as fixed only
+      when both stop flagging it.
 - [ ] Pafish confirmed as a `cpuidmon` fixture — its probes appear in a trace.
 - [ ] Idle noise floor re-measured after the rebuild.
 - [ ] Template re-saved, checksum and anchor PID recorded in the same pass.
@@ -231,7 +251,8 @@ unnoticed.
 
 - The package list as installed, per OS.
 - A maldoc running, and the same maldoc inert on the pre-rebuild image.
-- Pafish output, before and after, in full.
+- Pafish and al-khaser output, before and after, in full — four logs, so the
+  union can be recomputed rather than taken on trust.
 - A `cpuidmon` trace of Pafish running as a sample.
 - Idle noise floor, before and after.
 - The template checksum and anchor PID, recorded together.
