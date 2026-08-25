@@ -35,6 +35,38 @@ upstream DRAKVUF 0.8 (2021-12-21). `injector` is a separate tool, not a
 ("drakshell") during setup only, which self-terminates before the sample
 runs, preserving the agentless design.
 
+> **2026-08-24 — the inventory above has no OS split, and that turned out to
+> matter.** `src/plugins/plugins.h` carries the authoritative matrix,
+> `drakvuf_plugin_os_support[plugin][os]`, read directly on this date from
+> both `tklengyel/main` and `lfreijo/memdump`:
+>
+> **45 plugins — 16 Linux-capable, 26 Windows-only, 3 Linux-only.**
+>
+> | | Plugins |
+> |---|---|
+> | **Both** | `syscalls`, `filetracer`, `fileextractor`\*, `memdump`\*, `procmon`, `procdump2`, `cpuidmon`, `debugmon`, `ipt`, `hidsim`, `libhooktest` |
+> | **Linux only** | `ptracemon`, `ebpfmon`, `unixsocketmon`, `rebootmon` |
+> | **Windows only** | `apimon`, `procdump`, `regmon`, `socketmon`, `rootkitmon`, `tlsmon`, `codemon`, `exploitmon`, `wmimon`, `rpcmon`, `etwmon`, `clipboardmon`, `windowmon`, `librarymon`, `objmon`, `exmon`, `ssdtmon`, `poolmon`, `bsodmon`, `envmon`, `crashmon`, `delaymon`, `dkommon`, `spraymon`, `callbackmon`, `hidevm`, `memaccessmon`, `filedelete`, `linkmon` |
+>
+> \* **These two are what the fork actually adds.** Upstream has
+> `[VMI_OS_LINUX] = 0` for `fileextractor` and `memdump`; `lfreijo/memdump`
+> sets both to 1. Everything else Linux-capable is **already upstream**, so
+> the bus-factor exposure is two plugins rather than "Linux/Android plugin
+> support" as a whole — see the correction in
+> `docs/roadmap/project-roadmap.md` risk #8.
+>
+> The immediately useful consequence: **`procmon`, `procdump2`, `cpuidmon`,
+> `ipt`, `hidsim`, `ptracemon`, `ebpfmon` and `unixsocketmon` are available to
+> Ubuntu and Android today, upstream, and none is enabled.** `procmon` is the
+> process tree; `cpuidmon` records the sample's own hypervisor-detection
+> attempts; `hidsim` injects synthetic mouse and keyboard input.
+>
+> Two caveats. This was read from the **branch tip**, not the pinned
+> `52df0bc8044d3033af3259312787560dbb8caa12` — the matrix may differ there.
+> And the matrix says DRAKVUF **permits** the plugin, not that it produces
+> useful output against our guests; that needs the per-guest validation
+> matrix pattern from `docs/checklists/android.md` §0.4. DRAFT-050 owns both.
+
 ## `lfreijo/drakvuf`, `memdump` branch — provenance
 
 This is an **in-house/personal fork**, not a branch staged for upstream

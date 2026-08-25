@@ -480,6 +480,30 @@ cleanly against each sandbox VM (mirroring the existing "Plugin
 validation matrix" table in `docs/checklists/android.md` §0.4) before
 trusting it in the pipeline test.
 
+> **CORRECTION 2026-08-24 — five of the plugins named above are Windows-only,
+> and the list is missing six that are not.** The paragraph was written from
+> the plugin *inventory*, which records what exists in `src/plugins/` without
+> an OS split. The authoritative matrix is
+> `drakvuf_plugin_os_support[plugin][os]` in `src/plugins/plugins.h`, read
+> directly on this date.
+>
+> **Not Linux-capable** — `apimon`, `procdump`, `regmon`, `socketmon`,
+> `rootkitmon`. Following this list would have meant enabling five plugins
+> against Ubuntu and Android that cannot run there.
+>
+> **Linux-capable and omitted** — `procmon`, `procdump2`, `cpuidmon`,
+> `debugmon`, `hidsim`, and the Linux-only `ptracemon`, `ebpfmon`,
+> `unixsocketmon`, `rebootmon`.
+>
+> Correct Linux set for this stage: `syscalls`, `filetracer`,
+> `fileextractor`, `memdump`, `procmon`, `procdump2`, `cpuidmon`, `debugmon`,
+> `ipt`, `hidsim`, `ptracemon`, `ebpfmon`, `unixsocketmon`, `rebootmon`. The
+> `tlsmon` exclusion above stands and was always right.
+>
+> The validation-matrix instruction stands too, and this is why it exists:
+> the matrix says DRAKVUF permits the plugin, not that it works on our guests.
+> DRAFT-050 audits all 45 and owns the per-guest evidence.
+
 #### `ubuntu-pipeline` sub-stage
 
 Invoke the existing per-script pipeline (`clone.pl` →

@@ -208,11 +208,35 @@ for the fully specified first batch (DRAFT-001 through DRAFT-008).
 | 6 | ~~Missing `.cfg` files~~ — corrected 2026-08-07: all four Xen guest configs are tracked under `misc/` | None — closed | Initial research missed the `misc/` directory; DRAFT-006 repurposed to reconcile `misc/` naming (`linux*.cfg` files define `ubuntu`/`ubuntu_sandbox`, not "linux") rather than recover missing files |
 | 7 | ~~`drakvuf-ubuntu.sh` has an apparent unsubstituted `<USER>` bug vs. working `preconfig-ubuntu.sh`~~ — resolved 2026-08-08 (issue #2): the deployed Dom0 copy is correctly substituted and samples execute; only this repo's copy carries the placeholder | None — closed. "Ubuntu works" is now execution-evidenced | DRAFT-007 complete; transcript in `docs/runbooks/verify-user-placeholder.md` |
 | 11 | ~~`automation/*` had drifted from the deployed Dom0 copies~~ — resolved 2026-08-08: `automation/` synced wholesale from the tested production host (`drakvuf-ubuntu.sh`, `network-setup.sh`, `dirwatch_old.c`; five other files were already byte-identical), and issue #1's host-side `linux_sandbox.cfg` → `ubuntu_sandbox.cfg` rename was completed | None — closed. Repo and host now agree everywhere | Recurrence prevention is the open part: nothing detects drift automatically (see DRAFT-026 CI) |
-| 8 | `lfreijo/drakvuf` `memdump` branch has no upstream PR/merge trail (single-maintainer fork) | Bus-factor risk for **Linux/Android** plugin support specifically. The Windows track leans on upstream `tklengyel/drakvuf` (~30 Windows-oriented plugins already present), so it is not exposed to this fork — the pinned commit is titled "Add **Linux** support for memdump, filetracer, fileextractor, and syscalls plugins" | DRAFT-024, which must therefore pin **two** upstreams with different bus-factor profiles. Its priority should rise from P2: with engine work near-term (see the M9 note), a pinned revision is the baseline changes are diffed from, not just insurance |
+| 8 | `lfreijo/drakvuf` `memdump` branch has no upstream PR/merge trail (single-maintainer fork) | Bus-factor risk for **Linux/Android** plugin support specifically. The Windows track leans on upstream `tklengyel/drakvuf` (~30 Windows-oriented plugins already present), so it is not exposed to this fork — the pinned commit is titled "Add **Linux** support for memdump, filetracer, fileextractor, and syscalls plugins" — ***narrowed 2026-08-24, see below*** | DRAFT-024, which must therefore pin **two** upstreams with different bus-factor profiles. Its priority should rise from P2: with engine work near-term (see the M9 note), a pinned revision is the baseline changes are diffed from, not just insurance |
 | 9 | Upstream `dirwatch.c` had a historical timeout/retry bug (issue #140) with the same retry-on-timeout shape this project's copy uses | Possible latent reliability bug | DRAFT-010 |
 | 10 | No secrets-management design exists yet | Relevant once CI/deployment automation appears (M6+) | Not urgent now |
 | 12 | **Nothing links a saved sandbox state to the golden image it came from.** `state/<domain>.bak` records no provenance, and no check compares the two | A golden-VM change silently invalidates the saved state, and the pipeline keeps restoring it. The injection PID is worse than the state itself: it is a property of the `.bak`, so a stale `INJECTION_PID` makes `injector` attach to whatever now holds that PID — or to nothing | **Realised, not hypothetical.** The golden `android` VM was reinstalled on 2026-08-11 (AND-001), invalidating `state/android_sandbox.bak` and anchor PID 5715; `docs/checklists/android.md` §1.5 recorded them as validated and nothing flagged the conflict. **Android side closed 2026-08-11** by [issue #7](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/7): template rebuilt, new state `1844fc0a…`, anchor PID 3163. That rebuild also found the recorded checksum already stale for a second, more ordinary reason — the template had been re-saved several times during testing and the checklist was never updated. Neither cause was detected by anything. The generic fix — recording golden-image identity alongside the saved state and checking it at restore — is **unowned** and applies to all three OS targets |
 | 13 | **The lab is operated personally, over a residential Internet line, and analysis clones have deliberate unrestricted NAT egress** (established 2026-08-12; the egress posture is DRAFT-028's, and intentional) | The binding constraint on live detonation is the ISP's acceptable-use terms, not Spanish criminal law — enforced without a prosecutor, court or complainant, by a party that already knows who the subscriber is. Realistic failure is an abuse report and disconnection of a household line. Personal operation also means civil negligence exposure (`Código Civil` art. 1902) has no corporate veil or institutional insurance behind it | **Costs nothing today — only benign fixtures have ever been detonated — and becomes real on the first non-benign run.** Owned by DRAFT-022, which now carries the entity/uplink facts and the provisional position ("not on this uplink"). The engineering half is the `offline` network mode: proposed in `docs/architecture/networking.md`, listed as undecided M2 design work, and **unowned**. It is small — `network-setup.sh` already isolates the posture in dedicated chains, so `offline` is the `DRAKVUF_NAT` `MASQUERADE` not being installed |
+
+> **Risk #8, narrowed 2026-08-24 by a direct read of the OS-support matrix.**
+> `drakvuf_plugin_os_support[plugin][os]` in `src/plugins/plugins.h`,
+> compared between `tklengyel/main` and `lfreijo/memdump`:
+>
+> **The fork adds Linux support for exactly two plugins — `fileextractor` and
+> `memdump`.** Upstream has `[VMI_OS_LINUX] = 0` for both and the fork sets
+> them to 1. `syscalls` and `filetracer` already carry Linux support upstream,
+> despite the fork commit's title naming all four.
+>
+> So the exposure is **two plugins, not Linux/Android plugin support as a
+> whole**. Losing the fork would cost extracted files and memory dumps on
+> Ubuntu and Android — serious, but bounded, and both are single-plugin
+> reimplementations rather than a platform's worth of work.
+>
+> The same read found the upside: **`procmon`, `procdump2`, `cpuidmon`,
+> `debugmon`, `ipt`, `hidsim`, `ptracemon`, `ebpfmon`, `unixsocketmon` are
+> Linux-capable upstream and none is enabled.** No fork dependency, so this
+> capability survives the fork disappearing. `docs/workflow-ci.md`'s
+> Linux-applicable list was wrong in both directions and is corrected there;
+> the full matrix is in `docs/architecture/upstream-drakvuf.md`.
+>
+> Read from the branch tip, not the pinned `52df0bc` — DRAFT-050 confirms
+> against the pinned revision and evidences each plugin per guest.
 
 ## Architecture decisions needing experiments
 
