@@ -418,6 +418,38 @@ production.
 After changing shared Ubuntu/Android code, verify that Ubuntu behavior has not
 changed unintentionally.
 
+### The platform suite — never run it on the deployment
+
+`platform/tests/` runs against a **real** Postgres and MinIO, deliberately:
+`FOR UPDATE SKIP LOCKED`, LISTEN/NOTIFY and SigV4 have no substitute. That is
+why it must only ever run in the development container.
+
+**The `conn` fixture truncates before every test:**
+
+```python
+c.execute("TRUNCATE jobs, worker_pipelines, workers RESTART IDENTITY CASCADE")
+```
+
+`TEST_DATABASE_URL` defaults to `sandbox_platform_test`, so it is safe as
+written — but one wrong value on the platform container destroys the job
+history with no recovery. Attempted on the deployment 2026-08-25: it fails
+with 312 errors because that database does not exist there, and **the correct
+response is not to create it.** Running the suite there adds only "the same
+code on the same OS"; the deployment is verified by the runbook's `curl`
+checks and by looking at the UI, not by pytest.
+
+Run it here instead:
+
+    cd platform && .venv/bin/python -m pytest -q
+
+Two things it needs, both loud when absent. **`mc` on `PATH` or `MC_BIN`** —
+without it the service-account policy tests skip, leaving "no `ListBucket`"
+and "no `DeleteObject`" unverified. **A browser** for
+`tests/test_ui_browser.py` (`playwright install chromium`) — without it the
+XSS-execution tests skip, and those assert something the source-reading tests
+structurally cannot: that a hostile filename does not *execute*. Do not run
+`playwright install` on the deployment.
+
 ## Infrastructure boundary
 
 The development container is NOT Xen Dom0.
