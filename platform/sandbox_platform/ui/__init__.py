@@ -45,7 +45,7 @@ from starlette.requests import Request
 from .. import auth, catalogue
 from ..config import settings
 from ..db import connection
-from ..enums import JobState, TargetOs
+from ..enums import TERMINAL_STATES, JobState, TargetOs
 from ..routers.jobs import _detail, count_jobs, query_jobs
 
 _HERE = Path(__file__).resolve().parent
@@ -234,6 +234,11 @@ def _job_context(job_id: UUID, tab: str) -> dict:
         "filled": _filled(job),
         # Placeholder until DRAFT-052 records the real selection on the job.
         "plugins": catalogue.defaults(job.target_os),
+        # Rendered into data-terminal for job.js, which must know when to stop
+        # listening. Passed from here rather than written as a literal in the
+        # JS: two definitions of "terminal" would be free to drift, and the
+        # symptom is a finished job whose EventSource reconnects forever.
+        "terminal_states": sorted(s.value for s in TERMINAL_STATES),
     }
 
 
@@ -253,10 +258,20 @@ def job_view(request: Request,
                    **_job_context(job_id, tab))
 
 
-@router.get("/jobs/{job_id}/tab/{slug}", response_class=HTMLResponse)
-def job_tab(request: Request,
-            job_id: UUID = PathParam(),
-            slug: str = PathParam()) -> HTMLResponse:
-    """One tab body, for htmx. Renders the same partial the full page does."""
-    ctx = _job_context(job_id, slug)
-    return _render(request, ctx["body_template"], **ctx)
+@router.get("/jobs/{job_id}/live", response_class=HTMLResponse)
+def job_live(request: Request,
+             job_id: UUID = PathParam(),
+             tab: str = Query("overview")) -> HTMLResponse:
+    """The job's live region, for htmx tab clicks and job.js's SSE refresh.
+
+    Renders the same partial the full page includes, so there is one
+    definition of what a job page shows rather than one per entry point.
+
+    **Replaced `/jobs/<id>/tab/<slug>`, which returned only the tab body.**
+    That was too small a unit twice over: the tab bar is a sibling of the
+    body, so swapping the body alone could never move `aria-selected` -- the
+    underline stayed on whichever tab the server first rendered -- and an SSE
+    refresh needs the state block and the tab bar, not just the body.
+    """
+    ctx = _job_context(job_id, tab)
+    return _render(request, "_job_live.html", **ctx)

@@ -31,9 +31,14 @@ about what is being looked at and when.
 
 ## Why htmx rather than a framework, or nothing
 
-It buys two behaviours and no build step: swapping the plugin picker when the
-target OS changes, and swapping a tab body without a full page load. That is
-the whole of it.
+It buys three behaviours and no build step: swapping the plugin picker when
+the target OS changes, swapping a job's live region on a tab click, and — via
+`htmx.ajax` from `job.js` — swapping that same region when a server-sent event
+says the job moved. That is the whole of it.
+
+The third is why `job.js` calls `htmx.ajax` rather than doing its own fetch:
+the swap has to re-process the new nodes, and hand-rolling that is how the tab
+bar ends up inert after the first update.
 
 The alternative considered was **no dependency at all** — both behaviours are
 a `fetch` and an `innerHTML` assignment, roughly twenty lines, and this
@@ -49,7 +54,9 @@ people than this repository has.
 
 `submit.js` remains hand-written because the submission sequence — reserve,
 upload to the object store, admit — is not a declarative swap and would need
-custom code under any framework.
+custom code under any framework. `job.js` is hand-written for the same reason
+and stays deliberately small: it owns the EventSource lifecycle and nothing
+else, delegating every DOM change to htmx.
 
 ## Upgrading
 

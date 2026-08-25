@@ -460,3 +460,123 @@ def test_the_third_click_returns_to_following_the_system(strict_page, server):
 
     assert strict_page.locator("html").get_attribute("data-theme") is None
     assert strict_page.locator("#theme-toggle").inner_text() == "auto"
+
+
+# --- live status: the page follows the job ---------------------------------
+#
+# The SSE endpoint has been correct and tested since #36. What was missing was
+# a subscriber, so a job page was a snapshot from the moment it rendered --
+# observed against fake_worker 2026-08-25, where the worker walked the whole
+# state machine and the page sat on `queued`.
+#
+# These drive the state directly rather than through fake_worker: migration
+# 0002's trigger fires on any UPDATE, so this is the same NOTIFY a real worker
+# produces, without a second process to sequence.
+
+def _advance(job_id, state: str) -> None:
+    with psycopg.connect(DSN, autocommit=True) as c:
+        c.execute("UPDATE jobs SET state = %s WHERE id = %s", (state, job_id))
+
+
+def test_the_page_follows_the_job_without_a_reload(strict_page, server, seed):
+    """The bug, stated as a test: the state on screen tracks the database.
+
+    The marker is what makes it a test of the mechanism rather than of the
+    outcome. A page that reloaded itself on a timer would show the right state
+    too, and would lose scroll position, the active tab and any open detail
+    every time a job moved.
+    """
+    job_id = seed("sample.bin", state="queued")
+    strict_page.goto(f"{server}/ui/jobs/{job_id}")
+    strict_page.wait_for_selector("span.state[data-state='queued']")
+    strict_page.evaluate("window.__marker = 'no reload'")
+
+    _advance(job_id, "executing")
+
+    strict_page.wait_for_selector("span.state[data-state='executing']", timeout=10_000)
+    assert strict_page.evaluate("window.__marker") == "no reload"
+    assert strict_page.fired == [], strict_page.fired
+
+
+def test_the_wait_note_disappears_when_the_wait_does(strict_page, server, seed):
+    """`queued` renders an explanatory note, and a stale one is worse than
+    none: "waiting for an analysis host" under a running job describes a
+    system that is not doing what it says."""
+    job_id = seed("sample.bin", state="queued")
+    strict_page.goto(f"{server}/ui/jobs/{job_id}")
+    assert "Waiting" in strict_page.locator("p.note").inner_text()
+
+    _advance(job_id, "executing")
+
+    strict_page.wait_for_selector("span.state[data-state='executing']", timeout=10_000)
+    assert strict_page.locator("p.note").count() == 0
+
+
+def test_the_tab_you_are_reading_survives_a_state_change(strict_page, server, seed):
+    """A refresh must not throw you back to Overview.
+
+    The active tab lives in the DOM, not the URL: an htmx tab click swaps
+    content without navigating, so the address bar alone cannot say what you
+    are looking at.
+    """
+    job_id = seed("sample.bin", state="queued")
+    strict_page.goto(f"{server}/ui/jobs/{job_id}")
+    strict_page.get_by_role("link", name="Artifacts").click()
+    strict_page.wait_for_selector("nav.tabs[data-active='artifacts']")
+
+    _advance(job_id, "executing")
+
+    strict_page.wait_for_selector("span.state[data-state='executing']", timeout=10_000)
+    assert strict_page.locator("nav.tabs").get_attribute("data-active") == "artifacts"
+
+
+def test_the_tab_bar_still_works_after_an_update(strict_page, server, seed):
+    """htmx only wires nodes it has processed, and an SSE refresh replaces the
+    tab bar with markup htmx has never seen. Without htmx.process the page
+    updates exactly once and every tab link then falls back to a full
+    navigation -- which still 'works', which is why it needs a test."""
+    job_id = seed("sample.bin", state="queued")
+    strict_page.goto(f"{server}/ui/jobs/{job_id}")
+
+    _advance(job_id, "executing")
+    strict_page.wait_for_selector("span.state[data-state='executing']", timeout=10_000)
+
+    strict_page.evaluate("window.__marker = 'still here'")
+    strict_page.get_by_role("link", name="Artifacts").click()
+    strict_page.wait_for_selector("nav.tabs[data-active='artifacts']")
+
+    assert strict_page.evaluate("window.__marker") == "still here"
+
+
+def test_a_finished_job_does_not_reconnect_forever(strict_page, server, seed):
+    """The server ENDS the stream on a terminal state, and EventSource's
+    response to a closed stream is to reconnect -- so a completed job would
+    open a connection every few seconds for as long as the tab is open.
+
+    Costs nothing visible, which is exactly why it would have survived
+    review: one idle browser tab quietly holding a database LISTEN and a
+    worker slot's worth of connections.
+    """
+    seen: list[str] = []
+    strict_page.on("request", lambda r: seen.append(r.url) if "/events" in r.url else None)
+
+    job_id = seed("done.bin", state="completed")
+    strict_page.goto(f"{server}/ui/jobs/{job_id}")
+    strict_page.wait_for_timeout(6_000)   # two default retry windows
+
+    assert len(seen) == 1, seen
+
+
+def test_clicking_a_tab_moves_the_underline(strict_page, server, seed):
+    """Pre-existing, found while wiring the live refresh: the tab nav is a
+    SIBLING of the tab body, so swapping only the body could never move
+    aria-selected. Clicking Artifacts changed the content and left the
+    underline on Overview."""
+    job_id = seed("sample.bin")
+    strict_page.goto(f"{server}/ui/jobs/{job_id}")
+    assert strict_page.locator("nav.tabs a[aria-selected='true']").inner_text() == "Overview"
+
+    strict_page.get_by_role("link", name="Artifacts").click()
+    strict_page.wait_for_selector("nav.tabs[data-active='artifacts']")
+
+    assert strict_page.locator("nav.tabs a[aria-selected='true']").inner_text() == "Artifacts"
