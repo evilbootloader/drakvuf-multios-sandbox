@@ -921,8 +921,19 @@ deleted, so the reasoning survives the constraint.
 
 ## Tenth batch — DRAFT-019, DRAFT-048 through DRAFT-060
 
-Drafted 2026-08-25 while planning the web UI (#38). **Nothing published** —
-Stage 2 gate not yet passed.
+Drafted 2026-08-25 while planning the web UI (#38).
+
+**Two published 2026-08-25** — the pair that block everything else and were
+owned by nobody:
+
+| Draft | Issue |
+|---|---|
+| DRAFT-060 | [#41](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/41) **open** |
+| DRAFT-057 | [#42](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/42) **open** |
+
+The remaining twelve stay unpublished deliberately: ten *older* index rows
+still have no file, and adding twelve more issues on top would widen that gap
+rather than close it. See below.
 
 | Draft ID | Title | Area | OS | Milestone | Priority | Depends on | Origin |
 |---|---|---|---|---|---|---|---|
@@ -958,6 +969,17 @@ tab list is computed per guest rather than fixed.
   `networking.md`, recorded in the roadmap as undecided M2 work, and left
   unowned. It is the only issue here that gates whether real malware can be
   detonated at all; everything else assumes a sample already ran.
+
+### Most of this batch is testable without Dom0
+
+Noted by the maintainer, 2026-08-25, and it changes the order things can be
+built in. The platform-side drafts — **019, 048, 049, 051, 053, 059** — are
+post-processing over objects that already exist, so they can be exercised with
+scripts against the live API at `sandbox.evilbootloader.com`, the way
+`platform/submit.py` already is. No analysis host, no clone, no Dom0 session.
+
+That is most of the capability set. Only **050, 052, 054, 055, 056, 057, 058
+and 060** need Dom0 at all, and 060 gates several of those.
 
 ### Ten indexed drafts still have no file
 

@@ -1,6 +1,6 @@
 # DRAFT-057: Egress routing — offline, direct, or through an exit we choose
 
-**Status:** Drafted 2026-08-25. Not published.
+**Status:** **[#42](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/42) — published 2026-08-25, OPEN.**
 **Area:** platform/security
 **OS:** ALL
 **Milestone:** M2 — this gates live detonation, not enriches it.
@@ -68,9 +68,11 @@ sample that does nothing from a Spanish address may do plenty from elsewhere.
   worms — the sample runs, the traffic vanishes, and the report shows no
   network activity. They also null-route addresses when hosting providers
   force it after botnet traffic.
-- **The table's own preferred row is the right answer**: a VPS at a
-  research-friendly host with WireGuard. You hold the AUP relationship
-  directly and choose the exit country.
+- **The table's own preferred row is the right answer, and it is the one
+  chosen** (maintainer, 2026-08-25): **a VPS the operator rents, running
+  WireGuard.** The AUP relationship is held directly with a host that was
+  told what the traffic is, rather than inferred from a consumer VPN's
+  silence — and the exit country is whichever region the VPS sits in.
 
 **"Not expressly prohibited" is silence, not permission.** A VPN provider can
 terminate exactly as fast as an ISP, and risk #13's point is that enforcement
@@ -100,8 +102,10 @@ and the first is disqualifying:
 - **Simulated internet** (fake DNS, sinkholed responses). A distinct mode
   worth having later; `offline` is the honest first step.
 - **Per-request filtering or MITM.**
-- **Choosing a provider.** This issue defines the mechanism and records the
-  evidence; the purchase is the operator's.
+- **Selecting the hosting provider.** The *mechanism* is decided — one rented
+  VPS running WireGuard — but which host, and in which country, is the
+  operator's purchase. The one requirement this issue places on it: the host
+  must be told what the traffic is, in writing, before it carries any.
 
 # PLAN
 
@@ -119,19 +123,38 @@ and the first is disqualifying:
 |---|---|---|
 | **offline** | No `MASQUERADE`. Isolation and gateway intact, no route out | Anything not yet cleared for live detonation. **Should be the default** |
 | **direct** | Today's behaviour — NAT through the host's uplink | Benign fixtures, and only while the uplink is acceptable |
-| **routed** | Out through a WireGuard tunnel to a chosen exit | Real samples, country selection |
+| **routed** | Out through WireGuard to **a VPS we rent** | Real samples, country selection |
 
 **`offline` first, and default.** It is the smallest change, it is what makes
 the lab safe to use on real samples immediately, and everything else can
 follow.
 
-## Country selection
+## The exit: one VPS we rent
 
-Under `routed`, the exit is chosen per job from a configured set of WireGuard
-peers. The set is server-side configuration, never a submitter-supplied
-endpoint — a submitter naming an arbitrary tunnel endpoint would be choosing
-where Dom0 sends traffic, which is a different feature with a different threat
-model.
+**Decided 2026-08-25.** A rented VPS running WireGuard, not a commercial VPN.
+
+The reasoning is about *who answers for the traffic* rather than about
+technology. With a VPS the AUP relationship is direct: the host can be told in
+writing what the traffic is and can agree or refuse before anything runs.
+A consumer VPN's silence in its ToS — which is all Mullvad offers, accurately
+— is not agreement, and finding out where the line is by crossing it is the
+one experiment worth avoiding.
+
+Practical consequences worth stating:
+
+- **Nothing is blocked that we did not block.** Mullvad permanently blocks
+  ports 25, 137–139, 445 and 53. On our own VPS the only filtering is ours,
+  so a spam bot's SMTP and an SMB worm's 445 are visible rather than silently
+  absent.
+- **The exit address is ours and stays ours**, so a burned address is a
+  problem we can see and act on rather than one shared with strangers.
+- **One country to start.** Country selection is a set of peers; the design
+  supports several and the deployment starts with one. Adding a second VPS is
+  configuration, not a redesign.
+
+Peers are **server-side configuration, never a submitter-supplied endpoint.**
+A submitter naming an arbitrary tunnel endpoint would be choosing where Dom0
+sends traffic, which is a different feature with a different threat model.
 
 ## The kill-switch property
 
@@ -195,10 +218,15 @@ its kill-switch capture exists.
 - **A kill-switch failure is worse than no tunnel**, because it produces
   exactly the outcome the tunnel exists to prevent while everyone believes
   they are protected. Fail closed, and prove it with a capture.
-- **The exit is now the abuse-report recipient.** That is the point, and it
-  moves the AUP relationship rather than removing it. A provider who
-  terminates mid-project takes the capability with them, which argues for the
-  own-VPS option over a consumer VPN.
+- **The exit is now the abuse-report recipient**, and with a rented VPS that
+  recipient is the operator. That is the point: the report arrives somewhere
+  it can be answered, rather than at a residential ISP that will simply
+  disconnect. It does not make abuse costless — a host that receives enough
+  of them terminates, taking the capability along.
+- **Tell the host in writing, first.** This is the single cheapest risk
+  reduction in the issue and it is not a technical control. A host that
+  agreed in advance behaves very differently from one discovering it through
+  a complaint.
 - **Country selection is attributable.** Traffic from a chosen exit is still
   traffic someone paid for, and a rented VPS is more directly attributable
   than a shared VPN address.

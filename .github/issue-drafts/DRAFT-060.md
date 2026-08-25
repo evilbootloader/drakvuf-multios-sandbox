@@ -1,6 +1,6 @@
 # DRAFT-060: `sandboxd` — the analysis orchestrator, and argv instead of shell
 
-**Status:** Drafted 2026-08-25. Not published.
+**Status:** **[#41](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/41) — published 2026-08-25, OPEN.**
 **Area:** core/platform
 **OS:** ALL
 **Milestone:** M2 → gates M7
