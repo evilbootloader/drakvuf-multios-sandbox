@@ -2610,10 +2610,217 @@ against that**, 2026-08-24, after the SSE snapshot fix in `a0ddb21`.
 is reserved ahead of this one" from "nothing is ahead and no worker claimed
 it". The queue was never the bug; the silence was.
 
+# The web UI — issue [#38](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/38)
+
+> **EXECUTED on the deployment, 2026-08-25.** Written as a candidate and run
+> the same day; the transcripts below are the real output. One instruction in
+> it was wrong and has been replaced with the reason not to follow it — see
+> "Do not run the test suite here".
+
+## Step 27 — deploy the UI shell
+
+#38 adds the operator-facing UI: submit, history, and a per-job report with a
+tab framework. It is served by the **same** API process under `/ui`, so there
+is no new service, no second port and no reverse proxy.
+
+### Nothing changes on the Cloudflare side, and that is worth checking rather than assuming
+
+Step 26's ingress sends `^/analysis(/|$)` to MinIO and **everything else** to
+the API on 8000. `/ui` is "everything else", so it is already routed and
+already behind the Access application covering the hostname. No tunnel change,
+no DNS change, no new Access app.
+
+The one thing to keep in mind: `/analysis` is matched **first**. Any future UI
+route beginning `/analysis` would silently go to MinIO instead — which is why
+`platform/tests/test_objects.py::test_no_api_route_claims_the_bucket_prefix`
+exists and fails if one appears.
+
+### Pull and install
+
+```bash
+root@pve1:~# pct exec 102 -- su - platform -s /bin/bash -c '
+  cd /opt/platform/src && git pull --ff-only
+  cd /opt/platform/src/platform && .venv/bin/pip install -r requirements.txt
+'
+Updating a0ddb21..232740b
+Fast-forward
+ platform/sandbox_platform/catalogue.py             | 202 ++++++++++
+ platform/sandbox_platform/ui/__init__.py           | 237 +++++++++++
+ platform/sandbox_platform/ui/static/app.css        | 307 ++++++++++++++
+ platform/sandbox_platform/ui/static/htmx.min.js    |   1 +
+ platform/sandbox_platform/ui/static/submit.js      | 138 +++++++
+ ...
+ 41 files changed, 6340 insertions(+), 38 deletions(-)
+
+Downloading playwright-1.62.0-py3-none-manylinux1_x86_64.whl (47.7 MB)
+Successfully installed MarkupSafe-3.0.3 charset_normalizer-3.5.1 greenlet-3.5.5
+  jinja2-3.1.6 playwright-1.62.0 pyee-13.0.1 pytest-base-url-2.1.0
+  pytest-playwright-0.9.0 python-slugify-8.0.4 requests-2.34.2 text-unidecode-1.3
+```
+
+> **47.7 MB of Playwright landed on the deployment, and that is worth
+> revisiting.** `pytest` was already in `requirements.txt`, so test tooling
+> here is an existing decision — but that decision looks different at 47 MB
+> than it did at a few hundred kilobytes, on a container whose security
+> argument is that it holds every credential and therefore stays small.
+> **Splitting `requirements.txt` into runtime and dev would fix it**, and
+> would make the rule below structural instead of advisory. Not done here;
+> recorded so it is a decision rather than an accumulation.
+
+> **The container runs Python 3.13; the development container runs 3.14.**
+> Nothing here is version-sensitive and both are supported, so this is not a
+> fault. It is recorded because it means the development container is not
+> quite reproducing the deployment, which is the sort of gap that eventually
+> explains a mystery.
+
+`jinja2` is the only new **runtime** dependency — the UI is server-rendered so
+that autoescaping is structural rather than remembered.
+
+**`pytest-playwright` is also in `requirements.txt` and that is deliberate**,
+consistent with `pytest` already being there: the suite runs against the real
+Postgres and MinIO, which is the whole reason those tests are worth having.
+What must **not** be run here is:
+
+```bash
+# DO NOT run on the deployment
+.venv/bin/playwright install chromium
+```
+
+That downloads a 115 MB browser. The browser tests belong in development;
+`pytest.importorskip` makes them skip loudly here rather than fail.
+
+### Restart both listeners
+
+```bash
+root@pve1:~# pct exec 102 -- systemctl restart sandbox-api sandbox-api-browser
+root@pve1:~# pct exec 102 -- systemctl is-active sandbox-api sandbox-api-browser
+active
+active
+```
+
+**Both, not one.** `sandbox-api` is the mTLS listener Dom0 uses and
+`sandbox-api-browser` is the one behind the tunnel; they are separate
+processes of the same application, and restarting only the browser listener
+leaves Dom0 running yesterday's code.
+
+> **Python changes need a restart; templates do not.** Jinja reloads templates
+> from disk per request, so a running server picks up template edits and keeps
+> serving stale Python. That combination produced a page rendering new markup
+> against old context data during development, with no error — every tab
+> marked empty because the variable that says otherwise did not exist yet.
+> If a change looks half-applied, restart before investigating anything else.
+
+### Verify
+
+```bash
+TOKEN=$(cloudflared access token -app=https://sandbox.evilbootloader.com)
+
+# the views, and the static assets the app serves itself
+for p in /ui/submit /ui/jobs /ui /ui/static/app.css /ui/static/htmx.min.js; do
+  printf '%-26s ' "$p"
+  curl -so /dev/null -w '%{http_code}\n' -H "cf-access-token: $TOKEN" \
+       "https://sandbox.evilbootloader.com$p"
+done
+/ui/submit                 200
+/ui/jobs                   200
+/ui                        200
+/ui/static/app.css         200
+/ui/static/htmx.min.js     200
+
+# still behind Access, with no token
+curl -so /dev/null -w 'no token   %{http_code}  (expect 302)\n' \
+     https://sandbox.evilbootloader.com/ui/jobs
+no token   302  (expect 302)
+
+# the object store still wins the /analysis prefix
+curl -so /dev/null -w '/analysis  %{http_code}  (expect 403 from MinIO)\n' \
+     -H "cf-access-token: $TOKEN" https://sandbox.evilbootloader.com/analysis
+/analysis  403  (expect 403 from MinIO)
+```
+
+**403 on the last one is the PASS**, for the same reason as step 26: Access
+let the request through and MinIO refused it unsigned. A 302 there would mean
+the path rule stopped matching and the UI had swallowed the prefix.
+
+Confirm the vendored htmx is the file that was reviewed:
+
+```bash
+root@pve1:~# pct exec 102 -- sha256sum \
+    /opt/platform/src/platform/sandbox_platform/ui/static/htmx.min.js
+e209dda5c8235479f3166defc7750e1dbcd5a5c1808b7792fc2e6733768fb447  /opt/platform/src/platform/sandbox_platform/ui/static/htmx.min.js
+```
+
+Matches `ui/static/VENDOR.md`.
+
+It is the only third-party front-end code in the project;
+`ui/static/VENDOR.md` records why one was accepted at all.
+
+### Then look at it
+
+Open `https://sandbox.evilbootloader.com/ui/jobs` in a browser. The jobs from
+step 26 should be listed. Two things worth confirming by eye rather than by
+`curl`:
+
+- **A hostile filename renders as text.** Submit one — `<script>alert(1)` is
+  admitted deliberately, because the name must reach the guest byte-exact.
+  Nothing should execute, and the name should appear intact.
+- **A Ubuntu job has no Registry tab, and a Windows job does.** The tab list
+  is computed from the guest's plugin support; `regmon` is Windows-only, so a
+  Registry tab on Ubuntu could never be filled.
+
+### Do not run the test suite here
+
+The candidate version of this step said to run `pytest` on the container and
+expect the browser tests to skip. **That was wrong, and running it produced
+312 errors** — every test failing at setup, because the session fixture
+migrates a database called `sandbox_platform_test` which does not exist here:
+
+```bash
+root@pve1:~# pct exec 102 -- su - platform -s /bin/bash -c '
+  cd /opt/platform/src/platform && .venv/bin/python -m pytest -q 2>&1 | head -40
+'
+EEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEE [ 23%]
+...
+    @pytest.fixture(scope="session", autouse=True)
+    def migrated() -> None:
+>       subprocess.run(
+            [sys.executable, str(PLATFORM_DIR / "migrations" / "run.py")],
+            env={**os.environ, "DATABASE_URL": DSN},
+            check=True,
+            capture_output=True,
+        )
+312 errors in 3.36s
+```
+
+**The obvious fix is to create that database. Do not.** Look at what the
+`conn` fixture does before every single test:
+
+```python
+c.execute("TRUNCATE jobs, worker_pipelines, workers RESTART IDENTITY CASCADE")
+```
+
+The default DSN is the test database, so it is safe as written — but one
+mistyped `TEST_DATABASE_URL` on this container and the entire job history is
+gone, with no recovery. That risk buys nothing: the suite already runs against
+a real Postgres and a real MinIO in the development container, and running it
+here adds only "the same code on the same OS", which the checks above already
+established.
+
+**What verifies this deployment is the curl output and the browser**, not
+pytest.
+
+> **A defect this exposed, since fixed.** `conftest.py` used
+> `check=True, capture_output=True`, which raises a `CalledProcessError` whose
+> message names the command and *discards the runner's stderr* — so every test
+> errored with no reason given, and finding the cause took a second run with
+> `head -40`. It now fails with the DSN it tried, the command to create it,
+> and the runner's actual output.
+
 ## Rollback
 
 ```bash
 pct stop 102 && pct destroy 102     # destroys the rootfs
+
 ```
 
 `mp0` is a separate volume; check whether `pct destroy` removed it before

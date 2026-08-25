@@ -64,12 +64,25 @@ def migrated() -> None:
     the tests exercise the same path a deployment uses -- a migration that
     only applies when a test applies it is not a migration anyone can trust.
     """
-    subprocess.run(
+    result = subprocess.run(
         [sys.executable, str(PLATFORM_DIR / "migrations" / "run.py")],
         env={**os.environ, "DATABASE_URL": DSN},
-        check=True,
         capture_output=True,
+        text=True,
     )
+    if result.returncode != 0:
+        # NOT check=True. That raises a CalledProcessError whose message names
+        # the command and swallows its stderr, so every test in the suite
+        # errors at setup with no reason given -- observed on the deployment
+        # 2026-08-25, where the cause was simply that the test database did
+        # not exist and finding that out took a second run with head -40.
+        pytest.fail(
+            f"migrations failed against {DSN}\n"
+            f"  Create it with:  createdb sandbox_platform_test\n"
+            f"  or point TEST_DATABASE_URL at an existing database.\n\n"
+            f"{result.stderr or result.stdout}",
+            pytrace=False,
+        )
 
 
 @pytest.fixture
