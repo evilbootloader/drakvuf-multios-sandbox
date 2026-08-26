@@ -497,3 +497,79 @@ def test_a_bad_filter_value_is_still_refused(client):
     these are enums at all."""
     assert client.get("/ui/jobs?state=linux").status_code == 422
     assert client.get("/ui/jobs?target_os=freebsd").status_code == 422
+
+
+# --- F9: the history list did not update ------------------------------------
+
+def test_the_history_table_refreshes_while_a_job_can_still_change(client, conn):
+    """Reported from the deployment 2026-08-26: `/ui/jobs` showed `queued`
+    while the analysis had already finished.
+
+    `job.js` is only loaded on a job's own page, so the detail view went live
+    and the list it was reached from stayed frozen. Polled rather than pushed:
+    the SSE channel is per job id, so a list would need a subscription per row
+    or a new global stream, where one cheap query every few seconds is far less
+    machinery for a page read at human speed.
+    """
+    conn.execute("INSERT INTO jobs (target_os, submitted_filename, state)"
+                 " VALUES ('ubuntu', 'running.bin', 'executing')")
+
+    body = client.get("/ui/jobs").text
+
+    assert 'id="jobs-table"' in body
+    assert 'data-live="1"' in body
+    assert "/ui/jobs/table" in body
+
+
+def test_a_page_of_finished_jobs_does_not_poll(client, conn):
+    """What stops it polling forever. The server says whether anything on THIS
+    page can still change and the htmx trigger reads it, so a history of
+    completed work makes no requests at all."""
+    conn.execute("INSERT INTO jobs (target_os, submitted_filename, state)"
+                 " VALUES ('ubuntu', 'done.bin', 'completed')")
+
+    assert 'data-live="0"' in client.get("/ui/jobs").text
+
+
+def test_the_refresh_keeps_the_filters_and_the_page(client, conn):
+    """A refresh that dropped the filter would show a different result set
+    every five seconds; one that dropped the page would move the table under
+    the reader."""
+    # A row that MATCHES the filter. Without one the page renders its empty
+    # state instead of the table, so there is no poll to inspect -- which is
+    # correct behaviour and was the first version of this test's mistake.
+    conn.execute("INSERT INTO jobs (target_os, submitted_filename, state)"
+                 " VALUES ('ubuntu', 'filtered.bin', 'completed')")
+
+    body = client.get("/ui/jobs",
+                      params={"state": "completed", "target_os": "ubuntu",
+                              "page": 1}).text
+
+    # The hx-get attribute, wherever it wraps. Searched across the whole body
+    # rather than line by line: the first version of this test split on
+    # newlines and found nothing, because the attribute sits on its own line
+    # inside a multi-line tag and the value is HTML-escaped (`&amp;`).
+    poll = body[body.index("/ui/jobs/table"):][:200]
+    assert "state=completed" in poll
+    assert "target_os=ubuntu" in poll
+    assert "page=" in poll
+
+
+def test_the_table_fragment_renders_the_same_rows_as_the_page(client, conn):
+    """One context builder for both, so the polled fragment cannot drift from
+    the full page."""
+    conn.execute("INSERT INTO jobs (target_os, submitted_filename, state)"
+                 " VALUES ('ubuntu', 'both.bin', 'executing')")
+
+    assert "both.bin" in client.get("/ui/jobs").text
+    assert "both.bin" in client.get("/ui/jobs/table").text
+
+
+def test_the_fragment_is_only_the_table(client, conn):
+    """It replaces #jobs-table's contents, so anything outside the table --
+    the filters, the pagination -- would be duplicated into the page."""
+    fragment = client.get("/ui/jobs/table").text
+
+    assert "<table" in fragment
+    assert "<form" not in fragment
+    assert 'id="jobs-table"' not in fragment

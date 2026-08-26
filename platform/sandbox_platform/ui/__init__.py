@@ -166,9 +166,25 @@ def _jobs_context(q: str, state, target_os, page: int) -> dict:
         "jobs": rows, "page": page, "pages": pages, "total": total,
         "first": 0 if not total else (page - 1) * PAGE + 1,
         "last": min(page * PAGE, total),
+        # A window rather than every page number: 400 pages of links is not
+        # navigation.
+        "window": [n for n in range(page - 2, page + 3) if 1 <= n <= pages],
         # Whether anything on THIS page can still change. The poll stops when
         # nothing can, so a page of finished jobs makes no requests at all.
         "live": any(j.state not in TERMINAL_STATES for j in rows),
+        # TWO query strings, and they differ by one field on purpose.
+        #
+        # `querystring` carries the filters only: the pagination links append
+        # their own `page=`, so including one here would put two in the URL.
+        #
+        # `query` carries the filters AND the page, because the poll has to
+        # come back to the page being looked at. Refreshing page 3 into page 1
+        # would move the table under the reader every five seconds.
+        "querystring": urlencode(
+            {k: v for k, v in (("q", q.strip()),
+                               ("state", state.value if state else ""),
+                               ("target_os", target_os.value if target_os else ""))
+             if v}),
         "query": urlencode(
             {k: v for k, v in (("q", q.strip()),
                                ("state", state.value if state else ""),
@@ -213,52 +229,8 @@ def jobs_view(request: Request,
     alphabet means `%` and `_` can never reach the LIKE pattern as wildcards.
     The value is bound as a parameter regardless, so this is belt over braces.
     """
-    term = q.strip().lower()
-    bad = bool(term) and not _HEX.match(term)
-
-    filters = {"state": state, "target_os": target_os,
-               "sha256_prefix": term or None}
-    total = 0 if bad else count_jobs(**filters)
-    pages = max(1, -(-total // PAGE))          # ceiling division
-    # A page past the end shows the last one rather than an empty table. That
-    # happens for real: bookmark page 9, jobs age out, page 9 stops existing.
-    page = min(page, pages)
-
-    rows = [] if bad else query_jobs(
-        **filters, limit=PAGE, offset=(page - 1) * PAGE)
-
-    # When every row on this page is the same bytes, say so. DRAFT-030 makes
-    # that a normal situation rather than a curiosity: identical bytes
-    # submitted under different names are deliberately separate jobs, because
-    # the name is part of what is being analysed. Without this the reader sees
-    # several rows with the same digest and reasonably wonders which is "the"
-    # one -- the answer is all of them, and they differ in the columns shown.
-    digests = {j.sha256 for j in rows if j.sha256}
-    one_sample = digests.pop() if len(digests) == 1 else None
-
-    return _render(
-        request, "jobs.html", view="jobs",
-        q=q.strip(), bad_query=bad,
-        one_sample=one_sample,
-        state=state, target_os=target_os,
-        states=[s.value for s in JobState],
-        target_oses=[o.value for o in TargetOs],
-        jobs=rows,
-        page=page, pages=pages, total=total,
-        first=0 if not total else (page - 1) * PAGE + 1,
-        last=min(page * PAGE, total),
-        # A window rather than every page number: 400 pages of links is not
-        # navigation, it is wallpaper.
-        window=[n for n in range(page - 2, page + 3) if 1 <= n <= pages],
-        # Carried into every page link so paging does not silently drop the
-        # filters -- landing on page 2 of everything after searching for a
-        # hash is a small betrayal that costs real confusion.
-        querystring=urlencode(
-            {k: v for k, v in (("q", q.strip()),
-                               ("state", state.value if state else ""),
-                               ("target_os", target_os.value if target_os else ""))
-             if v}),
-    )
+    return _render(request, "jobs.html", view="jobs",
+                   **_jobs_context(q, state, target_os, page))
 
 
 def _tab_body(slug: str) -> str:
