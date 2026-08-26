@@ -1550,8 +1550,67 @@ not work.
 SANDBOXD_CONSOLE_API=https://192.168.1.10:8000
 ```
 
+### F12 — the worker channel is reachable through the tunnel
+
+Raised while reviewing F11: if `sandboxd` now dials the browser listener, what
+else can reach it there?
+
+The ingress for `sandbox.evilbootloader.com` has **no path restriction** — it
+routes everything to `192.168.1.10:8000`, `/api/v1/worker/*` included. On that
+listener those routes are protected by the worker token at the application
+(`worker.router` carries `require_worker_token`, not the Access dependency) and
+by Cloudflare Access at the edge.
+
+**This is pre-existing, not caused by F11's fix.** The worker routes have
+always been in the app served on 8000. What F11 changed is that they now
+matter there: before, `sandboxd` only ever used the LAN-only mTLS listener.
+
+Two layers is not nothing, but the mTLS listener additionally requires a client
+certificate and this path does not — so the tunnel route is strictly weaker,
+and it depends on the Access application being scoped to every path rather than
+to `/ui`.
+
+**Recommended: make those paths never leave the LAN.** First match wins in
+cloudflared, so a 404 rule ahead of the catch-all is enough:
+
+```yaml
+ingress:
+  # The worker channel is LAN-only. sandboxd reaches :8000 directly at
+  # 192.168.1.10; nothing on the internet needs these paths, and the mTLS
+  # listener is the one that requires a client certificate.
+  - hostname: sandbox.evilbootloader.com
+    path: ^/api/v1/worker(/|$)
+    service: http_status:404
+
+  - hostname: sandbox.evilbootloader.com
+    service: https://192.168.1.10:8000
+    originRequest:
+      caPool: /etc/cloudflared/ca.crt
+  # ... the objects.evilbootloader.com rules unchanged ...
+```
+
+Verify before reloading, and confirm both directions:
+
+```bash
+cloudflared --config /etc/cloudflared/config.yml tunnel ingress validate
+cloudflared --config /etc/cloudflared/config.yml tunnel ingress rule \
+    https://sandbox.evilbootloader.com/api/v1/worker/claim      # -> http_status:404
+cloudflared --config /etc/cloudflared/config.yml tunnel ingress rule \
+    https://sandbox.evilbootloader.com/api/v1/jobs/x/console    # -> 192.168.1.10:8000
+```
+
+The second must still route: the BROWSER's console socket is at
+`/api/v1/jobs/{id}/console`, and only the worker half moves off the tunnel.
+
+Then from outside, both must hold:
+
+```bash
+curl -si https://sandbox.evilbootloader.com/api/v1/worker/claim | head -1   # 404
+# and the UI still works, and a console session still pairs
+```
+
 ```text
-F12
+F13
 
 
 ```

@@ -323,6 +323,34 @@ slightly shorter path for an attacker who already holds the credential that
 matters. Both are acceptable behind a flag that is off by default; neither
 would be acceptable if it were on by default, which is why it is not.
 
+### 4.1c The console dial uses the browser listener, and what that implies
+
+The relay pairs two sockets in one process, and the platform runs two --
+mutual TLS on 8443 for the worker channel, and 8000 behind cloudflared for the
+browser. So both ends of a session must reach the same one, and it has to be
+the browser's: a browser cannot present a client certificate.
+
+`sandboxd` therefore dials `SANDBOXD_CONSOLE_API`, pointed at the browser
+listener, while the rest of the worker channel stays on the mTLS one.
+
+**That listener is the internet-facing one**, and the tunnel's ingress rule for
+`sandbox.evilbootloader.com` carries no path restriction — so `/api/v1/worker/*`
+is reachable through it, gated by the worker token at the application and by
+Access at the edge, but **not** by a client certificate the way 8443 is.
+
+This is pre-existing rather than introduced here: those routes have always been
+in the app served on 8000. What changes is that the console now depends on that
+listener, so the exposure is worth closing rather than tolerating.
+
+**The fix belongs at the ingress, not in the code** — a path rule that 404s
+`^/api/v1/worker(/|$)` at the edge, ahead of the catch-all. `sandboxd` reaches
+`192.168.1.10:8000` directly over the LAN and is unaffected; nothing on the
+internet needs those paths. The browser's own console socket is at
+`/api/v1/jobs/{id}/console` and stays routed.
+
+Recorded as F12 in `docs/runbooks/verify-sandboxd-and-console.md`, with the
+rule and its verification.
+
 ### 4.2 What a compromised platform can reach
 
 Once a session is open the platform can send bytes toward the clone's console.
