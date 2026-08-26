@@ -85,7 +85,7 @@
 </section>
 {# type="module" because noVNC is one. Inside the fragment rather than in
    base.html, so it loads when the console appears and not on every page. #}
-<script type="module" src="/ui/static/console.js"></script>
+<script type="module" src="/ui/static/console.js?v={{ asset_version }}"></script>
 {% elif job.interacted %}
 {# The flag outlives the session, because the report has to stay honest about
    how the run was produced. #}

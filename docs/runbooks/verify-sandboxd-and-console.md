@@ -1609,8 +1609,32 @@ curl -si https://sandbox.evilbootloader.com/api/v1/worker/claim | head -1   # 40
 # and the UI still works, and a console session still pairs
 ```
 
+### F13 — a cached stylesheet made a working console display nothing
+
+The console connected, the RFB handshake completed, 68 kB of framebuffer
+arrived — and the panel stayed blank.
+
+```js
+container: 1176 x 0
+canvas:    1024 x 768   →  style: width: 0px; height: 0px
+```
+
+noVNC scales its canvas from the **container's measured size**, and the
+container had no height because `.console-screen` was in a stylesheet the
+browser had cached from before that rule existed.
+`getComputedStyle(el).minHeight` read `0px` against a rule saying `320px`,
+which is only possible if the rule is not in the CSSOM at all.
+
+**Fixed** — static assets carry `?v=<mtime>`, so a changed file invalidates
+the cache and an unchanged one does not.
+
+**Everything below the browser was already correct.** The relay, the pairing,
+the deferred socket, the port resolution: all working, and displaying nothing.
+Worth remembering as a failure shape — "the feature does not work" pointed at
+seven layers of new code, and the answer was a cached file.
+
 ```text
-F13
+F14
 
 
 ```

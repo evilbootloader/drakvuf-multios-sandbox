@@ -52,6 +52,31 @@ _HERE = Path(__file__).resolve().parent
 templates = Jinja2Templates(directory=str(_HERE / "templates"))
 static = StaticFiles(directory=str(_HERE / "static"))
 
+
+def _asset_version() -> str:
+    """A cache key that changes when the assets do, and not otherwise.
+
+    Without one, a browser keeps serving the stylesheet it already has. That
+    cost a live-console debugging session on 2026-08-26: the console connected
+    and received a full 1024x768 framebuffer, and noVNC scaled its canvas to
+    0x0 because `.console-screen` -- which sets the container's height -- was
+    in a stylesheet the browser had cached from before the rule existed. The
+    symptom was a working relay that displayed nothing.
+
+    Newest mtime rather than a per-process value: a restart that changed
+    nothing should not invalidate a cache, and an edit that changed something
+    must. `novnc/` is skipped -- it is pinned and 57 files is a lot of stat
+    calls for something that only changes on a deliberate upgrade.
+    """
+    newest = 0.0
+    for path in (_HERE / "static").iterdir():
+        if path.is_file():
+            newest = max(newest, path.stat().st_mtime)
+    return str(int(newest))
+
+
+ASSET_VERSION = _asset_version()
+
 # Same dependency as the JSON routes, attached to the ROUTER rather than to
 # individual routes so a view added later cannot be public by omission.
 router = APIRouter(prefix="/ui", tags=["ui"],
@@ -59,6 +84,7 @@ router = APIRouter(prefix="/ui", tags=["ui"],
 
 
 def _render(request: Request, template: str, **ctx) -> HTMLResponse:
+    ctx.setdefault("asset_version", ASSET_VERSION)
     return templates.TemplateResponse(request, template, ctx)
 
 

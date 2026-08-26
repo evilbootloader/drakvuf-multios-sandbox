@@ -15,10 +15,10 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{% block title %}DRAKVUF MultiOS Sandbox{% endblock %}</title>
-<link rel="stylesheet" href="/ui/static/app.css">
+<link rel="stylesheet" href="/ui/static/app.css?v={{ asset_version }}">
 {# No defer: the stored theme must apply before the first paint,
    or a dark-mode reader gets a white flash on every page. #}
-<script src="/ui/static/theme.js"></script>
+<script src="/ui/static/theme.js?v={{ asset_version }}"></script>
 <script src="/ui/static/htmx.min.js" defer></script>
 </head>
 <body>

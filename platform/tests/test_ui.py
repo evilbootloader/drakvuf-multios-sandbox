@@ -573,3 +573,53 @@ def test_the_fragment_is_only_the_table(client, conn):
     assert "<table" in fragment
     assert "<form" not in fragment
     assert 'id="jobs-table"' not in fragment
+
+
+# --- F13: a cached stylesheet made a working console display nothing --------
+
+def test_static_assets_carry_a_cache_key(client):
+    """The console connected, received a full 1024x768 framebuffer, and drew
+    nothing: noVNC scales its canvas from the CONTAINER's measured size, and
+    `.console-screen` -- the rule that gives the container a height -- was in a
+    stylesheet the browser had cached from before that rule existed.
+
+    `getComputedStyle(el).minHeight` read `0px` against a rule saying `320px`,
+    which is only possible if the rule is not in the CSSOM at all.
+
+    A working relay that displays nothing is an expensive way to find a cache,
+    so the assets carry a key that changes when they do.
+    """
+    body = client.get("/ui/submit").text
+
+    assert "app.css?v=" in body
+    assert "submit.js?v=" in body
+
+
+def test_the_cache_key_is_the_same_across_requests(client):
+    """Derived from file mtime, not per-process or per-request. A restart that
+    changed nothing must not invalidate a cache, or the key is just
+    cache-busting with extra steps."""
+    a = client.get("/ui/submit").text
+    b = client.get("/ui/jobs").text
+
+    import re
+    ka = re.search(r"app\.css\?v=(\d+)", a).group(1)
+    kb = re.search(r"app\.css\?v=(\d+)", b).group(1)
+    assert ka == kb
+
+
+def test_the_cache_key_tracks_the_files(tmp_path, monkeypatch):
+    """It has to CHANGE when an asset does, or it is decoration."""
+    from sandbox_platform import ui
+
+    (tmp_path / "a.css").write_text("x")
+    monkeypatch.setattr(ui, "_HERE", tmp_path.parent)
+    (tmp_path.parent / "static").mkdir(exist_ok=True)
+    (tmp_path.parent / "static" / "a.css").write_text("x")
+    first = ui._asset_version()
+
+    import os, time
+    later = time.time() + 120
+    os.utime(tmp_path.parent / "static" / "a.css", (later, later))
+
+    assert ui._asset_version() != first
