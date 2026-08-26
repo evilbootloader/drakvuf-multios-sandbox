@@ -613,7 +613,7 @@ every import in `sandboxd/*.py`, not assumed.
 cd /root/drakvuf-multios-sandbox
 apt-get install -y python3-venv          # if not already present
 python3 -m venv .venv-sandboxd
-.venv-sandboxd/bin/pip install httpx websockets==17.0.1
+.venv-sandboxd/bin/pip install httpx 'websockets==16.1.1'
 .venv-sandboxd/bin/python -c "
 import httpx, websockets
 print('httpx', httpx.__version__, '| websockets', websockets.__version__)"
@@ -1203,6 +1203,16 @@ root@drakvuf:/home/user#
 
 # Part D — the live console
 
+> **Both halves are built as of 2026-08-26**, after F5 and F6. What has **never
+> run** is the VNC port resolution: `xenstore-read` and `xl list -l` are both
+> *Candidate* and unverified against a real clone, so D2 is the first thing to
+> exercise them.
+>
+> A console that never appears is most likely that rather than the relay. Check
+> `sandboxd`'s log for `no live console for job …`, which names the reason —
+> and never fails the analysis, because the console is an observer of the run
+> rather than a participant in its lifecycle.
+
 **Do not start Part D until C7 passes.** A console session on a pipeline that
 does not tear its clones down is a session on a domain that may outlive it.
 
@@ -1395,8 +1405,83 @@ If the run above nonetheless produced network traffic, the interfaces were
 left over from a previous `dirwatch` era — which is exactly how this would go
 unnoticed until a fresh Dom0 boot.
 
+### F5 — the WebSocket route was shadowed by a POST on the same path
+
+From the browser: `405 Method Not Allowed`, `Allow: POST`, on
+`wss://.../api/v1/jobs/<id>/console`, with noVNC reporting "Session lost".
+
+`request_console` (POST) and the browser relay (WebSocket) were both mounted at
+`/api/v1/jobs/{job_id}/console`. Both routers carry that prefix and
+`jobs.router` is included first, so the upgrade request matched the HTTP route
+and the WebSocket handler was never reached.
+
+**Fixed** — the POST moved to `/console/request`. Both are wanted: the POST sets
+`console_requested` *before* the job is executing, so `sandboxd` already knows
+by the time there is something to show.
+
+A collision like this is silent at import — nothing warns, the app starts
+cleanly, and it appears only as a 405 on an upgrade, which reads like a proxy
+problem. There is now a test asserting no path is served by both an HTTP and a
+WebSocket route.
+
+### F6 — uvicorn cannot serve WebSockets without a protocol library
+
+Then `404 Not Found` from `server: uvicorn`, **with the route registered**:
+
 ```text
-F5
+['/api/v1/jobs/{job_id}/console', '/api/v1/worker/jobs/{job_id}/console']
+...
+HTTP/1.1 404 Not Found
+server: uvicorn
+```
+
+`requirements.txt` pinned `uvicorn==0.52.4` and nothing else. uvicorn does not
+implement the WebSocket protocol itself: with neither `websockets` nor
+`wsproto` installed it does not handle the upgrade at all, treats the request
+as a plain HTTP GET, finds no HTTP route at that path, and 404s.
+
+**Fixed** — `websockets` pinned. (Initially `17.0.1`, corrected to `16.1.1` by
+F7 below: Dom0 could not install 17.)
+
+**Why 425 tests did not catch it.** `TestClient` speaks ASGI directly and never
+goes through uvicorn's protocol layer, so every WebSocket test passed against a
+server that could not serve one — the suite was exercising the app object, not
+the deployed shape. There is now an import assertion for a WebSocket protocol
+library and a check that it is **pinned**, since installed-as-somebody-else's-
+transitive-dependency is how this returns with nothing in the diff to explain
+it.
+
+**This one needs `pip install`, not just a pull:**
+
+```bash
+pct exec 102 -- su - platform -s /bin/bash -c '
+  cd /opt/platform/src && git pull --ff-only
+  cd platform && .venv/bin/pip install -r requirements.txt
+'
+pct exec 102 -- systemctl restart sandbox-api sandbox-api-browser
+```
+
+### F7 — `websockets==17.0.1` has no distribution for Dom0's Python
+
+```text
+ERROR: Could not find a version that satisfies the requirement
+websockets==17.0.1 (from versions: ..., 16.0, 16.1, 16.1.1)
+```
+
+The pin came from `pip list` in the **development container**, which runs
+Python 3.14. Dom0's is older, and 17 publishes nothing for it — so the version
+recorded as "what we use" was one the machine it was for could never install.
+
+**Fixed** — `websockets==16.1.1` on both sides. It carries the same API this
+code needs (`websockets.asyncio.client.connect` with `additional_headers`,
+added in 14.0), and both suites pass against it.
+
+The general point: a version pinned from whatever the dev container happens to
+have is a guess about every other host. Where two machines share a library,
+the pin has to be one they can both take.
+
+```text
+F8
 
 
 ```
