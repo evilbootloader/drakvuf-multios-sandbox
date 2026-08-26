@@ -375,6 +375,19 @@ class Analysis:
         capture = job.result_dir / CAPTURE
         tcpdump = self._runner.spawn(
             guests.argv_tcpdump(job, self._cfg.bridge, capture))
+        # Dialled as soon as the trace starts, not when someone asks.
+        #
+        # The request-driven version could NEVER work: the console panel only
+        # appears once the job reaches `executing`, so the operator can only
+        # ask after the trace has begun -- and the check happened before it.
+        # Every request arrived too late and the browser sat at "Waiting for
+        # the analysis host..." until the pair timeout (Dom0 2026-08-26, F8).
+        #
+        # So the relay socket is opened for the whole trace whenever the
+        # console is enabled on this host, and the platform holds it until a
+        # browser arrives or the trace ends. `console_enabled` therefore means
+        # "this host opens a relay socket per analysis" rather than "consoles
+        # may be requested" -- which is why it is off by default.
         console = self._start_console(job, beat)
         try:
             self._sleep(timing._trace_waits(job.target_os, job.kind,
@@ -428,12 +441,11 @@ class Analysis:
         continues regardless, and the operator sees no screen rather than a
         failed job.
 
-        Checked once, at the start of the trace, rather than watched
-        throughout. A session requested mid-trace waits for the next run --
-        DRAFT-056 puts reconnection out of scope, and re-checking would mean
-        the trace polling its own heartbeat thread.
+        Called unconditionally at the start of the trace when the console is
+        enabled -- see the comment at the call site for why waiting for a
+        request cannot work.
         """
-        if not self._cfg.console_enabled or not beat.console_wanted.is_set():
+        if not self._cfg.console_enabled:
             return None
         try:
             port = vnc.resolve_vnc_port(self._runner, job.domid,

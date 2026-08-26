@@ -402,6 +402,7 @@ root@pve1:~# pct exec 102 -- runuser -u platform -- psql -d sandbox_platform -At
   "SELECT column_name, data_type, column_default FROM information_schema.columns WHERE table_name = 'jobs' AND column_name IN ('console_requested','interacted') ORDER BY column_name"
 console_requested|boolean|false
 interacted|boolean|false
+
 ```
 
 ## A3. The UI, in a browser
@@ -451,9 +452,9 @@ Then the behavioural check, which beats reading either:
 ```bash
 # Trace something trivial with our four plugins and see whether hidsim
 # announces itself. Run against a THROWAWAY clone, not a real analysis.
-drakvuf -r <profile> -d <domid> -i <pid> \
-    -a syscalls -a filetracer -a fileextractor -a memdump \
-    -o json -t 20 2>&1 | grep -i "hid\|plugin" | head -20
+drakvuf -r profiles/linux.json -d 1 -i 1415     -a syscalls -o json -t 100 2>&1 > /tmp/drakvuf.out
+grep -nE -- '^\s+-a|--activate|plugin' /tmp/drakvuf-help-full.txt | head -20
+grep -i "hid" /tmp/drakvuf.out | head -20 
 ```
 
 ```text
@@ -490,27 +491,6 @@ root@drakvuf:~/drakvuf-multios-sandbox# drakvuf -r profiles/linux.json -d 1 -i 1
 [SYSCALLS] linux_cb fired (count=1) trap=do_syscall_64 rdi=0xffffb3ccc0f77f58 rsi=0xdb
 [SYSCALLS] linux_cb fired (count=2) trap=restart_syscall rdi=0xffffb3ccc17dff58 rsi=0x10f
 [SYSCALLS] linux_cb fired (count=3) trap=ppoll rdi=0xffffb3ccc0bc7f58 rsi=0xdb
-root@drakvuf:~/drakvuf-multios-sandbox# grep -i "hid\|plugin" /tmp/drakvuf.out | head -20 
-{"Plugin":"syscall","TimeStamp":"1787773417.362092","PID":623,"PPID":1,"TID":625,"UserId":111,"ProcessName":"/usr/libexec/rtkit-daemon","Method":"restart_syscall","EventUID":"0x1","ThreadName":"rtkit-daemon","Module":"linux","vCPU":0,"CR3":"0xb6d8000","Syscall":219,"NArgs":0,"Type":"x64"}
-{"Plugin":"syscall","TimeStamp":"1787773417.363499","PID":910,"PPID":904,"TID":920,"UserId":1000,"ProcessName":"/usr/bin/pulseaudio","Method":"ppoll","EventUID":"0x4","ThreadName":"null-sink","Module":"linux","vCPU":0,"CR3":"0x9e36000","Syscall":271,"NArgs":0,"Type":"x64"}
-{"Plugin":"syscall","TimeStamp":"1787773417.364301","PID":433,"PPID":1,"TID":459,"UserId":0,"ProcessName":"/usr/lib/accountsservice/accounts-daemon","Method":"restart_syscall","EventUID":"0x7","ThreadName":"gdbus","Module":"linux","vCPU":0,"CR3":"0x40ae000","Syscall":219,"NArgs":0,"Type":"x64"}
-{"Plugin":"syscall","TimeStamp":"1787773417.364904","PID":433,"PPID":1,"TID":433,"UserId":0,"ProcessName":"/usr/lib/accountsservice/accounts-daemon","Method":"restart_syscall","EventUID":"0xa","ThreadName":"accounts-daemon","Module":"linux","vCPU":0,"CR3":"0x40ae000","Syscall":219,"NArgs":0,"Type":"x64"}
-{"Plugin":"syscall","TimeStamp":"1787773417.366070","PID":1,"PPID":0,"TID":1,"UserId":0,"ProcessName":"/usr/lib/systemd/systemd","Method":"clock_gettime","EventUID":"0xe","ThreadName":"systemd","Module":"linux","vCPU":0,"CR3":"0x4f02000","Syscall":228,"NArgs":0,"Type":"x64"}
-{"Plugin":"sysret","TimeStamp":"1787773417.366327","PID":1,"PPID":0,"TID":1,"UserId":0,"ProcessName":"/usr/lib/systemd/systemd","Method":"clock_gettime","EventUID":"0xf","Module":"linux","vCPU":0,"CR3":"0x4f02000","Syscall":228,"Ret":"0x0","Info":""}
-{"Plugin":"syscall","TimeStamp":"1787773417.547480","PID":224,"PPID":1,"TID":224,"UserId":0,"ProcessName":"/usr/lib/systemd/systemd-journald","Method":"clock_gettime","EventUID":"0x10","ThreadName":"systemd-journal","Module":"linux","vCPU":0,"CR3":"0x8f7c000","Syscall":228,"NArgs":0,"Type":"x64"}
-{"Plugin":"sysret","TimeStamp":"1787773417.547853","PID":224,"PPID":1,"TID":224,"UserId":0,"ProcessName":"/usr/lib/systemd/systemd-journald","Method":"clock_gettime","EventUID":"0x11","Module":"linux","vCPU":0,"CR3":"0x8f7c000","Syscall":228,"Ret":"0x0","Info":""}
-{"Plugin":"syscall","TimeStamp":"1787773417.551461","PID":263,"PPID":1,"TID":263,"UserId":0,"ProcessName":"/usr/lib/systemd/systemd-udevd","Method":"gettid","EventUID":"0x12","ThreadName":"systemd-udevd","Module":"linux","vCPU":0,"CR3":"0x9aac000","Syscall":186,"NArgs":0,"Type":"x64"}
-{"Plugin":"sysret","TimeStamp":"1787773417.551755","PID":263,"PPID":1,"TID":263,"UserId":0,"ProcessName":"/usr/lib/systemd/systemd-udevd","Method":"gettid","EventUID":"0x13","Module":"linux","vCPU":0,"CR3":"0x9aac000","Syscall":186,"Ret":"0x0","Info":""}
-{"Plugin":"syscall","TimeStamp":"1787773417.555463","PID":408,"PPID":1,"TID":408,"UserId":101,"ProcessName":"/usr/lib/systemd/systemd-resolved","Method":"gettid","EventUID":"0x14","ThreadName":"systemd-resolve","Module":"linux","vCPU":0,"CR3":"0x4dd8000","Syscall":186,"NArgs":0,"Type":"x64"}
-{"Plugin":"sysret","TimeStamp":"1787773417.555852","PID":408,"PPID":1,"TID":408,"UserId":101,"ProcessName":"/usr/lib/systemd/systemd-resolved","Method":"gettid","EventUID":"0x15","Module":"linux","vCPU":0,"CR3":"0x4dd8000","Syscall":186,"Ret":"0x0","Info":""}
-{"Plugin":"syscall","TimeStamp":"1787773417.559446","PID":409,"PPID":1,"TID":409,"UserId":102,"ProcessName":"/usr/lib/systemd/systemd-timesyncd","Method":"gettid","EventUID":"0x16","ThreadName":"systemd-timesyn","Module":"linux","vCPU":0,"CR3":"0x4dda000","Syscall":186,"NArgs":0,"Type":"x64"}
-{"Plugin":"sysret","TimeStamp":"1787773417.559776","PID":409,"PPID":1,"TID":409,"UserId":102,"ProcessName":"/usr/lib/systemd/systemd-timesyncd","Method":"gettid","EventUID":"0x17","Module":"linux","vCPU":0,"CR3":"0x4dda000","Syscall":186,"Ret":"0x0","Info":""}
-{"Plugin":"syscall","TimeStamp":"1787773417.563200","PID":434,"PPID":1,"TID":434,"UserId":0,"ProcessName":"/usr/sbin/acpid","Method":"select","EventUID":"0x18","ThreadName":"acpid","Module":"linux","vCPU":0,"CR3":"0x40b4000","Syscall":23,"NArgs":5,"Type":"x64","nfds":"0xa","readfds":"0x7ffcd538fb60","writefds":"0x0","exceptfds":"0x7f3c0983319a","timeout":"0x0"}
-{"Plugin":"syscall","TimeStamp":"1787773417.564145","PID":435,"PPID":1,"TID":435,"UserId":0,"ProcessName":"/usr/sbin/anacron","Method":"rt_sigsuspend","EventUID":"0x1b","ThreadName":"anacron","Module":"linux","vCPU":0,"CR3":"0x40aa000","Syscall":130,"NArgs":0,"Type":"x64"}
-{"Plugin":"syscall","TimeStamp":"1787773417.564867","PID":439,"PPID":1,"TID":439,"UserId":115,"ProcessName":"/usr/sbin/avahi-daemon","Method":"restart_syscall","EventUID":"0x1e","ThreadName":"avahi-daemon","Module":"linux","vCPU":0,"CR3":"0x40b8000","Syscall":219,"NArgs":0,"Type":"x64"}
-{"Plugin":"syscall","TimeStamp":"1787773417.566225","PID":443,"PPID":1,"TID":443,"UserId":0,"ProcessName":"/usr/sbin/cupsd","Method":"epoll_wait","EventUID":"0x22","ThreadName":"cupsd","Module":"linux","vCPU":0,"CR3":"0xad20000","Syscall":232,"NArgs":0,"Type":"x64"}
-{"Plugin":"syscall","TimeStamp":"1787773417.567036","PID":444,"PPID":1,"TID":444,"UserId":103,"ProcessName":"/usr/bin/dbus-daemon","Method":"clock_gettime","EventUID":"0x25","ThreadName":"dbus-daemon","Module":"linux","vCPU":0,"CR3":"0x40bc000","Syscall":228,"NArgs":0,"Type":"x64"}
-{"Plugin":"sysret","TimeStamp":"1787773417.567381","PID":444,"PPID":1,"TID":444,"UserId":103,"ProcessName":"/usr/bin/dbus-daemon","Method":"clock_gettime","EventUID":"0x26","Module":"linux","vCPU":0,"CR3":"0x40bc000","Syscall":228,"Ret":"0x0","Info":""}
 root@drakvuf:~/drakvuf-multios-sandbox# grep -i "hid" /tmp/drakvuf.out | head -20 
 {"Plugin":"syscall","TimeStamp":"1787773501.232386","PID":1596,"PPID":1,"TID":1596,"UserId":0,"ProcessName":"/usr/lib/apt/apt-helper","Method":"openat","EventUID":"0xfac7","ThreadName":"apt-helper","Module":"linux","vCPU":0,"CR3":"0x4f00000","Syscall":257,"NArgs":4,"Type":"x64","dirfd":"0xffffff9c","pathname":"/etc/apt/apt.conf.d/60icons-hidpi","flags":"0x80100","mode":"0x21614f5b"}
 ```
@@ -1480,8 +1460,40 @@ The general point: a version pinned from whatever the dev container happens to
 have is a guess about every other host. Where two machines share a library,
 the pin has to be one they can both take.
 
+### F8 — the console could never have started
+
+D2: the panel appeared, the browser's WebSocket reached the relay
+(`101 Switching Protocols`, so F5 and F6 are genuinely fixed), and it then sat
+at **"Waiting for the analysis host…"** until the pair timeout. `sandboxd`
+never dialled out.
+
+The cause was an ordering error written in deliberately, with a comment
+claiming it was a limitation:
+
+> *"Checked once, at the start of the trace, rather than watched throughout. A
+> session requested mid-trace waits for the next run."*
+
+It is not a limitation, it is an impossibility. A session is scoped to a job
+that is **executing**, so the panel only appears once the trace has begun —
+which is *after* the check. Every request arrived too late to be seen, on every
+run, forever.
+
+**Fixed by removing the request channel entirely.** `sandboxd` now dials as
+soon as the trace starts, and the platform holds the socket unpaired until the
+browser arrives. There is no latency and nothing to ask for.
+
+The cost is real and is treated in `live-console.md` §4.1b rather than glossed:
+a relay socket is now open for **every** analysis on a console-enabled host,
+watched or not. `CONSOLE_ENABLED` changes meaning from "consoles may be
+requested" to "this host opens a relay socket per analysis" — which is why it
+is off by default on both sides.
+
+The worker's side of the pairing also lost its 90s timeout: sized for a
+request-driven dial, it would now have the worker give up before the operator
+opened the panel. It holds for the trace and closes during teardown instead.
+
 ```text
-F8
+F9
 
 
 ```

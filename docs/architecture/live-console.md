@@ -148,22 +148,35 @@ malware VM, not needed to click a button.
 
 ### 2.2 How a session starts, without Dom0 listening
 
-1. The operator opens the console for a job. The platform records
-   `console_requested` on the job row.
-2. `sandboxd` learns of it in its **next heartbeat response** — the channel
-   that already carries `cancel_requested`, for the same reason.
-3. `sandboxd` resolves the clone's VNC port, opens an outbound WebSocket to the
-   platform carrying the job id and the worker token, and bridges it to
-   `127.0.0.1:<port>`.
-4. The platform pairs that socket with the browser's, by job id.
+> **Revised 2026-08-26 after F8.** This section originally described a
+> request-driven dial: the operator asks, `sandboxd` learns on its next
+> heartbeat, then connects. **That could never have worked.** A session is
+> scoped to a job that is `executing` (§2.1), so the panel only appears once
+> the trace has begun — and the check for a request happened before it. Every
+> request arrived too late to be seen and the browser sat at "Waiting for the
+> analysis host…" until the pair timeout.
 
-**The latency floor is one heartbeat interval**, and that is the real cost of
-keeping the constraint -- the alternative is a listener on the malware host.
+1. `sandboxd` resolves the clone's VNC port when the trace starts, opens an
+   outbound WebSocket to the platform carrying the job id and the worker
+   token, and bridges it to `127.0.0.1:<port>`.
+2. The platform holds that socket, unpaired, for the duration of the trace.
+3. When the operator opens the panel, the browser's socket is paired with it
+   by job id, and bytes move immediately.
 
-The interval was lowered from 30s to **10s** on 2026-08-26 for this reason. At
-30s an operator waited half a minute for a screen, which is long enough that a
-CAPTCHA times out while you watch. The same change makes cancellation land
-sooner and gives the lease twelve beats instead of four, so a run of failed
+**There is no latency and no request channel.** The cost is that a relay socket
+is open for *every* analysis on a host where the console is enabled, watched or
+not — which is a real change to §4 and is treated there rather than glossed.
+
+The two sides therefore wait differently. `sandboxd` holds its end for the
+whole trace and closes it during teardown, on every path. The browser's end
+keeps a short timeout, because a human is looking at it and should be told
+promptly when nobody is there.
+
+**There is no longer a latency floor for the console** — dialling at trace
+start removed it. The heartbeat interval was lowered from 30s to **10s** on
+2026-08-26 while the request-driven design was still in place; the change is
+kept because it also makes cancellation land sooner and gives the lease twelve
+beats instead of four, so a run of failed
 beats on a busy platform no longer eats a quarter of the margin each time.
 
 The cost is one small row `UPDATE` per beat per running job -- twelve a minute
@@ -256,6 +269,38 @@ What the guest **can** do is control what is drawn. A viewer is looking at
 attacker-chosen pixels. That matters for the human, not for the software: no
 image can escape a canvas element, but an analyst can be socially engineered by
 what a sample chooses to display.
+
+### 4.1b A relay socket is open for every analysis
+
+This is the cost of removing the request channel (§2.2), and it is the largest
+change to this document since it was written.
+
+`sandboxd` dials out for **every executing job** on a host where the console is
+enabled, whether or not anyone is watching. `console.py` originally argued the
+opposite — *"a worker with no browser is a socket into a malware VM's console
+with nobody watching it, and the second is the one that matters"* — and the
+worker endpoint refused an unprompted dial as *"either a bug or a compromised
+Dom0 opening a channel on its own initiative"*.
+
+Both are withdrawn, because the alternative was a feature that could not work.
+What bounds it instead:
+
+- **`CONSOLE_ENABLED` is off by default, on both sides.** Its meaning changes
+  from "consoles may be requested" to **"this host opens a relay socket per
+  analysis"**. That is a coherent thing to switch on deliberately, and a
+  coherent thing to leave off.
+- The job must be `executing`. Outside that window the endpoint refuses.
+- The worker token is still required, over mutual TLS on the LAN.
+- The socket terminates at the platform. Reaching it from outside still needs
+  Cloudflare Access, unchanged.
+- It closes with the trace, on every path.
+
+What is genuinely worse than before: on a console-enabled host, a compromised
+`sandboxd` has a standing, authenticated channel out for the duration of every
+analysis rather than only when asked. It could already open one by setting the
+flag it controls, so this shortens the path rather than creating it — but it
+does shorten it, and that belongs on the record rather than in a commit
+message.
 
 ### 4.2 What a compromised platform can reach
 

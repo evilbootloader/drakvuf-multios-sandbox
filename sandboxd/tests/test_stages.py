@@ -521,3 +521,52 @@ def test_a_failed_run_still_reports_through_state(tmp_path):
     assert outcome.state == "failed"
     assert api.completed == []
     assert [s for s, _ in api.states][-2:] == ["cleaning", "failed"]
+
+
+# --- F8: the console is dialled, not requested -----------------------------
+
+def test_the_console_is_dialled_at_the_start_of_the_trace(tmp_path):
+    """The request-driven version could never work.
+
+    `_trace` checked `console_wanted` once, BEFORE starting the trace -- and
+    the console panel only appears when the job reaches `executing`, which is
+    after that check. So the operator could only ask once it was too late to be
+    noticed, and the browser sat at "Waiting for the analysis host..." until
+    the pair timeout. Observed on Dom0 2026-08-26.
+
+    Now the dial happens because the trace started, with nobody having asked.
+    """
+    r = runner_ready()
+    run(tmp_path, runner=r)
+
+    # The port lookup is the first thing a dial does; the FakeRunner answers
+    # nothing useful, so the session is abandoned -- but the ATTEMPT is what
+    # proves it no longer waits for a request.
+    assert r.ran(("xenstore-read",)), "no console dial was attempted"
+
+
+def test_a_console_failure_never_fails_the_analysis(tmp_path):
+    """The console is an observer of the run, never a participant in its
+    lifecycle. A missing VNC port means no screen, not a failed job."""
+    r = runner_ready()
+    r.script(("xenstore-read",), rc=1)
+    r.script(("xl", "list", "-l"), rc=1)
+
+    outcome, api = run(tmp_path, runner=r)
+
+    assert outcome.state == "completed"
+    assert api.completed
+
+
+def test_the_console_is_not_dialled_when_disabled_on_this_host(tmp_path):
+    """A Dom0-side kill switch, separate from the platform's. An operator can
+    refuse sessions on this host without touching the platform -- and with it
+    off, no relay socket is opened at all."""
+    cfg = config(tmp_path)
+    cfg.config_dir.mkdir(parents=True, exist_ok=True)
+    cfg.console_enabled = False
+    r = runner_ready()
+
+    S.Analysis(FakeApi(), r, cfg).run(FakeLease(), 3)
+
+    assert not r.ran(("xenstore-read",))

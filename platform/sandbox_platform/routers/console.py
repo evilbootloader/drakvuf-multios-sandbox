@@ -81,8 +81,19 @@ async def _relay(websocket: WebSocket, job_id: UUID, side: console.Side):
         await websocket.close(POLICY, "a session is already open for this job")
         return
 
+    # The two sides wait differently, because they arrive for different
+    # reasons. sandboxd dials at the START of a trace and holds the socket for
+    # its duration, so a short cap here would have it give up before the
+    # operator opened the panel -- which is most of the trace. The browser
+    # arrives on a human's click and should be told promptly if nobody is
+    # there.
+    #
+    # The worker's wait is bounded by the trace: it closes its own end during
+    # teardown, on every path.
+    timeout = (settings.console_pair_timeout if side is console.Side.BROWSER
+               else None)
     try:
-        if not await session.wait_paired(timeout=settings.console_pair_timeout):
+        if not await session.wait_paired(timeout=timeout):
             await websocket.close(
                 TRY_LATER,
                 "the other end never arrived"
@@ -190,12 +201,16 @@ async def worker_console(websocket: WebSocket, job_id: UUID):
     if row is None or JobState(row[0]) is not JobState.EXECUTING:
         await websocket.close(POLICY, "job is not executing")
         return
-    if not row[1]:
-        # Nobody asked. A worker dialling out unprompted would mean either a
-        # bug or a compromised Dom0 opening a channel on its own initiative,
-        # and neither should be quietly accepted.
-        await websocket.close(POLICY, "no console was requested for this job")
-        return
+    # **The "nobody asked" refusal is gone, deliberately.** It required
+    # `console_requested` to be set before a worker could dial, which made the
+    # feature impossible: the panel only appears once the job is `executing`,
+    # so the request could never arrive before the trace began (F8).
+    #
+    # sandboxd now dials for every executing job when the console is enabled on
+    # that host. What still bounds this is unchanged and is where the argument
+    # now rests: CONSOLE_ENABLED is off by default on both sides, the job must
+    # be EXECUTING, the worker token is required, and the socket is a relay to
+    # a browser that must still pass Cloudflare Access.
 
     await websocket.accept()
     await _relay(websocket, job_id, console.Side.WORKER)
