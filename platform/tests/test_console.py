@@ -293,3 +293,42 @@ def test_the_console_endpoints_are_where_the_client_expects():
 
     assert "/api/v1/jobs/{job_id}/console" in ws
     assert "/api/v1/worker/jobs/{job_id}/console" in ws
+
+
+def test_uvicorn_can_actually_serve_websockets():
+    """F6, from the deployment 2026-08-26: a 404 on a route that exists.
+
+    uvicorn does not implement the WebSocket protocol itself. With neither
+    `websockets` nor `wsproto` installed it does not handle an upgrade at all
+    -- the request is treated as a plain HTTP GET, nothing matches the socket
+    path, and the client gets `404` from uvicorn while the route is registered
+    and correct.
+
+    **The rest of this file cannot catch that.** `TestClient` speaks ASGI
+    directly and never goes through uvicorn's protocol layer, so every
+    WebSocket test here passes against a server that could not serve one. This
+    is the only check that looks at the deployed shape rather than the app
+    object, which is why it is an import assertion rather than a connection.
+    """
+    try:
+        import websockets  # noqa: F401
+    except ImportError:
+        try:
+            import wsproto  # noqa: F401
+        except ImportError:
+            raise AssertionError(
+                "neither websockets nor wsproto is installed, so uvicorn will "
+                "404 every WebSocket upgrade -- see requirements.txt"
+            ) from None
+
+
+def test_the_websocket_dependency_is_pinned_in_requirements():
+    """Installed-but-unpinned is how this comes back: it is here today as a
+    transitive dependency of something else, and a future resolution that drops
+    it would restore the 404 with nothing in the diff to explain it."""
+    from pathlib import Path
+
+    req = (Path(__file__).resolve().parents[1] / "requirements.txt").read_text()
+    assert "websockets==" in req or "wsproto==" in req, (
+        "uvicorn's WebSocket support is not pinned in requirements.txt"
+    )

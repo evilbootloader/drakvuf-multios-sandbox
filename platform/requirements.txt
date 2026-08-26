@@ -23,3 +23,12 @@ pytest-playwright==0.9.0
 python-magic==0.4.27
 starlette==1.6.0
 uvicorn==0.52.4
+# uvicorn does NOT implement the WebSocket protocol itself. Without one of
+# these it does not handle an upgrade at all: the request is treated as a plain
+# HTTP GET, no HTTP route matches the socket path, and the client gets a 404
+# from uvicorn with the route perfectly well registered (DRAFT-056, F6).
+#
+# That failure is invisible to the test suite, because TestClient speaks ASGI
+# directly and never goes through uvicorn's protocol layer -- so a WebSocket
+# test can pass while the deployed server cannot serve one.
+websockets==17.0.1
