@@ -580,3 +580,60 @@ def test_clicking_a_tab_moves_the_underline(strict_page, server, seed):
     strict_page.wait_for_selector("nav.tabs[data-active='artifacts']")
 
     assert strict_page.locator("nav.tabs a[aria-selected='true']").inner_text() == "Artifacts"
+
+
+# --- the live console's region survives a tab click ------------------------
+#
+# DRAFT-056 puts the console ABOVE the tabs precisely so it is not lost on
+# every tab change -- "the opposite of what an interactive session needs:
+# watch the screen while reading the syscall stream".
+#
+# The first implementation put it above the tabs but INSIDE the element tab
+# clicks replace, which has the same fault: clicking a tab would destroy the
+# console div, killing the WebSocket and the canvas mid-session. Caught in
+# review before it shipped.
+
+def test_a_tab_click_does_not_destroy_the_status_region(strict_page, server, seed):
+    """The console lives in #job-status. Proving that region survives a tab
+    click proves an open session survives one.
+
+    Tested by identity, not by presence: a re-rendered element looks identical
+    in the DOM but is a different node, and a WebSocket attached to the old one
+    is gone. So the test marks the node and checks the MARK survives.
+    """
+    job_id = seed("sample.bin")
+    strict_page.goto(f"{server}/ui/jobs/{job_id}")
+    strict_page.wait_for_selector("#job-status")
+    strict_page.evaluate(
+        "document.getElementById('job-status').__session = 'live socket here'")
+
+    strict_page.get_by_role("link", name="Artifacts").click()
+    strict_page.wait_for_selector("nav.tabs[data-active='artifacts']")
+
+    survived = strict_page.evaluate(
+        "document.getElementById('job-status').__session")
+    assert survived == "live socket here", (
+        "the status region was re-rendered by a tab click; a live console "
+        "session in it would have been destroyed"
+    )
+
+
+def test_a_tab_click_does_re_render_the_tab_bar(strict_page, server, seed):
+    """The other half. The nav must be inside the swapped region or
+    aria-selected cannot move -- which was the original underline bug."""
+    job_id = seed("sample.bin")
+    strict_page.goto(f"{server}/ui/jobs/{job_id}")
+    # The NAV, not its container. htmx's default swap is `innerHTML`, so
+    # #job-tabs itself persists and only its children are replaced -- marking
+    # the container would prove nothing, which is what a first version of this
+    # test did.
+    strict_page.evaluate("document.querySelector('nav.tabs').__marker = 'original'")
+
+    strict_page.get_by_role("link", name="Artifacts").click()
+    strict_page.wait_for_selector("nav.tabs[data-active='artifacts']")
+
+    assert strict_page.evaluate(
+        "document.querySelector('nav.tabs').__marker") is None, (
+        "the nav was not re-rendered, so aria-selected could not have moved")
+    assert strict_page.locator(
+        "nav.tabs a[aria-selected='true']").inner_text() == "Artifacts"

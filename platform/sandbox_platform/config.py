@@ -17,6 +17,19 @@ def _int(name: str, default: int) -> int:
     return int(os.environ.get(name, default))
 
 
+def _bool(name: str, default: bool) -> bool:
+    """Anything but a recognised true value is false.
+
+    Fails closed on a typo, which matters for `console_enabled`: a feature flag
+    that turns a capability ON because someone wrote `CONSOLE_ENABLED=ture` is
+    worse than one that stays off.
+    """
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
 @dataclass(frozen=True)
 class Settings:
     # --- database ---------------------------------------------------------
@@ -103,6 +116,24 @@ class Settings:
     # 0 disables it -- objects are kept indefinitely and nothing reclaims the
     # store but the quota refusing writes.
     retention_days: int = _int("RETENTION_DAYS", 30)
+
+    # --- live console (DRAFT-056) -----------------------------------------
+    #
+    # OFF by default. This is the feature that lets a human drive a running
+    # malware VM from a browser, and DRAFT-056 asks for it to be switchable
+    # off without a redeploy while confidence is built.
+    #
+    # With the direction reversed -- Dom0 dials out, see
+    # docs/architecture/live-console.md -- it is no longer an exception to
+    # "Dom0 never listens", but it is still an interactive channel toward a
+    # machine running malware and still the largest deliberate widening of
+    # attack surface in the project.
+    console_enabled: bool = _bool("CONSOLE_ENABLED", False)
+
+    # A session nobody completes must not hold a slot forever. One heartbeat
+    # interval plus margin: sandboxd cannot answer faster than its next beat,
+    # which is the latency floor of dialling out rather than listening.
+    console_pair_timeout: int = _int("CONSOLE_PAIR_TIMEOUT", 90)
 
     # --- admission --------------------------------------------------------
     #

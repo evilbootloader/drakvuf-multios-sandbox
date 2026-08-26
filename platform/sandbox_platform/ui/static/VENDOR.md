@@ -63,3 +63,59 @@ else, delegating every DOM change to htmx.
 Change the version, re-download, update the hash above, and re-run
 `tests/test_ui_browser.py` — the browser tests are what would actually catch a
 regression in the swap behaviour.
+---
+
+# noVNC — the live console client
+
+| | |
+|---|---|
+| Files | `novnc/core/`, `novnc/vendor/` (57 files) |
+| Version | **1.6.0**, pinned |
+| Source | `https://github.com/novnc/noVNC/archive/refs/tags/v1.6.0.tar.gz` |
+| Tarball SHA-256 | `5066103959ef4e9b10f37e5a148627360dd8414e4cf8a7db92bdbd022e728aaa` |
+| Size | 752 KB on disk |
+| Retrieved | 2026-08-26 |
+| Licence | MPL-2.0 (`novnc/LICENSE.txt`) |
+
+Verify before trusting a copy:
+
+```sh
+curl -sSL https://github.com/novnc/noVNC/archive/refs/tags/v1.6.0.tar.gz | sha256sum
+# 5066103959ef4e9b10f37e5a148627360dd8414e4cf8a7db92bdbd022e728aaa
+```
+
+## Why a second vendored dependency, when the first one was argued over
+
+DRAFT-056 states the cost plainly: *"noVNC is a few hundred KB against htmx's
+50, and a second entry in `ui/static/VENDOR.md`. Worth it — the alternative is
+writing an RFB protocol client."*
+
+That is the whole argument. RFB has a version negotiation, a security
+handshake, and a dozen framebuffer encodings — Raw, CopyRect, RRE, Hextile,
+Tight, ZRLE — each with its own decoder. Implementing that is not a feature,
+it is a project.
+
+**Only `core/` and `vendor/`.** The upstream `app/` directory is noVNC's own
+full-page viewer, with its own UI, settings panel, clipboard and file-transfer
+controls. None of that is wanted: DRAFT-056 puts clipboard, file transfer and
+audio out of scope, each being *"a separate channel into a malware VM and none
+is needed to click a button"*. Taking `core/` alone means those controls do not
+exist to be enabled by accident.
+
+`vendor/` is required by `core/` — it holds the `pako` inflate used by the
+Tight and ZRLE decoders. It is a dependency of the decoders, not a second
+choice we made.
+
+## ES modules, so still no build step
+
+`core/rfb.js` is an ES module and is loaded with `<script type="module">`. That
+keeps the property the htmx entry above argues for: nothing here is compiled,
+bundled or minified by us, so what is served is what was downloaded and the
+hash above is checkable against the running deployment.
+
+## What connects it to the platform
+
+`RFB` is pointed at `wss://<host>/api/v1/jobs/<id>/console`, which is the relay
+endpoint — **not** at a VNC server. The clone's console stays bound to Dom0's
+loopback and `sandboxd` dials out to meet the browser's socket in the middle.
+See `docs/architecture/live-console.md`.

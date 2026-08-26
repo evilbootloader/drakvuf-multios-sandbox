@@ -140,15 +140,23 @@ class StateRequest(BaseModel):
 
 
 class HeartbeatResponse(BaseModel):
-    """The only channel by which a running job learns it was cancelled.
+    """The only channel by which a running job learns anything.
 
     Dom0 has no inbound listener, so there is nowhere to push to. A worker
     that stops heartbeating stops learning, which is correct -- its lease
     then lapses and the record is marked interrupted.
+
+    `console_requested` rides the same channel as `cancel_requested`, for the
+    same reason (DRAFT-056). The operator asks for a console on the job row;
+    the worker finds out on its next beat and dials OUT. Nothing connects to
+    Dom0, so the deploy runbook's step-5 check still fails to reach it -- even
+    during a live session, which is what the draft asked for and what its own
+    diagram would have prevented.
     """
 
     lease_expires_at: datetime
     cancel_requested: bool
+    console_requested: bool = False
 
 
 class CompleteRequest(BaseModel):
@@ -328,10 +336,10 @@ def report_state(job: LeasedJob, req: StateRequest) -> None:
 
 @router.post("/jobs/{job_id}/heartbeat", response_model=HeartbeatResponse)
 def heartbeat(job: LeasedJob) -> HeartbeatResponse:
-    """Extend the lease, and deliver a pending cancellation.
+    """Extend the lease, and deliver anything pending for the worker.
 
-    The response is the *only* way a running job learns it was cancelled --
-    see HeartbeatResponse.
+    The response is the *only* way a running job learns it was cancelled, or
+    that a console session is wanted -- see HeartbeatResponse.
     """
     with connection() as conn, conn.cursor() as cur:
         cur.execute(
@@ -339,14 +347,21 @@ def heartbeat(job: LeasedJob) -> HeartbeatResponse:
             UPDATE jobs
                SET lease_expires_at = now() + %s::interval
              WHERE id = %s
-            RETURNING lease_expires_at, cancel_requested
+            RETURNING lease_expires_at, cancel_requested, console_requested
             """,
             (f"{settings.lease_seconds} seconds", job["id"]),
         )
-        expires_at, cancel_requested = cur.fetchone()
+        expires_at, cancel_requested, console_requested = cur.fetchone()
 
     return HeartbeatResponse(
-        lease_expires_at=expires_at, cancel_requested=cancel_requested
+        lease_expires_at=expires_at,
+        cancel_requested=cancel_requested,
+        # Reported only while the feature is enabled, so turning the flag off
+        # stops sessions being requested without a redeploy -- DRAFT-056 wants
+        # the first exception to "Dom0 never listens" switchable off while
+        # confidence is built. (It is not an exception any more, since Dom0
+        # dials out, but the flag is still worth having.)
+        console_requested=console_requested and settings.console_enabled,
     )
 
 

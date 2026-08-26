@@ -337,3 +337,31 @@ details.advanced > summary:hover { color: var(--fg); }
 .dl { display: grid; grid-template-columns: max-content 1fr; gap: 0.35rem 1rem; font-size: 0.9rem; }
 .dl dt { color: var(--fg-faint); }
 .dl dd { margin: 0; }
+/* --- the live console (DRAFT-056) ------------------------------------- */
+/*
+   Above the tab bar and full width: it is the one thing on this page an
+   analyst must not have to go looking for, and a CAPTCHA does not wait.
+*/
+.console {
+  margin: 0 0 1.5rem;
+  border: 1px solid var(--red);
+  border-radius: 3px;
+  padding: 0.75rem;
+  background: var(--bg-raised);
+}
+.console h3 { margin: 0 0 0.5rem; font-size: 1rem; }
+/*
+   A fixed height rather than one derived from the framebuffer: the guest
+   chooses its own resolution, and a panel that resizes itself when a sample
+   changes the display mode moves the tab bar under the reader's cursor.
+*/
+.console-screen {
+  width: 100%;
+  height: 60vh;
+  min-height: 320px;
+  background: #000;
+  overflow: hidden;
+}
+/* The border tracks the session so the state is visible without reading. */
+.console[data-state="connected"] { border-color: var(--red); }
+.console[data-state="closed"] { border-color: var(--line); opacity: 0.7; }

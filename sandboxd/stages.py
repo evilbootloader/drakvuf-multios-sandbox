@@ -45,10 +45,19 @@ from .clone import CloneBuilder, CloneError, CloneSpec
 from .guests import Interaction, Job, SampleKind, TargetOs
 from .proc import CommandError
 
-# Well inside LEASE_SECONDS=120. Four beats per lease, so two consecutive
-# failures still leave a margin -- a single missed beat on a busy platform must
-# not cost an analysis.
-HEARTBEAT_INTERVAL = 30.0
+# Well inside LEASE_SECONDS=120: twelve beats per lease, so a run of failures
+# on a busy platform is survivable where a single missed beat used to eat a
+# quarter of the margin.
+#
+# Lowered from 30s on 2026-08-26, and the console is why. The beat is the only
+# channel that can reach a running job -- Dom0 has no inbound listener -- so
+# **one interval is the latency floor for opening a live console** (DRAFT-056)
+# and for a cancellation landing. At 30s an operator waited half a minute to
+# see a screen; at 10s it is prompt enough to be usable.
+#
+# The cost is one small row UPDATE per beat per running job. With MAX_CLONES=2
+# that is twelve updates a minute, against a Postgres on the same container.
+HEARTBEAT_INTERVAL = 10.0
 
 # DRAFT-018 bounds a manifest at 512 artifacts. `extracted/` is named after
 # files the SAMPLE wrote, so the real ceiling is however many it drops; hitting

@@ -239,6 +239,10 @@ def _job_context(job_id: UUID, tab: str) -> dict:
         # JS: two definitions of "terminal" would be free to drift, and the
         # symptom is a finished job whose EventSource reconnects forever.
         "terminal_states": sorted(s.value for s in TERMINAL_STATES),
+        # DRAFT-056, off by default. Passed to the template so the console
+        # panel is absent rather than rendered-and-broken when the capability
+        # is switched off.
+        "console_enabled": settings.console_enabled,
     }
 
 
@@ -275,3 +279,22 @@ def job_live(request: Request,
     """
     ctx = _job_context(job_id, tab)
     return _render(request, "_job_live.html", **ctx)
+
+
+@router.get("/jobs/{job_id}/tabs", response_class=HTMLResponse)
+def job_tabs(request: Request,
+             job_id: UUID = PathParam(),
+             tab: str = Query("overview")) -> HTMLResponse:
+    """Just the tab bar and its body, for a tab click.
+
+    Narrower than `/live` deliberately. `/live` also carries the live console
+    (DRAFT-056), and swapping that on a tab click would destroy the console
+    element -- killing the WebSocket and the canvas mid-session, which is the
+    fault putting the console above the tabs was supposed to avoid.
+
+    The nav is INSIDE this fragment, which is what lets `aria-selected` move:
+    swapping only the tab body left the underline wherever the server first
+    put it.
+    """
+    ctx = _job_context(job_id, tab)
+    return _render(request, "_job_tabs.html", **ctx)

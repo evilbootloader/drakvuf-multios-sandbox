@@ -20,6 +20,7 @@ from fastapi.responses import RedirectResponse
 
 from . import events, maintenance
 from .db import close_pool, connection, open_pool
+from .routers import console as console_router
 from .routers import jobs, worker
 from .ui import router as ui_router, static as ui_static
 
@@ -59,6 +60,11 @@ app = FastAPI(
 
 app.include_router(jobs.router)
 app.include_router(worker.router)
+# Two ends of a live console session, on two routers because they authenticate
+# differently -- Access for the browser, the worker token over the LAN for
+# Dom0. Both are no-ops unless CONSOLE_ENABLED is set (DRAFT-056).
+app.include_router(console_router.browser_router)
+app.include_router(console_router.worker_router)
 
 # The operator UI (#38). Mounted under /ui, behind the same Access dependency
 # as the JSON routes. Deliberately NOT at "/" -- the object store is

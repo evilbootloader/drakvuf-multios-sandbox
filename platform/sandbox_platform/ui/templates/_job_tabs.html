@@ -1,0 +1,35 @@
+{#
+  The tab bar and the active tab's body. Swapped on a tab click, and again by
+  job.js on a state change (a completed job fills tabs an executing one could
+  not).
+#}
+{#
+  data-active is read by job.js: an SSE refresh must ask for the tab you are
+  looking at, not the one the URL was rendered with.
+#}
+<nav class="tabs" data-active="{{ active }}">
+  {% for tab in tabs %}
+  {# Tabs with no data yet are dimmed and marked, rather than looking
+     identical to filled ones. #38 ships with most of them empty on purpose,
+     and a tab you can only discover is empty by clicking reads as a fault.
+
+     Targets #job-tabs, which CONTAINS the nav. Swapping only #tab-body left
+     aria-selected wherever the server first put it -- click Artifacts and the
+     underline stayed on Overview -- so the nav has to be inside the swapped
+     region for the active tab to come from the server.
+
+     But not #job-live: that also holds the live console, and replacing it on
+     a tab click would kill an open session. Two regions, two lifetimes. #}
+  <a href="/ui/jobs/{{ job.id }}?tab={{ tab.slug }}"
+     hx-get="/ui/jobs/{{ job.id }}/tabs?tab={{ tab.slug }}"
+     hx-target="#job-tabs"
+     hx-push-url="/ui/jobs/{{ job.id }}?tab={{ tab.slug }}"
+     {% if tab.slug not in filled %}data-empty="1"
+       title="No data collected for this tab yet{% if tab.owner %} — {{ tab.owner }}{% endif %}"{% endif %}
+     {% if tab.slug == active %}aria-selected="true"{% endif %}>{{ tab.label }}</a>
+  {% endfor %}
+</nav>
+
+<div class="tab-body" id="tab-body">
+  {% include body_template %}
+</div>

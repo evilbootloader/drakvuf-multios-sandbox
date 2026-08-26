@@ -30,7 +30,7 @@ from .. import manifest as manifest_schema
 from .. import objects
 from ..config import settings
 from ..db import connection
-from ..enums import JobState, RejectReason, TargetOs
+from ..enums import TERMINAL_STATES, JobState, RejectReason, TargetOs
 
 # The identity dependency is attached to the ROUTER, not to routes, so a
 # route added later cannot forget it. It is a no-op unless
@@ -212,6 +212,12 @@ class JobDetail(JobSummary):
     # list to mint capabilities from. `manifest` itself is still returned raw,
     # which is what makes a malformed one diagnosable at all.
     manifest_error: str | None = None
+
+    # Set when a human drove this run through the live console (DRAFT-056).
+    # Permanent, and rendered on the report: an interactive run is not
+    # comparable to an automated one, so two reports that look alike must not
+    # describe different experiments.
+    interacted: bool = False
 
     # True for a manifest in the pre-DRAFT-018 shape: a list of bare names,
     # with no size or digest. Reported rather than hidden so "we do not know
@@ -437,7 +443,7 @@ def _detail(conn, job_id: UUID) -> JobDetail:
             "id", "created_at", "updated_at", "target_os", "submitted_filename",
             "state", "sha256", "size_bytes", "detected_type", "queue_reason",
             "failure_stage", "failure_reason", "attempt", "cancel_requested",
-            "owner",
+            "owner", "interacted",
         )},
         manifest=row["manifest"] if isinstance(row["manifest"], dict) else None,
         artifacts=artifacts,
@@ -579,6 +585,43 @@ def cancel_job(job_id: Annotated[UUID, Path()]) -> CancelResponse:
     """
     with connection() as conn:
         return CancelResponse(outcome=dal.cancel(conn, job_id))
+
+@router.post("/{job_id}/console", status_code=status.HTTP_204_NO_CONTENT)
+def request_console(job_id: Annotated[UUID, Path()]) -> None:
+    """Ask for a live console on this job (DRAFT-056).
+
+    **Requested when the job page opens, not when execution starts**, and that
+    is the point. Dom0 has no inbound listener, so `sandboxd` only learns of a
+    request on its next heartbeat -- setting the flag early means it already
+    knows by the time the job is executing, instead of the operator waiting a
+    beat after the screen could first have been shown.
+
+    Refused once the job is terminal: there is nothing left to watch, and a
+    flag set on a finished job would have the next worker to touch that row
+    dial out for a session nobody asked for.
+
+    A no-op unless CONSOLE_ENABLED. The flag is what lets the capability be
+    switched off without a redeploy while confidence is built.
+    """
+    if not settings.console_enabled:
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND, "the live console is disabled"
+        )
+
+    with connection() as conn, conn.cursor() as cur:
+        cur.execute("SELECT state FROM jobs WHERE id = %s", (job_id,))
+        row = cur.fetchone()
+        if row is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "no such job")
+        if JobState(row[0]) in TERMINAL_STATES:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                f"job is {row[0]}; there is nothing left to watch",
+            )
+        conn.execute(
+            "UPDATE jobs SET console_requested = true WHERE id = %s", (job_id,)
+        )
+
 
 @router.get("/{job_id}/events")
 async def job_events(job_id: Annotated[UUID, Path()]) -> StreamingResponse:

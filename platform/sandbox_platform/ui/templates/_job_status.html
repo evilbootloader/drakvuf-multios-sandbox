@@ -1,0 +1,98 @@
+{#
+  The part of a job page that changes with its STATE: the field list, the
+  wait/failure notes, and the live console.
+
+  Split from the tab bar on 2026-08-26, and the console is why. Tab clicks
+  swap their own region, so clicking a tab during an executing job no longer
+  destroys the console element -- which would kill the WebSocket and the
+  canvas mid-session. Placing the console above the tabs was supposed to
+  avoid exactly that; putting it above them but INSIDE the element tab clicks
+  replace had the same fault.
+
+  This region is refreshed only by job.js on a state change, which is when the
+  console should appear or disappear anyway.
+#}
+<dl class="dl">
+  <dt>State</dt>
+  <dd>
+    <span class="state" data-state="{{ job.state.value }}">{{ job.state.value }}</span>
+    {% if job.attempt and job.attempt > 1 %}<span class="mono">attempt {{ job.attempt }}</span>{% endif %}
+  </dd>
+  <dt>Target</dt><dd>{{ job.target_os.value }}</dd>
+  <dt>Type</dt><dd>{{ job.detected_type or '—' }}</dd>
+  <dt>SHA-256</dt><dd class="mono">{{ job.sha256 or '—' }}</dd>
+  <dt>Size</dt>
+  <dd class="mono">{% if job.size_bytes is not none %}{{ job.size_bytes | filesizeformat(binary=True) }}{% if job.size_bytes >= 1024 %} <span class="dim">({{ "{:,}".format(job.size_bytes) }} bytes)</span>{% endif %}{% else %}—{% endif %}</dd>
+  <dt>Submitted</dt><dd class="mono">{{ job.created_at.strftime('%Y-%m-%d %H:%M:%S') }}</dd>
+  <dt>Owner</dt><dd>{{ job.owner or '—' }}</dd>
+</dl>
+
+{#
+  `queued` is not a failure and must not read as one. The measured failure
+  mode this whole architecture exists to remove was a silent hold with
+  correct-looking logs; a UI that showed a normal wait as an error would be
+  the same mistake in the opposite colour.
+#}
+{% if job.state.value == 'queued' %}
+<p class="note">
+  {% if job.reserved_ahead %}
+    Waiting — another job is reserved ahead of this one.
+  {% else %}
+    Waiting for an analysis host to pick this up.
+  {% endif %}
+  {% if job.queue_reason %}<br><span class="mono">{{ job.queue_reason }}</span>{% endif %}
+</p>
+{% endif %}
+
+{% if job.failure_reason %}
+<p class="note danger">
+  {# Verbatim: a reason the operator cannot see is a reason that costs a Dom0
+     session to rediscover. #}
+  Failed at <span class="mono">{{ job.failure_stage or '?' }}</span> —
+  <span class="mono">{{ job.failure_reason }}</span>
+</p>
+{% endif %}
+
+{#
+  The live console (DRAFT-056), ABOVE the tab bar and never a tab.
+
+  The tabs are all RESULT views -- each describes something the run produced,
+  read after the fact. A console is neither: it exists only while the job is
+  executing, and it is the one thing an analyst must not have to go looking
+  for. A CAPTCHA does not wait for someone to click the right tab. Making it a
+  tab would also lose it on every tab change, which is the opposite of what an
+  interactive session needs -- watch the screen WHILE reading the syscalls.
+
+  Rendered only while executing, and absent rather than empty otherwise: a
+  control that looks available and does nothing reads as a fault, which is the
+  same reason the tab bar dims tabs with no data.
+
+  It sits inside #job-live, so the SSE refresh already makes it appear when the
+  job starts executing and disappear when it stops, with no extra wiring.
+#}
+{% if console_enabled and job.state.value == 'executing' %}
+<section class="console" id="console" data-job-id="{{ job.id }}">
+  <h3>Live console
+    {% if job.interacted %}<span class="state" data-state="failed">interacted</span>{% endif %}
+  </h3>
+  <p class="note danger">
+    This is a live view of a machine running the sample. Anything you type or
+    click goes to it, and doing so is recorded on the report — an interactive
+    run is not comparable to an automated one.
+  </p>
+  <div id="console-screen" class="console-screen"></div>
+  <p class="note" id="console-status">Waiting for the analysis host…</p>
+</section>
+{# type="module" because noVNC is one. Inside the fragment rather than in
+   base.html, so it loads when the console appears and not on every page. #}
+<script type="module" src="/ui/static/console.js"></script>
+{% elif job.interacted %}
+{# The flag outlives the session, because the report has to stay honest about
+   how the run was produced. #}
+<p class="note">
+  <strong>This run was driven interactively.</strong> A human made choices that
+  changed what happened, so it is not directly comparable to an automated run
+  of the same sample.
+</p>
+{% endif %}
+
