@@ -553,7 +553,11 @@ guessing how much memory Dom0 may give clones is how a host overcommits:
 export SANDBOXD_API=https://192.168.1.10:8443   # the mTLS worker channel
 export WORKER_TOKEN=<the same token the platform has>
 export SANDBOXD_TOTAL_MIB=<measure it: free -m, minus what Dom0 needs>
-export SANDBOXD_MAX_CLONES=2         # MUST match network-setup.sh's argument
+export SANDBOXD_MAX_CLONES=2
+# The console dials the BROWSER listener, not the worker one. The platform runs
+# two uvicorn processes over the same app and the relay pairs sockets in an
+# in-process registry, so both ends of a session must reach the SAME one (F11).
+SANDBOXD_CONSOLE_API=https://192.168.1.10:8000         # MUST match network-setup.sh's argument
 export SANDBOXD_CACERT=/root/ca.crt
 export SANDBOXD_CLIENT_CERT=/root/dom0.crt
 export SANDBOXD_CLIENT_KEY=/root/dom0.key
@@ -695,6 +699,10 @@ SANDBOXD_CACERT=/etc/sandboxd/tls/ca.crt
 SANDBOXD_CLIENT_CERT=/etc/sandboxd/tls/dom0-lab.crt
 SANDBOXD_CLIENT_KEY=/etc/sandboxd/tls/dom0-lab.key
 SANDBOXD_MAX_CLONES=2
+# The console dials the BROWSER listener, not the worker one. The platform runs
+# two uvicorn processes over the same app and the relay pairs sockets in an
+# in-process registry, so both ends of a session must reach the SAME one (F11).
+SANDBOXD_CONSOLE_API=https://192.168.1.10:8000
 SANDBOXD_TOTAL_MIB=10000
 EOF
 chmod 600 /etc/sandboxd/sandboxd.env
@@ -1492,8 +1500,58 @@ The worker's side of the pairing also lost its 90s timeout: sized for a
 request-driven dial, it would now have the worker give up before the operator
 opened the panel. It holds for the trace and closes during teardown instead.
 
+### F9 — the history list did not update
+
+`/ui/jobs` showed `queued` while the analysis had finished: `job.js` loads only
+on a job's own page, so the detail view went live and the list it was reached
+from stayed frozen.
+
+**Fixed** — the table is polled while any row on the page can still change, and
+not at all once they are all terminal.
+
+### F10 — the console socket opened before anyone was watching
+
+`console bridged to 127.0.0.1:5900` appeared at dial time, then the session
+died ~40s later saying only `console session ended`.
+
+Two causes. Both pumps sat in `except Exception: pass`, so the code destroyed
+the evidence needed to diagnose it. And `open_connection` ran when the
+WebSocket was dialled rather than when a viewer arrived — RFB has the SERVER
+speak first, so QEMU sent its banner to nobody and gave up.
+
+**Fixed** — errors are raised, and the console socket opens only when the
+platform signals a viewer attached (a TEXT frame, where all data is BINARY).
+
+### F11 — the two sides landed in different processes
+
+`console dialled out`, then **never** `console bridged`, and the browser sat
+until its timeout. Nothing errored, because both sides were doing exactly what
+they should.
+
+The platform runs **two uvicorn processes** over the same app:
+
+| Listener | Who | |
+|---|---|---|
+| `192.168.1.10:8443` | the worker channel | mutual TLS |
+| `192.168.1.10:8000` | the browser, via cloudflared | Access |
+
+The console relay pairs two sockets in an **in-process registry**. `sandboxd`
+connected to 8443 and the browser to 8000, so they attached to two different
+registries and could never meet. The code comment said "one per process" — an
+accurate statement of exactly the wrong property.
+
+**Fixed** — `SANDBOXD_CONSOLE_API` points the console dial at the browser
+listener while the rest of the worker channel stays on the mTLS one. Unset, it
+falls back and **warns**, because falling back is the case that silently does
+not work.
+
+```bash
+# Add to /etc/sandboxd/sandboxd.env, then restart sandboxd:
+SANDBOXD_CONSOLE_API=https://192.168.1.10:8000
+```
+
 ```text
-F9
+F12
 
 
 ```

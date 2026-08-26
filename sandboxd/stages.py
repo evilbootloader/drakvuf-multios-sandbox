@@ -170,6 +170,8 @@ class Config:
     # sessions on this host without touching the platform.
     console_enabled: bool = True
     api_base: str = ""
+    # The listener the BROWSER reaches -- see Settings.console_api.
+    console_api: str = ""
     worker_token: str = ""
     ssl_context: object = None
     injection_pids: dict = field(default_factory=lambda: {
@@ -451,7 +453,8 @@ class Analysis:
             port = vnc.resolve_vnc_port(self._runner, job.domid,
                                         job.clone_domain)
             session = vnc.ConsoleSession(
-                self._cfg.api_base, self._cfg.worker_token, job.job_id,
+                self._cfg.console_api or self._cfg.api_base,
+                self._cfg.worker_token, job.job_id,
                 ssl_context=self._cfg.ssl_context)
             session.start(port)
             return session

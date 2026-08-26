@@ -190,7 +190,22 @@ class Registry:
         return [j for j, s in self._sessions.items() if not s.closed]
 
 
-# One per process. The endpoints on the routers share it.
+# One per process -- which is a CONSTRAINT ON THE DEPLOYMENT, not just a note.
+#
+# This platform runs two uvicorn processes over the same app: 8443 with mutual
+# TLS for the worker channel, and 8000 behind cloudflared for the browser. Each
+# has its own copy of this object. A worker that connects to 8443 and a browser
+# that connects to 8000 therefore attach to two DIFFERENT registries and can
+# never pair -- both simply wait, with nothing logged, because each side is
+# doing exactly what it should (Dom0 2026-08-26, F11).
+#
+# So **both ends of a console session must reach the same listener.** sandboxd
+# dials SANDBOXD_CONSOLE_API, which points at the browser listener, while the
+# rest of the worker channel stays on the mTLS one.
+#
+# The alternative -- sharing sessions across processes through Postgres or
+# Redis -- is not worth it: a session IS a pair of open sockets on one process,
+# and a row describing one would outlive the process holding it.
 registry = Registry()
 
 

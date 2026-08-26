@@ -94,6 +94,17 @@ class Settings:
     cacert: str | None = None
     client_cert: tuple[str, str] | None = None
 
+    # **The console dials a DIFFERENT listener from the rest of the channel,
+    # and it has to.** The platform runs two uvicorn processes over the same
+    # app -- 8443 with mutual TLS for the worker channel, 8000 behind
+    # cloudflared for the browser -- and the console relay pairs two sockets
+    # in an IN-PROCESS registry. A worker on 8443 and a browser on 8000 attach
+    # to two different registries and can never meet: both simply wait
+    # (Dom0 2026-08-26, F11).
+    #
+    # So this points at the browser listener. Everything else stays on 8443.
+    console_api: str = ""
+
     @classmethod
     def from_env(cls, env=None) -> Settings:
         env = env if env is not None else os.environ
@@ -118,6 +129,7 @@ class Settings:
             api=env["SANDBOXD_API"],
             token=env["WORKER_TOKEN"],
             worker_id=env.get("SANDBOXD_WORKER_ID", os.uname().nodename),
+            console_api=env.get("SANDBOXD_CONSOLE_API", ""),
             total_mib=int(env["SANDBOXD_TOTAL_MIB"]),
             vlans=range(1, max_clones + 1),
             total_slots=int(env.get("SANDBOXD_MAX_SLOTS", str(max_clones))),
@@ -181,6 +193,7 @@ class Daemon:
         # channel uses -- no separate secret for the relay, because it is the
         # same door on the same LAN (DRAFT-056 §4.4).
         self._cfg.api_base = settings.api
+        self._cfg.console_api = settings.console_api or settings.api
         self._cfg.worker_token = settings.token
         if settings.cacert or settings.client_cert:
             from .tls import ssl_context
@@ -219,6 +232,14 @@ class Daemon:
         for vlan in self._s.vlans:
             if vlan not in report.dirty_vlans:
                 table.admit(vlan)
+        if self._cfg.console_enabled and not self._s.console_api:
+            log.warning(
+                "SANDBOXD_CONSOLE_API is unset, so the console will dial %s -- "
+                "the same listener as the worker channel. If the platform runs "
+                "a separate browser listener, the two sides land in different "
+                "processes and can never pair. Set it to the browser listener "
+                "(commonly :8000).", self._s.api)
+
         free = table.free()
         log.info("capacity: %d vlan(s) usable, %d MiB, %d slot(s)",
                  free.vlans, free.mib, free.slots)

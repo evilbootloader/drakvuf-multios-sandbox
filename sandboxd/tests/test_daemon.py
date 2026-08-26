@@ -455,3 +455,42 @@ def test_the_vlan_range_comes_from_max_clones(tmp_path):
         "SANDBOXD_TOTAL_MIB": "16384", "SANDBOXD_MAX_CLONES": "6"})
 
     assert list(s.vlans) == [1, 2, 3, 4, 5, 6]
+
+# --- F11: the console must dial the listener the browser reaches -----------
+
+def test_the_console_dials_its_own_listener(tmp_path):
+    """The platform runs TWO uvicorn processes over the same app -- 8443 with
+    mutual TLS for the worker channel, 8000 behind cloudflared for the browser
+    -- and the relay pairs sockets in an in-process registry.
+
+    A worker on 8443 and a browser on 8000 attach to different registries and
+    can never meet. Both wait, and nothing is logged, because each side is
+    doing exactly what it should. Observed on Dom0 2026-08-26: "console dialled
+    out" with no "console bridged" ever following.
+    """
+    d = daemon(tmp_path, **{"console_api": "https://192.168.1.10:8000"})
+    d.start()
+
+    assert d._cfg.console_api == "https://192.168.1.10:8000"
+    assert d._cfg.api_base == "https://p:8443"
+
+
+def test_an_unset_console_listener_falls_back_and_warns(tmp_path, caplog):
+    """Falling back to the worker channel is the behaviour that silently does
+    not work, so it says so rather than looking configured."""
+    import logging
+    with caplog.at_level(logging.WARNING):
+        daemon(tmp_path).start()
+
+    assert any("SANDBOXD_CONSOLE_API is unset" in r.message
+               for r in caplog.records)
+
+
+def test_the_console_listener_comes_from_the_environment():
+    s = D.Settings.from_env({
+        "SANDBOXD_API": "https://192.168.1.10:8443",
+        "SANDBOXD_CONSOLE_API": "https://192.168.1.10:8000",
+        "WORKER_TOKEN": "t", "SANDBOXD_TOTAL_MIB": "8192"})
+
+    assert s.api == "https://192.168.1.10:8443"
+    assert s.console_api == "https://192.168.1.10:8000"
