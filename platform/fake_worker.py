@@ -26,6 +26,7 @@ Against a deployed API, which requires a client certificate at the TLS layer
 from __future__ import annotations
 
 import argparse
+import hashlib
 import sys
 import time
 
@@ -36,9 +37,32 @@ from client_tls import ssl_context
 STAGES = ["preparing", "executing", "collecting", "cleaning"]
 ARTIFACTS = {
     "trace.log": b"fake worker: no analysis was performed\n",
+    # Zero bytes on purpose, and a real case rather than a lazy placeholder: a
+    # sample that made no network traffic produces an empty pcap, which is why
+    # #37's upload policy starts its content-length-range at 0.
     "capture.pcap": b"",
-    "manifest.json": b'{"note": "fake worker"}',
 }
+
+
+def manifest() -> dict:
+    """The DRAFT-018 shape.
+
+    `sandboxd` will build this the same way -- from what it actually uploaded,
+    with the digest it computed on the way out. Keeping this honest is part of
+    what the fake worker is for: a placeholder manifest that did not satisfy
+    the real contract would prove the channel closes while leaving the one
+    payload with a schema untested end to end.
+    """
+    return {
+        "schema_version": 1,
+        "artifacts": [
+            {"name": name,
+             "size_bytes": len(body),
+             "sha256": hashlib.sha256(body).hexdigest()}
+            for name, body in ARTIFACTS.items()
+        ],
+        "notes": "fake worker: no analysis was performed",
+    }
 
 
 class FakeWorker:
@@ -118,8 +142,13 @@ class FakeWorker:
             if self._heartbeat(job_id):
                 print("  cancel requested; tearing down")
                 self._state(job_id, "cleaning", cleanup_status="cancelled")
+                # No artifacts, and the cancellation is NOT recorded in the
+                # manifest: `cleanup_status` above already carries it, and the
+                # manifest describes what a run produced. Two places saying
+                # "cancelled" is two places free to disagree.
                 self._post(f"/api/v1/worker/jobs/{job_id}/complete",
-                           json={"manifest": {"cancelled": True}})
+                           json={"manifest": {"schema_version": 1,
+                                              "notes": "cancelled before upload"}})
                 return
             self._state(job_id, stage)
             print(f"  -> {stage}")
@@ -146,7 +175,7 @@ class FakeWorker:
         # already in the store, but nothing serves them as finished until this
         # row commits.
         self._post(f"/api/v1/worker/jobs/{job_id}/complete",
-                   json={"manifest": {"artifacts": list(ARTIFACTS)}})
+                   json={"manifest": manifest()})
         print("  -> completed")
 
     def _state(self, job_id: str, state: str, **extra) -> None:
