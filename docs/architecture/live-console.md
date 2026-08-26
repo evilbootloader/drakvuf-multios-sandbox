@@ -295,12 +295,33 @@ What bounds it instead:
   Cloudflare Access, unchanged.
 - It closes with the trace, on every path.
 
-What is genuinely worse than before: on a console-enabled host, a compromised
-`sandboxd` has a standing, authenticated channel out for the duration of every
-analysis rather than only when asked. It could already open one by setting the
-flag it controls, so this shortens the path rather than creating it — but it
-does shorten it, and that belongs on the record rather than in a commit
-message.
+**How much worse is it, actually?** Less than the paragraph above might
+suggest, and the correction is worth making rather than leaving an
+overstatement standing.
+
+A standing socket sounds alarming and is mostly not, because of what is on the
+other end of it. The relay pumps bytes **only to a paired peer**, and the only
+thing that can pair is a browser that opened a console on that job and passed
+Cloudflare Access. With no peer the socket sits there doing nothing: it is not
+a route to any other endpoint, it cannot enumerate, and it carries no data
+until someone authenticated is watching.
+
+So for a compromised Dom0 the marginal gain is: the ability to push chosen
+bytes at an operator's browser, once that operator chooses to look. Weighed
+against what the worker token already grants it — `/claim`, `/state`,
+`/heartbeat`, `/artifacts`, `/complete`, and presigned URLs into the object
+store — that is a small addition.
+
+It is not nothing. Feeding hostile RFB to noVNC is a real vector at the
+operator's browser, and it is now reachable without anyone having asked for a
+session first. But the guest already controls every pixel in that framebuffer,
+so an operator opening a console is looking at attacker-chosen content either
+way (§4.1).
+
+**What is genuinely different:** one socket and one thread per analysis, and a
+slightly shorter path for an attacker who already holds the credential that
+matters. Both are acceptable behind a flag that is off by default; neither
+would be acceptable if it were on by default, which is why it is not.
 
 ### 4.2 What a compromised platform can reach
 
