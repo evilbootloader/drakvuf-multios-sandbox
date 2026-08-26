@@ -13,6 +13,46 @@ issues now depend on it.
 DRAFT-055 (`hidsim`), and dirwatch retirement.
 **Needs Dom0:** **Yes.** This *is* the Dom0 component.
 
+> **Amended 2026-08-26 — `clone.pl` is now IN scope.** This issue shipped with
+> it excluded: *"Rewriting `clone.pl`. It is Perl on a fixed 3-argument
+> contract, holds no OS-specific value, and works. Leave it."* That is
+> withdrawn, on the issue's own argument. `clone.pl:207` is:
+>
+> ```perl
+> my $cmd = join(' ', @argv);      # argv joined into a string
+> my $out = `$cmd 2>&1`;           # executed by a shell
+> ```
+>
+> So are its `which lvcreate`, `xl domid $clone` and `cat $config` backticks.
+> **`clone.pl` is the last shell-string builder in the pipeline.** Excluding it
+> while #41 removes every other shell from Dom0 would leave in place the one
+> component that runs `lvremove -f` on a device path built by interpolation —
+> and would leave "argv instead of shell", which is this issue's title, only
+> mostly true.
+>
+> Three improvements come free, and all three are defects in how `dirwatch`
+> *uses* the script rather than in the script:
+>
+> * **The exit status is read.** `dirwatch.c:369` passes `NULL` for `exit_rc`,
+>   so clone.pl's carefully separated codes — `EXIT_PRECHECK`, `EXIT_LOCKED`,
+>   `EXIT_LVM`, `EXIT_RESTORE` — are computed and discarded, and every failure
+>   looks identical: no domain id on stdout. They become distinct reasons on
+>   the job row.
+> * **stdout stops being a protocol.** clone.pl may print the domain id and
+>   nothing else, ever, because dirwatch parses whatever it prints as a domain
+>   id. Every diagnostic in it is routed around that constraint.
+> * **The lock stops being advisory-by-accident.** clone.pl proceeds *without*
+>   the cross-process lock when `/run/lock` is unwritable, because refusing to
+>   work would be the worse failure. One daemon owning every clone makes the
+>   in-process case structural; the file lock remains only as the guard against
+>   a concurrently-running `dirwatch` during migration.
+>
+> **What does not change: behavioural parity is still the acceptance
+> criterion.** Every measured finding in the script crosses with its comment —
+> the post-`xl destroy` settle wait (Dom0 2026-08-14, "Logical volume in use"),
+> the per-clone-name rather than per-origin lock, `-L<size>` with no space, and
+> the refusal to treat a non-integer `xl domid` as a domain.
+
 # Objective
 
 Replace `dirwatch.c` and the five worker scripts with one Python daemon that
@@ -137,8 +177,11 @@ milestone is an Ubuntu run that produces the same artifacts as today.
 - **Multi-host.** One analysis host.
 - **The capability tracks themselves.** This makes DRAFT-052/055/059
   buildable; it does not build them.
-- **Rewriting `clone.pl`.** It is Perl on a fixed 3-argument contract, holds
-  no OS-specific value, and works. Leave it.
+- ~~**Rewriting `clone.pl`.** It is Perl on a fixed 3-argument contract, holds
+  no OS-specific value, and works. Leave it.~~ **Withdrawn 2026-08-26** — see
+  the amendment at the head of this file. It is the last shell-string builder
+  in the pipeline, so excluding it left this issue's own thesis only mostly
+  applied.
 
 # PLAN
 
@@ -155,9 +198,24 @@ sandboxd
   ├── claim loop        long-poll /worker/claim, honour the lease
   ├── resources         VLAN + memory table, in process
   ├── stages            clone → preconfig → trace → collect → cleanup
+  │                     clone is a STAGE, not an external script (2026-08-26)
   ├── exec              argv only. shell=False. no string ever built
-  └── reconcile         on startup, against `xl list` and `ip link`
+  └── sweep             on startup, reclaim every clone Dom0 still holds
 ```
+
+**`reconcile` became `sweep`, 2026-08-26.** The startup step destroys every
+clone it finds rather than adopting live ones. A clone whose orchestrator died
+has no timer watching it, no way to report how far it got, and is disposable by
+design; retry is already an operator decision on a *new* job id, so
+`interrupted` is the correct terminal state and there is nothing to adopt. The
+worker channel already expresses this — `POST /worker/reconcile` marks anything
+not listed in `live_job_ids` as interrupted, and after a sweep that list is
+empty.
+
+The danger is the word "every", so the sweep matches **positively** on the
+clone-name grammar `<origin>-<vlan>-clone` and touches nothing else. A denylist
+would be one forgotten name away from destroying `ubuntu_sandbox`, which has to
+be rebuilt from the golden VM.
 
 **VLANs come from an in-process table**, which is the whole reason DRAFT-036's
 host-global allocator was dropped: one process owning every clone allocates
@@ -220,8 +278,11 @@ Every finding in the scripts moves across with its comment: the absent
    guest saw the string, Dom0 saw a list.
 4. **A filename with spaces, quotes and `$` stages and executes correctly** —
    DRAFT-030's regression, in the new implementation.
-5. **Startup reconciliation** against a clone `sandboxd` did not create:
-   adopted or destroyed, never ignored.
+5. **The startup sweep** destroys a clone `sandboxd` did not create, and
+   **leaves the golden images and templates untouched** — `ubuntu`, `android`,
+   `ubuntu_sandbox`, `android_sandbox` and their LVs. That second half is the
+   test worth writing first: the failure it prevents costs a template rebuild
+   from the golden VM.
 6. **A lease that expires mid-analysis** ends with the clone destroyed and the
    job reported, not orphaned.
 7. **Two orchestrators refuse to run at once**, `sandboxd` and `dirwatch`
@@ -268,21 +329,27 @@ demonstrate.
       test that enforces it.
 - [ ] Operator-supplied run commands reach the guest as argv elements and are
       never parsed by a shell on Dom0.
-- [ ] Startup reconciliation handles a clone from a previous life.
+- [ ] The startup sweep reclaims every clone from a previous life — domain, LV,
+      temp config and stray process — and destroys nothing that is not one.
 - [ ] The concurrency guard covers `sandboxd` and `dirwatch` together,
       and refuses rather than sharing a VLAN range.
 - [ ] **Two OS targets analysed concurrently under `sandboxd`** — the
       thing `dirwatch` structurally cannot do, and the clearest
       evidence the in-process allocator replaced the slot index.
 - [ ] Every recorded finding in the scripts is carried across with its reason.
-- [ ] `clone.pl` unchanged.
+- [ ] ~~`clone.pl` unchanged.~~ **Amended 2026-08-26:** `clone.pl` is ported,
+      with every measured finding carried across — the post-destroy settle
+      wait, the per-clone-name lock, `-L<size>` with no space, and the refusal
+      to read a non-integer `xl domid` as a domain — and with its exit statuses
+      actually read rather than discarded as `dirwatch` discards them.
 
 # Evidence required
 
 - Side-by-side artifact listings, `dirwatch` versus `sandboxd`, same sample.
 - The hostile-run-command test, showing Dom0's process list.
 - An Android trace that completes.
-- A reconciliation transcript against a deliberately orphaned clone.
+- A sweep transcript against a deliberately orphaned clone, with `xl list` and
+  `lvs` before and after showing the templates still present.
 
 # Security considerations
 
@@ -298,9 +365,17 @@ demonstrate.
   Anyone who can submit can already detonate malware of their choosing; a
   hostile command adds nothing there. The danger is only ever escape upward,
   which argv prevents structurally.
-- **Reconciliation can destroy a clone another process owns**, if the guard
-  fails. Two orchestrators sharing a host is the failure CLAUDE.md describes
-  as having "no symptom but interference".
+- **The sweep can destroy a clone another process owns**, if the guard fails.
+  Two orchestrators sharing a host is the failure CLAUDE.md describes as having
+  "no symptom but interference" — and a sweep turns that from interference into
+  a `dirwatch` analysis losing its domain mid-trace.
+- **The sweep is the most destructive code in this daemon**, and its whole
+  safety rests on one predicate. It matches positively on
+  `<origin>-<vlan>-clone` and touches nothing else; the alternative — a list of
+  names to spare — is one forgotten entry away from `lvremove -f` on a template
+  that then has to be rebuilt from the golden VM. CLAUDE.md forbids operating
+  on the golden LV or saved state at all without explicit instruction, and that
+  restriction is what the predicate encodes.
 - **Porting is where a security property gets dropped silently.** The
   `sh -c '…' sh "$1"` idiom looks like an oddity to anyone who does not know
   why it is there; it must arrive with its comment or it will be simplified

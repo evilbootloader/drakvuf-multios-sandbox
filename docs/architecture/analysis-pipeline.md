@@ -509,6 +509,19 @@ shared; see C2.
 > exist and are still what runs. A Windows pipeline written today writes
 > four files.
 
+> **Pending amendment, 2026-08-26 (#41).** The clone step stops being a
+> *script* at all. `automation/clone.pl` is ported into `sandboxd` as a stage,
+> so C1's "it is shared; see C2" becomes "it is not a file". #41 had excluded
+> the port — *"holds no OS-specific value, and works. Leave it."* — and
+> withdrew that on 2026-08-26: `clone.pl:207` joins argv into a string and runs
+> it through backticks, as do its `which`, `xl domid` and `cat` calls, making
+> it the last shell-string builder in a pipeline whose replacement exists to
+> remove them.
+>
+> **Not yet applied.** `clone.pl` is still what runs, still on its 3-argument
+> contract, and stays installed as the rollback path until `sandboxd` is
+> evidenced on Dom0. A pipeline written today still calls it.
+
 > **Amended 2026-08-15 (DRAFT-015).** C1 previously required five files,
 > including `clone-<os>.pl`. Writing Android's revealed that
 > `clone-ubuntu.pl` held exactly one OS-specific value — the `-L64G`
@@ -526,7 +539,11 @@ shared; see C2.
 > `docs/runbooks/verify-android-isolation.md` steps 2–3 wrote by hand.
 
 **C2 — Do not copy, fork or special-case a shared file.** `dirwatch.c`,
-`clone.pl`, `network-setup.sh`, `cleanup.sh`, `tcpdump.sh`. Needing a
+`clone.pl`, `network-setup.sh`, `cleanup.sh`, `tcpdump.sh`. *(`clone.pl` leaves
+this list when #41 lands — see C1's pending amendment. The rule it states does
+not change: it becomes a shared stage rather than a shared file, and a
+`clone_<os>` branch inside it would fail this check for the same reason a
+`clone-<os>.pl` does.)* Needing a
 change in one of them is a change to three pipelines at once and takes its
 own issue; a `<os>`-suffixed copy of any of them fails this check
 outright. `clone-<os>.pl` in particular is now a C2 violation rather than
