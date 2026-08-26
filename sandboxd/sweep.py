@@ -76,10 +76,24 @@ class SweepReport:
         return not self.dirty_vlans
 
     def summary(self) -> str:
-        return (f"sweep: {len(self.domains)} domain(s), {len(self.lvs)} LV(s), "
-                f"{len(self.processes)} process(es), {len(self.configs)} "
-                f"config(s); {len(self.clean_vlans)} vlan(s) clean, "
-                f"{len(self.dirty_vlans)} withheld")
+        """What was reclaimed, phrased so a clean host does not read as broken.
+
+        The first version said "0 vlan(s) clean" on a healthy host, because
+        `clean_vlans` counts only VLANs that HAD something on them. An operator
+        reading that during an incident would reasonably conclude there was no
+        usable capacity -- the same confusion that was a real bug in the daemon
+        (admitting only `clean_vlans` would have started with zero VLANs).
+        """
+        found = len(self.domains) + len(self.lvs) + len(self.processes)
+        if not found and not self.dirty_vlans:
+            return "sweep: nothing to reclaim, Dom0 was already clean"
+        parts = [f"sweep: reclaimed {len(self.domains)} domain(s), "
+                 f"{len(self.lvs)} LV(s), {len(self.processes)} process(es), "
+                 f"{len(self.configs)} file(s)"]
+        if self.dirty_vlans:
+            parts.append(f"vlan(s) {sorted(self.dirty_vlans)} WITHHELD -- their "
+                         f"clones could not be removed")
+        return "; ".join(parts)
 
 
 def argv_xl_list() -> list[str]:

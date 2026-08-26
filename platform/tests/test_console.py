@@ -227,3 +227,69 @@ async def test_a_failing_sink_still_closes_the_session():
         await pump(source, sink, session)
 
     assert session.closed
+
+# --- route shadowing --------------------------------------------------------
+#
+# F5, from the browser 2026-08-26: the WebSocket at /api/v1/jobs/{id}/console
+# was shadowed by a POST route at the SAME path on the jobs router, which is
+# included first. The upgrade request matched the HTTP route and got
+# `405 Allow: POST`; the socket handler was never reached.
+
+def test_the_websocket_path_is_not_also_an_http_route():
+    """Two routers share the /api/v1/jobs prefix, and include order decides
+    which claims a path. A collision is silent at import and only shows up as
+    a 405 on an upgrade -- which reads like a proxy problem, not a routing
+    one."""
+    import os
+    os.environ.setdefault("DATABASE_URL", "postgresql:///unused")
+    os.environ.setdefault("WORKER_TOKEN", "unused")
+    from fastapi.routing import APIRoute, APIWebSocketRoute
+
+    from sandbox_platform.app import app
+
+    # FastAPI wraps an included router in `_IncludedRouter`, which exposes the
+    # real routes on `.original_router.routes` rather than `.routes`. Walking
+    # the wrong attribute silently finds nothing, which would make this test
+    # pass while proving the opposite of what it claims.
+    def walk(routes):
+        for r in routes:
+            inner = getattr(r, "original_router", None)
+            if inner is not None:
+                yield from walk(inner.routes)
+            else:
+                yield r
+
+    http_paths = {r.path for r in walk(app.routes) if isinstance(r, APIRoute)}
+    ws_paths = {r.path for r in walk(app.routes)
+                if isinstance(r, APIWebSocketRoute)}
+
+    assert ws_paths, "no WebSocket routes registered at all"
+    clash = http_paths & ws_paths
+    assert clash == set(), (
+        f"{clash} is served by both an HTTP route and a WebSocket route; "
+        f"whichever router is included first wins and the other is dead"
+    )
+
+
+def test_the_console_endpoints_are_where_the_client_expects():
+    """console.js and sandboxd/vnc.py build these paths independently, so a
+    rename on one side has to fail here rather than at runtime."""
+    import os
+    os.environ.setdefault("DATABASE_URL", "postgresql:///unused")
+    os.environ.setdefault("WORKER_TOKEN", "unused")
+    from fastapi.routing import APIWebSocketRoute
+
+    from sandbox_platform.app import app
+
+    def walk(routes):
+        for r in routes:
+            inner = getattr(r, "original_router", None)
+            if inner is not None:
+                yield from walk(inner.routes)
+            else:
+                yield r
+
+    ws = {r.path for r in walk(app.routes) if isinstance(r, APIWebSocketRoute)}
+
+    assert "/api/v1/jobs/{job_id}/console" in ws
+    assert "/api/v1/worker/jobs/{job_id}/console" in ws

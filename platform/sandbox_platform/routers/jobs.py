@@ -586,9 +586,17 @@ def cancel_job(job_id: Annotated[UUID, Path()]) -> CancelResponse:
     with connection() as conn:
         return CancelResponse(outcome=dal.cancel(conn, job_id))
 
-@router.post("/{job_id}/console", status_code=status.HTTP_204_NO_CONTENT)
+@router.post("/{job_id}/console/request",
+             status_code=status.HTTP_204_NO_CONTENT)
 def request_console(job_id: Annotated[UUID, Path()]) -> None:
     """Ask for a live console on this job (DRAFT-056).
+
+    **`/console/request`, not `/console`** -- the WebSocket lives at
+    `/console`, and both routers carry the `/api/v1/jobs` prefix. This router
+    is included first, so a POST route at the same path SHADOWED the socket:
+    the upgrade request matched here and got `405 Allow: POST`, and the
+    WebSocket handler was never reached. Observed from the browser
+    2026-08-26, F5.
 
     **Requested when the job page opens, not when execution starts**, and that
     is the point. Dom0 has no inbound listener, so `sandboxd` only learns of a

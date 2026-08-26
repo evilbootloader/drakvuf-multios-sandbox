@@ -210,6 +210,9 @@ class Daemon:
         for vlan in self._s.vlans:
             if vlan not in report.dirty_vlans:
                 table.admit(vlan)
+        free = table.free()
+        log.info("capacity: %d vlan(s) usable, %d MiB, %d slot(s)",
+                 free.vlans, free.mib, free.slots)
         if report.dirty_vlans:
             log.warning("running at reduced capacity: vlan(s) %s withheld, "
                         "their clones could not be removed",
