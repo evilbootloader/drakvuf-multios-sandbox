@@ -228,10 +228,21 @@ class Clone:
 
 class CloneBuilder:
     def __init__(self, runner, *, lock_dir: Path = Path("/run/lock"),
-                 config_dir: Path = Path("/tmp")):
+                 config_dir: Path = Path("/tmp"),
+                 budget: float | None = None,
+                 settle: float = DESTROY_SETTLE_SECONDS):
         self._run = runner
         self._lock_dir = lock_dir
         self._config_dir = config_dir
+        # A guard over the WHOLE build, distinct from CMD_TIMEOUT per command.
+        # Without it the worst case is the sum of every command's timeout plus
+        # the lock retry and the destroy settle -- around eight minutes for a
+        # clone that was never going to come up.
+        self._budget = budget
+        # The post-`xl destroy` poll, configurable for the same reason every
+        # other wait is: it is a measured value that a different host may
+        # legitimately need more or less of.
+        self._settle = settle
 
     def build(self, spec: CloneSpec) -> Clone:
         """Precheck, snapshot, restore. Raises CloneError naming the stage.
@@ -244,6 +255,7 @@ class CloneBuilder:
         """
         name = spec.name  # validates origin charset and vlan range
         self._check_tools()
+        deadline = (time.monotonic() + self._budget) if self._budget else None
 
         with self._clone_lock(name):
             self._destroy_stale(name)
@@ -261,6 +273,11 @@ class CloneBuilder:
                     self._run.run(argv_xl_restore(config_path, spec.saved_state),
                                   timeout=CMD_TIMEOUT, what="xl restore",
                                   check=True)
+                if deadline and time.monotonic() > deadline:
+                    raise CloneError(
+                        "budget",
+                        f"clone of {name!r} exceeded its {self._budget:.0f}s "
+                        f"budget; the partial clone is being removed")
                 domid = self._domid(name)
                 if domid is None:
                     raise CloneError(
@@ -383,7 +400,7 @@ class CloneBuilder:
         self._run.run(argv_xl_destroy(name), timeout=CMD_TIMEOUT,
                       what=f"xl destroy of the stale clone {name!r}", check=True)
 
-        deadline = time.monotonic() + DESTROY_SETTLE_SECONDS
+        deadline = time.monotonic() + self._settle
         while time.monotonic() < deadline:
             if self._domid(name) is None:
                 return
