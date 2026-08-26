@@ -334,6 +334,53 @@ the same incident.
 
 ---
 
+## 4.6 OPEN: does `hidsim` already run, and would it fight the operator?
+
+**Unresolved, and it must be settled on Dom0 before a console session is used
+in anger.** Raised 2026-08-26.
+
+DRAKVUF's `hidsim` plugin injects synthetic mouse and keyboard input. Its own
+options describe what it does with no template:
+
+```text
+--hid-template <path>   The template specifying the HID events to simulate.
+                        If not specified, THE MOUSE WILL MOVE RANDOMLY.
+--hid-random-clicks     Inject random clicks and double clicks, if no template
+                        is specified. Spares the bottom-left 20 percent.
+```
+
+Neither `drakvuf-ubuntu.sh:178`, `drakvuf-android.sh` nor `sandboxd/guests.py`
+passes any `--hid-*` option. So whether `hidsim` runs at all depends on one
+thing nobody here has established:
+
+> **Is `-a <plugin>` restrictive or additive?** If specifying `-a syscalls -a
+> filetracer -a fileextractor -a memdump` means "only these", `hidsim` has
+> never run and there is nothing to reconcile. If it means "these as well as
+> the defaults", every Ubuntu and Android trace this project has ever produced
+> had a randomly moving mouse in it — an unrecorded fact about all of them.
+
+The captured `drakvuf --help` in `verify-user-placeholder.md:71` was piped
+through a grep for exec-related options, so the `-a` line's text is not in the
+repository, and there is no DRAKVUF source checkout to read. This cannot be
+answered from the desk.
+
+**Why it matters for this feature specifically.** If `hidsim` is running, a
+human driving through noVNC is fighting a synthetic pointer for control of the
+same cursor. That is precisely the collision DRAFT-056's view-only mode exists
+to avoid — and view-only is deferred (§1.2), so there is currently no way to
+avoid it at all.
+
+**It matters more for the traces themselves.** Random clicks in a guest are
+guest behaviour that no report attributes to anything. A sample that appears to
+open a file because a random double-click landed on it would be indistinguishable
+from one that chose to.
+
+Settle it with the check in the runbook. Until then the interaction between
+`hidsim` and a live console is **unknown, not absent**, and DRAFT-055 should
+not be planned as though starting from zero.
+
+---
+
 ## 5. What this changes elsewhere
 
 - **`docs/architecture/platform.md`** — the "Dom0 never listens" constraint is
