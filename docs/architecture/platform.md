@@ -278,11 +278,19 @@ Bucket layout:
 ```text
 samples/<job_id>/<submitted filename>
 results/<job_id>/trace.log
+results/<job_id>/preconfig.log
 results/<job_id>/capture.pcap
+results/<job_id>/<capability>.json
 results/<job_id>/memdump/…
 results/<job_id>/extracted/…
+results/<job_id>/screenshots/…
 results/<job_id>/manifest.json
 ```
+
+The reserved names, which prefix holds sample-chosen leaf names, and the
+envelope every `<capability>.json` shares are specified in
+`result-schema.md` §4 (DRAFT-018) and implemented in
+`sandbox_platform/manifest.py`.
 
 **Keyed by `job_id`, not by SHA-256.** DRAFT-030 established that identical
 bytes submitted under different names are separate runs with separate result
@@ -313,8 +321,8 @@ POST /api/v1/worker/jobs/<id>/complete   { manifest }
 ```
 
 The job is not `completed` until that row lands. A half-uploaded result set
-is therefore never served as finished, which closes the atomic-publication
-`KNOWN GAP` that DRAFT-018 currently carries: publication becomes a single
+is therefore never served as finished, which closed the atomic-publication
+`KNOWN GAP` DRAFT-018 used to carry: publication becomes a single
 committed row rather than a directory that readers might catch mid-write.
 
 ---

@@ -6,6 +6,14 @@ Issue #36 (DRAFT-043), with the two-endpoint split from #39.
 access is a presigned URL scoped to one key with a short expiry, issued here
 for a job the caller is entitled to. A sample that escapes into Dom0 cannot
 enumerate the bucket, read another job's artifacts, or reach the history.
+
+That last clause is held up by `manifest.reject_unsafe_name`, which every key
+component passes through before a URL is minted for it -- at the ticket
+endpoint and again at `/complete`. Until DRAFT-018 only the first door checked,
+and the guarantee rested on MinIO refusing `..` itself
+(`XMinioInvalidResourceName`, verified 2026-08-25). It was never exploitable,
+but a claim made in this docstring should hold because of code in this
+repository, not because of a dependency's input validation.
 """
 
 from __future__ import annotations

@@ -158,6 +158,16 @@ where it means something.
 
 A post-processing step alongside DRAFT-019's. Output `results/<job_id>/static.json`.
 
+> **Wrapped in the DRAFT-018 envelope (added 2026-08-26).** This draft
+> specified a bare `*.json`; it is now `sandbox.static/1` inside the shared envelope —
+> `schema`, `job_id`, `produced_at`, `producer` (with `ruleset_version`),
+> `status`, `status_reason`, `data`. The payload this draft describes goes in
+> `data` and is unchanged. **`status` is not optional decoration:** a run that
+> hit its timeout part-way through produces real findings that read exactly
+> like a clean sample, and this is the field that tells them apart. See
+> `docs/architecture/result-schema.md` §4.3 and
+> `sandbox_platform/manifest.py`.
+
 # Acceptance criteria
 
 - [ ] PE, ELF and APK each produce structured output, verified against an

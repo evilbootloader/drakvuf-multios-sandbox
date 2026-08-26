@@ -135,7 +135,17 @@ the machine holding every credential on the platform.
 
 ## Output
 
-`results/<job_id>/capa.json`, listed in the manifest. Plus a summary on the
+`results/<job_id>/capa.json`, listed in the manifest.
+
+> **Wrapped in the DRAFT-018 envelope (added 2026-08-26).** This draft
+> specified a bare `*.json`; it is now `sandbox.capa/1` inside the shared envelope —
+> `schema`, `job_id`, `produced_at`, `producer` (with `ruleset_version`),
+> `status`, `status_reason`, `data`. The payload this draft describes goes in
+> `data` and is unchanged. **`status` is not optional decoration:** a run that
+> hit its timeout part-way through produces real findings that read exactly
+> like a clean sample, and this is the field that tells them apart. See
+> `docs/architecture/result-schema.md` §4.3 and
+> `sandbox_platform/manifest.py`. Plus a summary on the
 job row for Overview: matched rule names and the ATT&CK/MBC identifiers their
 metadata carries.
 

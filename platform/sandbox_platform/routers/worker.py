@@ -26,6 +26,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field, field_validator
 
 from .. import jobs as dal
+from .. import manifest as manifest_schema
 from .. import objects
 from ..auth import LeasedJob, require_worker_token
 from ..config import settings
@@ -151,7 +152,10 @@ class HeartbeatResponse(BaseModel):
 
 
 class CompleteRequest(BaseModel):
-    manifest: dict
+    # Was `dict`, and was the one worker-supplied payload with no shape at all
+    # while every other one -- names, sizes, filenames -- was carefully bounded.
+    # See sandbox_platform/manifest.py for what that cost.
+    manifest: manifest_schema.Manifest
 
 
 # --- registration and recovery --------------------------------------------
@@ -354,58 +358,6 @@ class ArtifactTicket(BaseModel):
     expires_in: int
 
 
-# S3 keys cap at 1024 bytes UTF-8 and `results/<uuid>/` spends 45 of them.
-# Refused rather than truncated: a truncated artifact name is a wrong one, and
-# `extracted/` names are evidence of what the sample wrote.
-_MAX_ARTIFACT_NAME = 900
-
-
-def _reject_unsafe_name(name: str) -> str:
-    """Refuse an artifact name that could escape `results/<job_id>/`.
-
-    **These names are attacker-influenced.** `trace.log` and `capture.pcap` are
-    ours, but `extracted/` is named after files the *sample* dropped, so this is
-    untrusted input on the same footing as a submitted filename.
-
-    Refuse, never sanitise. Rewriting `../x` to `x` would silently store the
-    wrong evidence under a plausible name, and a worker sending one is either
-    broken or compromised -- both worth surfacing.
-
-    On percent-encoded traversal (`..%2f..`): it is not a bypass, and the reason
-    is worth stating rather than defending against twice. An S3 key is an opaque
-    byte string that nothing here resolves as a filesystem path. In the POST
-    ticket the key travels in a form field, undecoded; in a presigned GET URL
-    boto3 escapes `%` to `%25`, so one decode by the server yields the literal
-    name back, not a separator. What *would* traverse is a real `..` path
-    component, which is what the component check below refuses.
-
-    `%`, quotes, spaces and unicode are all admitted deliberately -- a dropped
-    file really can be called `50%off.exe`, and byte-exactness of that name is
-    the point of collecting it.
-    """
-    if not name:
-        raise ValueError("artifact name is empty")
-    if len(name.encode()) > _MAX_ARTIFACT_NAME:
-        raise ValueError(f"artifact name exceeds {_MAX_ARTIFACT_NAME} bytes")
-    if name.startswith("/"):
-        raise ValueError(f"artifact name is absolute: {name!r}")
-    if "\\" in name:
-        # Not a separator on Linux, so this is not a traversal fix. It is
-        # refused because a key that means one thing here and another on a
-        # Windows reader is ambiguous evidence.
-        raise ValueError(f"artifact name contains a backslash: {name!r}")
-    if any(ord(c) < 0x20 or ord(c) == 0x7F for c in name):
-        # NUL in particular: harmless in Python, a truncation point in any C
-        # layer this key later passes through.
-        raise ValueError(f"artifact name contains a control character: {name!r}")
-    for part in name.split("/"):
-        # "" catches `a//b` and a trailing slash; "." and ".." catch traversal
-        # and the prefix itself.
-        if part in ("", ".", ".."):
-            raise ValueError(f"artifact name escapes the job prefix: {name!r}")
-    return name
-
-
 class ArtifactRequest(BaseModel):
     # Relative names under results/<job_id>/, each mapped to the size the
     # worker is about to upload.
@@ -420,8 +372,12 @@ class ArtifactRequest(BaseModel):
     @field_validator("artifacts")
     @classmethod
     def _names_stay_in_the_prefix(cls, v: dict[str, int]) -> dict[str, int]:
+        # The same validator the manifest uses. Shared rather than duplicated
+        # because these names arrive through two doors -- here when the ticket
+        # is minted, and again at /complete -- and for a while only this one
+        # was guarded.
         for name in v:
-            _reject_unsafe_name(name)
+            manifest_schema.reject_unsafe_name(name)
         return v
 
 
@@ -473,7 +429,7 @@ def artifact_urls(job: LeasedJob,
     tickets: dict[str, ArtifactTicket] = {}
     for name, size in req.artifacts.items():
         # Names were validated by ArtifactRequest, which refuses anything that
-        # could leave this prefix -- see _reject_unsafe_name.
+        # could leave this prefix -- see manifest.reject_unsafe_name.
         if size > settings.max_artifact_bytes:
             raise HTTPException(
                 status.HTTP_413_CONTENT_TOO_LARGE,
@@ -496,7 +452,8 @@ def complete(job: LeasedJob, req: CompleteRequest) -> None:
     **This one call is what makes publication atomic.** The artifacts are
     already in the object store, but a reader sees nothing until this row
     commits -- so a half-uploaded result set is never served as finished.
-    That closes the gap DRAFT-018 carries as a KNOWN GAP.
+    That closed the atomic-publication gap DRAFT-018 used to carry; it is
+    struck in `result-schema.md` §3 rather than still listed as pending.
 
     Reachable only from `cleaning`, per the transition table: a job that has
     not torn its clone down has not finished.
@@ -514,5 +471,5 @@ def complete(job: LeasedJob, req: CompleteRequest) -> None:
                SET state = %s, manifest = %s, lease_expires_at = NULL
              WHERE id = %s
             """,
-            (JobState.COMPLETED.value, json.dumps(req.manifest), job["id"]),
+            (JobState.COMPLETED.value, req.manifest.model_dump_json(), job["id"]),
         )

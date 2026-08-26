@@ -135,6 +135,16 @@ directly so than the submitted sample, which may only have been a dropper.
 # DEPLOY
 
 Post-processing alongside the others. Output `results/<job_id>/memory.json`
+
+> **Wrapped in the DRAFT-018 envelope (added 2026-08-26).** This draft
+> specified a bare `*.json`; it is now `sandbox.memory/1` inside the shared envelope —
+> `schema`, `job_id`, `produced_at`, `producer` (with `ruleset_version`),
+> `status`, `status_reason`, `data`. The payload this draft describes goes in
+> `data` and is unchanged. **`status` is not optional decoration:** a run that
+> hit its timeout part-way through produces real findings that read exactly
+> like a clean sample, and this is the field that tells them apart. See
+> `docs/architecture/result-schema.md` §4.3 and
+> `sandbox_platform/manifest.py`.
 plus repaired payloads as artifacts.
 
 # Acceptance criteria

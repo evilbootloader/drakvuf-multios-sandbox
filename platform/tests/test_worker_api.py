@@ -195,8 +195,14 @@ def test_completed_is_reachable_only_through_cleaning(client, worker_headers, co
     enqueue(conn, "ubuntu", SMALL_MIB)
     job_id = claim(client, worker_headers, free_mib=FREE_MIB).json()["job_id"]
 
+    # A VALID manifest, so 409 is the state rule talking and not the body
+    # validator. `{}` used to serve here, and under DRAFT-018's model it is
+    # rejected for a missing schema_version before the handler runs -- which
+    # would have made this test pass for the wrong reason if it had asserted
+    # only "not 204".
     early = client.post(f"/api/v1/worker/jobs/{job_id}/complete",
-                        headers=worker_headers, json={"manifest": {}})
+                        headers=worker_headers,
+                        json={"manifest": {"schema_version": 1}})
     assert early.status_code == 409
 
     for nxt in ("preparing", "executing", "collecting", "cleaning"):
@@ -205,7 +211,15 @@ def test_completed_is_reachable_only_through_cleaning(client, worker_headers, co
 
     ok = client.post(f"/api/v1/worker/jobs/{job_id}/complete",
                      headers=worker_headers,
-                     json={"manifest": {"artifacts": ["capture.pcap"]}})
+                     json={"manifest": {
+                         "schema_version": 1,
+                         "artifacts": [{"name": "capture.pcap",
+                                        "size_bytes": 0,
+                                        "sha256": "e3b0c442" + "98fc1c14"
+                                                  + "9afbf4c8" + "996fb924"
+                                                  + "27ae41e4" + "649b934c"
+                                                  + "a495991b" + "7852b855"}],
+                     }})
     assert ok.status_code == 204
     assert state_of(conn, uuid.UUID(job_id)) == "completed"
 

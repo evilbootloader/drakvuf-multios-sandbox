@@ -1,8 +1,23 @@
 # DRAFT-018: The result schema — the manifest, the layout, and the capability envelope
 
-**Status:** Drafted 2026-08-25. **Indexed since the first pass and never
-written** — `issue-index.md` has carried this row from the beginning with no
-file behind it. Not published.
+**Status:** Drafted 2026-08-25, **implemented 2026-08-26**. Indexed since the
+first pass and never written — `issue-index.md` carried this row from the
+beginning with no file behind it. Not published.
+
+> **Built:** `platform/sandbox_platform/manifest.py` (models, shared name
+> validator, tolerant `parse()`, capability envelope),
+> `platform/tests/test_manifest.py` (76 cases), the reader in
+> `routers/jobs.py`, the writer in `routers/worker.py`, and
+> `result-schema.md` §3–4. 405 passed, 3 skipped.
+>
+> **Not built, and deliberately:** `documents` does not yet drive the UI's
+> `_filled`. The mapping from a document name to a tab belongs with the
+> capability that produces it — there is no `capa.json` to light the Behaviour
+> tab with — so wiring it now would be guessing at four issues' output at
+> once. The field is specified, validated and stored; the tab wiring lands
+> with the first capability. This amends the acceptance criterion below rather
+> than quietly dropping it.
+
 **Area:** core/platform
 **OS:** ALL
 **Milestone:** M4
@@ -373,21 +388,21 @@ cheapest moment it will ever be available.
 
 # Acceptance criteria
 
-- [ ] `CompleteRequest.manifest` is a validated model, not `dict`.
-- [ ] Artifact names go through `_reject_unsafe_name` at both doors, from one
+- [x] `CompleteRequest.manifest` is a validated model, not `dict`.
+- [x] Artifact names go through `_reject_unsafe_name` at both doors, from one
       shared list of cases.
-- [ ] `artifacts` is bounded, and hitting the bound sets `truncated`.
-- [ ] No manifest value can produce a 500 from `GET /api/v1/jobs/{id}` or the
+- [x] `artifacts` is bounded, and hitting the bound sets `truncated`.
+- [x] No manifest value can produce a 500 from `GET /api/v1/jobs/{id}` or the
       UI job view; malformed rows render degraded.
-- [ ] The six measured shapes each have a test.
-- [ ] The reserved layout is documented, including which prefix holds
+- [x] The six measured shapes each have a test.
+- [x] The reserved layout is documented, including which prefix holds
       attacker-named leaves.
-- [ ] The envelope exists, carries `status`/`status_reason`/`ruleset_version`,
+- [x] The envelope exists, carries `status`/`status_reason`/`ruleset_version`,
       and DRAFT-019/048/049/051 are updated to reference it rather than
       specify their own.
-- [ ] `result-schema.md`'s atomic-publication `KNOWN GAP` is struck as closed
+- [x] `result-schema.md`'s atomic-publication `KNOWN GAP` is struck as closed
       by #36, and its `type_identifiers` question re-pointed at DRAFT-048.
-- [ ] `objects.py`'s containment docstring is true at our boundary, not only
+- [x] `objects.py`'s containment docstring is true at our boundary, not only
       at MinIO's.
 
 # Evidence required

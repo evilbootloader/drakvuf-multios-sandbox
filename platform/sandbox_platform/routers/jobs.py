@@ -26,6 +26,7 @@ from pydantic import BaseModel, Field, model_validator
 from .. import auth
 from .. import events
 from .. import jobs as dal
+from .. import manifest as manifest_schema
 from .. import objects
 from ..config import settings
 from ..db import connection
@@ -204,6 +205,18 @@ class JobDetail(JobSummary):
     cancel_requested: bool
     manifest: dict | None
     artifacts: dict[str, str] = {}
+
+    # Set when the manifest could not be read. The job still renders -- state,
+    # timings and sample identity are all on the row and all still true -- and
+    # `artifacts` is empty, because a list that could not be validated is not a
+    # list to mint capabilities from. `manifest` itself is still returned raw,
+    # which is what makes a malformed one diagnosable at all.
+    manifest_error: str | None = None
+
+    # True for a manifest in the pre-DRAFT-018 shape: a list of bare names,
+    # with no size or digest. Reported rather than hidden so "we do not know
+    # this file's size" is distinguishable from "this file is 0 bytes".
+    manifest_legacy: bool = False
 
     # True once the job is older than the store's retention window, at which
     # point `artifacts` is empty because MinIO has expired the objects behind
@@ -389,17 +402,23 @@ def _detail(conn, job_id: UUID) -> JobDetail:
         - timedelta(days=settings.retention_days)
     )
 
+    # Total by construction: parse() never raises, so a manifest written under
+    # an older contract -- or by a broken writer -- renders the job rather than
+    # 500ing the only view of it. See sandbox_platform/manifest.py.
+    parsed = manifest_schema.parse(row["manifest"])
+
     artifacts: dict[str, str] = {}
-    if row["manifest"] and not expired:
-        manifest = row["manifest"]
-        if isinstance(manifest, str):
-            manifest = json.loads(manifest)
+    if not expired:
         # One presigned GET per artifact, minted per request and short-lived.
         # Never a prefix -- that would be a bucket enumeration primitive over
         # a store holding live malware.
-        for name in manifest.get("artifacts", []):
-            artifacts[name] = objects.presigned_get(
-                f"{objects.result_prefix(job_id)}{name}",
+        #
+        # `parsed.artifacts` is empty when `parsed.error` is set, so a name
+        # this module could not validate never reaches here: degraded means
+        # fewer capabilities, never looser ones.
+        for artifact in parsed.artifacts:
+            artifacts[artifact.name] = objects.presigned_get(
+                f"{objects.result_prefix(job_id)}{artifact.name}",
                 objects.Audience.BROWSER,
             )
 
@@ -422,6 +441,8 @@ def _detail(conn, job_id: UUID) -> JobDetail:
         )},
         manifest=row["manifest"] if isinstance(row["manifest"], dict) else None,
         artifacts=artifacts,
+        manifest_error=parsed.error,
+        manifest_legacy=parsed.legacy,
         reserved_ahead=reserved_ahead,
         artifacts_expired=expired,
     )
