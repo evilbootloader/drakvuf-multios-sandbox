@@ -1,0 +1,433 @@
+"""Per-guest analysis packages: how a sample is staged and how it is run.
+
+Issue #41 (DRAFT-060).
+
+This is the per-OS boundary that `preconfig-<os>.sh` and `drakvuf-<os>.sh`
+occupy today, expressed as argv builders. Everything here is a **pure
+function** returning a list, so the parity criterion -- "the same sample
+produces the same artifact set" -- is checkable at the desk against the
+literal commands the scripts run, before any Dom0 time is spent.
+
+## What is carried across, and why each one
+
+A port that loses these re-earns them the hard way, so each arrives with its
+reason attached:
+
+  * **No `chmod` after `writefile`.** `writefile` leaves the staged file
+    executable. Established on Dom0 2026-08-09 by REMOVING a chmod injection
+    that had been there and confirming runs still traced. The injector help
+    does not say this. If a sample ever traces empty with a successful
+    WriteFile, check the staged file's mode first -- that is the assumption.
+  * **Android traces with `-F --disable-sysret`; Ubuntu does not.** A property
+    of the guest, not a preference: every binder IPC is an `ioctl()` and every
+    system service runs a Looper on `epoll_pwait`, so an idle BlissOS clone
+    emits thousands of events before anything is analysed. Without these an
+    APK installed and launched correctly and still could not finish drawing
+    inside the window.
+  * **`am`, never `monkey`.** `monkey` reaches `app_process64`, which aborts
+    with exit 134 without the `/data/system/environ/classpath` import; and
+    `ActivityManager.isUserAMonkey()` reports it to the sample. `am` is a
+    two-line wrapper around the native `cmd`, so it needs no import.
+  * **The install is not traced.** `pm install` takes 3s untraced and does not
+    finish in 120s under the trace. Nothing is lost -- an Android application
+    cannot run its own code during installation.
+  * **The guest sees the SUBMITTED filename, not a digest** (C5, DRAFT-030).
+    Extension dispatch and `argv[0]` self-checks are real evasion surface that
+    a hash-named file exercises none of.
+
+## What is deliberately NOT carried
+
+`1>"$OUT/drakvuf.log" 2>&1`. Every trace in the scripts merges DRAKVUF's
+diagnostics into what `-o json` makes a pure JSONL event stream, which is what
+blocks capa (DRAFT-019). `proc.spawn` takes separate paths and offers no merge.
+"""
+
+from __future__ import annotations
+
+import zipfile
+from dataclasses import dataclass, field
+from enum import Enum
+from pathlib import Path
+
+
+class TargetOs(str, Enum):
+    UBUNTU = "ubuntu"
+    ANDROID = "android"
+    WINDOWS = "windows"
+
+
+class SampleKind(str, Enum):
+    """Chosen from the sample's own BYTES, never from `detected_type`.
+
+    `detected_type` is advisory and submitter-influenced; this decides whether
+    a file is installed or executed. `drakvuf-android.sh` already draws the
+    distinction and it is kept: a structural test, repeated where it is needed
+    rather than carried between stages, because a marker file is state a sample
+    could read.
+    """
+
+    ELF = "elf"
+    APK = "apk"
+    PE = "pe"
+    UNSUPPORTED = "unsupported_type"
+
+
+class Interaction(str, Enum):
+    """Who drives the guest while the trace runs.
+
+    **Not yet supplied by anything.** The submit form renders no such control
+    and `submit.js` posts only `target_os`, `filename` and `size_bytes`. The
+    field exists so the stage machine has one place to read it from when
+    DRAFT-055 (`hidsim`) and DRAFT-056 (VNC) land, and `NONE` reproduces
+    exactly what the scripts do today.
+    """
+
+    NONE = "none"           # today: the sample runs unattended
+    AUTOMATIC = "automatic"  # DRAFT-055: hidsim synthesises mouse/keyboard
+    MANUAL = "manual"        # DRAFT-056: an operator drives it over VNC
+
+
+@dataclass(frozen=True)
+class TraceOptions:
+    """The trace budget and plugin set for one job.
+
+    **Nothing supplies these per-job yet**, and the UI says so in red:
+    `_plugins.html` reads "Nothing here takes effect yet ... The selection is
+    not sent, not stored and not honoured." DRAFT-052 is what wires the picker
+    to the job row.
+
+    So `for_os()` below returns exactly what the shell scripts hard-code. That
+    is the point: until a job carries its own, the port must produce the same
+    argv the scripts do, which is #41's acceptance criterion rather than an
+    aspiration.
+    """
+
+    plugins: tuple[str, ...]
+    timeout: int
+    fast_singlestep: bool = False    # -F
+    disable_sysret: bool = False
+    interaction: Interaction = Interaction.NONE
+
+    def drakvuf_flags(self) -> list[str]:
+        flags: list[str] = []
+        if self.fast_singlestep:
+            flags.append("-F")
+        if self.disable_sysret:
+            flags.append("--disable-sysret")
+        return flags
+
+
+# The literals from drakvuf-ubuntu.sh:181 and drakvuf-android.sh:324. Identical
+# today; kept per-OS rather than shared because the plugin matrix is per-guest
+# (`drakvuf_plugin_os_support` in plugins.h) and a shared tuple would invite a
+# Windows-only plugin into a Linux list.
+_LINUX_PLUGINS = ("syscalls", "filetracer", "fileextractor", "memdump")
+
+
+def default_trace_options(os_: TargetOs, kind: SampleKind) -> TraceOptions:
+    """What the scripts do today, per guest.
+
+    `kind` matters only on Android, where the APK path gets `-t 150` rather
+    than 120: `dirwatch.c:653` arms a 180s timer over the trace, so 150 leaves
+    roughly 20s of headroom where 120 left 55s unused -- and a launch is
+    heavier than an execve (zygote fork, ART init, an activity start, all at
+    the trace's slowdown).
+    """
+    if os_ is TargetOs.UBUNTU:
+        return TraceOptions(plugins=_LINUX_PLUGINS, timeout=120)
+
+    if os_ is TargetOs.ANDROID:
+        return TraceOptions(
+            plugins=_LINUX_PLUGINS,
+            timeout=150 if kind is SampleKind.APK else 120,
+            fast_singlestep=True,
+            disable_sysret=True,
+        )
+
+    # No drakvuf-windows.sh exists and nothing has ever run on a Windows
+    # guest. Returning the Linux defaults would be inventing evidence, which
+    # catalogue.py refuses to do for the same reason -- so this is explicit.
+    raise NotImplementedError(
+        "no Windows analysis package: DRAFT-034 owns the guest and DRAFT-020 "
+        "what is installed in it. Nothing has executed on a Windows guest, so "
+        "there is no measured plugin set or timeout to default to."
+    )
+
+
+@dataclass(frozen=True)
+class GuestPaths:
+    """Where a sample lands inside the guest, per OS.
+
+    From `pipeline-<os>.env`. `/data/local/tmp` is not arbitrary: it pre-exists
+    in the saved Android image and permits execution, where
+    `/storage/self/primary/Download` is a noexec mount on which `chmod` is
+    silently a no-op.
+    """
+
+    staging_dir: str
+    shell: str
+    nameserver: str = "1.1.1.1"
+
+
+PATHS = {
+    TargetOs.UBUNTU: GuestPaths(staging_dir="/home/carlos/Desktop",
+                                shell="/usr/bin/sh"),
+    # /system/bin/sh, not /usr/bin/sh: the Ubuntu path does not exist here. No
+    # sudo and no `su -c` either -- the guest is already root and ships
+    # neither. All three measured by DRAFT-013.
+    TargetOs.ANDROID: GuestPaths(staging_dir="/data/local/tmp",
+                                 shell="/system/bin/sh"),
+}
+
+
+# --- what a sample is, from its bytes ---------------------------------------
+
+def classify(path: Path) -> SampleKind:
+    """A structural test on the file itself.
+
+    Deliberately not `detected_type`, which is advisory and derived from a
+    submitter-supplied name at admission. This decides whether a file is
+    installed or executed, and that decision should rest on the bytes.
+    """
+    with open(path, "rb") as fh:
+        magic = fh.read(4)
+
+    if magic[:4] == b"\x7fELF":
+        return SampleKind.ELF
+    if magic[:2] == b"MZ":
+        return SampleKind.PE
+    if magic[:2] == b"PK":
+        # A ZIP containing AndroidManifest.xml is an APK. Reading the central
+        # directory is not decompressing: it is cheap, bounded, and does not
+        # enter the code path where bombs live.
+        try:
+            with zipfile.ZipFile(path) as z:
+                if "AndroidManifest.xml" in z.namelist():
+                    return SampleKind.APK
+        except (zipfile.BadZipFile, OSError):
+            return SampleKind.UNSUPPORTED
+    return SampleKind.UNSUPPORTED
+
+
+@dataclass(frozen=True)
+class Job:
+    """Everything the stage machine needs about one analysis.
+
+    The first six come from the lease and are all the platform sends today
+    (`LeaseResponse` in routers/worker.py). `options` is filled from
+    `default_trace_options` until DRAFT-052 records a real selection on the
+    job row.
+    """
+
+    job_id: str
+    target_os: TargetOs
+    submitted_filename: str
+    attempt: int
+    domid: int
+    vlan: int
+    clone_domain: str
+    sample_path: Path          # on Dom0, for `injector -B`
+    profile: Path              # -r, the LibVMI kernel profile
+    injection_pid: int
+    result_dir: Path
+    options: TraceOptions
+    kind: SampleKind
+
+    @property
+    def guest_sample(self) -> str:
+        """`<staging>/<submitted filename>`, built by ONE rule.
+
+        Both the stage that delivers and the stage that executes derive it the
+        same way, from the same two values. That drift is not hypothetical: it
+        is exactly what issue #2 found, where the trace held a literal
+        `/home/<USER>/Desktop/test` while preconfig staged to
+        `/home/carlos/Desktop/test`.
+        """
+        return f"{PATHS[self.target_os].staging_dir}/{self.submitted_filename}"
+
+
+# --- staging -----------------------------------------------------------------
+
+def argv_deliver(job: Job) -> list[str]:
+    """Push the sample into the guest. One injection, no guest shell (C6).
+
+    Deliberately first, and before any network exists: delivery does not depend
+    on guest networking, which is what keeps an offline analysis mode reachable.
+    `-B` is the Dom0 source, `-e` the guest destination -- confirmed from the
+    installed build's own help on Dom0 2026-08-08.
+    """
+    return [
+        "injector", "-r", str(job.profile), "-d", str(job.domid),
+        "-i", str(job.injection_pid), "-m", "writefile",
+        "-B", str(job.sample_path),
+        "-e", job.guest_sample,
+    ]
+
+
+def _ubuntu_netcfg(job: Job, subnet: str) -> str:
+    paths = PATHS[TargetOs.UBUNTU]
+    return (
+        f"sudo ip addr flush dev eth0 && "
+        f"sudo ip addr add {subnet}.{job.vlan}.2/24 dev eth0 && "
+        f"sudo ip route replace default via {subnet}.{job.vlan}.1 dev eth0 && "
+        f"echo 'nameserver {paths.nameserver}' | sudo tee /etc/resolv.conf"
+    )
+
+
+def _android_netcfg(job: Job, subnet: str) -> str:
+    """Bliss-Bass `EthernetConfigurator`, measured by DRAFT-013 -- not Ubuntu's
+    `ip` chain, which BlissOS does not honour.
+
+    `private_dns_mode off` is REQUIRED, not tuning: left at its default the
+    clone resolved over DoT to 1.1.1.1:853 and the pcap recorded an encrypted
+    stream instead of the domains the sample looked up. Silently, with nothing
+    failing. Pcap-evidenced both ways in verify-android-isolation.md.
+    """
+    ns = PATHS[TargetOs.ANDROID].nameserver
+    return (
+        'while IFS=" " read -r a n v; do [ "$a" = export ] && export "$n=$v"; '
+        'done < /data/system/environ/classpath; '
+        'APK="$(pm path com.example.ethernetconfig | sed "s/^package://")"; '
+        'CLASSPATH="$APK" /system/bin/app_process64 / '
+        'com.example.ethernetconfig.network.EthernetConfigurator STATIC eth0 '
+        f'{subnet}.{job.vlan}.2 24 {subnet}.{job.vlan}.1 {ns} none && '
+        'settings put global private_dns_mode off'
+    )
+
+
+def argv_configure_network(job: Job, subnet: str = "172.16") -> list[str]:
+    """Give the clone its address. A separate injection from delivery.
+
+    The guest-side text is ONE argument to `sh -c`. It reaches the guest as a
+    single `execve` element and no Dom0 shell ever sees it, which is what makes
+    the mixed-expansion Android form safe -- Dom0 interpolates only the vlan
+    and the nameserver; everything else expands in the guest.
+    """
+    shell = PATHS[job.target_os].shell
+    script = (_android_netcfg(job, subnet) if job.target_os is TargetOs.ANDROID
+              else _ubuntu_netcfg(job, subnet))
+    return [
+        "injector", "-r", str(job.profile), "-d", str(job.domid),
+        "-i", str(job.injection_pid), "-m", "execproc",
+        "-e", shell, "-f", "-c", "-f", script,
+    ]
+
+
+def argv_install_apk(job: Job, handoff: str) -> list[str]:
+    """Install, and resolve the launcher component, untraced.
+
+    **The untrusted filename never becomes shell text.** `sh -c '<script>' sh
+    "$GUEST_SAMPLE"` puts the path in `$1`, which nothing re-parses --
+    `sample_name_admissible()` admits `"`, `$`, a backtick and `;`, and all
+    four are live inside a double-quoted guest shell word. Sample-derived text
+    may be held in guest shell VARIABLES and used quoted; what it may not do is
+    arrive as text Dom0 pasted into a command.
+    """
+    script = (
+        'B=$(pm list packages 2>/dev/null); '
+        'pm install -r -t -g "$1" >/dev/null 2>&1; '
+        'PKG=$(pm list packages 2>/dev/null | while read -r p; do '
+        'case "$B" in *"$p"*) ;; *) echo "$p";; esac; done | head -1 '
+        '| sed "s/^package://"); '
+        '[ -n "$PKG" ] || exit 0; '
+        'cmd package resolve-activity --brief '
+        f'-c android.intent.category.LAUNCHER "$PKG" 2>/dev/null | tail -1 > {handoff}'
+    )
+    return [
+        "injector", "-r", str(job.profile), "-d", str(job.domid),
+        "-i", str(job.injection_pid), "-m", "execproc",
+        "-e", PATHS[TargetOs.ANDROID].shell,
+        "-f", "-c", "-f", script, "-f", "sh", "-f", job.guest_sample,
+    ]
+
+
+def argv_read_component(job: Job, handoff: str, dest: Path) -> list[str]:
+    """Bring the resolved component to Dom0 so the trace needs no guest shell."""
+    return [
+        "injector", "-r", str(job.profile), "-d", str(job.domid),
+        "-i", str(job.injection_pid), "-m", "readfile",
+        "-B", str(dest), "-e", handoff,
+    ]
+
+
+def argv_remove_handoff(job: Job, handoff: str) -> list[str]:
+    """Delete the component file before the sample runs.
+
+    Not tidiness: from the launch onward the sample is running, and a file in
+    its own staging directory naming its own component is exactly what an
+    evasive application looks for. Nothing of the sample's has run yet -- an
+    Android application cannot execute during installation -- so removing it
+    here closes the window rather than narrowing it.
+    """
+    return [
+        "injector", "-r", str(job.profile), "-d", str(job.domid),
+        "-i", str(job.injection_pid), "-m", "execproc",
+        "-e", "/system/bin/rm", "-f", "-f", "-f", handoff,
+    ]
+
+
+# --- tracing -----------------------------------------------------------------
+
+def argv_trace(job: Job, component: str | None = None) -> list[str]:
+    """The DRAKVUF invocation.
+
+    Two execution paths, selected from the sample's bytes: an APK is LAUNCHED,
+    already installed, via `am start -n`; anything else is `execve`d directly.
+    """
+    argv = [
+        "drakvuf", "-r", str(job.profile), "-d", str(job.domid),
+        "-i", str(job.injection_pid), "-m", "execproc",
+    ]
+
+    if job.kind is SampleKind.APK:
+        if not component:
+            raise ValueError(
+                "an APK trace needs a launcher component; preconfig resolves "
+                "it and a missing one means resolve-activity returned a "
+                "diagnostic -- nothing should be executed"
+            )
+        argv += ["-e", "/system/bin/am", "-f", "start", "-f", "-n",
+                 "-f", component]
+    else:
+        argv += ["-e", job.guest_sample]
+
+    argv += job.options.drakvuf_flags()
+    argv += ["-o", "json", "-t", str(job.options.timeout)]
+    for plugin in job.options.plugins:
+        argv += ["-a", plugin]
+    argv += ["-D", str(job.result_dir / "dump"),
+             "--memdump-dir", str(job.result_dir / "memdump")]
+    return argv
+
+
+def argv_tcpdump(job: Job, bridge: str, dest: Path) -> list[str]:
+    """Capture on the clone's own VLAN sub-interface.
+
+    `-U` so packets are written as they arrive: without it a trace that ends
+    abruptly loses whatever is still in the buffer, which is the traffic
+    closest to whatever ended it.
+    """
+    return ["tcpdump", "-i", f"{bridge}.{job.vlan}", "-n", "-U",
+            "-w", str(dest)]
+
+
+# --- component validation ----------------------------------------------------
+
+def component_is_launchable(component: str) -> bool:
+    """`<package>/<activity>`, and nothing else.
+
+    Guest-derived and therefore untrusted -- an APK chooses its own package and
+    activity names. It reaches `execve` as a single argv element so nothing
+    re-parses it, but a value that is not a component means `resolve-activity`
+    returned a diagnostic and there is nothing to launch.
+
+    `$` is admitted because an inner class is a legitimate launcher activity.
+    """
+    if component.count("/") != 1:
+        return False
+    if not component:
+        return False
+    allowed = set("abcdefghijklmnopqrstuvwxyz"
+                  "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+                  "0123456789._/$-")
+    return all(c in allowed for c in component)

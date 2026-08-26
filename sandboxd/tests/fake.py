@@ -68,6 +68,12 @@ class FakeRunner:
         argv_t = self._record(argv, timeout, what, check, stdout_path,
                               stderr_path, "run")
         result = self._answer(argv_t, timeout)
+        # A real command given an output path writes to it. Without this the
+        # collect stage finds an empty result directory and every manifest
+        # test passes vacuously -- the fake would be hiding the stage it exists
+        # to exercise.
+        self._write_outputs(stdout_path, result.stdout, stderr_path,
+                            result.stderr)
         if check and not result.ok:
             from sandboxd.proc import CommandError
             raise CommandError(what or argv_t[0], result)
@@ -77,6 +83,15 @@ class FakeRunner:
               env=None):
         self._record(argv, None, None, False, stdout_path, stderr_path, "spawn")
         return FakeChild(tuple(argv))
+
+    @staticmethod
+    def _write_outputs(stdout_path, stdout, stderr_path, stderr) -> None:
+        for path, text in ((stdout_path, stdout), (stderr_path, stderr)):
+            if path is None:
+                continue
+            p = Path(path)
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text(text or "")
 
     # -- internals -----------------------------------------------------------
 

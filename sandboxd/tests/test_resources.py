@@ -323,29 +323,87 @@ def test_admitting_an_already_free_vlan_is_idempotent():
 
 # --- concurrency -----------------------------------------------------------
 
-def test_a_vlan_is_never_handed_to_two_threads():
-    """The claim loop, the stage machine and the heartbeat all touch this.
-    'Report free, then allocate' is a read-then-write that is wrong by
-    construction without a lock -- which is the same class of bug as the
-    process-local slot array, one scope smaller."""
-    t = table(total_mib=1_000_000, vlans=range(1, 51), total_slots=50)
-    got = []
-    barrier = threading.Barrier(50)
+def test_memory_is_never_oversubscribed_under_contention():
+    """The race the lock exists for, and it must CONTEND to be a test at all.
+
+    An earlier version of this gave 50 threads 50 VLANs and asserted they got
+    50 distinct ones. That passes with the lock removed entirely: nothing is
+    scarce, and `list.pop(0)` under the GIL hands out different elements
+    anyway. It proved nothing.
+
+    The real hazard is the read-then-write inside `acquire`: two threads both
+    compute free memory, both see room for one more, and both insert. So the
+    threads here outnumber the capacity by 4x and the assertion is on the
+    total, which is what oversubscription actually looks like.
+    """
+    capacity = 4
+    t = table(total_mib=100 * capacity, vlans=range(1, 33), total_slots=32)
+    barrier = threading.Barrier(32)
 
     def claim(i):
         barrier.wait()
-        held = t.acquire(f"job-{i}", 100)
-        if held:
-            got.append(held.vlan)
+        t.acquire(f"job-{i}", 100)
 
-    threads = [threading.Thread(target=claim, args=(i,)) for i in range(50)]
+    threads = [threading.Thread(target=claim, args=(i,)) for i in range(32)]
     for th in threads:
         th.start()
     for th in threads:
         th.join()
 
-    assert len(got) == 50
-    assert len(set(got)) == 50, "a VLAN was handed out twice"
+    held = t.held()
+    total = sum(h.mib for h in held)
+    assert total <= 100 * capacity, (
+        f"{len(held)} jobs holding {total} MiB of a {100 * capacity} MiB host"
+    )
+    assert t.free().mib >= 0
+
+
+def test_a_vlan_is_never_handed_to_two_threads_under_contention():
+    """Same shape for the VLAN pool: far more threads than VLANs.
+
+    **Weaker than the two either side of it, and worth saying so.** Removing
+    the lock makes the memory and slot tests fail; this one still passes,
+    because `list.pop(0)` is effectively atomic under the GIL and the VLAN pool
+    is a single mutation rather than a read-then-write. It pins the
+    "4 VLANs, 32 threads, exactly 4 succeed" invariant, not the lock.
+    """
+    t = table(total_mib=1_000_000, vlans=range(1, 5), total_slots=32)
+    got = []
+    lock = threading.Lock()
+    barrier = threading.Barrier(32)
+
+    def claim(i):
+        barrier.wait()
+        held = t.acquire(f"job-{i}", 100)
+        if held:
+            with lock:
+                got.append(held.vlan)
+
+    threads = [threading.Thread(target=claim, args=(i,)) for i in range(32)]
+    for th in threads:
+        th.start()
+    for th in threads:
+        th.join()
+
+    assert len(got) == 4, f"{len(got)} jobs took 4 VLANs"
+    assert len(set(got)) == 4, "a VLAN was handed out twice"
+
+
+def test_slots_are_never_oversubscribed_under_contention():
+    t = table(total_mib=1_000_000, vlans=range(1, 33), total_slots=3)
+    barrier = threading.Barrier(32)
+
+    def claim(i):
+        barrier.wait()
+        t.acquire(f"job-{i}", 100)
+
+    threads = [threading.Thread(target=claim, args=(i,)) for i in range(32)]
+    for th in threads:
+        th.start()
+    for th in threads:
+        th.join()
+
+    assert len(t.held()) <= 3, f"{len(t.held())} jobs in 3 slots"
 
 
 def test_live_job_ids_is_what_reconcile_is_told():
