@@ -34,13 +34,14 @@ that can reach a running job, because Dom0 has no inbound listener.
 from __future__ import annotations
 
 import hashlib
+import logging
 import shutil
 import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from . import guests, timing
+from . import guests, timing, vnc
 from .clone import CloneBuilder, CloneError, CloneSpec
 from .guests import Interaction, Job, SampleKind, TargetOs
 from .proc import CommandError
@@ -57,6 +58,8 @@ from .proc import CommandError
 #
 # The cost is one small row UPDATE per beat per running job. With MAX_CLONES=2
 # that is twelve updates a minute, against a Postgres on the same container.
+log = logging.getLogger("sandboxd.stages")
+
 HEARTBEAT_INTERVAL = 10.0
 
 # DRAFT-018 bounds a manifest at 512 artifacts. `extracted/` is named after
@@ -98,6 +101,10 @@ class Heartbeat:
         self._interval = interval
         self._stop = threading.Event()
         self.cancelled = threading.Event()
+        # Set when the operator asks for a live console. An Event rather than a
+        # flag because the trace is a blocking call: the stage machine waits on
+        # this without polling the API itself.
+        self.console_wanted = threading.Event()
         # Consecutive failed beats. The lease has room for one missed beat --
         # four fit inside LEASE_SECONDS=120 -- but a run of them means the
         # platform has stopped answering and the lease is lapsing, so carrying
@@ -128,6 +135,8 @@ class Heartbeat:
                 self.missed += 1
                 continue
             self.missed = 0
+            if beat.console_requested:
+                self.console_wanted.set()
             if beat.cancel_requested:
                 self.cancelled.set()
                 return
@@ -152,6 +161,17 @@ class Config:
     # margin. Configurable because the lease TTL is, and because a fixed value
     # made cancellation untestable without waiting a real interval.
     heartbeat_interval: float = HEARTBEAT_INTERVAL
+
+    # --- live console (DRAFT-056), off unless the platform asks -------------
+    #
+    # `console_enabled` here is a local kill switch. The platform has its own
+    # CONSOLE_ENABLED and will simply never set console_requested when it is
+    # off, so this is a second, Dom0-side "no" -- an operator can refuse
+    # sessions on this host without touching the platform.
+    console_enabled: bool = True
+    api_base: str = ""
+    worker_token: str = ""
+    ssl_context: object = None
     injection_pids: dict = field(default_factory=lambda: {
         TargetOs.UBUNTU: 1415, TargetOs.ANDROID: 3174})
     lv_sizes: dict = field(default_factory=lambda: {
@@ -355,6 +375,7 @@ class Analysis:
         capture = job.result_dir / CAPTURE
         tcpdump = self._runner.spawn(
             guests.argv_tcpdump(job, self._cfg.bridge, capture))
+        console = self._start_console(job, beat)
         try:
             self._sleep(timing._trace_waits(job.target_os, job.kind,
                                             self._cfg.waits), beat)
@@ -392,6 +413,39 @@ class Analysis:
                 )
         finally:
             tcpdump.stop()
+            if console is not None:
+                # Ends with the trace, on every path. DRAFT-056 scopes a
+                # session to a job that is EXECUTING; one left open past the
+                # trace is a socket pointed at a domain being destroyed.
+                console.stop()
+
+    def _start_console(self, job: Job, beat: Heartbeat):
+        """Dial out, if a console was asked for. Never fails the analysis.
+
+        The console is an OBSERVER of the run, never a participant in its
+        lifecycle -- so every failure here is logged and swallowed. A missing
+        VNC port, a relay that refuses, a platform that is down: the trace
+        continues regardless, and the operator sees no screen rather than a
+        failed job.
+
+        Checked once, at the start of the trace, rather than watched
+        throughout. A session requested mid-trace waits for the next run --
+        DRAFT-056 puts reconnection out of scope, and re-checking would mean
+        the trace polling its own heartbeat thread.
+        """
+        if not self._cfg.console_enabled or not beat.console_wanted.is_set():
+            return None
+        try:
+            port = vnc.resolve_vnc_port(self._runner, job.domid,
+                                        job.clone_domain)
+            session = vnc.ConsoleSession(
+                self._cfg.api_base, self._cfg.worker_token, job.job_id,
+                ssl_context=self._cfg.ssl_context)
+            session.start(port)
+            return session
+        except Exception as exc:  # noqa: BLE001 - never fail the analysis
+            log.warning("no live console for job %s: %s", job.job_id, exc)
+            return None
 
     def _collect(self, lease, job_dir: Path) -> Outcome:
         """Upload what the run produced and build its manifest."""

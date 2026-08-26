@@ -18,8 +18,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
-
-from .proc import CommandError
+import threading
 
 log = logging.getLogger("sandboxd.vnc")
 
@@ -95,7 +94,7 @@ def resolve_vnc_port(runner, domid: int, domain: str) -> int:
     )
 
 
-async def bridge(ws, host: str, port: int) -> None:
+async def bridge(ws, host: str, port: int, stop=None) -> None:
     """Move bytes between an open WebSocket and the clone's console.
 
     Symmetrical with the platform's `console.pump`, and for the same reason:
@@ -126,13 +125,22 @@ async def bridge(ws, host: str, port: int) -> None:
         except Exception:
             pass
 
+    async def watch_stop():
+        # The trace ending is the third way a session finishes, alongside
+        # either socket closing.
+        while stop is not None and not stop.is_set():
+            await asyncio.sleep(0.2)
+
     a = asyncio.create_task(to_console())
     b = asyncio.create_task(to_platform())
+    tasks = {a, b}
+    if stop is not None:
+        tasks.add(asyncio.create_task(watch_stop()))
     try:
         # The FIRST to finish ends the session. A half-open bridge would leave
         # a socket pointed at a malware VM's console with nothing reading it.
         done, pending = await asyncio.wait(
-            {a, b}, return_when=asyncio.FIRST_COMPLETED)
+            tasks, return_when=asyncio.FIRST_COMPLETED)
         for task in pending:
             task.cancel()
     finally:
@@ -150,15 +158,26 @@ class ConsoleSession:
     Started when a heartbeat says one was requested, and stopped when the
     trace ends -- which is what keeps a session scoped to a job that is
     executing, with no orphaned relay to reap.
+
+    **`websockets`, not `httpx-ws`.** httpx-ws would reuse the existing httpx
+    client, so the SSL context with Dom0's client certificate would carry for
+    free -- but it does not implement the protocol, it adapts `wsproto` onto
+    httpx. That is two libraries where one will do, one of them pre-1.0, on the
+    path between the internet and the machine running malware. `websockets`
+    takes the same `SSLContext` object directly, so the advantage disappears,
+    and it is already what the platform's uvicorn uses to accept the browser's
+    end -- one implementation on both sides rather than two.
     """
 
     def __init__(self, api_base: str, token: str, job_id: str,
-                 host: str = "127.0.0.1"):
+                 host: str = "127.0.0.1", ssl_context=None):
         self._base = api_base.rstrip("/")
         self._token = token
         self._job_id = job_id
         self._host = host
-        self._task: asyncio.Task | None = None
+        self._ssl = ssl_context
+        self._thread: threading.Thread | None = None
+        self._stop = threading.Event()
 
     @property
     def url(self) -> str:
@@ -171,3 +190,55 @@ class ConsoleSession:
         # not get a credential of its own: it is the same door on the same
         # LAN, already gated by the client certificate at the TLS layer.
         return {"Authorization": f"Bearer {self._token}"}
+
+    # -- running alongside a synchronous trace ------------------------------
+
+    def start(self, port: int) -> None:
+        """Dial out and bridge, on a thread of its own.
+
+        A thread with its own event loop because the stage machine is
+        synchronous -- `drakvuf` is one blocking call -- and the console has to
+        live for the whole of it. Nothing is shared with the analysis but the
+        stop flag, so a console that fails cannot affect the trace.
+        """
+        if self._thread is not None:
+            raise RuntimeError("this session has already been started")
+        self._stop.clear()
+        self._thread = threading.Thread(
+            target=self._run, args=(port,), daemon=True,
+            name=f"console-{self._job_id[:8]}")
+        self._thread.start()
+
+    def stop(self, timeout: float = 5.0) -> None:
+        """End the session. Called when the trace ends, on every path.
+
+        DRAFT-056 scopes a session to a job that is executing; one left open
+        past the trace is a socket pointed at a domain being destroyed.
+        """
+        self._stop.set()
+        if self._thread is not None:
+            self._thread.join(timeout=timeout)
+            self._thread = None
+
+    def _run(self, port: int) -> None:
+        try:
+            asyncio.run(self._session(port))
+        except Exception:
+            # A console failure must never touch the analysis. It is an
+            # observer of the run, not a participant in its lifecycle.
+            log.exception("console session for job %s ended in an error",
+                          self._job_id)
+
+    async def _session(self, port: int) -> None:
+        from websockets.asyncio.client import connect
+
+        kwargs = {"additional_headers": self.headers(), "open_timeout": 30}
+        if self._ssl is not None:
+            # Passed through to create_connection. The SAME context object
+            # `client_tls.ssl_context()` builds, carrying Dom0's client
+            # certificate -- not a second derivation of it.
+            kwargs["ssl"] = self._ssl
+
+        async with connect(self.url, **kwargs) as ws:
+            log.info("console dialled out for job %s", self._job_id)
+            await bridge(ws, self._host, port, stop=self._stop)

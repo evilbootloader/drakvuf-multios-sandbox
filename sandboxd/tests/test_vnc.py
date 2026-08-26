@@ -113,3 +113,52 @@ def test_the_url_carries_the_job_id_encoded():
     s = vnc.ConsoleSession("https://p:9000", "t",
                            "11111111-1111-1111-1111-111111111111")
     assert "11111111-1111-1111-1111-111111111111" in s.url
+
+# --- the outbound dial ------------------------------------------------------
+
+def test_a_session_is_not_started_twice():
+    """One session per job. A second start would leave the first thread
+    bridging with nothing to stop it."""
+    s = vnc.ConsoleSession("https://p:9000", "t", "job-1")
+    s._thread = object()          # pretend it is running
+
+    with pytest.raises(RuntimeError, match="already been started"):
+        s.start(5901)
+
+
+def test_stopping_a_session_that_never_started_is_safe():
+    """stop() runs from the trace's `finally`, which executes on every path
+    including the ones where no console was ever opened."""
+    vnc.ConsoleSession("https://p:9000", "t", "job-1").stop()
+
+
+def test_the_ssl_context_is_passed_through_not_rebuilt(monkeypatch):
+    """The whole argument for `websockets` over `httpx-ws` was that it takes
+    the SAME SSLContext object client_tls builds -- so a test that let this
+    become a second derivation would remove the reason for the choice."""
+    seen = {}
+
+    class FakeWS:
+        async def __aenter__(self): raise RuntimeError("stop here")
+        async def __aexit__(self, *a): return False
+
+    def fake_connect(url, **kwargs):
+        seen.update(kwargs)
+        seen["url"] = url
+        return FakeWS()
+
+    import sys, types
+    mod = types.ModuleType("websockets.asyncio.client")
+    mod.connect = fake_connect
+    monkeypatch.setitem(sys.modules, "websockets.asyncio.client", mod)
+
+    sentinel = object()
+    s = vnc.ConsoleSession("https://p:9000", "tok", "job-1",
+                           ssl_context=sentinel)
+    import asyncio
+    with pytest.raises(RuntimeError, match="stop here"):
+        asyncio.run(s._session(5901))
+
+    assert seen["ssl"] is sentinel, "the SSL context was rebuilt, not passed"
+    assert seen["additional_headers"]["Authorization"] == "Bearer tok"
+    assert seen["url"].startswith("wss://")

@@ -89,6 +89,11 @@ class Idle:
 class Heartbeat:
     lease_expires_at: str
     cancel_requested: bool
+    # Rides the same channel as cancellation, for the same reason: Dom0 has no
+    # inbound listener, so a console session cannot be pushed either. The
+    # operator sets it on the job row and the worker finds out on its next
+    # beat, then dials OUT (DRAFT-056).
+    console_requested: bool = False
 
 
 @dataclass(frozen=True)
@@ -246,8 +251,14 @@ class WorkerAPI:
         Dom0 has no inbound listener, so there is nowhere to push to.
         """
         body = self._post(f"/api/v1/worker/jobs/{job_id}/heartbeat").json()
-        return Heartbeat(lease_expires_at=body["lease_expires_at"],
-                         cancel_requested=bool(body["cancel_requested"]))
+        return Heartbeat(
+            lease_expires_at=body["lease_expires_at"],
+            cancel_requested=bool(body["cancel_requested"]),
+            # Absent from an older platform, which must not be an error: the
+            # worker channel has to tolerate the two sides being deployed
+            # minutes apart.
+            console_requested=bool(body.get("console_requested", False)),
+        )
 
     def artifact_tickets(self, job_id: str,
                          sizes: dict[str, int]) -> dict[str, Ticket]:

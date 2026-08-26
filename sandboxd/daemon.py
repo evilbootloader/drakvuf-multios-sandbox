@@ -177,6 +177,15 @@ class Daemon:
         self._api = api or WorkerAPI(
             settings.api, settings.token, settings.worker_id,
             cacert=settings.cacert, client_cert=settings.client_cert)
+        # The console dials out with the SAME credentials the rest of the
+        # channel uses -- no separate secret for the relay, because it is the
+        # same door on the same LAN (DRAFT-056 §4.4).
+        self._cfg.api_base = settings.api
+        self._cfg.worker_token = settings.token
+        if settings.cacert or settings.client_cert:
+            from .tls import ssl_context
+            self._cfg.ssl_context = ssl_context(settings.cacert,
+                                                settings.client_cert)
         self._table: ResourceTable | None = None
         self._stopping = threading.Event()
         self._workers: list[threading.Thread] = []
