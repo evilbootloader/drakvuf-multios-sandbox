@@ -37,6 +37,7 @@ class FakeApi:
     claims: list = field(default_factory=list)
     states: list = field(default_factory=list)
     interrupted: list = field(default_factory=list)
+    manifests: list = field(default_factory=list)
     refuse_claim: bool = False
 
     def register(self, **kw):
@@ -77,7 +78,12 @@ class FakeApi:
         pass
 
     def complete(self, job_id, manifest):
-        pass
+        # /complete is what SETS `completed`, together with the manifest, in
+        # one committed row -- that is what makes publication atomic. The
+        # worker never reports `completed` through /state, and a fake that did
+        # not model this let the wrong sequence pass (Dom0 2026-08-26, F3).
+        self.states.append((job_id, "completed"))
+        self.manifests.append(manifest)
 
 
 def lease(job_id="j1", os_="ubuntu", mib=2198) -> Lease:

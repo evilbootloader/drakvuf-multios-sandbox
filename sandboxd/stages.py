@@ -479,9 +479,29 @@ class Analysis:
             extra["failure_stage"] = outcome.failure_stage
         if outcome.failure_reason:
             extra["failure_reason"] = outcome.failure_reason
-        self._api.report_state(lease.job_id, outcome.state, **extra)
-        if outcome.state == "completed" and outcome.manifest is not None:
+        # **`completed` is reported BY `/complete`, never by `/state`.**
+        #
+        # `/complete` requires the job to be `cleaning` and sets `completed`
+        # itself, in one committed UPDATE together with the manifest -- that
+        # single row is what makes publication atomic, so a half-uploaded
+        # result set is never served as finished.
+        #
+        # Reporting `completed` through `/state` first therefore does two bad
+        # things at once: it makes `/complete` unreachable (409, "the worker no
+        # longer owns it" -- the lease is released with the terminal state),
+        # and because `/complete` is the ONLY writer of `jobs.manifest`, the
+        # run finishes with its artifacts in the store and no record of them.
+        # Observed on Dom0 2026-08-26, F3.
+        if outcome.state == "completed":
+            if outcome.manifest is None:
+                raise RuntimeError(
+                    "a completed run has no manifest; /complete is the only "
+                    "writer of jobs.manifest and it cannot be skipped"
+                )
             self._api.complete(lease.job_id, outcome.manifest)
+            return
+
+        self._api.report_state(lease.job_id, outcome.state, **extra)
 
     # -- helpers ------------------------------------------------------------
 

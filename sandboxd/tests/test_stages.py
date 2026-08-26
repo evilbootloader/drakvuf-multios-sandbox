@@ -45,8 +45,33 @@ class FakeApi:
     cancel_after: int | None = None
     sample_bytes: bytes = b"\x7fELF" + b"\x00" * 60
     beats: int = 0
+    # /claim leaves a job here; the worker reports from `preparing` onward.
+    job_state: str = "cloning"
+
+    # The server's table, from routers/worker.py:58. Enforced here because a
+    # fake that accepts anything lets a wrong sequence pass -- which is exactly
+    # what happened: the stage machine reported `completed` via /state and the
+    # tests were happy, while the real API answered 409 and the manifest was
+    # never written (Dom0 2026-08-26, F3).
+    TRANSITIONS = {
+        "cloning": {"preparing", "cleaning"},
+        "preparing": {"executing", "cleaning"},
+        "executing": {"collecting", "cleaning"},
+        "collecting": {"cleaning"},
+        # `completed` is deliberately ABSENT: it is reachable only through
+        # /complete, which is the atomic-publication call.
+        "cleaning": {"failed", "cancelled", "interrupted"},
+    }
 
     def report_state(self, job_id, state, **extra):
+        current = self.job_state
+        allowed = self.TRANSITIONS.get(current, set())
+        if state not in allowed:
+            raise AssertionError(
+                f"illegal transition {current} -> {state}; the server allows "
+                f"{sorted(allowed) or 'none'} (routers/worker.py:58)"
+            )
+        self.job_state = state
         self.states.append((state, extra))
 
     def heartbeat(self, job_id):
@@ -77,6 +102,16 @@ class FakeApi:
         self.uploaded.append(name)
 
     def complete(self, job_id, manifest):
+        # Same rule the server enforces: reachable only from `cleaning`, and it
+        # is what SETS `completed` -- together with the manifest, in one
+        # committed row. That is what makes publication atomic.
+        if self.job_state != "cleaning":
+            raise AssertionError(
+                f"job is {self.job_state}; /complete is reachable only from "
+                f"cleaning (routers/worker.py:476)"
+            )
+        self.job_state = "completed"
+        self.states.append(("completed", {}))
         self.completed.append(manifest)
 
 
@@ -435,3 +470,54 @@ def test_a_cancelled_run_tears_its_clone_down(tmp_path):
     S.Analysis(FakeApi(cancel_after=1), r, cfg).run(FakeLease(), 3)
 
     assert r.ran(("xl", "destroy", "ubuntu_sandbox-3-clone"))
+
+
+# --- F3: completed is /complete's to report, never /state's ----------------
+
+def test_completed_is_reported_only_through_complete(tmp_path):
+    """Found on Dom0 2026-08-26, and it passed every desk test first.
+
+    `/complete` requires `cleaning` and SETS `completed` itself, together with
+    the manifest, in one committed row -- that is what makes publication
+    atomic. Reporting `completed` through `/state` first made `/complete`
+    unreachable (409, "the worker no longer owns it": the lease is released
+    with the terminal state), and since `/complete` is the ONLY writer of
+    `jobs.manifest`, the run finished with its artifacts in the store and no
+    record of them.
+
+    The fake now enforces the server's table, which is what makes this test
+    able to fail.
+    """
+    outcome, api = run(tmp_path)
+
+    assert outcome.state == "completed"
+    assert api.completed, "the manifest was never sent"
+    # The LAST /state report is `cleaning`; `completed` arrives via /complete.
+    reports = [s for s, _ in api.states]
+    assert reports[-1] == "completed"        # recorded by the fake's complete()
+    assert reports[-2] == "cleaning"
+
+
+def test_a_completed_run_without_a_manifest_is_refused(tmp_path):
+    """/complete is the only writer of jobs.manifest, so skipping it would
+    finish a job with its artifacts uploaded and nothing pointing at them."""
+    cfg = config(tmp_path)
+    cfg.config_dir.mkdir(parents=True, exist_ok=True)
+    a = S.Analysis(FakeApi(), runner_ready(), cfg)
+
+    with pytest.raises(RuntimeError, match="only writer of jobs.manifest"):
+        a._report_terminal(FakeLease(), S.Outcome(state="completed",
+                                                  manifest=None))
+
+
+def test_a_failed_run_still_reports_through_state(tmp_path):
+    """Only `completed` moves to /complete. failed, cancelled and interrupted
+    are ordinary state reports from `cleaning`."""
+    r = runner_ready()
+    r.script(("injector",), rc=1, stderr="injection failed")
+
+    outcome, api = run(tmp_path, runner=r)
+
+    assert outcome.state == "failed"
+    assert api.completed == []
+    assert [s for s, _ in api.states][-2:] == ["cleaning", "failed"]
