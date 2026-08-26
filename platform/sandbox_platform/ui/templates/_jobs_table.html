@@ -1,0 +1,48 @@
+{#
+  The history table, split out so it can be refreshed on its own.
+
+  The list did not update at all until 2026-08-26 (F9): job.js is only loaded
+  on a job's own page, so the detail view went live while the list it was
+  reached from stayed frozen -- an operator watching /ui/jobs saw `queued`
+  while the analysis had already finished.
+#}
+<div class="scroll-x">
+<table class="rows">
+  <thead>
+    <tr>
+      <th>Submitted</th><th>Target</th><th>Filename</th>
+      <th>State</th><th>SHA-256</th><th>Owner</th>
+    </tr>
+  </thead>
+  <tbody>
+  {% for job in jobs %}
+    <tr>
+      <td class="mono"><a href="/ui/jobs/{{ job.id }}">{{ job.created_at.strftime('%Y-%m-%d %H:%M') }}</a></td>
+      <td>{{ job.target_os.value }}</td>
+      {#
+        Attacker-controlled, rendered verbatim and autoescaped. `.filename`
+        isolates bidi overrides so a name containing U+202E cannot reverse the
+        rest of the row -- which is a display attack, not an escaping one, and
+        would survive any amount of HTML escaping.
+      #}
+      <td class="filename"><a href="/ui/jobs/{{ job.id }}">{{ job.submitted_filename }}</a></td>
+      <td><span class="state" data-state="{{ job.state.value }}">{{ job.state.value }}</span></td>
+      {# Truncated with an explicit ellipsis and the full digest in the
+         tooltip -- a silently-cut hash invites someone to compare a prefix
+         against a full one and conclude they differ.
+
+         Clicking searches for the whole digest, which is the common next
+         question: "what else came from these bytes?" DRAFT-030 makes that a
+         real question rather than a rhetorical one, since identical bytes
+         submitted under two names are deliberately two separate jobs. #}
+      <td class="mono">
+        {% if job.sha256 %}
+        <a href="/ui/jobs?q={{ job.sha256 }}" title="{{ job.sha256 }}">{{ job.sha256[:12] }}…</a>
+        {% else %}—{% endif %}
+      </td>
+      <td>{{ job.owner or '—' }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>

@@ -162,3 +162,96 @@ def test_the_ssl_context_is_passed_through_not_rebuilt(monkeypatch):
     assert seen["ssl"] is sentinel, "the SSL context was rebuilt, not passed"
     assert seen["additional_headers"]["Authorization"] == "Bearer tok"
     assert seen["url"].startswith("wss://")
+
+
+# --- F10: the console socket opens when a viewer arrives, not before -------
+
+def _fake_ws(frames):
+    """A WebSocket that yields `frames` then blocks."""
+    class WS:
+        def __init__(self): self.sent = []
+        async def recv(self):
+            if frames:
+                return frames.pop(0)
+            await asyncio.sleep(3600)
+        async def send(self, data): self.sent.append(data)
+    return WS()
+
+
+import asyncio  # noqa: E402
+
+
+def test_no_console_socket_is_opened_before_a_viewer_attaches(monkeypatch):
+    """The bug: `open_connection` ran at dial time, so the TCP connection to
+    QEMU opened a minute before anyone watched. RFB has the SERVER speak
+    first, so the banner went to nobody and QEMU gave up -- the session died
+    ~40s in with no explanation (Dom0 2026-08-26).
+
+    It is also what §4.1b was uneasy about: a socket into a malware VM's
+    console with nobody watching it.
+    """
+    opened = []
+
+    async def fake_open(host, port):
+        opened.append((host, port))
+        raise AssertionError("connected before a viewer attached")
+
+    monkeypatch.setattr(vnc.asyncio, "open_connection", fake_open)
+    ws = _fake_ws([])          # nothing arrives; no viewer signal
+
+    async def run():
+        await asyncio.wait_for(vnc.bridge(ws, "127.0.0.1", 5900), timeout=0.3)
+
+    with pytest.raises((asyncio.TimeoutError, TimeoutError)):
+        asyncio.run(run())
+
+    assert opened == [], "the console was connected with nobody watching"
+
+
+def test_the_socket_opens_once_the_platform_signals_a_viewer(monkeypatch):
+    opened = []
+
+    class FakeReader:
+        async def read(self, n): await asyncio.sleep(3600)
+
+    class FakeWriter:
+        def write(self, d): pass
+        async def drain(self): pass
+        def close(self): pass
+        async def wait_closed(self): pass
+
+    async def fake_open(host, port):
+        opened.append((host, port))
+        return FakeReader(), FakeWriter()
+
+    monkeypatch.setattr(vnc.asyncio, "open_connection", fake_open)
+    ws = _fake_ws([vnc.PEER_ATTACHED])
+
+    async def run():
+        await asyncio.wait_for(vnc.bridge(ws, "127.0.0.1", 5901), timeout=0.4)
+
+    with pytest.raises((asyncio.TimeoutError, TimeoutError)):
+        asyncio.run(run())
+
+    assert opened == [("127.0.0.1", 5901)]
+
+
+def test_console_data_before_a_viewer_is_refused(monkeypatch):
+    """Binary before the control frame means a peer that should not exist."""
+    monkeypatch.setattr(vnc.asyncio, "open_connection", None)
+    ws = _fake_ws([b"RFB 003.008\n"])
+
+    with pytest.raises(vnc.ConsoleUnavailable, match="before a viewer"):
+        asyncio.run(vnc.bridge(ws, "127.0.0.1", 5900))
+
+
+def test_a_bridge_failure_is_raised_not_swallowed(monkeypatch):
+    """Both pumps sat in `except Exception: pass`, so a bridge that died on
+    its first read logged "session ended" and nothing else -- the code
+    destroyed the evidence needed to diagnose it."""
+    class Boom:
+        async def recv(self): raise ConnectionResetError("relay went away")
+        async def send(self, d): pass
+
+    with pytest.raises(ConnectionResetError, match="relay went away"):
+        asyncio.run(vnc.bridge(Boom(), "127.0.0.1", 5900))

@@ -137,6 +137,63 @@ BlankableOs = Annotated[TargetOs | None, BeforeValidator(_blank_is_absent)]
 PAGE = 30
 
 
+def _jobs_context(q: str, state, target_os, page: int) -> dict:
+    """Everything the history view and its table fragment both need.
+
+    One builder so the polled fragment cannot drift from the full page -- a
+    filter honoured on first load and dropped on refresh would quietly show a
+    different result set every five seconds.
+    """
+    term = q.strip().lower()
+    bad = bool(term) and not _HEX.match(term)
+
+    filters = {"state": state, "target_os": target_os,
+               "sha256_prefix": term or None}
+    total = 0 if bad else count_jobs(**filters)
+    pages = max(1, -(-total // PAGE))
+    page = min(page, pages)
+    rows = [] if bad else query_jobs(**filters, limit=PAGE,
+                                     offset=(page - 1) * PAGE)
+
+    digests = {j.sha256 for j in rows if j.sha256}
+    one_sample = digests.pop() if len(digests) == 1 else None
+
+    return {
+        "q": q.strip(), "bad_query": bad, "one_sample": one_sample,
+        "state": state, "target_os": target_os,
+        "states": [s.value for s in JobState],
+        "target_oses": [o.value for o in TargetOs],
+        "jobs": rows, "page": page, "pages": pages, "total": total,
+        "first": 0 if not total else (page - 1) * PAGE + 1,
+        "last": min(page * PAGE, total),
+        # Whether anything on THIS page can still change. The poll stops when
+        # nothing can, so a page of finished jobs makes no requests at all.
+        "live": any(j.state not in TERMINAL_STATES for j in rows),
+        "query": urlencode(
+            {k: v for k, v in (("q", q.strip()),
+                               ("state", state.value if state else ""),
+                               ("target_os", target_os.value if target_os else ""),
+                               ("page", str(page)))
+             if v}),
+    }
+
+
+@router.get("/jobs/table", response_class=HTMLResponse)
+def jobs_table(request: Request,
+               q: str = Query("", max_length=64),
+               state: BlankableState = None,
+               target_os: BlankableOs = None,
+               page: int = Query(1, ge=1)) -> HTMLResponse:
+    """Just the table, for the poll on the history page (F9).
+
+    Takes the same query parameters as the full view and builds its context
+    with the same function, so a refresh cannot show a different filter than
+    the page was rendered with.
+    """
+    return _render(request, "_jobs_table.html",
+                   **_jobs_context(q, state, target_os, page))
+
+
 @router.get("/jobs", response_class=HTMLResponse)
 def jobs_view(request: Request,
               q: str = Query("", max_length=64),

@@ -105,6 +105,21 @@ async def _relay(websocket: WebSocket, job_id: UUID, side: console.Side):
         other = (session.worker if side is console.Side.BROWSER
                  else session.browser)
 
+        if side is console.Side.WORKER:
+            # Tell Dom0 a viewer has arrived, so it can open the TCP
+            # connection to the console NOW rather than at dial time.
+            #
+            # RFB has the SERVER speak first, so a connection opened before
+            # anyone is watching sends its banner to nobody and waits -- which
+            # QEMU gives up on. sandboxd dials at the start of the trace so the
+            # relay is ready; this is what tells it the other half is real
+            # (F10).
+            #
+            # A TEXT frame, where all data is BINARY. That split is the entire
+            # control channel: nothing has to be parsed to tell them apart, and
+            # RFB bytes can never be read as a control message.
+            await websocket.send_text(console.PEER_ATTACHED)
+
         async def source():
             try:
                 return await websocket.receive_bytes()
@@ -122,6 +137,14 @@ async def _relay(websocket: WebSocket, job_id: UUID, side: console.Side):
         if side is console.Side.BROWSER and session.interacted:
             _mark_interacted(job_id)
     finally:
+        if side is console.Side.BROWSER and session.worker is not None:
+            # The viewer has gone. Tell Dom0 so it closes its end of the
+            # console rather than holding a socket into a running malware VM
+            # with nobody watching.
+            try:
+                await session.worker.send_text(console.PEER_GONE)
+            except Exception:  # noqa: BLE001 - the socket may already be gone
+                pass
         await console.registry.close(str(job_id), side)
         if side is console.Side.BROWSER:
             # The request is satisfied or abandoned either way; leaving it set

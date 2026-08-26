@@ -49,6 +49,13 @@ PAIR_TIMEOUT = 90.0
 QUEUE_DEPTH = 64
 
 
+# The control channel between the platform and sandboxd, in TEXT frames. All
+# console data is BINARY, so the two can never be confused and neither side
+# has to parse framing to tell them apart. Mirrored in sandboxd/vnc.py.
+PEER_ATTACHED = "peer-attached"
+PEER_GONE = "peer-gone"
+
+
 class Side(Enum):
     BROWSER = "browser"
     WORKER = "worker"

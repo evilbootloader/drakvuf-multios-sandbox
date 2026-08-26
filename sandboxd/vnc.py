@@ -36,6 +36,12 @@ QUERY_TIMEOUT = 30.0
 # a megabyte per session.
 CHUNK = 64 * 1024
 
+# The control channel, carried in TEXT frames. Data is always BINARY, so RFB
+# bytes can never be read as a control message and no framing has to be parsed
+# to tell them apart.
+PEER_ATTACHED = "peer-attached"
+PEER_GONE = "peer-gone"
+
 
 class ConsoleUnavailable(RuntimeError):
     """No console to bridge. Not a failure of the analysis.
@@ -100,55 +106,97 @@ async def bridge(ws, host: str, port: int, stop=None) -> None:
     Symmetrical with the platform's `console.pump`, and for the same reason:
     it does not know what RFB is. Two directions, no parsing, and either side
     closing ends both.
+
+    **The TCP connection to the console is opened only once a viewer has
+    attached**, not when the WebSocket is dialled. `sandboxd` dials at the
+    start of the trace so the relay is ready, but the browser may arrive a
+    minute later -- and RFB has the SERVER speak first. Connecting early sends
+    a ProtocolVersion banner to nobody and then waits, which QEMU eventually
+    gives up on: the session died about forty seconds in with no explanation
+    (Dom0 2026-08-26, F10).
+
+    It also means no socket is held into a malware VM's console while nobody
+    is watching, which is what `live-console.md` §4.1b was uneasy about.
+
+    The platform signals a viewer with a TEXT frame; the byte stream is
+    BINARY. That split is the whole control channel -- no framing to parse,
+    and RFB data can never be mistaken for a control message because RFB is
+    carried in binary frames and nothing else is.
     """
-    reader, writer = await asyncio.open_connection(host, port)
-    log.info("console bridged to %s:%d", host, port)
+    reader = writer = None
+
+    async def wait_for_viewer():
+        """Read frames until the platform says a viewer has attached.
+
+        Anything binary arriving before that is protocol from a peer that
+        should not exist yet, and is refused rather than forwarded.
+        """
+        while True:
+            frame = await ws.recv()
+            if isinstance(frame, str):
+                if frame == PEER_ATTACHED:
+                    return
+                log.warning("unknown control frame %r; ignoring", frame[:40])
+                continue
+            raise ConsoleUnavailable(
+                "received console data before a viewer attached"
+            )
 
     async def to_console():
-        try:
-            while True:
-                data = await ws.recv()
-                if data is None:
-                    break
-                writer.write(data if isinstance(data, bytes) else data.encode())
-                await writer.drain()
-        except Exception:
-            pass
+        while True:
+            frame = await ws.recv()
+            if isinstance(frame, str):
+                # Control, not data. A viewer leaving ends the session.
+                if frame == PEER_GONE:
+                    return
+                continue
+            if not frame:
+                return
+            writer.write(frame)
+            await writer.drain()
 
     async def to_platform():
-        try:
-            while True:
-                data = await reader.read(CHUNK)
-                if not data:
-                    break
-                await ws.send(data)
-        except Exception:
-            pass
+        while True:
+            data = await reader.read(CHUNK)
+            if not data:
+                return
+            await ws.send(data)
 
     async def watch_stop():
-        # The trace ending is the third way a session finishes, alongside
-        # either socket closing.
         while stop is not None and not stop.is_set():
             await asyncio.sleep(0.2)
 
-    a = asyncio.create_task(to_console())
-    b = asyncio.create_task(to_platform())
-    tasks = {a, b}
-    if stop is not None:
-        tasks.add(asyncio.create_task(watch_stop()))
     try:
+        await wait_for_viewer()
+        reader, writer = await asyncio.open_connection(host, port)
+        log.info("console bridged to %s:%d", host, port)
+
+        tasks = {asyncio.create_task(to_console()),
+                 asyncio.create_task(to_platform())}
+        if stop is not None:
+            tasks.add(asyncio.create_task(watch_stop()))
+
         # The FIRST to finish ends the session. A half-open bridge would leave
         # a socket pointed at a malware VM's console with nothing reading it.
         done, pending = await asyncio.wait(
             tasks, return_when=asyncio.FIRST_COMPLETED)
         for task in pending:
             task.cancel()
+
+        # **Raised, not swallowed.** Both pumps used to sit inside
+        # `except Exception: pass`, so a bridge that died on its first read
+        # logged "session ended" and nothing else -- the code destroyed the
+        # evidence needed to diagnose it, which is how F10 stayed a guess.
+        for task in done:
+            if task.exception() is not None:
+                raise task.exception()
     finally:
-        writer.close()
-        try:
-            await writer.wait_closed()
-        except Exception:
-            pass
+        if writer is not None:
+            writer.close()
+            try:
+                await writer.wait_closed()
+            except Exception as exc:
+                log.debug("console socket close: %s", exc)
         log.info("console session for %s:%d ended", host, port)
 
 
