@@ -15,6 +15,7 @@ submission. This file pins the output half. The two together are the contract.
 
 from __future__ import annotations
 
+import json
 import uuid
 
 import pytest
@@ -623,6 +624,53 @@ def test_the_cache_key_tracks_the_files(tmp_path, monkeypatch):
     os.utime(tmp_path.parent / "static" / "a.css", (later, later))
 
     assert ui._asset_version() != first
+
+
+# --- the artifacts tab, populated -------------------------------------------
+
+def _with_artifacts(conn, names: list[str]) -> uuid.UUID:
+    return conn.execute(
+        """
+        INSERT INTO jobs (target_os, submitted_filename, state, manifest)
+        VALUES ('ubuntu', 'sample.bin', 'completed', %s) RETURNING id
+        """,
+        (json.dumps({"artifacts": names}),),
+    ).fetchone()[0]
+
+
+def test_every_artifact_can_be_downloaded_at_once(client, conn):
+    """One archive for the whole result set, not a click per file."""
+    job_id = _with_artifacts(conn, ["trace.log", "capture.pcap",
+                                    "memdump/0x1000.dmp"])
+
+    page = client.get(f"/ui/jobs/{job_id}?tab=artifacts").text
+
+    assert f"/api/v1/jobs/{job_id}/artifacts.zip" in page
+    assert "Download all 3 artifacts" in page
+
+
+def test_the_download_links_go_through_the_wrapping_route(client, conn):
+    """**Not straight to MinIO.** A presigned GET serves the stored object as
+    it is, so the tab's promise of a password-protected ZIP was false for every
+    artifact anyone ever downloaded."""
+    job_id = _with_artifacts(conn, ["extracted/evil.exe"])
+
+    page = client.get(f"/ui/jobs/{job_id}?tab=artifacts").text
+
+    assert f"/api/v1/jobs/{job_id}/artifact.zip?name=extracted%2Fevil.exe" in page
+    assert "X-Amz-Signature" not in page
+
+
+def test_the_notice_does_not_promise_secrecy(client, conn):
+    """`infected` is a published convention and ZipCrypto is weak. The wrapping
+    stops a browser, an OS or a scanner acting on the bytes; it protects
+    nothing from whoever holds the link, and the tab must not imply it does."""
+    job_id = _with_artifacts(conn, ["trace.log"])
+
+    page = client.get(f"/ui/jobs/{job_id}?tab=artifacts").text
+
+    assert "packaging, not protection" in page
+    assert "isolated environment" in page
 
 
 # --- the artifacts tab's empty states ---------------------------------------

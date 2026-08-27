@@ -13,8 +13,10 @@ object-store credentials.
 from __future__ import annotations
 
 import json
+import re
 from datetime import UTC, datetime, timedelta
 from typing import Annotated, Literal
+from urllib.parse import quote
 from uuid import UUID
 
 import magic
@@ -28,6 +30,7 @@ from .. import events
 from .. import jobs as dal
 from .. import manifest as manifest_schema
 from .. import objects
+from .. import packaging
 from ..config import settings
 from ..db import connection
 from ..enums import TERMINAL_STATES, JobState, RejectReason, TargetOs
@@ -415,17 +418,21 @@ def _detail(conn, job_id: UUID) -> JobDetail:
 
     artifacts: dict[str, str] = {}
     if not expired:
-        # One presigned GET per artifact, minted per request and short-lived.
-        # Never a prefix -- that would be a bucket enumeration primitive over
-        # a store holding live malware.
+        # **Links to this API's wrapping routes, NOT presigned GETs to MinIO.**
+        # A presigned GET hands over the stored object exactly as it is, so an
+        # analyst clicking something recovered from `extracted/` received a
+        # live executable while the tab told them it arrived as a
+        # password-protected ZIP. The wrapping can only happen here -- MinIO
+        # serves what it stores -- so the link has to come back through the
+        # API. See the download routes below.
         #
         # `parsed.artifacts` is empty when `parsed.error` is set, so a name
         # this module could not validate never reaches here: degraded means
         # fewer capabilities, never looser ones.
         for artifact in parsed.artifacts:
-            artifacts[artifact.name] = objects.presigned_get(
-                f"{objects.result_prefix(job_id)}{artifact.name}",
-                objects.Audience.BROWSER,
+            artifacts[artifact.name] = (
+                f"/api/v1/jobs/{job_id}/artifact.zip"
+                f"?name={quote(artifact.name, safe='')}"
             )
 
     reserved_ahead = False
@@ -572,6 +579,110 @@ def count_jobs(*, state=None, target_os=None, sha256=None,
 def get_job(job_id: Annotated[UUID, Path()]) -> JobDetail:
     with connection() as conn:
         return _detail(conn, job_id)
+
+
+# --- downloading ----------------------------------------------------------
+#
+# **Artifacts leave this platform wrapped, never raw**, which is what the
+# artifacts tab has claimed since #38 and what nothing implemented until
+# 2026-08-27. See `packaging.py` for what the password does and does not buy;
+# the short version is that it stops a browser, an OS or a scanner acting on
+# the bytes in transit, and protects nothing from whoever holds the link.
+#
+# These two routes are the ONLY way artifacts are offered now. The presigned
+# GET that `_detail` used to mint per artifact went straight to MinIO and
+# handed over an unwrapped executable, so it is gone -- `JobDetail.artifacts`
+# now carries these URLs instead.
+#
+# The API is in the data path here, which `objects.py` otherwise avoids on
+# purpose. That is the trade: wrapping cannot happen anywhere else, because
+# MinIO serves what it stores. Nothing is buffered -- `packaging.stream` and
+# `objects.chunks` are both generators, so an abandoned download stops pulling
+# from the store rather than running to completion.
+
+def _for_download(job_id: UUID):
+    """The artifacts a download route may serve, or the reason it may not.
+
+    410 rather than 404 for an expired job: the objects existed and the
+    manifest still records what they were, which is a different thing to say
+    than "no such job".
+    """
+    with connection() as conn, conn.cursor(row_factory=dict_row) as cur:
+        cur.execute("SELECT created_at, manifest FROM jobs WHERE id = %s",
+                    (job_id,))
+        row = cur.fetchone()
+    if row is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "no such job")
+
+    if (settings.retention_days
+            and row["created_at"] < datetime.now(UTC)
+            - timedelta(days=settings.retention_days)):
+        raise HTTPException(status.HTTP_410_GONE,
+                            "artifacts have expired from the object store")
+
+    # `parse` never raises and yields no artifacts when it could not validate
+    # the manifest, so a name this platform could not check never reaches a
+    # download: degraded means fewer capabilities, never looser ones.
+    artifacts = manifest_schema.parse(row["manifest"]).artifacts
+    if not artifacts:
+        raise HTTPException(status.HTTP_404_NOT_FOUND,
+                            "this run has no artifacts to download")
+    return artifacts
+
+
+def _attachment(stem: str) -> dict[str, str]:
+    """A Content-Disposition built from OUR text, never the artifact's name.
+
+    `manifest.reject_unsafe_name` admits quotes, spaces and unicode on purpose
+    -- a dropped file really can be called `50%off.exe` and byte-exactness of
+    that name is the point of collecting it. None of that belongs unescaped in
+    a response header, so the download name is derived here and the real names
+    survive inside the archive, which is where they matter.
+    """
+    safe = re.sub(r"[^A-Za-z0-9._-]", "_", stem).strip("._-")[:60]
+    return {"Content-Disposition":
+            f'attachment; filename="{safe or "artifacts"}.zip"'}
+
+
+@router.get("/{job_id}/artifacts.zip")
+def download_all_artifacts(job_id: Annotated[UUID, Path()]) -> StreamingResponse:
+    """Every artifact of one run, in a single password-protected ZIP."""
+    artifacts = _for_download(job_id)
+    prefix = objects.result_prefix(job_id)
+
+    return StreamingResponse(
+        packaging.stream(
+            (a.name, objects.chunks(f"{prefix}{a.name}")) for a in artifacts
+        ),
+        media_type="application/zip",
+        headers=_attachment(f"job-{job_id}-artifacts"),
+    )
+
+
+@router.get("/{job_id}/artifact.zip")
+def download_one_artifact(
+    job_id: Annotated[UUID, Path()],
+    name: Annotated[str, Query(description="artifact name from the manifest")],
+) -> StreamingResponse:
+    """One artifact, wrapped the same way.
+
+    **The name is matched against the manifest rather than used to build a
+    key.** It arrives from the query string, so treating it as a path fragment
+    would make this an arbitrary-read primitive over a bucket holding live
+    malware; resolving it to a manifest entry first means the only reachable
+    objects are the ones this job actually declared.
+    """
+    match = next((a for a in _for_download(job_id) if a.name == name), None)
+    if match is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND,
+                            "no such artifact for this job")
+
+    key = f"{objects.result_prefix(job_id)}{match.name}"
+    return StreamingResponse(
+        packaging.stream([(match.name, objects.chunks(key))]),
+        media_type="application/zip",
+        headers=_attachment(match.name.rsplit("/", 1)[-1]),
+    )
 
 
 @router.post("/{job_id}/cancel")

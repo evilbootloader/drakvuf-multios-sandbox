@@ -243,6 +243,17 @@ def sample_status(key: str, expected: str | None) -> str:
     return "ok"
 
 
+def chunks(key: str, chunk_size: int = 1 << 20) -> Iterator[bytes]:
+    """Stream one stored object, for a caller that will not keep it.
+
+    The public face of `_chunks`. Used by the artifact download routes, which
+    wrap what they read into an encrypted ZIP and forward it -- so the bytes
+    pass through this process without ever reaching its disk, exactly as
+    `inspect` requires of a sample.
+    """
+    return _chunks(key, chunk_size)
+
+
 def _chunks(key: str, chunk_size: int = 1 << 20) -> Iterator[bytes]:
     body = _client(Audience.WORKER).get_object(
         Bucket=settings.s3_bucket, Key=key

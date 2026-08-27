@@ -31,11 +31,29 @@
   {% endif %}
 </div>
 {% else %}
+{#
+  This said the same thing before 2026-08-27 and it was not true: the links
+  were presigned GETs straight to the object store, so "downloads as ZIP"
+  described packaging that existed nowhere in the codebase. The routes behind
+  these links now do the wrapping -- see routers/jobs.py and packaging.py --
+  so the claim is the behaviour.
+
+  Deliberately does NOT say the archive keeps anything secret. `infected` is a
+  published convention, ZipCrypto is weak, and anyone who can open this page
+  can open the file. What it buys is that the bytes in transit are not the
+  bytes of an executable.
+#}
 <p class="note danger">
-  Executable artifacts download as ZIP with the password <code>infected</code>.
-  That is the convention every analyst and tool expects, and it stops the
-  browser, the OS and any scanner in between from executing or quarantining
-  the file mid-download.
+  Artifacts download as ZIP with the password <code>infected</code>. That is the
+  convention every analyst and tool expects, and it stops the browser, the OS
+  and any scanner in between from executing or quarantining the file
+  mid-download. It is packaging, not protection — anything here may be live, so
+  open it in an isolated environment.
+</p>
+<p>
+  <a href="/api/v1/jobs/{{ job.id }}/artifacts.zip" rel="noopener nofollow">
+    Download all {{ job.artifacts | length }} artifacts</a>
+  as a single archive.
 </p>
 <table>
   <thead><tr><th>Artifact</th><th></th></tr></thead>

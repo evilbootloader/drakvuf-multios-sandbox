@@ -486,9 +486,27 @@ Candidate. Names and shapes are the design's, not an implementation's.
 | `POST /api/v1/jobs` | Create; returns `job_id` + presigned PUT |
 | `POST /api/v1/jobs/{id}/uploaded` | Admission checks; `queued` or `rejected` |
 | `GET /api/v1/jobs` | History, filter and search |
-| `GET /api/v1/jobs/{id}` | Status, manifest, presigned GETs for artifacts |
+| `GET /api/v1/jobs/{id}` | Status, manifest, artifact download links |
+| `GET /api/v1/jobs/{id}/artifacts.zip` | Every artifact, one encrypted archive |
+| `GET /api/v1/jobs/{id}/artifact.zip?name=` | One artifact, encrypted |
 | `GET /api/v1/jobs/{id}/events` | SSE, backed by `LISTEN`/`NOTIFY` |
 | `POST /api/v1/jobs/{id}/cancel` | Cancel |
+
+> **Amended 2026-08-27 (code review): artifacts leave wrapped, not raw.**
+> `GET /api/v1/jobs/{id}` used to mint a presigned GET per artifact, pointing
+> the browser straight at MinIO. The artifacts tab told operators the download
+> was a ZIP with the password `infected` — the convention that stops a browser,
+> an OS or a scanner acting on the bytes — and nothing anywhere implemented it,
+> so an analyst clicking a file recovered from `extracted/` received a live
+> executable.
+>
+> The two routes above do the wrapping, so the API is deliberately in the data
+> path here even though `objects.py` avoids that everywhere else: MinIO serves
+> what it stores, so this is the only place the packaging can happen. Nothing
+> is buffered or written to disk — `packaging.stream` and `objects.chunks` are
+> both generators, which keeps the property `objects.inspect` states about
+> samples. The password is packaging, not confidentiality; `packaging.py` says
+> so at length.
 
 **Worker, scoped token, Dom0 only:**
 

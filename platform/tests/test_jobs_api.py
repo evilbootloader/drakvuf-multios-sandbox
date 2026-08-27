@@ -5,8 +5,10 @@ Issue #36 (DRAFT-043), with the two-endpoint split from #39.
 
 from __future__ import annotations
 
+import io
 import json
 import uuid
+import zipfile
 
 import pytest
 
@@ -500,6 +502,141 @@ def test_a_job_inside_the_window_still_offers_links(client, conn):
 
     assert detail["artifacts_expired"] is False
     assert "trace.log" in detail["artifacts"]
+
+
+# --- wrapped downloads -----------------------------------------------------
+#
+# End to end: real objects in the bucket, through the route, decrypted with the
+# stdlib. `test_packaging.py` covers the archive format on its own.
+
+def _completed_with_objects(conn, put_object, files: dict[str, bytes]):
+    names = json.dumps({"artifacts": sorted(files)})
+    job_id = conn.execute(
+        """
+        INSERT INTO jobs (target_os, submitted_filename, state, manifest)
+        VALUES ('ubuntu', 'x.bin', 'completed', %s) RETURNING id
+        """,
+        (names,),
+    ).fetchone()[0]
+    for name, body in files.items():
+        put_object(f"results/{job_id}/{name}", body)
+    return job_id
+
+
+def _unzip(payload: bytes) -> zipfile.ZipFile:
+    archive = zipfile.ZipFile(io.BytesIO(payload))
+    archive.setpassword(b"infected")
+    return archive
+
+
+def test_one_artifact_downloads_as_an_encrypted_zip(client, conn, put_object):
+    """The claim the artifacts tab has made since #38, finally true."""
+    payload = b"MZ" + b"\x90" * 2048
+    job_id = _completed_with_objects(conn, put_object,
+                                     {"extracted/evil.exe": payload})
+
+    r = client.get(f"/api/v1/jobs/{job_id}/artifact.zip",
+                   params={"name": "extracted/evil.exe"})
+
+    assert r.status_code == 200
+    assert r.headers["content-type"] == "application/zip"
+    # The executable's own bytes never appear on the wire, which is the whole
+    # reason for wrapping: no scanner or browser in between can act on them.
+    assert payload not in r.content
+    assert _unzip(r.content).read("extracted/evil.exe") == payload
+
+
+def test_every_artifact_downloads_in_one_archive(client, conn, put_object):
+    files = {"trace.log": b"openat\n" * 100,
+             "capture.pcap": b"\xd4\xc3\xb2\xa1" + b"\x00" * 500,
+             "memdump/0x1000.dmp": b"\xde\xad\xbe\xef" * 64}
+    job_id = _completed_with_objects(conn, put_object, files)
+
+    r = client.get(f"/api/v1/jobs/{job_id}/artifacts.zip")
+
+    assert r.status_code == 200
+    archive = _unzip(r.content)
+    assert set(archive.namelist()) == set(files)
+    for name, body in files.items():
+        assert archive.read(name) == body
+
+
+def test_the_download_name_never_carries_the_artifacts_own_name(
+        client, conn, put_object):
+    """`reject_unsafe_name` admits quotes on purpose, and an artifact called
+    `a".exe` would otherwise close the quoting in Content-Disposition."""
+    job_id = _completed_with_objects(conn, put_object, {'a";x.exe': b"hi"})
+
+    r = client.get(f"/api/v1/jobs/{job_id}/artifact.zip",
+                   params={"name": 'a";x.exe'})
+
+    # Both the quote and the semicolon are replaced, so neither can terminate
+    # the quoted string or start a second header parameter.
+    assert r.headers["content-disposition"] == 'attachment; filename="a__x.exe.zip"'
+    # The real name survives where it matters, inside the archive.
+    assert _unzip(r.content).read('a";x.exe') == b"hi"
+
+
+def test_a_name_not_in_the_manifest_is_refused(client, conn, put_object):
+    """**The name resolves against the manifest rather than building a key.**
+    Otherwise this route is an arbitrary read over a bucket of live malware."""
+    job_id = _completed_with_objects(conn, put_object, {"trace.log": b"ok"})
+    put_object(f"results/{job_id}/secret.bin", b"not declared")
+
+    for name in ("secret.bin", "../../samples/x", "trace.log/../secret.bin"):
+        r = client.get(f"/api/v1/jobs/{job_id}/artifact.zip",
+                       params={"name": name})
+        assert r.status_code == 404, name
+
+
+def test_an_expired_job_refuses_the_download_rather_than_404ing(client, conn):
+    """410: the objects existed and the manifest still says what they were,
+    which is a different thing to say than "no such job"."""
+    job_id = _completed_with_artifacts(conn, age_days=45)
+
+    assert client.get(f"/api/v1/jobs/{job_id}/artifacts.zip").status_code == 410
+    assert client.get(f"/api/v1/jobs/{job_id}/artifact.zip",
+                      params={"name": "trace.log"}).status_code == 410
+
+
+def test_a_run_with_no_artifacts_has_nothing_to_download(client, conn):
+    job_id = conn.execute(
+        "INSERT INTO jobs (target_os, submitted_filename, state, manifest) "
+        "VALUES ('ubuntu', 'x.bin', 'completed', '{\"artifacts\": []}') "
+        "RETURNING id"
+    ).fetchone()[0]
+
+    assert client.get(f"/api/v1/jobs/{job_id}/artifacts.zip").status_code == 404
+
+
+def test_download_links_point_at_the_wrapping_routes(client, conn):
+    """**Not a presigned GET.** One of those hands over the stored object as it
+    is, so an analyst clicking something from `extracted/` received a live
+    executable while the tab said it arrived as a password-protected ZIP. The
+    wrapping can only happen in this API, so the link has to come back here."""
+    job_id = _completed_with_artifacts(conn, age_days=1)
+
+    url = client.get(f"/api/v1/jobs/{job_id}").json()["artifacts"]["trace.log"]
+
+    assert url == f"/api/v1/jobs/{job_id}/artifact.zip?name=trace.log"
+
+
+def test_an_artifact_name_is_url_encoded_into_the_link(client, conn):
+    """Names admit spaces, `&` and unicode by design -- `reject_unsafe_name`
+    says so -- and an unencoded one would silently truncate at the `&`."""
+    job_id = conn.execute(
+        """
+        INSERT INTO jobs (target_os, submitted_filename, state, manifest)
+        VALUES ('ubuntu', 'x.bin', 'completed',
+                '{"artifacts": ["extracted/a b&c.exe"]}')
+        RETURNING id
+        """
+    ).fetchone()[0]
+
+    urls = client.get(f"/api/v1/jobs/{job_id}").json()["artifacts"]
+
+    assert urls["extracted/a b&c.exe"].endswith(
+        "artifact.zip?name=extracted%2Fa%20b%26c.exe")
 
 
 def test_retention_disabled_never_expires_anything(client, conn, monkeypatch):
