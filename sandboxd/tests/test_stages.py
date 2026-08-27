@@ -200,6 +200,35 @@ def test_the_trace_streams_are_never_merged(tmp_path):
     assert drakvuf.stdout_path != drakvuf.stderr_path
 
 
+def test_both_plugin_output_directories_exist_before_drakvuf_runs(tmp_path):
+    """DRAKVUF does not create them and says nothing when they are missing.
+
+    `drakvuf-ubuntu.sh:170` created both with one `mkdir -p` and the port to
+    `stages.py` dropped it. That stayed invisible because the two plugins fail
+    differently: `-D` ends up created anyway, so `dump/` appears and looks like
+    proof the output paths work, while `--memdump-dir` does not and `memdump`
+    writes nothing. Dom0 2026-08-27: a completed trace with 48 memdump lines in
+    trace.log and no memdump directory beside it.
+
+    The shape is what makes it worth a test. The job reports `completed`, the
+    manifest lists the artifacts that did survive, and nothing anywhere records
+    that a plugin was asked to collect memory and could not -- a silent partial
+    loss of evidence, which is the worst way for a sandbox to fail.
+    """
+    r = runner_ready()
+    run(tmp_path, runner=r)
+
+    drakvuf = [c for c in r.calls if c.argv[0] == "drakvuf"][0]
+    dump = Path(drakvuf.argv[drakvuf.argv.index("-D") + 1])
+    memdump = Path(drakvuf.argv[drakvuf.argv.index("--memdump-dir") + 1])
+
+    assert dump.is_dir(), "-D was passed a path that does not exist"
+    assert memdump.is_dir(), (
+        "--memdump-dir was passed a path that does not exist; memdump writes "
+        "nothing and the trace still reports success"
+    )
+
+
 def test_the_capture_runs_alongside_the_trace_and_is_stopped(tmp_path):
     """Held rather than searched for. drakvuf-<os>.sh stops it by grepping
     `ps aux` for its own command line, which carries DRAFT-011's wildcard

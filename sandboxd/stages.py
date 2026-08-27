@@ -392,6 +392,26 @@ class Analysis:
         # may be requested" -- which is why it is off by default.
         console = self._start_console(job, beat)
         try:
+            # **DRAKVUF does not create these, and says nothing when they are
+            # missing.** `drakvuf-ubuntu.sh:170` created both with a single
+            # `mkdir -p` and the port to this module dropped it, which was not
+            # visible because the two plugins fail differently: `-D` ends up
+            # created anyway, so `dump/` appears and looks like proof the
+            # output paths work, while `--memdump-dir` does not and `memdump`
+            # writes nothing at all. Measured on Dom0 2026-08-27 -- a completed
+            # trace with 48 memdump lines in trace.log and no memdump directory
+            # beside it.
+            #
+            # A silent partial loss of evidence is the worst shape this failure
+            # could take: the analysis reports `completed`, the manifest lists
+            # the artifacts that did survive, and nothing anywhere records that
+            # a plugin was asked to collect memory and could not.
+            #
+            # `parents=True, exist_ok=True` for the same reason the shell used
+            # `-p`: a retry reuses the job directory.
+            for sub in ("dump", "memdump"):
+                (job.result_dir / sub).mkdir(parents=True, exist_ok=True)
+
             self._sleep(timing._trace_waits(job.target_os, job.kind,
                                             self._cfg.waits), beat)
             result = self._runner.run(
