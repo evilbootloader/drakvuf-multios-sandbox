@@ -495,14 +495,36 @@ root@drakvuf:~/drakvuf-multios-sandbox# grep -i "hid" /tmp/drakvuf.out | head -2
 {"Plugin":"syscall","TimeStamp":"1787773501.232386","PID":1596,"PPID":1,"TID":1596,"UserId":0,"ProcessName":"/usr/lib/apt/apt-helper","Method":"openat","EventUID":"0xfac7","ThreadName":"apt-helper","Module":"linux","vCPU":0,"CR3":"0x4f00000","Syscall":257,"NArgs":4,"Type":"x64","dirfd":"0xffffff9c","pathname":"/etc/apt/apt.conf.d/60icons-hidpi","flags":"0x80100","mode":"0x21614f5b"}
 ```
 
-**If additive:** every past trace contains synthetic mouse input, that fact
-belongs in `docs/architecture/upstream-drakvuf.md`, and `sandboxd` needs a way
-to suppress it before a console session is usable. Find the option in the full
-help — there may be no way to disable a default-on plugin except by listing
-plugins differently.
+### RESULT — restrictive. `hidsim` has never run.
 
-**If restrictive:** `hidsim` has never run, nothing to reconcile, and DRAFT-055
-starts from zero as its draft assumes.
+Answered from the source rather than from behaviour, which is the stronger
+form: `/home/user/drakvuf/src/main.cpp`.
+
+```c
+438:  bool plugin_list[] = {[0 ... __DRAKVUF_PLUGIN_LIST_MAX-1] = 1};
+163:  static inline bool enable_plugin(char* _optarg, bool* plugin_list,
+                                       bool* disabled_all)
+167:          disable_all_plugins(plugin_list);
+174:          plugin_list[i] = true;
+```
+
+Every plugin starts enabled (`:438`) — but the **first `-a` calls
+`disable_all_plugins()`** and only then enables what it names. So `-a` is
+**restrictive**, and the four plugins the pipeline passes are the only four
+that have ever run.
+
+The `grep -i hid` above is consistent: its single hit is a syscall event whose
+`pathname` happens to contain `60icons-hidpi`, not a `[HIDSIM]` line. There is
+no hidsim output because there was no hidsim.
+
+**Nothing to reconcile.** No Ubuntu or Android trace in this project contains
+synthetic mouse input, an operator driving the DRAFT-056 console is not
+competing with a synthetic pointer, and DRAFT-055 starts from zero as its own
+draft assumes. Recorded in `docs/architecture/upstream-drakvuf.md` and
+`docs/architecture/live-console.md` §4.6, which is now closed.
+
+Noted in passing, for DRAFT-052: `-x` / `disable_plugin` exists
+(`main.cpp:143,733`), so a plugin can be excluded without re-listing the rest.
 
 ## B2. How is a clone's VNC port found?
 
@@ -1233,10 +1255,10 @@ appear **above the tab bar** — with no reload, because the SSE refresh
 re-renders that region.
   
 - [x] The panel appears when the state becomes `executing`
-- [ ] It is above the tabs, not one of them
-- [ ] A screen appears within ~10s (one heartbeat interval — Dom0 dials out,
+- [x] It is above the tabs, not one of them
+- [x] A screen appears within ~10s (one heartbeat interval — Dom0 dials out,
       so this is the latency floor of not listening)
-- [ ] **Clicking a tab does not kill the session.** This is the bug caught in
+- [x] **Clicking a tab does not kill the session.** This is the bug caught in
       review: the console used to live in the region tab clicks replace
 
 ```text
@@ -1262,9 +1284,8 @@ reports that look alike must not describe different experiments.
 > plugin are contending for the same cursor.
 
 ```text
-EVIDENCE D3
-
-
+root@pve1:~# pct exec 102 -- runuser -u platform -- psql -d sandbox_platform -Atc   "SELECT interacted FROM jobs ORDER BY created_at DESC LIMIT 1"
+f
 ```
 
 ## D4. The session ends with the trace
@@ -1273,13 +1294,14 @@ EVIDENCE D3
 # Watch the panel when the job leaves `executing`.
 ```
 
-- [ ] The panel disappears when the state changes
-- [ ] No `sandboxd` process is left holding a socket: `ss -tnp | grep 59`
-- [ ] The job completes normally — the console is an observer, never a
+- [x] The panel disappears when the state changes
+- [x] No `sandboxd` process is left holding a socket: `ss -tnp | grep 59`
+- [I can move pointer and click] The job completes normally — the console is an observer, never a
       participant in the analysis's lifecycle
 
 ```text
-EVIDENCE D4
+root@drakvuf:~/drakvuf-multios-sandbox# ss -tnp | grep 59
+CLOSE-WAIT 25     0      192.168.1.144:45920 192.168.1.10:9000 users:(("python",pid=10739,fd=5))
 
 
 ```
@@ -1309,9 +1331,19 @@ ss -ltn
 Nothing on a non-loopback address that was not there before.
 
 ```text
-EVIDENCE E1 — run DURING a live console session
+root@pve1:~# pct exec 102 -- bash -lc 'curl -m 5 -sv https://192.168.1.144/ ; echo "exit=$?"'
+ 
+*   Trying 192.168.1.144:443...
+* Connection timed out after 5002 milliseconds
+* closing connection #0
+exit=28
 
-
+root@drakvuf:~/drakvuf-multios-sandbox# ss -ltn
+State     Recv-Q     Send-Q         Local Address:Port         Peer Address:Port    Process    
+LISTEN    0          4096           127.0.0.53%lo:53                0.0.0.0:*                  
+LISTEN    0          128                127.0.0.1:631               0.0.0.0:*                  
+LISTEN    0          128                    [::1]:631                  [::]:*                  
+root@drakvuf:~/drakvuf-multios-sandbox# 
 ```
 
 ## E2. The console refuses what it should
@@ -1328,9 +1360,11 @@ pct exec 102 -- systemctl restart sandbox-api sandbox-api-browser
 ```
 
 ```text
-EVIDENCE E2
+vscode ➜ /workspaces/sandbox_project (master) $ curl -s -o /dev/null -w '%{http_code}\n' -H "cf-access-token: $TOKEN" \
+  https://sandbox.evilbootloader.com/api/v1/jobs/2764462d-a532-41a2-aea9-9f378e7363c2/console
+404
 
-
+With "sed -i 's/CONSOLE_ENABLED=1/CONSOLE_ENABLED=0/' /etc/sandbox-platform/api.env" console does not open
 ```
 
 ## E3. Two orchestrators still refuse to share the host
@@ -1342,9 +1376,21 @@ EVIDENCE E2
 ```
 
 ```text
-EVIDENCE E3
+# sandboxd running, then run_analysis-ubuntu.sh
+root@drakvuf:~/drakvuf-multios-sandbox# /root/drakvuf-multios-sandbox/automation/run_analysis-ubuntu.sh
+DRAKVUF_NAT  all opt -- in * out *  0.0.0.0/0  -> 0.0.0.0/0  
+DRAKVUF_ISOLATION  all opt -- in * out *  0.0.0.0/0  -> 0.0.0.0/0  
+\u00e7DRAKVUF_INPUT  all opt -- in * out *  0.0.0.0/0  -> 0.0.0.0/0  
+DRAKVUF_ISOLATION6  all opt    in * out *  ::/0  -> ::/0  
+DRAKVUF_INPUT6  all opt    in * out *  ::/0  -> ::/0  
+network-setup.sh: provisioned 2 VLAN sub-interface(s) on xenbr1
+DRAKVUF dirwatch v1.1-git20260511151619+52df0bc8-1 Copyright (C) 2014-2024 Tamas K Lengyel
+VLAN pool: 1..2 (leases in /run/drakvuf/vlan), worker slots: 2
+Memory admission: DISABLED (DRAKVUF_CLONE_MEMORY_MIB unset) -- clones are limited only by worker slots, and concurrent watchers can overcommit this host
 
-
+# run_analysis-ubuntu.sh, then sandboxd
+root@drakvuf:~/drakvuf-multios-sandbox# .venv-sandboxd/bin/python -m sandboxd.daemon
+2026-08-27 00:17:37,747 ERROR   sandboxd: a dirwatch is running (pid 15606). Its clones use VLANs 1..MAX_CLONES and so would these -- they would collide on gateway addresses and isolation rules, and nothing would report it. Stop it first; migration is a cutover, not coexistence.
 ```
 
 ---
@@ -1648,3 +1694,430 @@ F14
 - `docs/architecture/live-console.md` §4.6 is closed or updated by B1.
 - If Part C passed on Ubuntu, #41's acceptance criteria can start being ticked
   — but Android and the concurrency criterion need their own runs.
+
+---
+
+# F. Host capacity — why two clones crawl
+
+**Reported by the operator 2026-08-26:** with one or two analysis VMs running,
+Dom0's CPUs are throttled and the analysis is very laggy.
+
+This section is **diagnosis, not yet evidence.** The mechanism below is
+inference from how DRAKVUF works; the numbers that would confirm it have not
+been taken. Take them before changing anything.
+
+## F1. The feedback loop this is likely to be
+
+Under DRAKVUF a trapped syscall **pauses the guest vCPU** until Dom0 has run
+the plugin callback and single-stepped past the breakpoint. So guest execution
+speed is bounded by *Dom0's* event-processing throughput, and the usual
+intuition inverts:
+
+> **Giving the clones more CPU makes them slower**, because the CPU comes out
+> of Dom0's share, and Dom0 is the bottleneck.
+
+With no pinning, Xen's scheduler sees four guest vCPUs (two clones ×
+`vcpus = 2`) plus Dom0's, all runnable, and shares fairly between them. Fair is
+exactly wrong here: a guest vCPU spends most of its time blocked on Dom0 and
+traps again the moment it resumes, so Dom0 needs a *disproportionate* share and
+gets an equal one. Each clone added takes CPU from the thing every clone is
+waiting for, which is why the second one hurts far more than linearly.
+
+Two multipliers on top:
+
+- **`syscalls` traps everything.** The help captured in B1 says so directly —
+  *"trap all if parameter is absent"* — and no filter file is passed. Every
+  `read`, every `epoll_pwait`, every clock call is a VM exit plus a
+  single-step.
+- **This is nested.** L0 Proxmox/KVM → L1 Xen → L2 guest. Every VM exit costs
+  materially more than it would on bare metal, and VM exits are the entire
+  workload.
+
+## F2. Measure, before changing anything
+
+The first command may settle it outright.
+
+```sh
+xl info | grep -E "nr_cpus|threads_per_core|cores_per_socket|total_memory|free_memory"
+cat /proc/cmdline                     # dom0_max_vcpus / dom0_vcpus_pin present?
+xl vcpu-list                          # Dom0's vCPUs, and any CPU affinity
+```
+
+**If `nr_cpus` is 4 or fewer, stop here** — two clones at `vcpus = 2` already
+ask for the whole machine and Dom0 gets what is left over, which is nothing.
+That is oversubscription, not a tuning problem, and the fix is either more
+vCPUs on the L1 Proxmox VM or fewer concurrent jobs.
+
+Then, *during* a two-clone run:
+
+```sh
+xentop -b -i 5 -d 2                   # who is actually burning CPU
+```
+
+Read `Domain-0`'s CPU% against the clones'. The prediction is that Dom0 is
+pinned at or near its ceiling while the clones sit low — busy waiting on it,
+not computing. If instead the clones are high and Dom0 is low, the loop above
+is the wrong diagnosis and this section needs rewriting.
+
+EVIDENCE F2 — paste `xl info`, `/proc/cmdline` and one `xentop` sample
+
+```
+```
+
+## F3. The fixes, in order of leverage
+
+Not applied. Each needs its own decision, and the first two are Dom0 host
+configuration rather than repository changes.
+
+**1. Pin Dom0 to its own pCPUs.** Add to the Xen command line —
+
+    dom0_max_vcpus=2 dom0_vcpus_pin
+
+— and pin the clones to the complement with `cpus = "2-N"` in
+`misc/*_sandbox.cfg`. This breaks the feedback loop directly: Dom0 always has
+CPU to service traps, so the clones stop waiting on a starved handler. It is
+the standard DRAKVUF deployment posture and the change with the most leverage.
+Requires a Dom0 reboot.
+
+**2. Cut the trap surface.** Pass a syscall filter file so `syscalls` traps a
+chosen set instead of all of them. This is the largest reduction in event rate
+available without touching scheduling. **It has a real cost** — a syscall not
+on the list is invisible, exactly as `--disable-sysret` costs return values on
+Android — so the list belongs in `pipeline-<os>.env` as a reviewable file, not
+inline in a script.
+
+**3. One vCPU per clone.** `vcpus = 2` doubles the trap load for a workload
+that is usually single-threaded, and adds altp2m view synchronisation across
+vCPUs. **Cost: the templates must be re-saved**, because `xl restore` takes the
+vCPU count from the saved memory image and not from the `.cfg` — so this is not
+a config edit. Worth measuring the win before paying for it.
+
+**4. `-F` and `--disable-sysret` on Ubuntu.** Android already runs both
+(`pipeline-android.env:222`) and Ubuntu runs neither. This would very likely
+help — but CLAUDE.md says Ubuntu behaviour is not changed unless explicitly
+requested, and Ubuntu is the only end-to-end evidenced pipeline in the project.
+**Flagged, not done.** It also costs syscall return values, which is why
+Android carries `DISABLE_SYSRET` as a switch rather than a constant.
+
+## F4. `sandboxd` does not model CPU at all — DRAFT-061
+
+`ResourceTable` admits a job on **memory, a VLAN and a slot**
+(`sandboxd/resources.py:119`). There is no CPU dimension. On a host with RAM to
+spare it will therefore happily admit clones until the pCPUs are oversubscribed
+and every running analysis slows down together — which is the failure this
+section is about, and `sandboxd` cannot currently see it.
+
+`total_slots` is the only thing standing in the way, and it is a number an
+operator sets rather than one derived from `xl info`. That is a real gap, not a
+tuning preference: **memory is the resource that fails loudly and CPU is the
+one that degrades every job at once, silently.** The second is worse, because a
+job that merely runs slowly still hits `dirwatch`'s old 180s trace ceiling and
+is recorded as a timeout — a capacity problem reported as an analysis result.
+
+Raise as DRAFT-061: derive a vCPU budget from `xl info`, subtract Dom0's pinned
+set, and make `acquire()` all-or-nothing across memory, VLAN, slot **and**
+vCPUs, the way it already is across the first three.
+
+## F5. Hybrid CPUs — keep Dom0 off the E-cores
+
+**Reported by the operator 2026-08-26:** the host has Intel hybrid cores
+(P-cores and E-cores), Dom0 should not be scheduled on the E-cores, and the
+Xen VM's Proxmox CPU type is **`host`**.
+
+### F5a. The pinning cannot happen inside Xen
+
+Dom0 is **L1**. Proxmox presents it a set of uniform vCPUs, so Xen cannot tell
+which of its `pCPU 0..N-1` is executing on a P-core — and the answer changes as
+L0's scheduler migrates the QEMU vCPU threads. `dom0_vcpus_pin` therefore pins
+Dom0 to a *virtual* CPU that can be running on an E-core a millisecond later.
+
+**Core-type selection is an L0 (Proxmox) operation.** The Xen-level pinning in
+F3 is still worth doing, but it only partitions Dom0 from the clones *within*
+whatever L0 hands up — it cannot choose core types. Both levels are needed, in
+this order:
+
+    L0 Proxmox : qm affinity              -> Xen VM's threads run only on P-cores
+    L1 Xen     : dom0_vcpus_pin + cpus=   -> Dom0 and clones partitioned
+                                             within that P-core set
+
+### F5b. `cpu: host` makes this a correctness problem, not only a slow one
+
+`cpu: host` passes the physical CPU's feature set straight through. On a hybrid
+part QEMU enumerates CPUID **once**, from whichever core it happened to be on —
+and the VM's threads then migrate freely between P-cores and E-cores. The guest
+is therefore told about a CPU it is not always executing on.
+
+What still differs on Alder Lake and later:
+
+- **leaf 0x1A** (hybrid core type) — answers differently depending on where it
+  is asked;
+- **leaf 0xA, the PMU** — P-cores and E-cores expose different counter counts
+  and architectural PMU versions;
+- **cache topology** — E-cores share L2 in clusters of four, P-cores do not.
+
+The AVX-512 case that used to cause outright `#UD` is mostly gone — Intel fused
+it off on P-cores in retail parts for exactly this reason — but the shape
+stands. **This is a latent instability worth tracking separately from the
+throttling.** If unexplained flakiness appears in Dom0 or in a clone, this is a
+candidate cause, and it would not look like a CPU problem.
+
+**Do not "fix" it by changing the CPU model.** Xen needs `vmx` exposed to run
+HVM guests at all, and most named QEMU models omit it; `cpu: host` is the usual
+way nested virtualisation is enabled on Proxmox and is very likely why it is
+set. Changing it is how one discovers DRAKVUF can no longer start a domain.
+
+The convergence is the useful part: **confining the VM to P-cores makes
+`cpu: host` honest**, because enumeration and execution then agree. One change
+addresses F1's contention *and* removes this hazard.
+
+### F5c. Identify the cores — on the Proxmox host, not Dom0
+
+Do not infer core type from clock speed; the kernel exposes it directly.
+
+```sh
+cat /sys/devices/cpu_core/cpus      # P-cores, e.g. 0-15
+cat /sys/devices/cpu_atom/cpus      # E-cores, e.g. 16-23
+lscpu -e=CPU,CORE,MAXMHZ            # cross-check, and shows SMT siblings
+```
+
+On a hybrid Intel part the P-cores are SMT (two threads per core) and the
+E-cores are not, so the numbering is not simply "low = fast".
+
+EVIDENCE F5c — paste both `cpus` files and the `lscpu -e` table
+
+```
+root@pve1:~# cat /sys/devices/cpu_core/cpus      # P-cores, e.g. 0-15
+0-15
+root@pve1:~# cat /sys/devices/cpu_atom/cpus      # E-cores, e.g. 16-23
+16-31
+root@pve1:~# lscpu -e=CPU,CORE,MAXMHZ            # cross-check, and shows SMT siblings
+CPU CORE    MAXMHZ
+  0    0 5500.0000
+  1    0 5500.0000
+  2    1 5500.0000
+  3    1 5500.0000
+  4    2 5800.0000
+  5    2 5800.0000
+  6    3 5800.0000
+  7    3 5800.0000
+  8    4 5500.0000
+  9    4 5500.0000
+ 10    5 5500.0000
+ 11    5 5500.0000
+ 12    6 5500.0000
+ 13    6 5500.0000
+ 14    7 5500.0000
+ 15    7 5500.0000
+ 16    8 4300.0000
+ 17    9 4300.0000
+ 18   10 4300.0000
+ 19   11 4300.0000
+ 20   12 4300.0000
+ 21   13 4300.0000
+ 22   14 4300.0000
+ 23   15 4300.0000
+ 24   16 4300.0000
+ 25   17 4300.0000
+ 26   18 4300.0000
+ 27   19 4300.0000
+ 28   20 4300.0000
+ 29   21 4300.0000
+ 30   22 4300.0000
+ 31   23 4300.0000
+```
+
+### F5d. Pin the Xen VM to P-cores only
+
+**Candidate — not yet run.** `--affinity` is PVE 7.3+ and takes a CPU list in
+the same form as `taskset -c`.
+
+```sh
+qm config <vmid> | grep -E "affinity|cores|sockets|cpu:"
+qm set <vmid> --affinity 0-15        # the cpu_core list from F5c
+qm stop <vmid> && qm start <vmid>    # applied cleanly on a fresh start
+```
+
+**Give Dom0 whole cores, not single SMT siblings.** A P-core's two threads
+share execution resources, so a Dom0 thread sharing a core with a clone's vCPU
+contends for the same pipeline — F1's problem reintroduced one level down,
+where Xen cannot see it and cannot schedule around it.
+
+EVIDENCE F5d — `qm config` before and after, and one `xentop` sample after
+
+```
+root@pve1:~# qm config 101 | grep -E "affinity|cores|sockets|cpu:"
+cores: 20
+cpu: host,flags=-hv-evmcs;-hv-tlbflush
+sockets: 1
+root@pve1:~# qm set 101 --affinity 0-15        # the cpu_core list from F5c
+update VM 101: -affinity 0-15
+root@pve1:~# qm stop 101 && qm start 101
+root@pve1:~# qm config 101 | grep -E "affinity|cores|sockets|cpu:"
+affinity: 0-15
+cores: 20
+cpu: host,flags=-hv-evmcs;-hv-tlbflush
+sockets: 1
+
+
+```
+
+### F5e. What Dom0 sees now
+
+Worth capturing before the change, because it says whether Xen's own load
+balancing has been working from a true topology.
+
+```sh
+xl info | grep -E "nr_cpus|threads_per_core|cores_per_socket|hw_caps"
+grep -m1 -o hybrid /proc/cpuinfo || echo "no hybrid flag visible in Dom0"
+```
+
+If the core count or `threads_per_core` does not match a pure P-core set, the
+topology Xen schedules against is already fiction.
+
+### Two decisions worth making explicitly
+
+**Disabling E-cores in firmware is a legitimate option.** Blunt, but this is a
+dedicated analysis host, and it covers what `qm set --affinity` does not reach.
+The cost is the E-cores' throughput for everything else the host does.
+
+**Hybrid cores are a reproducibility hazard independent of speed.** A sample
+that times itself — `rdtsc` deltas are ordinary sandbox-detection material —
+gets a materially different answer on a P-core than an E-core. DRAKVUF's
+single-stepping already distorts guest timing enormously, but that distortion
+is at least consistent; core-type roulette adds run-to-run variance to a number
+an evasive sample is actively reading. Pinning removes it as a side effect,
+which is a second and independent reason to do it.
+
+**SMT and the malware guest — flagged, not resolved.** The standard posture for
+a host running untrusted code alongside a privileged domain is `smt=off`:
+L1TF/MDS-class leakage is specifically cross-thread, and a clone's vCPU sharing
+a physical core with Dom0 is exactly that threat model. It also costs roughly
+half the thread count on a host that is already CPU-starved, which conflicts
+directly with the rest of section F. That trade-off belongs in a Dom0
+threat-model document that does not yet exist, not in a decision made in
+passing here.
+
+## F6. The layout that was chosen, and three corrections to F3–F5
+
+Settled with the operator on Dom0 2026-08-27, against real `xl info` and
+`xentop` output rather than the estimates F1–F5 were written from. Where this
+section disagrees with those, **this one is right** — they are kept unedited
+because the reasoning in them is what produced the measurements here.
+
+### F6a. What the host actually is
+
+```
+xen_version      : 4.20.1        total_memory : 20479
+nr_cpus          : 20            free_memory  : 12082
+threads_per_core : 1             xen_scheduler: credit
+```
+
+`xl dmesg` reports no rejected parameters — its only hit is
+`Unrecognised CPU model 0xb7`, which is Raptor Lake (an i9-13900K: 8 P-cores at
+5.5–5.8 GHz on host CPUs 0–15, 16 E-cores on 16–31, per F5c). Xen 4.20 does not
+know the model and falls back to a conservative LazyFPU mitigation. Cosmetic.
+
+### F6b. Three corrections
+
+**1. `force-ept=1`, `ept=ad=0` and `sched=credit` are all accepted.** F5 and the
+surrounding discussion doubted the first two would parse and claimed credit1 was
+removed in Xen 4.19. Both wrong: Xen logs unknown parameters and logged none,
+and `xen_scheduler : credit` shows credit1 alive on 4.20. Keep them as
+drakvuf.com has them.
+
+**2. `smt=0` is a no-op here, and that is fine.** `threads_per_core : 1` —
+Proxmox presents a flat topology, so Xen sees no siblings to disable. It costs
+nothing and is kept for parity with the upstream example. It should not be
+mistaken for sibling isolation: L1TF/MDS-class leakage is about *physical*
+threads, and only L0 decides which physical core a vCPU thread runs on.
+
+**3. F5d's "give Dom0 whole cores" cannot be delivered by `qm set --affinity`.**
+That option applies one CPU mask to *all* the VM's threads; it does not pin them
+individually, so L0 floats them freely inside the mask. Whole-core allocation
+would need per-thread pinning (a hookscript, or `taskset` per QEMU thread). The
+only mask-level way to guarantee it is to request no more vCPUs than there are
+physical P-cores — which the chosen layout deliberately does not do.
+
+### F6c. The layout
+
+**12 vCPUs**, Proxmox affinity `0-15` (the P-core set from F5c), 20 GB.
+
+```
+GRUB_CMDLINE_XEN_DEFAULT="dom0_mem=8192M,max:8192M dom0_max_vcpus=6 \
+  dom0_vcpus_pin=1 force-ept=1 ept=ad=0 hap_1gb=0 hap_2mb=0 altp2m=1 \
+  hpet=legacy-replacement smt=0 sched=credit"
+```
+
+    Dom0    pCPU 0-5        dom0_vcpus_pin
+    clones  pCPU 6-11       cpus = "6-11" in misc/*_sandbox.cfg
+
+**`cpus =` is not optional, and it is the half that is easy to miss.**
+`dom0_vcpus_pin` pins Dom0 *into* pCPU 0–5; it does not *reserve* them. An
+unpinned guest is scheduled wherever Xen likes, including on top of Dom0 — and
+because a trapped syscall pauses its vCPU until Dom0 has serviced it, a clone
+sharing a pCPU with Dom0 is competing with the thing it is waiting for. That is
+F1's loop, surviving a change that looks like it addressed it.
+
+Added to `ubuntu_sandbox.cfg` and `android_sandbox.cfg` 2026-08-27.
+`clone.py`'s `rewrite_config` changes only `name`, `vif` and `disk` and passes
+everything else through, so it reaches every clone. **No template re-save is
+needed for this** — vCPU affinity is a runtime property libxl applies from the
+config at restore; only the vCPU *count* comes from the saved memory image.
+`windows.cfg` keeps 2 vCPUs and gets its own line when `windows_sandbox.cfg`
+exists.
+
+**12 vCPUs exceeds the 8 physical P-cores**, so some vCPUs share a core. That is
+the accepted price of the extra parallelism, and it is why F6b(3) matters:
+nothing at the Xen level can prevent it.
+
+### F6d. Capacity
+
+```
+memory   20479 - 8192 Dom0  ->  12082 free  / 2198 per clone  =  5 clones
+cpu      12 - 6 Dom0        ->      6 pCPU  / 1 vCPU per clone =  6 clones
+```
+
+**Memory binds first**, which is the good outcome: it is the dimension
+`ResourceTable` models, so its admission decisions are correct rather than
+optimistic, and DRAFT-061 (F4) drops from "prevents a real failure" to "worth
+having for completeness".
+
+    SANDBOXD_TOTAL_MIB=11500
+
+Admits 5 clones (10990) and refuses a 6th (13188), with ~500 MiB of headroom
+for fragmentation and Xen's own accounting.
+
+### F6e. The clones already had one working vCPU
+
+`xentop` during a two-template run, 2026-08-27:
+
+```
+      NAME  STATE  CPU(sec) CPU(%)    MEM(k) MEM(%)  VCPUS
+android_sa ----p-         0    0.0   2081068    9.9      2
+VCPUs(sec):   0:         0s
+  Domain-0 -----r        61    9.3   8388608   40.0      8
+VCPUs(sec):   0:  8s  1:  7s  2:  7s  3:  7s  4:  8s  5:  6s  6:  6s  7:  8s
+ubuntu_san ----p-         0    0.0   2081068    9.9      2
+VCPUs(sec):   0:         0s
+```
+
+`VCPUS` is `max_vcpu_id + 1`, and the per-vCPU breakdown **skips offline
+vCPUs** — Domain-0 lists all eight, both templates list only `0:`. So each
+template had vCPU 1 *allocated and never brought up by the guest*.
+
+**This corrects the premise of F3(3).** An offline vCPU executes nothing and
+traps nothing, so `vcpus = 1` does not reduce the trap rate — it was never
+contributing one, and the change will not measurably help the throttling. It is
+kept anyway for two narrower reasons: a sample cannot online CPU1 through sysfs
+part-way through an analysis and change the shape of its own trace, and DRAKVUF
+stops iterating a vCPU that will never run.
+
+It also means the throttling is **not** explained by vCPU count, and the
+remaining candidates are the ones F1 named: Dom0/clone contention for the same
+pCPUs (addressed by F6c) and `syscalls` trapping every syscall (F3(2), still
+open).
+
+EVIDENCE F6 — after applying F6c, one `xentop` sample under two live analyses
+
+```
+```

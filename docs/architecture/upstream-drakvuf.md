@@ -56,6 +56,18 @@ runs, preserving the agentless design.
 > `docs/roadmap/project-roadmap.md` risk #8.
 >
 > The immediately useful consequence: **`procmon`, `procdump2`, `cpuidmon`,
+> **`-a` is restrictive, verified 2026-08-26.** `src/main.cpp:438` enables
+> every plugin by default, but the first `-a` calls `disable_all_plugins()`
+> (`:167`) and then enables only what is named — so listing four plugins runs
+> exactly those four. `-x` (`disable_plugin`, `:143`) excludes one without
+> re-listing the rest.
+>
+> This matters beyond configuration: it means `hidsim` has **never run** in
+> this project, so no existing trace contains the synthetic mouse input it
+> injects. Had `-a` been additive, every Ubuntu and Android trace would have
+> carried randomly-moving-mouse activity that no report attributes to
+> anything.
+>
 > `ipt`, `hidsim`, `ptracemon`, `ebpfmon` and `unixsocketmon` are available to
 > Ubuntu and Android today, upstream, and none is enabled.** `procmon` is the
 > process tree; `cpuidmon` records the sample's own hypervisor-detection
