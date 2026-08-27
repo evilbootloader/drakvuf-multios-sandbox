@@ -146,12 +146,11 @@ def counts() -> list[str]:
     ]
 
 
-def git_facts() -> list[str]:
-    return [
-        f"| HEAD | `{sh('git', 'rev-parse', '--short', 'HEAD')}` "
-        f"{sh('git', 'log', '-1', '--format=%s')} |",
-        f"| branch | `{sh('git', 'rev-parse', '--abbrev-ref', 'HEAD')}` |",
-    ]
+# **Nothing here may depend on HEAD.** The first version of this generator put
+# the commit sha and subject in the table, which made the file invalidate itself
+# the instant it was committed: the block recorded the sha of the commit before
+# the one that contained it, so `--check` failed forever after. A generated file
+# that is committed can only derive from things a commit does not change.
 
 
 def build() -> str:
@@ -187,7 +186,6 @@ def build() -> str:
         "| | |",
         "|---|---|",
         *counts(),
-        *git_facts(),
         "",
         END,
     ]

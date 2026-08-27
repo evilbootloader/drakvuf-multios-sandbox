@@ -215,7 +215,5 @@ is corrected here instead.
 | sandboxd modules | 14 |
 | test files | 12 sandboxd, 14 platform |
 | documents under `docs/` | 28 |
-| HEAD | `976cbbc` runbook 10: is Dom0 CPU-starved, and can L0 do anything about it |
-| branch | `master` |
 
 <!-- END GENERATED -->
