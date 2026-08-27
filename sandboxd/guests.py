@@ -44,10 +44,14 @@ blocks capa (DRAFT-019). `proc.spawn` takes separate paths and offers no merge.
 
 from __future__ import annotations
 
+import logging
+import re
 import zipfile
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
+
+log = logging.getLogger("sandboxd.guests")
 
 
 class TargetOs(str, Enum):
@@ -122,6 +126,68 @@ class TraceOptions:
 # (`drakvuf_plugin_os_support` in plugins.h) and a shared tuple would invite a
 # Windows-only plugin into a Linux list.
 _LINUX_PLUGINS = ("syscalls", "filetracer", "fileextractor", "memdump")
+
+# A plugin name as `-a` will accept it. Restrictive on purpose: this value
+# arrives from the environment and goes straight into argv, and while the
+# runner never uses a shell, a name with a space in it would silently become
+# two arguments and `-a` would take the wrong one.
+_PLUGIN_NAME = re.compile(r"\A[a-z][a-z0-9_]*\Z")
+
+
+class PluginOverrideError(ValueError):
+    """`SANDBOXD_PLUGINS` was set to something that cannot be a plugin set.
+
+    Raised at startup rather than at trace time. An unknown name makes DRAKVUF
+    exit, so without this every job would claim the host and fail identically
+    — a misconfiguration reported once per sample instead of once.
+    """
+
+
+def parse_plugins_override(raw: str | None) -> tuple[str, ...] | None:
+    """`SANDBOXD_PLUGINS=syscalls,memdump` -> `("syscalls", "memdump")`.
+
+    **A measurement tool, not a configuration knob.** DRAKVUF issue #108 says
+    the only way to size a plugin's cost is to run the same workload with and
+    without it and compare; issue #517's advice for a slow guest is "disable
+    the plugins you don't need". Both need the set changed without editing
+    code, which is what this is for. DRAFT-052 is what records a real
+    per-job selection, and it will supersede this.
+
+    Unset or empty means "use the measured defaults", so the variable being
+    absent is exactly today's behaviour.
+
+    **Whatever this is set to applies to every job on the host, and nothing
+    records that per job.** A trace missing `filetracer` output then looks
+    identical to one where `filetracer` found nothing — the same silent
+    absence of evidence that let the missing `memdump` directory go unnoticed
+    (§F, 2026-08-27). The daemon logs the override loudly at startup for that
+    reason, and it should be unset again once a measurement is finished.
+    """
+    if raw is None or not raw.strip():
+        return None
+
+    names = tuple(n.strip() for n in raw.split(",") if n.strip())
+    if not names:
+        raise PluginOverrideError(
+            "SANDBOXD_PLUGINS is set but names no plugins. Unset it to use the "
+            "defaults; an empty set would run DRAKVUF with no plugin at all."
+        )
+    for name in names:
+        if not _PLUGIN_NAME.match(name):
+            raise PluginOverrideError(
+                f"SANDBOXD_PLUGINS contains {name!r}, which is not a plugin "
+                f"name. Expected a comma-separated list such as "
+                f"'syscalls,memdump'."
+            )
+    if "syscalls" not in names:
+        # Not a hard error -- there are real reasons to trace without it -- but
+        # it is far more often a typo, and the resulting trace is nearly empty
+        # while still reporting success.
+        log.warning(
+            "SANDBOXD_PLUGINS does not include 'syscalls': traces will record "
+            "almost nothing and will still complete normally"
+        )
+    return names
 
 
 def default_trace_options(os_: TargetOs, kind: SampleKind) -> TraceOptions:

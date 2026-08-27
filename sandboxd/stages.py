@@ -38,7 +38,7 @@ import logging
 import shutil
 import threading
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from . import guests, timing, vnc
@@ -161,6 +161,12 @@ class Config:
     # margin. Configurable because the lease TTL is, and because a fixed value
     # made cancellation untestable without waiting a real interval.
     heartbeat_interval: float = HEARTBEAT_INTERVAL
+    # SANDBOXD_PLUGINS. None means "use the measured per-OS defaults", which is
+    # what an unset variable gives -- so absence is exactly today's behaviour.
+    # A measurement tool for sizing a plugin's cost (DRAKVUF #108) rather than
+    # a configuration knob; DRAFT-052 records a real per-job selection and
+    # supersedes it. See guests.parse_plugins_override.
+    plugins: tuple[str, ...] | None = None
 
     # --- live console (DRAFT-056), off unless the platform asks -------------
     #
@@ -286,6 +292,24 @@ class Analysis:
                                settle=self._cfg.waits.destroy_settle)
         return builder.build(spec)
 
+    def _trace_options(self, os_, kind) -> guests.TraceOptions:
+        """The measured defaults, unless this host is being measured.
+
+        The override is applied HERE rather than inside
+        `guests.default_trace_options` so that function stays pure and keeps
+        answering one question: what do the shell scripts do for this guest.
+        Mixing a host's environment into it would make the answer depend on
+        where it was asked, and #41's acceptance criterion is that the port
+        produces the same argv the scripts do.
+
+        Everything else in the options -- the timeout, `-F`, `--disable-sysret`
+        -- is left exactly as the defaults set it. Only the plugin list moves.
+        """
+        options = guests.default_trace_options(os_, kind)
+        if self._cfg.plugins is None:
+            return options
+        return replace(options, plugins=tuple(self._cfg.plugins))
+
     def _job(self, lease, os_, kind, clone, vlan, job_dir, sample) -> Job:
         # Checked first, and explicitly. Reading `injection_pids[os_]` inline
         # below made a Windows job die on a bare KeyError -- Python evaluates
@@ -308,7 +332,7 @@ class Analysis:
             profile=self._cfg.profile(os_),
             injection_pid=self._cfg.injection_pids[os_],
             result_dir=job_dir,
-            options=guests.default_trace_options(os_, kind),
+            options=self._trace_options(os_, kind),
             kind=kind,
         )
 

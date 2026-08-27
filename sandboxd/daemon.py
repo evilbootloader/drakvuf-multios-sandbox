@@ -46,7 +46,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import proc, resources, sweep
+from . import guests, proc, resources, sweep
 from .api import Idle, Lease, ProtocolError, Reserved, WorkerAPI
 from .guests import TargetOs
 from .resources import Exhausted, ResourceTable, required_mib
@@ -185,6 +185,22 @@ class Daemon:
                  runner=None, api=None):
         self._s = settings
         self._cfg = config or Config()
+
+        # Read once here rather than per job: an unknown plugin name makes
+        # DRAKVUF exit, so validating late would report the same
+        # misconfiguration once per sample instead of once at startup.
+        override = guests.parse_plugins_override(os.environ.get("SANDBOXD_PLUGINS"))
+        if override is not None:
+            self._cfg.plugins = override
+            # WARNING, not INFO. This changes what every analysis on this host
+            # records, and nothing writes it down per job -- a trace missing
+            # filetracer output is indistinguishable from one where filetracer
+            # found nothing. It must be obvious in the log that the host was
+            # not running its measured defaults.
+            log.warning(
+                "SANDBOXD_PLUGINS overrides the plugin set for EVERY job on "
+                "this host: %s. This is a measurement tool (DRAKVUF #108); "
+                "unset it when the measurement is done.", ", ".join(override))
         self._runner = runner or Runner()
         self._api = api or WorkerAPI(
             settings.api, settings.token, settings.worker_id,

@@ -419,3 +419,45 @@ def test_tcpdump_captures_on_the_clones_own_interface(tmp_path):
     # abruptly loses whatever is still buffered, which is the traffic closest
     # to whatever ended it.
     assert "-U" in argv
+
+# --- SANDBOXD_PLUGINS (DRAKVUF #108/#517) -----------------------------------
+
+def test_no_override_means_the_measured_defaults():
+    """An unset variable must be exactly today's behaviour, not a special
+    case of it -- otherwise adding the knob changes every host that never
+    sets it."""
+    assert G.parse_plugins_override(None) is None
+    assert G.parse_plugins_override("") is None
+    assert G.parse_plugins_override("   ") is None
+
+
+def test_a_plugin_set_is_parsed_and_trimmed():
+    assert G.parse_plugins_override("syscalls, memdump") == ("syscalls", "memdump")
+
+
+def test_a_name_that_cannot_be_a_plugin_is_refused_at_startup():
+    """DRAKVUF exits on an unknown `-a`, so a late check would report the same
+    misconfiguration once per sample rather than once. The pattern is also what
+    keeps a value with a space in it from becoming two argv elements."""
+    for bad in ("file tracer", "sys;calls", "-F", "Syscalls", "../etc"):
+        with pytest.raises(G.PluginOverrideError):
+            G.parse_plugins_override(bad)
+
+
+def test_a_set_naming_nothing_is_refused_rather_than_run_empty():
+    """`-a` is restrictive (main.cpp:167), so an empty set is not "the
+    defaults" -- it is DRAKVUF with every plugin disabled, producing a trace
+    that records nothing and completes normally."""
+    with pytest.raises(G.PluginOverrideError):
+        G.parse_plugins_override(",  ,")
+
+
+def test_dropping_syscalls_warns_but_is_allowed(caplog):
+    """Far more often a typo than a choice, and the resulting trace is nearly
+    empty while still reporting success. Not fatal: there are real reasons to
+    trace without it, and refusing would make this a policy rather than a
+    measurement tool."""
+    with caplog.at_level("WARNING"):
+        assert G.parse_plugins_override("memdump") == ("memdump",)
+
+    assert "syscalls" in caplog.text

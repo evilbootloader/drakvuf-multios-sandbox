@@ -141,8 +141,9 @@ def runner_ready(clone="ubuntu_sandbox-3-clone", origin="ubuntu_sandbox"):
     return r
 
 
-def run(tmp_path, *, api=None, runner=None, lease=None, vlan=3):
+def run(tmp_path, *, api=None, runner=None, lease=None, vlan=3, plugins=None):
     cfg = config(tmp_path)
+    cfg.plugins = plugins
     cfg.config_dir.mkdir(parents=True, exist_ok=True)
     api = api or FakeApi()
     a = S.Analysis(api, runner or runner_ready(), cfg)
@@ -599,3 +600,34 @@ def test_the_console_is_not_dialled_when_disabled_on_this_host(tmp_path):
     S.Analysis(FakeApi(), r, cfg).run(FakeLease(), 3)
 
     assert not r.ran(("xenstore-read",))
+
+
+# --- SANDBOXD_PLUGINS reaches the argv (DRAKVUF #108/#517) ------------------
+
+def test_the_plugin_override_replaces_the_set_and_nothing_else(tmp_path):
+    """The measurement DRAKVUF #108 asks for: the same workload with and
+    without a plugin. Only the `-a` list may move -- the timeout and `-F` are
+    measured findings, and an override that quietly changed them would make
+    the two runs incomparable, which is the one thing the experiment needs.
+    """
+    r = runner_ready()
+    run(tmp_path, runner=r, plugins=("syscalls",))
+
+    argv = [c for c in r.calls if c.argv[0] == "drakvuf"][0].argv
+    plugins = [argv[i + 1] for i, a in enumerate(argv) if a == "-a"]
+
+    assert plugins == ["syscalls"]
+    assert "-F" in argv, "fast singlestep is not part of the plugin selection"
+    assert argv[argv.index("-t") + 1] == "120"
+
+
+def test_no_override_leaves_the_measured_default_set(tmp_path):
+    """A host that never sets the variable must produce byte-identical argv to
+    one built before the knob existed -- #41's parity criterion."""
+    r = runner_ready()
+    run(tmp_path, runner=r)
+
+    argv = [c for c in r.calls if c.argv[0] == "drakvuf"][0].argv
+    plugins = [argv[i + 1] for i, a in enumerate(argv) if a == "-a"]
+
+    assert plugins == ["syscalls", "filetracer", "fileextractor", "memdump"]
