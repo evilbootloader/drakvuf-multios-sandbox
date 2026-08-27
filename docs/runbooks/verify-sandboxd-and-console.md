@@ -2205,7 +2205,79 @@ may not take a cheaper trace.
 EVIDENCE F7a — `xentop` with `-F` live: the clone's CPU(%) against the ~7% above
 
 ```
+root@drakvuf:~# pgrep -a drakvuf
+5428 drakvuf -r .../profiles/linux.json -d 6 -i 1415 -m execproc \
+      -e /home/carlos/Desktop/slow.sh -F -o json -t 120 \
+      -a syscalls -a filetracer -a fileextractor -a memdump -D ... --memdump-dir ...
+
+root@drakvuf:~# xentop -b -i 5 -d 2
+      NAME  STATE  CPU(sec) CPU(%)    MEM(k) MEM(%) VCPUS
+  Domain-0 -----r       556   99.2   8388608   40.0     6
+ubuntu_san ------         4    6.2   2081092    9.9     1
+  Domain-0 -----r       558   99.1   8388608   40.0     6
+ubuntu_san ------         4    6.0   2081092    9.9     1
+  Domain-0 -----r       560   99.6   8388608   40.0     6
+ubuntu_san ------         4    6.5   2081092    9.9     1
 ```
+
+**`-F` produced no measurable gain** — ~6.2% against the ~7% before it. The
+comparison is **confounded** and should not be read as a refutation: this run
+traced `slow.sh` and the earlier one traced different samples, so the syscall
+mixes differ. A clean A/B needs the same sample with and without the flag. It
+is kept because it is theoretically sound and costs no information, but this
+measurement does not support it.
+
+### F7c. Dom0 at 99% is ONE SATURATED THREAD, not a busy host
+
+This is the finding that supersedes F1, F7 and F7b.
+
+    1 clone   Domain-0  99.2 / 99.1 / 99.6 %   of 600% available
+    2 clones  Domain-0 196.7 / 198.8 / 195.9 %
+
+Domain-0 has **six** vCPUs, so its ceiling is 600%. Pinned at 99.x% with a
+single trace running, and at almost exactly twice that with two, it is not
+"a third utilised" — it is **one DRAKVUF event loop saturating one core**, one
+per trace, scaling linearly. Five cores sit idle throughout.
+
+**That is a serialisation bound, and it explains every measurement in §F.** The
+guest cannot exceed ~6% because a single-threaded consumer processes every one
+of its trapped events and that thread is already flat out. Idle cores cannot be
+handed to it. This is why:
+
+- pinning fixed the contention F1 described and changed the guest not at all;
+- `-F` did not move it — `-F` makes the *singlestep* cheaper, and the saturated
+  thread is spending its time elsewhere (four plugin callbacks and JSON
+  serialisation per event);
+- adding Dom0 vCPUs would do nothing.
+
+**The only remaining lever is fewer events.** Not faster handling of them.
+
+Concurrency is unaffected and is genuinely good: one core per trace against six
+means ~6 concurrent analyses before Dom0 saturates, above the memory cap of
+five in F6d. **This lab trades per-trace speed for parallelism, and that is the
+right trade for a sandbox** — nobody watches one analysis finish sooner, but
+five running at once is five reports.
+
+### F7d. CORRECTION: "is anything being cut off" is not visible in job state
+
+F7b said a rising `timed_out` count would justify paying information cost.
+**There is no `timed_out` state.** `JobState` (`platform/sandbox_platform/enums.py:31`)
+is `received → … → completed`, plus `rejected`, `cancelled`, `failed` and
+`interrupted`.
+
+And `-t 120` is a trace **duration**, not a deadline: DRAKVUF traces for 120
+seconds and stops, so a sample cut off mid-behaviour produces a job that
+records `completed` exactly like one that finished. Measured 2026-08-27 —
+44 completed, 1 failed, 1 rejected, 2 interrupted, and **no state that could
+have represented truncation.**
+
+So the question has to be asked of the trace's *contents*, not the job table:
+run a sample whose completion is externally observable — one that writes a
+known file, or opens a known connection — and check whether that artifact
+appears in the results. `slow.sh` is presumably already this. Until a known
+sample is demonstrably being truncated, `--disable-sysret` and a syscall filter
+stay off: they would stop recording return values for every analysis the lab
+ever runs, in exchange for a guest that feels faster to a human watching it.
 
 ### F7b. If `-F` is not enough
 
