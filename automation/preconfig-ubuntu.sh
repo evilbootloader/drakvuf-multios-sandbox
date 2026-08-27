@@ -185,7 +185,7 @@ mkdir -p "$OUTPUTFOLDER/$MD5" 1>/dev/null 2>&1
 #    an `offline` analysis mode possible (docs/architecture/networking.md).
 #    -B is the Dom0 source, -e the guest destination -- confirmed from the
 #    installed build's own help, captured on Dom0 2026-08-08 and recorded
-#    at docs/runbooks/verify-user-placeholder.md:155.
+#    at docs/runbooks/01-verify-user-placeholder.md:155.
 injector -r "$REKALL" -d "$DOMAIN" -i "$PID" -m writefile \
     -B "$RUNFOLDER/$RUNFILE" \
     -e "$GUEST_SAMPLE" \
@@ -205,7 +205,7 @@ fi
 # The injector help does not say that. It was established on Dom0
 # 2026-08-09, by removing a chmod injection that had been there and
 # confirming runs still traced
-# (docs/runbooks/deploy-repo-relative-paths.md, D5).
+# (docs/runbooks/02-deploy-repo-relative-paths.md, D5).
 #
 # If a sample ever traces empty with a successful WriteFile in this log,
 # check the staged file's mode first -- that is what this removal assumed.

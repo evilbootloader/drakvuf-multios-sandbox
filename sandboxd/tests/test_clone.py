@@ -7,7 +7,7 @@ any Dom0 time is spent.
 
 The config rewrite is tested against the REAL misc/*.cfg files, because
 misc/android_sandbox.cfg records that clone.pl's rewrite "reproduces
-byte-for-byte what verify-android-isolation.md step 2 wrote out by hand",
+byte-for-byte what 06-verify-android-isolation.md step 2 wrote out by hand",
 verified 2026-08-15. That gives the port a known-correct output to match
 rather than a plausible one.
 """

@@ -16,7 +16,7 @@ the time, which is still true and still the useful part.
 > **PLAN steps 1–2 required no new Dom0 work.** They ask for an
 > `injector --help` capture to settle whether `writefile` exists and what
 > its arguments are. That capture was already taken during issue #2 and
-> is recorded at `docs/runbooks/verify-user-placeholder.md:154-157`:
+> is recorded at `docs/runbooks/01-verify-user-placeholder.md:154-157`:
 >
 > ```text
 > writefile - push a file (specified by host path -B) to the VM and store it on guest path specified by -e

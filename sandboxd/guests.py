@@ -367,7 +367,7 @@ def _android_netcfg(job: Job, subnet: str) -> str:
     `private_dns_mode off` is REQUIRED, not tuning: left at its default the
     clone resolved over DoT to 1.1.1.1:853 and the pcap recorded an encrypted
     stream instead of the domains the sample looked up. Silently, with nothing
-    failing. Pcap-evidenced both ways in verify-android-isolation.md.
+    failing. Pcap-evidenced both ways in 06-verify-android-isolation.md.
     """
     ns = PATHS[TargetOs.ANDROID].nameserver
     return (

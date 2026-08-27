@@ -181,7 +181,7 @@ VLAN sub-interfaces on a bridge that does not exist.
   2026-08-11 by DRAFT-028's own deployment**, which produced the nine-row
   connectivity matrix with per-rule packet counters
   (`docs/checklists/android.md` §1.3, transcript in
-  `docs/runbooks/deploy-network-isolation.md`). Measured on Ubuntu clones,
+  `docs/runbooks/04-deploy-network-isolation.md`). Measured on Ubuntu clones,
   which transfers — the rules match on interface, not on anything
   guest-specific. What does not transfer is the guest's *reaction*: Android
   probes connectivity and may mark the network unvalidated when it cannot
@@ -218,7 +218,7 @@ than a control. It is **not** egress control.
 > inter-clone `FORWARD` `DROP` rule was fixed and measured in DRAFT-028
 > (2026-08-11), made terminal in DRAFT-029 (2026-08-12), and clone
 > containment was verified against an Android guest in DRAFT-013
-> (2026-08-14, `docs/runbooks/verify-android-isolation.md`).
+> (2026-08-14, `docs/runbooks/06-verify-android-isolation.md`).
 
 **It costs no visibility — on Ubuntu.** `tcpdump.sh` captures the clone's
 entire `xenbr1.<vlan>` sub-interface and DNS is plaintext UDP/53 there, so
@@ -327,12 +327,12 @@ vif script (see `misc/ubuntu_sandbox.cfg`, `misc/android_sandbox.cfg` —
 *(Corrected twice. On 2026-08-12 this section was retitled from "Android
 network isolation is unverified", because §1.3's table had been filled the
 day before by DRAFT-028's deployment. **Closed 2026-08-14** by DRAFT-013 —
-`docs/runbooks/verify-android-isolation.md`. The narrowed gap described
+`docs/runbooks/06-verify-android-isolation.md`. The narrowed gap described
 below is answered, and the answer is at the end of the section.)*
 
 `docs/checklists/android.md` §1.3's isolation table is **complete** — nine
 rows with measured results and per-rule packet counters, transcript in
-`docs/runbooks/deploy-network-isolation.md`. The mechanism is verified, and
+`docs/runbooks/04-deploy-network-isolation.md`. The mechanism is verified, and
 it verifies for all three OS families at once: `network-setup.sh` matches on
 interface (`-i`/`-o xenbr1.+`), not on anything guest-specific.
 

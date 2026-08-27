@@ -179,7 +179,7 @@ It is deliberately carried forward, it needs a Windows counterpart
 (DRAFT-034) that the original wording does not cover, and it now also covers
 the corrected `injector -m writefile` syntax — `-B` is the Dom0 source and
 `-e` the guest destination, which refuted the Android checklist's candidate
-command (`docs/runbooks/verify-user-placeholder.md:154-157`, DRAFT-027's
+command (`docs/runbooks/01-verify-user-placeholder.md:154-157`, DRAFT-027's
 resolution note). The conformance checklist this issue produces is what
 discharges it, for both remaining targets.
 

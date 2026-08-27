@@ -214,7 +214,7 @@ a second user is a check nobody has tested.
 
 Access application and identity provider configured in Cloudflare; the
 audience tag recorded in the platform's environment. Recorded in
-`docs/runbooks/deploy-platform-lxc.md`.
+`docs/runbooks/08-deploy-platform-lxc.md`.
 
 Rollback is reverting to the single-tenant build and narrowing Access to
 trusted users only — which must be deliberate, since it silently removes
@@ -263,7 +263,7 @@ validated.
   gains a browser-to-browser row it does not currently have.
 - **Updated:** `.github/issue-drafts/DRAFT-043.md` — annotate that
   multi-tenancy moved out of M8.
-- **Updated:** `docs/runbooks/deploy-platform-lxc.md` — Access application,
+- **Updated:** `docs/runbooks/08-deploy-platform-lxc.md` — Access application,
   identity provider, audience tag.
 
 # Recovery / rollback

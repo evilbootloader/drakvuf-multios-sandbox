@@ -242,7 +242,7 @@ Deliberately thin below step 2 — the mechanism depends on DRAFT-010.
    > this issue needs a different mechanism (a hard `maxmem` set on the
    > clone after restore, or admission against a pessimistic ceiling)
    > rather than a more careful version of the same arithmetic. See
-   > `docs/runbooks/deploy-repo-relative-paths.md`, D5 observations.
+   > `docs/runbooks/02-deploy-repo-relative-paths.md`, D5 observations.
 
    Dom0 is pinned at `dom0_mem=4096M,max:4096M`
    (`docs/drakvuf-on-xen-nested-within-proxmox.md:280`) and does not

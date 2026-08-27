@@ -56,7 +56,7 @@ log = logging.getLogger("sandboxd.clone")
 
 # `xl destroy` returns before the block device is released -- measured on Dom0
 # 2026-08-14, where lvremove reported "Logical volume in use" and succeeded on
-# a retry (docs/runbooks/verify-android-isolation.md:965, annotated :996).
+# a retry (docs/runbooks/06-verify-android-isolation.md:965, annotated :996).
 # Waiting is what makes the lvremove that follows reliable.
 DESTROY_SETTLE_SECONDS = 10
 
@@ -104,7 +104,7 @@ class CloneSpec:
 #
 # Separated from everything that touches Dom0 so it can be tested against the
 # real misc/*.cfg files here. misc/android_sandbox.cfg records that this
-# rewrite "reproduces byte-for-byte what verify-android-isolation.md step 2
+# rewrite "reproduces byte-for-byte what 06-verify-android-isolation.md step 2
 # wrote out by hand", verified 2026-08-15 -- so it has a known-correct output
 # and the port is checkable against it rather than merely plausible.
 

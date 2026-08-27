@@ -7,7 +7,7 @@
 **Milestone:** M2
 **Priority:** P2
 **Depends on:** DRAFT-029, landed. Nothing open.
-**Origin:** Finding F4 in `docs/runbooks/deploy-terminal-chains.md`, step 7,
+**Origin:** Finding F4 in `docs/runbooks/05-deploy-terminal-chains.md`, step 7,
 2026-08-12. Recorded in the source as `KNOWN GAP` at
 `automation/network-setup.sh:249`.
 

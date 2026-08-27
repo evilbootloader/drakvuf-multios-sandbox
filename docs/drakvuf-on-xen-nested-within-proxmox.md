@@ -698,7 +698,7 @@ DocumentRoot /malware_processing
 >   user is now `GUEST_USER` in the env file.
 >
 > The current end-to-end procedure is
-> `docs/runbooks/deploy-repo-relative-paths.md`.
+> `docs/runbooks/02-deploy-repo-relative-paths.md`.
 
 ```bash
 # Run on L1: Virtual machine running Xen, Dom0 and DRAKVUF

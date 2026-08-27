@@ -39,7 +39,7 @@ the same convention run backwards.
 ## Where unpacking happens — settled by two facts about `injector`
 
 Both read from the recorded help in
-`docs/runbooks/verify-user-placeholder.md`, not assumed:
+`docs/runbooks/01-verify-user-placeholder.md`, not assumed:
 
 ```
 writefile - push a file (specified by host path -B) to the VM and store it

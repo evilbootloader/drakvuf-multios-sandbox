@@ -289,7 +289,7 @@ root@drakvuf:~/sandbox_project# sudo vgs
 Edit `automation/pipeline-ubuntu.env` — in particular `INJECTION_PID`,
 which is a property of the `.bak` file, not of the repository. The value
 committed here (`1415`) is the one evidenced in
-`verify-user-placeholder.md`; confirm it still matches this saved state.
+`01-verify-user-placeholder.md`; confirm it still matches this saved state.
 
 ```bash
 # Run on L1: Xen Dom0                                       [Candidate]

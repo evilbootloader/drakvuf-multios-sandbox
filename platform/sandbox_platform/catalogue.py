@@ -48,7 +48,7 @@ class Support(StrEnum):
 # The guests each of the four current plugins has actually run against.
 #
 # Ubuntu and Android only. Both are evidenced end to end -- Ubuntu throughout,
-# Android on 2026-08-17 (`docs/runbooks/verify-android-mvp.md`). **Windows is
+# Android on 2026-08-17 (`docs/runbooks/07-verify-android-mvp.md`). **Windows is
 # absent on purpose**: the pipeline would enable the same four, but nothing
 # has ever executed there, and a form that labelled them "proven" on Windows
 # would be inventing evidence.

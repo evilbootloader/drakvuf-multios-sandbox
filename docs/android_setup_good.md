@@ -997,7 +997,7 @@ getprop | grep -i ethernet # Nothing found in this one
 
 **This is the reason for the rebuild, so it is worth stating plainly.**
 
-`docs/runbooks/verify-android-isolation.md` established by measurement on
+`docs/runbooks/06-verify-android-isolation.md` established by measurement on
 2026-08-12 that this Android 14 build has **no shell command that sets the
 Ethernet resolver**: `/etc/resolv.conf` is a no-op, `setprop net.dns1` is a
 no-op, `ndc resolver` does not exist, and `cmd ethernet help` returns
@@ -1618,7 +1618,7 @@ If the rebuilt image still requires the manual import, recheck the §8.1
 # 25. Rebuild the sandbox template
 
 **Do not improvise this.** The procedure is
-`docs/runbooks/rebuild-android-sandbox.md` (issue #7 / DRAFT-037), which
+`docs/runbooks/03-rebuild-android-sandbox.md` (issue #7 / DRAFT-037), which
 covers snapshotting the golden LV into `android_sandbox`, booting it, opening
 the anchor process, and `xl save`-ing to
 `/root/sandbox_project/state/android_sandbox.bak`.
@@ -1646,7 +1646,7 @@ way that does not obviously point back here:
 | `android.json` / `profiles/android.json` | New `vmlinux`, new symbol offsets | LibVMI initialises, DRAKVUF attaches, introspection returns garbage |
 | `state/android_sandbox.bak` | Saved memory image of the **old** kernel | `xl restore` produces a domain the new profile cannot read |
 | **Anchor PID 3163** | Belongs to the old saved state | Injection targets a PID that is not the anchor, or does not exist |
-| `1844fc0a…` checksum | `verify-android-isolation.md` step 0 checks it | Step 0 aborts — correctly; update the expected value with the new one |
+| `1844fc0a…` checksum | `06-verify-android-isolation.md` step 0 checks it | Step 0 aborts — correctly; update the expected value with the new one |
 | `/etc/libvmi.conf` | Path unchanged, contents behind it are not | Silent: same path, wrong symbols |
 | `docs/checklists/android.md` §1.4, AND-001 | Recorded against the old build fingerprint | Stale environment line |
 

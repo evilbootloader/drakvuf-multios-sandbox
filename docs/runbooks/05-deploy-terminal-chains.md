@@ -85,7 +85,7 @@ rest of this file:
    deployed DRAFT-028 chains, before step 3 checks anything out. Whatever
    the cause, it predates the change under test.
 
-The same commands worked on 2026-08-11 (`deploy-network-isolation.md`,
+The same commands worked on 2026-08-11 (`04-deploy-network-isolation.md`,
 step 5), so something changed on the host in between.
 
 > ## ANNOTATION 2026-08-12 — the two numbered claims above are WRONG
@@ -1394,10 +1394,10 @@ Fast-forward
  automation/network-setup.sh               |  149 ++++++++++++++++--
  docs/architecture/networking.md           |  116 ++++++++++++--
  docs/roadmap/project-roadmap.md           |    1 +
- docs/runbooks/deploy-network-isolation.md |   12 +-
- docs/runbooks/deploy-terminal-chains.md   | 1370 +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+ docs/runbooks/04-deploy-network-isolation.md |   12 +-
+ docs/runbooks/05-deploy-terminal-chains.md   | 1370 +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
  8 files changed, 2037 insertions(+), 223 deletions(-)
- create mode 100644 docs/runbooks/deploy-terminal-chains.md
+ create mode 100644 docs/runbooks/05-deploy-terminal-chains.md
 root@drakvuf:~/sandbox_project# git branch -d draft-029-terminal-chains
 Deleted branch draft-029-terminal-chains (was e794045).
 root@drakvuf:~/sandbox_project# git log -1 --oneline                          # should contain the DRAFT-029 commit

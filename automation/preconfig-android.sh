@@ -119,7 +119,7 @@
 #
 # The network half is NOT a translation of preconfig-ubuntu.sh's `ip`
 # chain. It was measured on a live clone in
-# docs/runbooks/verify-android-isolation.md and recorded as
+# docs/runbooks/06-verify-android-isolation.md and recorded as
 # docs/checklists/android.md §1.6: Bliss-Bass EthernetConfig subsumes the
 # whole chain, so address, prefix, gateway and resolver are one framework
 # call rather than four `ip` commands and a resolv.conf write.
@@ -236,7 +236,7 @@ NETCFG="${NETCFG}${SUBNET_PREFIX}.${VLAN}.2 24 ${SUBNET_PREFIX}.${VLAN}.1 ${GUES
 # clone resolved over DoT to 1.1.1.1:853 and the pcap recorded an
 # encrypted stream instead of the domains the sample looked up -- silently,
 # with nothing failing. Pcap-evidenced both ways in
-# docs/runbooks/verify-android-isolation.md.
+# docs/runbooks/06-verify-android-isolation.md.
 NETCFG="${NETCFG}settings put global private_dns_mode off"
 
 # /system/bin/sh, not /usr/bin/sh: the Ubuntu path does not exist here.
@@ -260,7 +260,7 @@ fi
 # drakvuf-android.sh's traced command, where it never completed: 3s
 # untraced against not finishing in 120s under
 # `-a syscalls -a filetracer -a fileextractor -a memdump`, a lower bound
-# of 40x (docs/runbooks/verify-android-mvp.md F3). Raising -t is not
+# of 40x (docs/runbooks/07-verify-android-mvp.md F3). Raising -t is not
 # available either -- dirwatch arms a 180s timer over the trace phase, so
 # a larger -t just moves the failure to a clone/retry loop.
 #

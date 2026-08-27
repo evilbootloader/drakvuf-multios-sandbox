@@ -68,7 +68,7 @@ injector -r <profile> -d <clone> -i <pid> -m writefile \
 
 `-B` is the Dom0 source and `-e` the guest destination — confirmed from
 the installed build's own `--help`, captured on Dom0 2026-08-08 and
-recorded at `docs/runbooks/verify-user-placeholder.md:154-157`. (`-f` is
+recorded at `docs/runbooks/01-verify-user-placeholder.md:154-157`. (`-f` is
 **not** part of this: it is accepted only with `-m execproc` or
 `-m shellexec`.)
 
@@ -136,7 +136,7 @@ and `dirwatch_old.c` carried it, so it came from the upstream tool.
 > snapshot when it next reuses that name, so the count is bounded by
 > `MAX_CLONES` rather than growing without limit, but one snapshot per slot
 > persists between runs. That is the state `lvs` shows on an idle Dom0
-> (`docs/runbooks/verify-android-isolation.md:975`).
+> (`docs/runbooks/06-verify-android-isolation.md:975`).
 
 **Every callback is spawned as an argv vector, never as a command string**
 (DRAFT-030, 2026-08-15). The five call sites used to build
@@ -175,7 +175,7 @@ is logged and left untouched rather than moved.
 > Neither `180` nor `120` is configurable today — the first is compiled
 > into `dirwatch.c`, the second is a literal in the trace script — so
 > tuning the headroom currently means editing code. See
-> `docs/runbooks/deploy-repo-relative-paths.md`, D5 observations. Concurrency is
+> `docs/runbooks/02-deploy-repo-relative-paths.md`, D5 observations. Concurrency is
 capped by a thread pool sized from the `<max clones>` argument, which this
 project's copy validates as 1–128 in `main()` — `dirwatch.c:486-488`
 rejects anything outside that range with "Invalid clone count %u (valid
@@ -391,7 +391,7 @@ target's saved image:
 
 | `target_os` | `GUEST_STAGING_DIR` | Status |
 |---|---|---|
-| `ubuntu` | `/home/carlos/Desktop` | in use; evidenced by six staged runs (`docs/runbooks/verify-user-placeholder.md`) |
+| `ubuntu` | `/home/carlos/Desktop` | in use; evidenced by six staged runs (`docs/runbooks/01-verify-user-placeholder.md`) |
 | `android` | `/data/local/tmp` | **decided 2026-08-10**, execution-evidenced on the guest — see `docs/checklists/android.md`, "Staging directory" |
 | `windows` | — | DRAFT-034; must satisfy the same two properties (pre-exists, permits the execution method) |
 
@@ -536,7 +536,7 @@ shared; see C2.
 > The rename was verified against Android before it was made — handed
 > `android_sandbox 1 misc/android_sandbox.cfg`, the existing rewrites
 > reproduce byte-for-byte the config that
-> `docs/runbooks/verify-android-isolation.md` steps 2–3 wrote by hand.
+> `docs/runbooks/06-verify-android-isolation.md` steps 2–3 wrote by hand.
 
 **C2 — Do not copy, fork or special-case a shared file.** `dirwatch.c`,
 `clone.pl`, `network-setup.sh`, `cleanup.sh`, `tcpdump.sh`. *(`clone.pl` leaves
@@ -980,7 +980,7 @@ Two rules make it safe:
 
 - The name must reach the guest as a **single argv element, never through
   a shell-parsed string**. `drakvuf -e` is execve-direct with no guest
-  shell — established by issue #2 (`docs/runbooks/verify-user-placeholder.md`)
+  shell — established by issue #2 (`docs/runbooks/01-verify-user-placeholder.md`)
   — so a name cannot dereference guest-side through that path.
   **This finding is qualified `[LINUX]` at its source.** `injector --help`
   reads `[LINUX] (execproc -> execve(...); 64bit only)`, so it is

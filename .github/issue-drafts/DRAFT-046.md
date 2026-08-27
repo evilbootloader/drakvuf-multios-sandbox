@@ -237,7 +237,7 @@ anything**, and they are the ones worth writing.
 # DEPLOY
 
 Certificates are generated on the workstation and copied in; the CA key never
-moves. Recorded in `docs/runbooks/deploy-platform-lxc.md` as its own section,
+moves. Recorded in `docs/runbooks/08-deploy-platform-lxc.md` as its own section,
 with the negative checks run against the real deployment.
 
 Rollback is reverting to plaintext on the LAN links — a decision, not an
@@ -292,7 +292,7 @@ accident, and one to record if taken.
 # Documentation changes
 
 - **New:** `tls/README.md`; a TLS and tunnel section in
-  `docs/runbooks/deploy-platform-lxc.md`.
+  `docs/runbooks/08-deploy-platform-lxc.md`.
 - **Updated:** `docs/architecture/networking.md` — the two trust domains.
 - **Updated:** `docs/architecture/platform.md` — its topology figure shows
   HTTPS without saying what verifies it, and does not show the tunnel.

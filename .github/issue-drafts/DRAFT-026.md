@@ -83,7 +83,7 @@ while it ships with it.
 - Supersedes DRAFT-012's static-check scope (title-only in the roadmap,
   never drafted as its own file).
 - Informed by issue #2 (DRAFT-007, resolved 2026-08-08 out-of-band via
-  `docs/runbooks/verify-user-placeholder.md`) and issue #1 (DRAFT-006,
+  `docs/runbooks/01-verify-user-placeholder.md`) and issue #1 (DRAFT-006,
   `misc/` naming, now closed on both repo and host sides).
 
 *Added 2026-08-08 from `project-assessment.md`:*

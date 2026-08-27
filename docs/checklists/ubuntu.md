@@ -92,7 +92,7 @@ execution. None of the checkboxes below represent execution evidence.
 ## Execution evidence — repo-relative paths and injection delivery (2026-08-09)
 
 **Deployed and verified end to end on Dom0**, commit `57713fc`, full
-transcript in `docs/runbooks/deploy-repo-relative-paths.md`. This is
+transcript in `docs/runbooks/02-deploy-repo-relative-paths.md`. This is
 execution evidence, not source reading.
 
 - [x] **The pipeline runs from a checkout at any path.** Launched from
@@ -165,7 +165,7 @@ Three things the same run surfaced that are **not** fixed:
 
 - [x] **Verify the `drakvuf-ubuntu.sh` `<USER>` bug — DONE 2026-08-08, and
   the premise was wrong.** Execution evidence from Dom0 (full transcript in
-  `docs/runbooks/verify-user-placeholder.md`) shows the **deployed** copy at
+  `docs/runbooks/01-verify-user-placeholder.md`) shows the **deployed** copy at
   `/home/user/drakvuf-tools/drakvuf-ubuntu.sh` is correctly substituted with
   `CMD="/home/carlos/Desktop/test"`, and that samples **do** execute:
 
@@ -238,7 +238,7 @@ Three things the same run surfaced that are **not** fixed:
   `drakvuf-ubuntu.sh:119` not. Both now carry `carlos`, matching production.
 
   **Hypotheses, and how each was resolved** (runbook:
-  `docs/runbooks/verify-user-placeholder.md`):
+  `docs/runbooks/01-verify-user-placeholder.md`):
 
   | # | Hypothesis | Resolved by | Outcome |
   |---|---|---|---|
@@ -270,13 +270,13 @@ Three things the same run surfaced that are **not** fixed:
   `automation/pipeline-ubuntu.env`, with repository-owned assets resolved
   from the script's own location. Static verification only so far; the
   out-of-repo invocation test still needs running on Dom0
-  (`docs/runbooks/deploy-repo-relative-paths.md`).
+  (`docs/runbooks/02-deploy-repo-relative-paths.md`).
 
 ## Planned M1 work
 
 - [x] Confirm the `<USER>` bug against real execution (DRAFT-007 / issue #2)
   — done 2026-08-08; premise refuted, production was never affected. See
-  Known issues above and `docs/runbooks/verify-user-placeholder.md`.
+  Known issues above and `docs/runbooks/01-verify-user-placeholder.md`.
 - [x] Reconcile `automation/drakvuf-ubuntu.sh` with the deployed Dom0 copy
   (the drift this uncovered — `<USER>`, `-a syscalls`, `--memdump_dir`)
   — done 2026-08-08 as part of issue #2; the production copy was taken as
@@ -374,7 +374,7 @@ correctly substituted (`CMD="/home/carlos/Desktop/test"`, sha256
 (sha256 `d0a17e4e…`) is the stale one and has additionally drifted on the
 `drakvuf` invocation line. Full Dom0 transcript — R0 (`-e` semantics),
 R1 (deployed-vs-repo diff), R1b (guest user), R2 (historical run logs) — is
-in `docs/runbooks/verify-user-placeholder.md`. R3 was not needed.
+in `docs/runbooks/01-verify-user-placeholder.md`. R3 was not needed.
 
 Key execution evidence, from
 `/malware_finished/cd22b2c623c0cf35ec4fea588fe61bf6/drakvuf.log` (2026-08-07):
@@ -441,6 +441,6 @@ functional in the development container as of 2026-08-08, consistent with
 
 Superseded by the Dom0 evidence above. What remains open is *not* the
 `<USER>` question but the repo↔host drift it exposed — see
-`docs/runbooks/verify-user-placeholder.md`: R0 (`-e` semantics / H3), R1
+`docs/runbooks/01-verify-user-placeholder.md`: R0 (`-e` semantics / H3), R1
 (deployed-vs-repo diff / H1 vs H2), R2 (historical run logs), R3 (benign
 A/B run, only if R1+R2 are inconclusive).

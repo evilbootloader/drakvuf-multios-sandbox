@@ -189,7 +189,7 @@ drift check**. The `<USER>` placeholder was never a production bug — it was
 a symptom of `automation/` having silently diverged from what Dom0 actually
 ran, which nothing detected for months. A checksum comparison of
 `automation/*` against the deployed copies belongs in Level 2 (where a real
-Dom0 is available); see `docs/runbooks/verify-user-placeholder.md` for the
+Dom0 is available); see `docs/runbooks/01-verify-user-placeholder.md` for the
 `sha256sum` comparison that found it by hand.
 
 No unit test framework (pytest, `Makefile`, `package.json`,

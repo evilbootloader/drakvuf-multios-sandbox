@@ -99,7 +99,7 @@ Inspected in this order, per the required workflow:
 2. Documentation: `README.md`, `CLAUDE.md`, `CONTRIBUTING.md`,
    `docs/roadmap/project-roadmap.md`, all four `docs/checklists/*.md`, all
    five `docs/architecture/*.md`, `docs/workflow-ci.md`,
-   `docs/runbooks/verify-user-placeholder.md`,
+   `docs/runbooks/01-verify-user-placeholder.md`,
    `docs/drakvuf-on-xen-nested-within-proxmox.md`, `docs/android_setup.md`.
 3. Implementation: every file under `automation/`, every `misc/*.cfg`.
 4. DRAKVUF/LibVMI integration surface as this repo actually invokes it
@@ -752,7 +752,7 @@ Four ordering points worth stating explicitly:
 
 | Finding | Why not |
 |---|---|
-| NET-03 (Internet-by-default) | A **design decision**, not a defect — the current lab deliberately gives clones NAT egress, and `verify-user-placeholder.md:55` relies on gateway reachability. The `offline`/`simulated`/`controlled-internet` modes in `docs/architecture/networking.md` are M2 containment-design work spanning all three OS families. Recommend recording observed behaviour in DRAFT-013's test table and deciding modes as part of that design. |
+| NET-03 (Internet-by-default) | A **design decision**, not a defect — the current lab deliberately gives clones NAT egress, and `01-verify-user-placeholder.md:55` relies on gateway reachability. The `offline`/`simulated`/`controlled-internet` modes in `docs/architecture/networking.md` are M2 containment-design work spanning all three OS families. Recommend recording observed behaviour in DRAFT-013's test table and deciding modes as part of that design. |
 | NET-04 (`vconfig` / OVS provisioning gap) | Split across two owners already: the documentation half is DRAFT-032's; the `vconfig`→`ip link` modernization touches production networking and belongs inside DRAFT-028 rather than as its own unit. |
 | DRAKVUF-04 (`ps\|grep` PID safety) | Already anticipated by `docs/checklists/android.md` §2.10 and squarely inside DRAFT-011's "retrofit without behaviour change" scope. Recommend an EDIT to DRAFT-011 (widened to note 3 of 4 sites are in shared `cleanup.sh`), not a new draft. |
 | CI-04 (`dirwatch_old.c`) | One-line disposition question; belongs in DRAFT-010, which exists to document exactly this file. |

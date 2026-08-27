@@ -77,7 +77,7 @@ the more interesting result and the fix is a separate issue.**
 `/malware_incoming`.
 
 **Never restore onto the golden or the template LV.** Always a snapshot —
-the same rule `rebuild-android-sandbox.md` step 7 states, and step 11 here
+the same rule `03-rebuild-android-sandbox.md` step 7 states, and step 11 here
 re-checks it.
 
 **The vif must attach to `xenbr1.<vlan>`, not `xenbr1`.** This is the trap
@@ -85,7 +85,7 @@ that would silently invalidate the whole exercise. The isolation rules match
 the `xenbr1.+` wildcard, which matches `xenbr1.1`, `xenbr1.2` and so on and
 **deliberately does not match the bare bridge**
 (`automation/network-setup.sh:369-372`). `misc/android_sandbox.cfg` ships
-`bridge=xenbr1`, and `rebuild-android-sandbox.md` step 7's throwaway config
+`bridge=xenbr1`, and `03-rebuild-android-sandbox.md` step 7's throwaway config
 inherits it — so a config built by copying that one attaches an Android guest
 to an **unfiltered** bridge. Step 3 below checks the attachment before the
 guest is unpaused, and that check is not optional.
@@ -126,7 +126,7 @@ sha256sum /root/sandbox_project/state/android_sandbox.bak
 > the pre-EthernetConfig template. The rebuilt template has a new one, and a
 > mismatch here is the expected result rather than a sign of corruption.
 > **Record the new value and treat it as the baseline from now on**, including
-> in `rebuild-android-sandbox.md`.
+> in `03-rebuild-android-sandbox.md`.
 >
 > Likewise the **anchor PID is no longer 3163** unless the rebuild happened to
 > reproduce it. Read it from the new template's rebuild transcript, not from
@@ -134,7 +134,7 @@ sha256sum /root/sandbox_project/state/android_sandbox.bak
 
 The template must have been rebuilt from the new golden image before this
 runs — `docs/android_setup_good.md` §25, via
-`docs/runbooks/rebuild-android-sandbox.md`. A clone restored from the old
+`docs/runbooks/03-rebuild-android-sandbox.md`. A clone restored from the old
 `.bak` runs the old kernel and has no EthernetConfig in it.
 
 ```text
@@ -1307,7 +1307,7 @@ identity onto the analysis VLAN. Three implications:
   before `xl save` when the template is rebuilt.
 
 Not this issue's to fix. Belongs to DRAFT-015/016, and the template-rebuild
-note belongs in `rebuild-android-sandbox.md`.
+note belongs in `03-rebuild-android-sandbox.md`.
 
 ## Security
 

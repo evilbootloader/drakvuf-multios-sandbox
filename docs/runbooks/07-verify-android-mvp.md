@@ -595,7 +595,7 @@ missing saved state      exit / stdout / stderr:
 root@drakvuf:~/sandbox_project# run_case automation/clone.pl ubuntu_sandbox 1 misc/ubuntu_sandbox.cfg
 exit=3 stdout=''
 clone.pl: saved memory image not found or unreadable: /root/sandbox_project/automation/../state/ubuntu_sandbox.bak
-clone.pl:   Expected <repo root>/state/<origin domain>.bak -- see docs/runbooks/deploy-repo-relative-paths.md
+clone.pl:   Expected <repo root>/state/<origin domain>.bak -- see docs/runbooks/02-deploy-repo-relative-paths.md
 
 Any stdout on a failure path? (must be NO): no
 Partial snapshots left behind (must be none): no
@@ -1000,7 +1000,7 @@ If the launch failed: does the APK declare a LAUNCHER activity? not sure
 > Exit 134 is `app_process64` aborting before `main()` for want of the
 > classpath import — already measured and documented at
 > `docs/checklists/android.md:833` and
-> `docs/runbooks/verify-android-isolation.md:1029`, and already carried by
+> `docs/runbooks/06-verify-android-isolation.md:1029`, and already carried by
 > `preconfig-android.sh:227`. `drakvuf-android.sh` omits it. That is F2.
 >
 > With the import added, `monkey` works (`Events injected: 1`,
@@ -1159,7 +1159,7 @@ blocked the run. Findings from a first bring-up are the point of it.
 
 `INJECTION_PID=3164` is a backgrounded `nano`, blocked on a console tty read
 and captured in that state by `xl save` (`docs/checklists/android.md` §1.4,
-`rebuild-android-sandbox.md` step 5: *"Anchor is just a shell process (nano)
+`03-rebuild-android-sandbox.md` step 5: *"Anchor is just a shell process (nano)
 running in background"*). `injector` waits for the target PID to be
 scheduled onto a vCPU and **has no timeout and prints nothing while
 waiting** — so a never-scheduled anchor produces a silent hang, not an
@@ -1187,10 +1187,10 @@ why `Killed` appears inside `preconfig.log` and identifies `injector` as
 the process that died.
 
 **Fix:** replace the anchor with one that is scheduled on its own and holds
-no VT, then re-save the template (`rebuild-android-sandbox.md`). New
+no VT, then re-save the template (`03-rebuild-android-sandbox.md`). New
 `INJECTION_PID` and new `.bak` checksum follow, so
 `automation/pipeline-android.env`, `docs/checklists/android.md` §1.4/§1.5
-and `verify-android-isolation.md`'s recorded values all move together.
+and `06-verify-android-isolation.md`'s recorded values all move together.
 
 Constraints on the replacement, all evidenced by this run:
 
@@ -1264,7 +1264,7 @@ while IFS=" " read -r a n v; do [ "$a" = export ] && export "$n=$v"; done < /dat
 `monkey` → `app_process64` aborts before `main()` with **exit 134**.
 Reproduced exactly (`monkey_rc=134`), and the failure mode was already
 recorded on 2026-08-11 at `docs/checklists/android.md:833` and
-`docs/runbooks/verify-android-isolation.md:1029` — the latter calling it
+`docs/runbooks/06-verify-android-isolation.md:1029` — the latter calling it
 *"YES — and it is not optional"*.
 
 This is a defect the project had already found and fixed in one file of a
@@ -1358,7 +1358,7 @@ Two consequences, neither previously written down:
 2. **Nothing in this repository recreates it.** It is dated 2026-08-14,
    lives only in `android_sandbox.bak`, and is not produced by any tracked
    script. A future template rebuild that forgets it breaks the network
-   injection the same silent way. `rebuild-android-sandbox.md` should carry
+   injection the same silent way. `03-rebuild-android-sandbox.md` should carry
    a step for it.
 
 ### F6 — `injector`'s `[INJECT]` line records the Dom0 path, not the guest path

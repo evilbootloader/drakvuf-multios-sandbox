@@ -89,7 +89,7 @@ are not is exactly what stops the next person repeating them.
 ## Answered 2026-08-13 — the resolver mechanism exists now because the image was rebuilt
 
 All four candidates above were measured and **all four are dead** on Android
-14 (`docs/runbooks/verify-android-isolation.md`, step 7): `/etc/resolv.conf`
+14 (`docs/runbooks/06-verify-android-isolation.md`, step 7): `/etc/resolv.conf`
 and `setprop net.dns1` are no-ops, `ndc resolver` does not exist, and
 `cmd ethernet help` returns `No shell command implementation`. The conclusion
 was not "look harder" — there is no shell client for `IDnsResolver` on this
@@ -206,7 +206,7 @@ would reopen part of what DRAFT-028 closed — and that decision belongs here.
 
 ## A trap found while drafting this
 
-`docs/runbooks/rebuild-android-sandbox.md` step 7 restores a disposable
+`docs/runbooks/03-rebuild-android-sandbox.md` step 7 restores a disposable
 Android clone using `android_test.cfg`, described as "same as
 `android_sandbox.cfg` but `name` and `disk`". That inherits
 `bridge=xenbr1` — **the bare OVS bridge.**
@@ -281,7 +281,7 @@ Two consequences:
 
 No code. The deliverables are evidence and documentation:
 
-1. `docs/runbooks/verify-android-isolation.md` — the transcript.
+1. `docs/runbooks/06-verify-android-isolation.md` — the transcript.
 2. `docs/checklists/android.md` — replace the "Current blocker" row with the
    result, and add the **parity matrix** below as a new subsection, filled.
    That table is what DRAFT-016 is written from:
@@ -457,7 +457,7 @@ and the exact configuration steps; before/after LV sizes.
 
 - **No sample runs, benign or otherwise.** This is a boot test.
 - Never restore onto the golden or the template LV — always a snapshot, per
-  `rebuild-android-sandbox.md` step 7's own warning.
+  `03-rebuild-android-sandbox.md` step 7's own warning.
 - **The Android guest will reach the Internet during this test**, because
   its validation probes are how it decides the network works. On a
   residential uplink under personal operation (roadmap risk #13) that
@@ -471,11 +471,11 @@ and the exact configuration steps; before/after LV sizes.
 
 # Documentation changes
 
-New: `docs/runbooks/verify-android-isolation.md`.
+New: `docs/runbooks/06-verify-android-isolation.md`.
 Updated: `docs/checklists/android.md` (Current blocker, §1.3 note, and the
 manual configuration steps), `docs/architecture/networking.md`,
 `docs/roadmap/project-roadmap.md` risk #5, and
-`docs/runbooks/rebuild-android-sandbox.md` — **annotated, not edited** — to
+`docs/runbooks/03-rebuild-android-sandbox.md` — **annotated, not edited** — to
 record that its step 7 config attaches to the bare bridge.
 
 # Recovery / rollback

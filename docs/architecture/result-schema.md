@@ -37,7 +37,7 @@ SHA-256):
 > under different filenames write to the same place and overwrite each
 > other, and a trace-timeout retry re-enters with the same key and truncates
 > the previous attempt's logs. Evidenced on Dom0 2026-08-17 as **F8** in
-> `docs/runbooks/verify-android-mvp.md`.
+> `docs/runbooks/07-verify-android-mvp.md`.
 >
 > A fix existed — `<sha256>/<utime>-<vlan>` per-run directories, on the
 > `vlan-lease` branch — and was **not merged**. `<utime>-<vlan>` is a

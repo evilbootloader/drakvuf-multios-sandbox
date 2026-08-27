@@ -7,7 +7,7 @@
 **Milestone:** M2 (containment closure)
 **Priority:** P1
 **Depends on:** DRAFT-028 and DRAFT-029, both landed. Nothing open.
-**Origin:** Findings F1 and F2′ in `docs/runbooks/deploy-terminal-chains.md`,
+**Origin:** Findings F1 and F2′ in `docs/runbooks/05-deploy-terminal-chains.md`,
 from DRAFT-029's deployment on 2026-08-12.
 
 # Objective

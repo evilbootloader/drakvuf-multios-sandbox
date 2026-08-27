@@ -71,11 +71,11 @@ belonging to DRAFT-016.
 
 The clone script is not speculative work. The entire sequence was executed
 by hand on Dom0 on 2026-08-14, against the current template, and recorded in
-`docs/runbooks/verify-android-isolation.md` steps 2–3. The script's job is to
+`docs/runbooks/06-verify-android-isolation.md` steps 2–3. The script's job is to
 produce that transcript from three arguments.
 
 ```bash
-# verify-android-isolation.md:238 — the snapshot
+# 06-verify-android-isolation.md:238 — the snapshot
 sudo lvcreate -s -n android_sandbox-13-clone -L32G /dev/vg-root/android_sandbox
 
 # :243-249 — the three config rewrites, by hand
@@ -139,7 +139,7 @@ clone LV size is not among them — it is per-OS … Windows will want more,
 Android likely less. `CLONE_LV_SIZE` belongs in `pipeline-<os>.env`, with
 `64G` as Ubuntu's default."* Android's value is **32G**, and it is measured,
 not guessed: `android_sandbox` is a 32,00g LV
-(`verify-android-isolation.md:975`) against `ubuntu_sandbox`'s 64,00g, and
+(`06-verify-android-isolation.md:975`) against `ubuntu_sandbox`'s 64,00g, and
 32G is what the manual clone used.
 
 Once DRAFT-033 moves the first three rows to the environment and the fifth to
@@ -249,7 +249,7 @@ both halves**, and taking it at face value puts a stale PID in a new file:
 - §1.5 records anchor PID **3163** against saved state `1844fc0a…`.
 - The template was re-saved before DRAFT-013 ran. The current saved state is
   `516644e2…` and the current anchor PID is **3164**
-  (`verify-android-isolation.md:171-172`, confirmed in that runbook's results
+  (`06-verify-android-isolation.md:171-172`, confirmed in that runbook's results
   matrix at `:1159`).
 - `3164` appears in **exactly one file in the repository** — that runbook.
   §1.5 has not been annotated.

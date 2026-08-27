@@ -37,7 +37,7 @@ sudo automation/run_analysis-ubuntu.sh
 
 A fresh checkout also needs a LibVMI profile in `profiles/` and a saved
 guest state in `state/`; neither is git-tracked. See `profiles/README.md`,
-`state/README.md`, and `docs/runbooks/deploy-repo-relative-paths.md`.
+`state/README.md`, and `docs/runbooks/02-deploy-repo-relative-paths.md`.
 
 ## Repository layout
 
@@ -65,7 +65,7 @@ guest state in `state/`; neither is git-tracked. See `profiles/README.md`,
   evidence (`android.md`, `ubuntu.md`, `windows.md`, `platform.md`). These
   track what's actually been done and evidenced, distinct from the roadmap.
 - `docs/runbooks/` — dated execution transcripts from real Dom0 work
-  (`verify-user-placeholder.md`, `deploy-repo-relative-paths.md`).
+  (`01-verify-user-placeholder.md`, `02-deploy-repo-relative-paths.md`).
   Append-only evidence: annotate, never edit in place.
 - `docs/workflow-ci.md` — the CI design: a GitHub-hosted static tier and a
   self-hosted Xen integration tier (DRAFT-026a/b). Neither is implemented.

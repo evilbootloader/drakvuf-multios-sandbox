@@ -21,7 +21,7 @@ written, and listed only DRAFT-009/010, 025–034 and 036. DRAFT-015 added
 | DRAFT-006 | Reconcile `misc/` Xen guest config naming and cross-references | governance | M0 | P2 | DRAFT-001 | **Closed** — [#1](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/1), done 2026-08-08 |
 | DRAFT-007 | Verify `drakvuf-ubuntu.sh`'s `<USER>` placeholder bug against real behavior | ubuntu | M1 | P0 | DRAFT-001 | **Closed** — [#2](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/2), done 2026-08-08; premise refuted (see note below) |
 | DRAFT-008 | Define OS-independent analysis job/result state model | core | M0 | P0 | DRAFT-001 | **Closed** — [#3](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/3), done 2026-08-09; model in `docs/architecture/analysis-pipeline.md` |
-| DRAFT-025 | Standardize Xen analysis pipeline paths | platform | M0 | P1 | DRAFT-001; informed by DRAFT-006, DRAFT-007 | Published — [#4](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/4), retitled 2026-08-09 to "…paths **and replace HTTP sample delivery**" when DRAFT-027 was folded in; **Closed 2026-08-10** — CREATE and DEPLOY both complete (`docs/runbooks/deploy-repo-relative-paths.md`), PR #5 merged. One acceptance criterion carried forward to DRAFT-009/#6 and DRAFT-015/016/034. Scope expanded — see note below |
+| DRAFT-025 | Standardize Xen analysis pipeline paths | platform | M0 | P1 | DRAFT-001; informed by DRAFT-006, DRAFT-007 | Published — [#4](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/4), retitled 2026-08-09 to "…paths **and replace HTTP sample delivery**" when DRAFT-027 was folded in; **Closed 2026-08-10** — CREATE and DEPLOY both complete (`docs/runbooks/02-deploy-repo-relative-paths.md`), PR #5 merged. One acceptance criterion carried forward to DRAFT-009/#6 and DRAFT-015/016/034. Scope expanded — see note below |
 | DRAFT-026 | Implement GitHub Actions and self-hosted Xen integration runner | ci | M1 | P1 | DRAFT-001; soft dep. on DRAFT-025; supersedes DRAFT-012; informed by DRAFT-006, DRAFT-007 | Drafted, not published — see `.github/issue-drafts/DRAFT-026.md` |
 
 ## Second batch — DRAFT-027 through DRAFT-034
@@ -109,7 +109,7 @@ evidenced.
 
 **Published and closed 2026-08-11 — [#7](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/7)** (label `bug`). Drafted,
 published and executed the same day. Transcript:
-`docs/runbooks/rebuild-android-sandbox.md`; resolution in
+`docs/runbooks/03-rebuild-android-sandbox.md`; resolution in
 `.github/issue-drafts/DRAFT-037.md`.
 
 New saved state `1844fc0a…`, anchor PID 3163, golden LV unmodified, AND-001
@@ -212,7 +212,7 @@ Also settled, and worth carrying into any future work on these scripts:
 `drakvuf -e` is **execve-direct**, with no shell in the guest, so a `$USER`
 in that argument can never dereference guest-side.
 
-Full transcript: `docs/runbooks/verify-user-placeholder.md`. Recurrence
+Full transcript: `docs/runbooks/01-verify-user-placeholder.md`. Recurrence
 prevention (a repo↔host checksum check) is folded into DRAFT-026.
 
 ## Note on DRAFT-026
@@ -432,7 +432,7 @@ Scope moved by issue #6, same date:
 
 Added 2026-08-12, produced by DRAFT-029's deployment rather than a backlog
 review. Both are findings recorded in
-`docs/runbooks/deploy-terminal-chains.md`; neither is a defect in what
+`docs/runbooks/05-deploy-terminal-chains.md`; neither is a defect in what
 DRAFT-029 changed.
 
 | Draft ID | Title | Area | OS | Milestone | Priority | Depends on | Origin |
@@ -885,7 +885,7 @@ deleted, so the reasoning survives the constraint.
   (added 2026-08-12 by DRAFT-013's drafting). The isolation rules match the
   `xenbr1.+` wildcard, which does **not** match the bare bridge, so a guest
   on `xenbr1` is covered by no rule at all. `clone.pl` rewrites the vif
-  correctly, but the **manual** procedure in `rebuild-android-sandbox.md`
+  correctly, but the **manual** procedure in `03-rebuild-android-sandbox.md`
   step 7 does not — it inherits `bridge=xenbr1` from
   `misc/android_sandbox.cfg`. Any hand-built test domain must override it.
 

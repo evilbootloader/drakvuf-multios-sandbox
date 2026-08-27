@@ -156,7 +156,7 @@ behind the implementation work it describes.
 # Out of scope
 
 - **Rewriting historical evidence.** `docs/checklists/android.md`'s dated
-  evidence blocks, `docs/runbooks/verify-user-placeholder.md`,
+  evidence blocks, `docs/runbooks/01-verify-user-placeholder.md`,
   `.github/issue-drafts/DRAFT-001…007`, and the roadmap's dated correction
   narratives are records of what was true when written. Where they are now
   outdated, **annotate**, never edit in place — the precedent is issue

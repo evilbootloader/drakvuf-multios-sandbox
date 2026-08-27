@@ -12,7 +12,7 @@ normalizer, C5), DRAFT-033 (hard — template error handling), DRAFT-011
 DRAFT-037/#7 are landed. DRAFT-013/#13 is landed and supplies the
 specification.
 **Origin:** `docs/checklists/android.md` §2.7–2.8; specification measured
-2026-08-14 in `docs/runbooks/verify-android-isolation.md` and recorded as
+2026-08-14 in `docs/runbooks/06-verify-android-isolation.md` and recorded as
 §1.6 of the checklist.
 
 > **Retitled on drafting.** The index row reads "Implement
@@ -96,7 +96,7 @@ This is the largest risk in the issue and it is not stated anywhere else, so
 it is stated here. Every `injector` invocation in the Android documentation
 is either a candidate (`docs/checklists/android.md:1398`, `:1431`, `:1462`)
 or derived from `injector --help` captured on Dom0 against **Ubuntu**
-(`docs/runbooks/verify-user-placeholder.md:154-157`). The staging-directory
+(`docs/runbooks/01-verify-user-placeholder.md:154-157`). The staging-directory
 probe that chose `/data/local/tmp` (§2.7, 2026-08-10) was run from a guest
 terminal, and DRAFT-013's three commands were run from the guest console.
 
@@ -115,7 +115,7 @@ script is written. If that does not work the rest of the issue is moot.
 `injector -m execproc` is execve-direct with no guest shell (issue #2), so
 the three commands above must reach the guest as one argument to
 `/system/bin/sh -c`. The runbook flags the quoting as the risk
-(`verify-android-isolation.md:1140`). It is worth naming the specific trap,
+(`06-verify-android-isolation.md:1140`). It is worth naming the specific trap,
 because it fails silently.
 
 `preconfig-ubuntu.sh:206` builds its chain in **double quotes**, and every
@@ -234,7 +234,7 @@ for memdump, filetracer, fileextractor, and syscalls plugins."* The deployed
 build, `v1.1-git20260511151619+52df0bc8-1`, descends from it.
 
 Evidenced at runtime on Linux, not just claimed —
-`docs/runbooks/verify-user-placeholder.md`:
+`docs/runbooks/01-verify-user-placeholder.md`:
 
 ```text
 :364  {"Plugin":"fileextractor",…,"Reason":"WriteFile","DumpFile":"…/00000000_unknown_fd_7"}
@@ -398,7 +398,7 @@ is annotated in place as part of CREATE.
   issue records stage results in logs, and does not invent a second format.
 - **Dropping outbound 853 in `network-setup.sh`.** The Dom0-side alternative
   to `private_dns_mode off` affects all three OS families and is its own
-  issue (`verify-android-isolation.md:1086`). Use the guest-side setting.
+  issue (`06-verify-android-isolation.md:1086`). Use the guest-side setting.
 - Any change to a shared file (C2). Needing one is a separate issue.
 - **Any collection off the guest.** `logcat`/`dumpsys`/`dmesg` stay withdrawn
   (issue #6), and the two 2026-08-14 alternatives — a post-trace `logcat -d`

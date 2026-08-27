@@ -377,7 +377,7 @@ listener, so the exposure is worth closing rather than tolerating.
 internet needs those paths. The browser's own console socket is at
 `/api/v1/jobs/{id}/console` and stays routed.
 
-Recorded as F12 in `docs/runbooks/verify-sandboxd-and-console.md`, with the
+Recorded as F12 in `docs/runbooks/09-verify-sandboxd-and-console.md`, with the
 rule and its verification.
 
 ### 4.2 What a compromised platform can reach

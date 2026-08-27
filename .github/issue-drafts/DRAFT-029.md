@@ -16,7 +16,7 @@ made while sweeping this draft on 2026-08-12 (see "The fail-open window").
 > was moved into DRAFT-028 at the maintainer's request and deployed on
 > 2026-08-11 as the `DRAKVUF_INPUT` chain
 > (`automation/network-setup.sh:365-404`; transcript in
-> `docs/runbooks/deploy-network-isolation.md`). `issue-index.md` recorded
+> `docs/runbooks/04-deploy-network-isolation.md`). `issue-index.md` recorded
 > that re-scope on 2026-08-11; this file did not, and was still presenting
 > the closed half as open. The original text is in git history.
 
@@ -32,7 +32,7 @@ instead of open.
 
 DRAFT-028 built the posture into five dedicated chains and left one thing
 open, which it said so explicitly
-(`docs/runbooks/deploy-network-isolation.md:764`):
+(`docs/runbooks/04-deploy-network-isolation.md:764`):
 
 > What this deployment does **not** establish, and must not be read as
 > establishing: no terminal policy is set on `FORWARD` or `INPUT`
@@ -40,7 +40,7 @@ open, which it said so explicitly
 > That is DRAFT-029.
 
 What the host already has, measured during that deployment
-(`docs/runbooks/deploy-network-isolation.md:349-354,600-602`):
+(`docs/runbooks/04-deploy-network-isolation.md:349-354,600-602`):
 
 ```
 -P INPUT ACCEPT

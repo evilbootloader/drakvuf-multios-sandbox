@@ -90,7 +90,7 @@ Three things that follow, and must not be lost:
 
   **And a dedicated volume is not sufficient — the storage *pool* is the real
   constraint.** Observed on L0 2026-08-22
-  (`docs/runbooks/deploy-platform-lxc.md` F1): the LVM thin pool carries
+  (`docs/runbooks/08-deploy-platform-lxc.md` F1): the LVM thin pool carries
   6.35 TiB of provisioned volumes against 1.82 TiB of real storage, with no
   `thin_pool_autoextend_threshold` set. A full pool affects **every** thin
   volume on it, including the Xen L1 VM's disks. So filling the artifact

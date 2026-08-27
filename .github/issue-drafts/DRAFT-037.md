@@ -1,6 +1,6 @@
 # DRAFT-037: Rebuild the Android sandbox template from the reinstalled golden VM
 
-**Status:** **Closed 2026-08-11 — [#7](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/7)**, published and completed the same day. Execution transcript: `docs/runbooks/rebuild-android-sandbox.md`.
+**Status:** **Closed 2026-08-11 — [#7](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/7)**, published and completed the same day. Execution transcript: `docs/runbooks/03-rebuild-android-sandbox.md`.
 **Area:** android / platform
 **Milestone:** M2 → M3 (gates the Android MVP)
 **Priority:** P0
@@ -271,7 +271,7 @@ from it at any time, which is precisely why `misc/android_sandbox.cfg` sets
 # Resolution — 2026-08-11
 
 Executed and closed the same day it was published. Transcript:
-`docs/runbooks/rebuild-android-sandbox.md`.
+`docs/runbooks/03-rebuild-android-sandbox.md`.
 
 | | |
 |---|---|

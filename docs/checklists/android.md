@@ -23,7 +23,7 @@
 | Start date | 2026-08-06 |
 | Last update | 2026-08-14 |
 | Current phase | Phase 2 — Android automation scripts (not started, **now unblocked**). Phase 1 complete: template rebuilt and restore-validated 2026-08-11 (issue #7), ROM rebuilt with EthernetConfig and re-validated 2026-08-14 (DRAFT-013) |
-| Current blocker | **None for containment — cleared 2026-08-14 (DRAFT-013, `docs/runbooks/verify-android-isolation.md`).** An Android clone booted on `xenbr1.1` under the current rules, probed its gateway with ICMP, had 10 packets dropped by `DRAKVUF_INPUT`, and validated the network anyway — the posture is robust rather than lucky, and no ICMP exemption is needed. Failed IPv6 provisioning did not change its verdict. Connectivity parity was established in the same run and is in §1.6. **Two constraints still bind Phase 2:** `preconfig-android.sh` must set `private_dns_mode off` or the pcap records DoT instead of DNS queries (§1.6), and clones retain deliberate NAT egress, so no non-benign sample should run with networking enabled until the `offline`/`simulated` modes exist (DRAFT-022) |
+| Current blocker | **None for containment — cleared 2026-08-14 (DRAFT-013, `docs/runbooks/06-verify-android-isolation.md`).** An Android clone booted on `xenbr1.1` under the current rules, probed its gateway with ICMP, had 10 packets dropped by `DRAKVUF_INPUT`, and validated the network anyway — the posture is robust rather than lucky, and no ICMP exemption is needed. Failed IPv6 provisioning did not change its verdict. Connectivity parity was established in the same run and is in §1.6. **Two constraints still bind Phase 2:** `preconfig-android.sh` must set `private_dns_mode off` or the pcap records DoT instead of DNS queries (§1.6), and clones retain deliberate NAT egress, so no non-benign sample should run with networking enabled until the `offline`/`simulated` modes exist (DRAFT-022) |
 
 ### Status legend
 
@@ -356,7 +356,7 @@ Destination size:
 >
 > No previous `android_sandbox` LV existed at the time of this run, so the
 > create-alongside rollback in the runbook was not needed.
-> Full transcript: `docs/runbooks/rebuild-android-sandbox.md`.
+> Full transcript: `docs/runbooks/03-rebuild-android-sandbox.md`.
 
 ---
 
@@ -435,7 +435,7 @@ Boot result: Successful
   was dropped by `DRAKVUF_ISOLATION` rule 4 — `192.168.0.0/16`, 2 packets —
   and `ping` to a LAN host returned 100% loss from inside the guest.)*
 - [x] **Confirm Android tolerates the rules.** *(2026-08-14, DRAFT-013 —
-  `docs/runbooks/verify-android-isolation.md`. It probed the gateway with
+  `docs/runbooks/06-verify-android-isolation.md`. It probed the gateway with
   ICMP, `DRAKVUF_INPUT` dropped 10 packets, and it reported "Internet
   through Ethernet" regardless. This is the row §1.3 could not fill while
   every measurement came from Ubuntu.)*
@@ -493,7 +493,7 @@ getprop | grep -iE 'dns|net\.'
 ### Evidence and notes
 
 **Filled 2026-08-11 from the DRAFT-028 deployment**, transcript in
-`docs/runbooks/deploy-network-isolation.md` steps 8 and 8b.
+`docs/runbooks/04-deploy-network-isolation.md` steps 8 and 8b.
 
 > **Read the provenance before relying on this table.** The measurements
 > were taken from **Ubuntu** analysis clones, not Android ones. That is
@@ -562,7 +562,7 @@ previous inter-clone rule was `-o !xenbr0`, which current iptables accepts
 while storing `!xenbr0` as a *literal interface name* — one that has never
 existed. It installed cleanly, appeared in `iptables -S`, and matched
 nothing. Every analysis run before that date, Ubuntu and Android alike, had
-the rule present and inert. See `docs/runbooks/deploy-network-isolation.md`
+the rule present and inert. See `docs/runbooks/04-deploy-network-isolation.md`
 step 2 and roadmap risk #5.
 
 ### Still open for Android specifically
@@ -658,7 +658,7 @@ sudo vmi-process-list android_sandbox | grep -i drakvuf
 > from that image, every injection hung silently and forever. It was
 > reachable only by switching to the console VT and typing `fg`, one
 > injection per nudge. Full diagnosis and evidence:
-> `docs/runbooks/verify-android-mvp.md` F1.
+> `docs/runbooks/07-verify-android-mvp.md` F1.
 >
 > **This invalidates §1.5's "Confirm the injection anchor is running".** A
 > `vmi-process-list` match proves the task *exists*; it says nothing about
@@ -687,7 +687,7 @@ sudo vmi-process-list android_sandbox | grep -i drakvuf
 >    `/data/system/environ/classpath`, which is `0600 system:system`. A
 >    non-root anchor reads nothing, `app_process64` aborts 134, and the
 >    clone's network configuration fails **silently**
->    (`verify-android-mvp.md` F5).
+>    (`07-verify-android-mvp.md` F5).
 > 3. **It must be 64-bit.** `injector --help`: the Linux `execproc` path is
 >    64-bit only.
 > 4. **It must not put traffic on the analysis VLAN.** The anchor runs for
@@ -821,7 +821,7 @@ Restore result: Correct
 > record of what was done on 2026-08-06.
 >
 > **Re-run completed the same day** under **DRAFT-037 / [issue #7][i7]**.
-> Full transcript: `docs/runbooks/rebuild-android-sandbox.md`.
+> Full transcript: `docs/runbooks/03-rebuild-android-sandbox.md`.
 >
 > ```text
 > Operator / date:       evilbootloader, 2026-08-11 (L1 / Xen Dom0)
@@ -871,7 +871,7 @@ Restore result: Correct
 ## 1.6 Connectivity parity with Ubuntu — the DRAFT-016 specification
 
 **Measured 2026-08-14 on an Android clone.** Full transcript and evidence in
-`docs/runbooks/verify-android-isolation.md`. This section is what
+`docs/runbooks/06-verify-android-isolation.md`. This section is what
 `preconfig-android.sh` is written from; it is a specification, not a summary.
 
 ### The result: one framework call replaces the whole `ip` chain
@@ -1033,7 +1033,7 @@ Baseline commit:
 > exactly one OS-specific value, `-L64G`, which is now `CLONE_LV_SIZE` in
 > `pipeline-<os>.env`. C1/C2 in `analysis-pipeline.md` are amended to
 > match. Handed `android_sandbox 1 misc/android_sandbox.cfg`, it reproduces
-> byte-for-byte the config `verify-android-isolation.md` step 2 wrote by
+> byte-for-byte the config `06-verify-android-isolation.md` step 2 wrote by
 > hand — verified 2026-08-15 before the rename was made.
 >
 > The saved-state paragraph above describes behaviour issue #4 removed on
@@ -1297,7 +1297,7 @@ Startup log:
 >   frontend/options" and "do not blindly assume `hda`".
 >   `misc/android_sandbox.cfg:59` and `misc/ubuntu_sandbox.cfg:54` are the
 >   same line but for the LV name, and the manual clone in
->   `verify-android-isolation.md` restored, ran 99 s and passed eleven
+>   `06-verify-android-isolation.md` restored, ran 99 s and passed eleven
 >   isolation steps on `hda`.
 > - **12 belong to DRAFT-033**, which has not landed: locking, the four
 >   exit-status checks, snapshot removal on failure, the restore timeout,
@@ -1518,7 +1518,7 @@ injector -h 2>&1 | tee -a /tmp/injector-help.txt
 >
 > Two defects, both settled by the `injector --help` capture taken on Dom0
 > 2026-08-08 and recorded at
-> `docs/runbooks/verify-user-placeholder.md:154-157`:
+> `docs/runbooks/01-verify-user-placeholder.md:154-157`:
 >
 > ```text
 > writefile - push a file (specified by host path -B) to the VM and store it on guest path specified by -e
@@ -1539,7 +1539,7 @@ Validated argument shape — and as of 2026-08-09 the invocation itself is
 **execution-evidenced**, not just help-evidenced: the Ubuntu pipeline ran
 this exact form end to end on Dom0 with `apache2` stopped, and a `readfile`
 pull confirmed the delivered bytes hashed identically to the Dom0 source
-(`docs/runbooks/deploy-repo-relative-paths.md`, D5/D6). Android inherits a
+(`docs/runbooks/02-deploy-repo-relative-paths.md`, D5/D6). Android inherits a
 working mechanism rather than a candidate one:
 
 ```bash
@@ -3138,8 +3138,8 @@ Next phase:
 | 2026-08-06 | Initial checklist created | | | evilbootloader |
 | 2026-08-11 | Golden `android` VM **reinstalled** with `HWACCEL=0` | BlissOS installer, Options → Graphics → Hardware Acceleration → Disable hardware acceleration; procedure in `docs/android_setup.md` | Golden VM boots to a usable UI; AND-001 resolved | evilbootloader |
 | 2026-08-11 | Issue log populated from the 2026-08-11 diagnostic capture; §0.3 and §1.5 annotated | — | Phase 1 reopened: `android_sandbox` must be rebuilt from the reinstalled golden — DRAFT-037, published as [#7](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/7) | evilbootloader |
-| 2026-08-11 | **`android_sandbox` rebuilt and restore-validated** from the reinstalled golden. New saved state `1844fc0a…`, anchor PID 3163. DNS DNAT deliberately not re-applied; anchor renamed to `nano` for anti-evasion | `docs/runbooks/rebuild-android-sandbox.md` | Phase 1 complete; issue #7 closed. §1.3 isolation still open | evilbootloader |
-| 2026-08-17 | **Android MVP bring-up run.** `injector` proven against BlissOS (12 MB APK `writefile`/`readfile` byte-exact), clone 32G, network injection, native ELF traced, APK installed and launched. Every injection required a manual `fg` at the guest console — the `nano` anchor is never scheduled | `docs/runbooks/verify-android-mvp.md` (F1–F8) | `monkey` rejected in favour of `am start -n`; APK install exceeds the 120 s trace window | evilbootloader |
+| 2026-08-11 | **`android_sandbox` rebuilt and restore-validated** from the reinstalled golden. New saved state `1844fc0a…`, anchor PID 3163. DNS DNAT deliberately not re-applied; anchor renamed to `nano` for anti-evasion | `docs/runbooks/03-rebuild-android-sandbox.md` | Phase 1 complete; issue #7 closed. §1.3 isolation still open | evilbootloader |
+| 2026-08-17 | **Android MVP bring-up run.** `injector` proven against BlissOS (12 MB APK `writefile`/`readfile` byte-exact), clone 32G, network injection, native ELF traced, APK installed and launched. Every injection required a manual `fg` at the guest console — the `nano` anchor is never scheduled | `docs/runbooks/07-verify-android-mvp.md` (F1–F8) | `monkey` rejected in favour of `am start -n`; APK install exceeds the 120 s trace window | evilbootloader |
 | 2026-08-17 | **`android_sandbox` re-saved to replace the injection anchor.** New saved state `465aa4d7…`, anchor PID **3174**, anchor is a backgrounded `ping` — self-scheduling, which the `nano` anchor was not. `pipeline-android.env` and `CLAUDE.md` updated the same day | §1.4/§1.5 annotations below | Three full unattended analyses completed; F1 closed pending the pcap question in §1.4 | evilbootloader |
 
 ---

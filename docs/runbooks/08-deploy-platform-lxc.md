@@ -2161,7 +2161,7 @@ Fast-forward
  .github/issue-drafts/issue-index.md         |  24 +-
  docs/architecture/platform.md               |  45 ++-
  docs/architecture/result-schema.md          |  15 +
- docs/runbooks/deploy-platform-lxc.md        | 584 ++++++++++++++++++++++++++--
+ docs/runbooks/08-deploy-platform-lxc.md        | 584 ++++++++++++++++++++++++++--
  platform/fake_worker.py                     |  22 +-
  platform/migrations/0004_results_bytes.sql  |  45 +++
  platform/minio/README.md                    | 120 ++++++

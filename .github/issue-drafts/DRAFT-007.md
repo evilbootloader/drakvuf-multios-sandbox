@@ -113,7 +113,7 @@ Not applicable — read-only verification, no changes to infrastructure.
 
 **The premise was wrong: `<USER>` was never a production bug.** Verified on
 the real Dom0 host; full transcript in
-`docs/runbooks/verify-user-placeholder.md`.
+`docs/runbooks/01-verify-user-placeholder.md`.
 
 All three acceptance criteria met:
 

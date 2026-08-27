@@ -120,7 +120,7 @@
 #
 # Verified against Android before the rename: handed
 # `android_sandbox 1 misc/android_sandbox.cfg`, the rewrites below produce
-# byte-for-byte what docs/runbooks/verify-android-isolation.md steps 2-3
+# byte-for-byte what docs/runbooks/06-verify-android-isolation.md steps 2-3
 # wrote out by hand on 2026-08-14.
 #
 # The origin is passed as an argument (e.g. ubuntu_sandbox, not the golden
@@ -400,7 +400,7 @@ sub clone {
         # `xl destroy` returns before the block device is released --
         # measured on Dom0 2026-08-14, where lvremove reported "Logical
         # volume in use" and succeeded on a retry
-        # (docs/runbooks/verify-android-isolation.md:965, annotated :996).
+        # (docs/runbooks/06-verify-android-isolation.md:965, annotated :996).
         # Waiting here is what makes the lvremove below reliable.
         for (1 .. 10) {
             last unless length `$xl domid $clone 2>/dev/null`;
@@ -430,7 +430,7 @@ sub clone {
         fail($EXIT_PRECHECK,
              "saved memory image not found or unreadable: $saved_state",
              "  Expected <repo root>/state/<origin domain>.bak -- see "
-           . "docs/runbooks/deploy-repo-relative-paths.md");
+           . "docs/runbooks/02-deploy-repo-relative-paths.md");
     }
 
     my $domconfig = `cat $config`;

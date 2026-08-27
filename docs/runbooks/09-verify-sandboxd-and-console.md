@@ -291,11 +291,11 @@ Aug 26 19:24:50 platform systemd[1]: Started sandbox-api.service - DRAKVUF sandb
 
 ## A1b. Apply the migration, with the environment the service uses
 
-Both services read `/etc/sandbox-platform/api.env` (`deploy-platform-lxc.md`
+Both services read `/etc/sandbox-platform/api.env` (`08-deploy-platform-lxc.md`
 :1463), so sourcing it is what makes a command run by hand see what the service
 sees. `set -a` exports everything the file defines rather than needing each
 line to say `export`. This is the form already proven at
-`deploy-platform-lxc.md:1602`.
+`08-deploy-platform-lxc.md:1602`.
 
 ```bash
 pct exec 102 -- su - platform -s /bin/bash -c '
@@ -348,7 +348,7 @@ applied  0005_console.sql
 > evidence the check was pointed at the object store.
 
 Two listeners, two different proofs of identity
-(`deploy-platform-lxc.md:1422`):
+(`08-deploy-platform-lxc.md:1422`):
 
 | Port | Who | Auth |
 |---|---|---|
@@ -358,7 +358,7 @@ Two listeners, two different proofs of identity
 ```bash
 # The browser listener. --insecure because the CA is ours and the container
 # does not trust it by default; this is checking that the service answers,
-# not that TLS is right -- deploy-platform-lxc.md step 5 does that.
+# not that TLS is right -- 08-deploy-platform-lxc.md step 5 does that.
 pct exec 102 -- curl -sk https://192.168.1.10:8000/healthz; echo
 
 # The mTLS listener needs a client certificate, so it is checked from Dom0
@@ -439,7 +439,7 @@ sample that appears to open a file indistinguishable from one that chose to.
 
 ```bash
 # On Dom0. Capture the WHOLE help this time -- the existing capture in
-# verify-user-placeholder.md was grep-filtered and lost this line.
+# 01-verify-user-placeholder.md was grep-filtered and lost this line.
 drakvuf --help 2>&1 | tee /tmp/drakvuf-help-full.txt
 grep -nE -- '^\s+-a|--activate|plugin' /tmp/drakvuf-help-full.txt | head -20
 
@@ -645,7 +645,7 @@ print('httpx', httpx.__version__, '| websockets', websockets.__version__)"
 
 Dom0 presents a client certificate because the worker listener runs with
 `--ssl-cert-reqs 2`. The identity is **`dom0-lab`**, issued at
-`deploy-platform-lxc.md:830` with `./tls/issue-cert.sh client dom0-lab`, and
+`08-deploy-platform-lxc.md:830` with `./tls/issue-cert.sh client dom0-lab`, and
 that runbook is explicit: *"`dom0-lab.crt`/`dom0-lab.key` go to Dom0 and
 nowhere else."*
 
@@ -697,7 +697,7 @@ root@drakvuf:~# curl --cacert /etc/sandboxd/tls/ca.crt \
 
 ### C3c. The worker token
 
-Generated once at `deploy-platform-lxc.md:1049` with `openssl rand -hex 32`,
+Generated once at `08-deploy-platform-lxc.md:1049` with `openssl rand -hex 32`,
 and stored in `/etc/sandbox-platform/api.env` on the container. That file is
 `0600` and owned by `platform` because it holds every credential in the system.
 
@@ -1231,7 +1231,7 @@ does not tear its clones down is a session on a domain that may outlive it.
 Off by default, deliberately.
 
 ```bash
-# Both services read this file -- see deploy-platform-lxc.md:1463.
+# Both services read this file -- see 08-deploy-platform-lxc.md:1463.
 pct exec 102 -- bash -c "echo 'CONSOLE_ENABLED=1' >> /etc/sandbox-platform/api.env"
 pct exec 102 -- systemctl restart sandbox-api sandbox-api-browser
 
@@ -1319,7 +1319,7 @@ direction was reversed. Run it **while a console session is open**.
 pct exec 102 -- bash -lc 'curl -m 5 -sv https://192.168.1.139/ ; echo "exit=$?"'
 ```
 
-Expect a timeout and `exit=28`, exactly as `deploy-platform-lxc.md` step 5
+Expect a timeout and `exit=28`, exactly as `08-deploy-platform-lxc.md` step 5
 records. **If this connects, stop and report it** — the whole design rests on
 it.
 

@@ -247,7 +247,7 @@ fi
 # shape is branched. -f is valid here: `drakvuf --help` on the installed
 # build records "-f <args for exec>  Additional args for exec() (requires
 # -m execproc or -m shellexec)", captured at
-# docs/runbooks/verify-user-placeholder.md:104.
+# docs/runbooks/01-verify-user-placeholder.md:104.
 if [ "$SAMPLE_KIND" = apk ]; then
     # The sample is ALREADY INSTALLED by preconfig-android.sh; this traces
     # the launch only. See that script for why the install moved out of

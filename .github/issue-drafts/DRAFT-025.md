@@ -372,7 +372,7 @@ Requires manual Dom0 coordination — present, do not execute automatically:
 >    pipeline inherits `injector -m writefile` with `-B` as the **Dom0
 >    source** and `-e` as the **guest destination** — the order that
 >    refuted the Android checklist's candidate command
->    (`docs/runbooks/verify-user-placeholder.md:154-157`). There is no HTTP
+>    (`docs/runbooks/01-verify-user-placeholder.md:154-157`). There is no HTTP
 >    fallback to inherit.
 > 3. **DRAFT-009 is where it is discharged.** That issue produces the
 >    conformance checklist a new per-OS pipeline is written against; this
@@ -460,7 +460,7 @@ before any old copy is removed.
 # CREATE completed 2026-08-09 — with three deliberate scope changes
 
 Repo-side work is done and statically verified. Nothing is deployed;
-DEPLOY is `docs/runbooks/deploy-repo-relative-paths.md`, not yet executed.
+DEPLOY is `docs/runbooks/02-deploy-repo-relative-paths.md`, not yet executed.
 
 **Issue #4 was updated on GitHub the same day, with approval.** Its body
 was rewritten to match what was built (per `CONTRIBUTING.md`'s "Issue
@@ -498,7 +498,7 @@ DRAFT-027 was implemented in the same change and the coupling removed.
 
 **DRAFT-027's PLAN steps 1–2 did not need the Dom0 capture they ask
 for.** That capture already existed, taken during issue #2 and recorded
-at `docs/runbooks/verify-user-placeholder.md:154-157`. It also refuted
+at `docs/runbooks/01-verify-user-placeholder.md:154-157`. It also refuted
 the Android checklist's candidate command, which had `-e`/`-f` where the
 real interface is `-B` (Dom0 source) and `-e` (guest destination) — see
 DRAFT-027's own resolution note.
@@ -536,7 +536,7 @@ and both are recorded where they were found rather than deferred:
 
 The runbook was executed on Dom0 the same day, against commit `57713fc`.
 D1–D6 passed; evidence is in
-`docs/runbooks/deploy-repo-relative-paths.md`, summarized in
+`docs/runbooks/02-deploy-repo-relative-paths.md`, summarized in
 `docs/checklists/ubuntu.md`.
 
 - Location independence: launched from `/tmp`, behaved identically.

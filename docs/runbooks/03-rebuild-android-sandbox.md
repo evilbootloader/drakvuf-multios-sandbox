@@ -316,7 +316,7 @@ Tombstones / system_server_watchdog entries: Not checked
 > restored from `android_sandbox.bak` boots believing it is `192.168.1.122`,
 > the address the golden VM held on `xenbr0`, and ARPs for a residential
 > gateway for its first ~45 seconds on the analysis VLAN. Measured in
-> `docs/runbooks/verify-android-isolation.md`, finding F4.
+> `docs/runbooks/06-verify-android-isolation.md`, finding F4.
 >
 > It is captured into the **memory image** at `xl save` time, not into a
 > file — `/data/misc/ethernet/ipconfig.txt` is not written — so it cannot be
