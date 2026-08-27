@@ -1,14 +1,38 @@
 # Verifying `sandboxd`, the platform API, the web UI and the live console
 
-> **Status: written 2026-08-26, NOT YET EXECUTED.** Every `EVIDENCE` block is
-> empty and stays empty until an operator pastes real output into it. Per this
-> project's convention a runbook is committed *after* execution, so if you are
-> reading this in git history with the blocks still empty, it was committed
-> early by mistake.
+> **Status: EXECUTED, 2026-08-26 to 2026-08-27.** Parts A–F carry real output
+> from `pve1`, Dom0 and the platform container. `sandboxd` has run against a
+> real `xl`, `lvcreate`, `injector` and `drakvuf`, and §F is a measurement
+> campaign rather than a plan.
 >
-> **Nothing in `sandboxd` has ever run against a real `xl`, `lvcreate`,
-> `injector` or `drakvuf`.** 252 tests pass against a recording fake, which is
-> what makes booking Dom0 time worth it — not a substitute for having done it.
+> Not every block is filled — read each `EVIDENCE` block on its own terms, and
+> §F7d for one check that could not have worked as written.
+>
+> **The original pre-execution banner is preserved in the annotation below.**
+> It was written before this ran and was never updated, so for a day this
+> document asserted that nothing here had ever touched real Dom0 tooling while
+> containing 44 pasted host prompts. `docs/CURRENT-STATE.md`'s generator read
+> that banner and reported the runbook as evidence-free — the correction is why
+> it now counts pasted prompts and ignores banners.
+
+> ### ANNOTATION 2026-08-27 — the banner this replaces
+>
+> Written 2026-08-26, before execution:
+>
+> *"Status: written 2026-08-26, NOT YET EXECUTED. Every `EVIDENCE` block is
+> empty and stays empty until an operator pastes real output into it. Per this
+> project's convention a runbook is committed after execution, so if you are
+> reading this in git history with the blocks still empty, it was committed
+> early by mistake.*
+>
+> *Nothing in `sandboxd` has ever run against a real `xl`, `lvcreate`,
+> `injector` or `drakvuf`. 252 tests pass against a recording fake, which is
+> what makes booking Dom0 time worth it — not a substitute for having done
+> it."*
+>
+> Both statements were true when written and are false now. Kept because the
+> reason this session was booked is part of the record, and because the
+> 252-test figure dates the state of the suite at that moment.
 
 ## What this covers, and in what order
 
