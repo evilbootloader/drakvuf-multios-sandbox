@@ -134,7 +134,27 @@ def default_trace_options(os_: TargetOs, kind: SampleKind) -> TraceOptions:
     the trace's slowdown).
     """
     if os_ is TargetOs.UBUNTU:
-        return TraceOptions(plugins=_LINUX_PLUGINS, timeout=120)
+        # `-F` added 2026-08-27 at the operator's request, after pinning Dom0
+        # and the clones to disjoint pCPUs left the guest still crawling. The
+        # measurement that decided it (runbook §F6e/§F7): with two traces
+        # running, Dom0 sat at 196% of 600% -- four idle cores -- while each
+        # clone got ~7% of its single vCPU. Nothing was CPU-starved; the guest
+        # was paused ~93% of wall time waiting for Dom0 to service traps. That
+        # is per-event cost, and no amount of scheduling fixes it.
+        #
+        # **`-F` is the only lever here with no information cost**, which is
+        # why it is the one applied to Ubuntu. It swaps the full singlestep
+        # round trip after each hooked event for a second altp2m view: the same
+        # events, carrying the same data, delivered more cheaply. Contrast
+        # `--disable-sysret`, which halves the events by discarding syscall
+        # return values, and a syscall filter file, which discards every
+        # syscall not on the list -- both are still off here.
+        #
+        # Requires Xen 4.14+; Dom0 runs 4.20.1. Android has run it evidenced
+        # since 2026-08-17. Revert by dropping this argument -- the flag is
+        # emitted by TraceOptions.drakvuf_flags() and nothing else reads it.
+        return TraceOptions(plugins=_LINUX_PLUGINS, timeout=120,
+                            fast_singlestep=True)
 
     if os_ is TargetOs.ANDROID:
         return TraceOptions(

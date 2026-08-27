@@ -2120,4 +2120,109 @@ open).
 EVIDENCE F6 — after applying F6c, one `xentop` sample under two live analyses
 
 ```
+root@drakvuf:/home/user# xl vcpu-list
+Name                        ID  VCPU  CPU State  Time(s) Affinity (Hard / Soft)
+Domain-0                     0     0    0   r--     12.8  0 / all
+Domain-0                     0     1    1   r--     12.0  1 / all
+Domain-0                     0     2    2   -b-     12.5  2 / all
+Domain-0                     0     3    3   -b-     14.2  3 / all
+Domain-0                     0     4    4   r--     13.3  4 / all
+Domain-0                     0     5    5   -b-      8.0  5 / all
+ubuntu_sandbox-1-clone       2     0    6   ---      5.2  6-11 / all
+ubuntu_sandbox-2-clone       3     0    7   ---      5.0  6-11 / all
+
+root@drakvuf:/home/user# xentop -b -i 5 -d 2
+      NAME  STATE  CPU(sec) CPU(%)    MEM(k) MEM(%) VCPUS
+  Domain-0 -----r        96  196.7   8388608   40.0     6
+ubuntu_san ------         6    6.2   2081092    9.9     1
+ubuntu_san -----r         5    7.8   2081092    9.9     1
+  Domain-0 -----r       100  198.8   8388608   40.0     6
+ubuntu_san ------         6    7.3   2081092    9.9     1
+ubuntu_san ------         6    7.6   2081092    9.9     1
+  Domain-0 -----r       104  195.9   8388608   40.0     6
+ubuntu_san ------         6    7.5   2081092    9.9     1
+ubuntu_san ------         6    7.6   2081092    9.9     1
 ```
+
+**The partition holds.** Dom0 is pinned 1:1 to pCPU 0-5, both clones are
+confined to 6-11 and are running on 6 and 7, and the two sets do not overlap.
+`VCPUS 1` also confirms `vcpus = 1` took effect and that `xl restore` accepted
+a config whose vCPU count differs from the pre-change templates — the mismatch
+this runbook warned might block the change did not occur, and no re-save was
+needed.
+
+**But the operator reports the analysis is still laggy**, and the numbers say
+why. See §F7.
+
+## F7. The bottleneck after pinning: per-event cost, not scheduling
+
+**Dom0 2026-08-27**, from the F6 measurement. Read the two columns together:
+
+    Domain-0   ~197%  of 600% available   ->  ~33% utilised, 4 cores idle
+    clone 1      ~7%  of 100%
+    clone 2      ~7%  of 100%
+
+**Nothing is CPU-starved.** Dom0 has four idle cores it could hand to a clone
+and the clone still cannot use them — so the guest running at ~7% of a single
+vCPU is not waiting for a *processor*, it is paused waiting for Dom0 to service
+its traps. It spends roughly 93% of wall time stopped.
+
+That closes F1's diagnosis and replaces it. The feedback loop F1 described was
+real and the pinning fixed it; what remains is the irreducible cost of trapping
+every syscall, which F3(2) named and which no amount of scheduling touches.
+
+Dom0's load also scales predictably from this: ~1 core per active DRAKVUF
+instance, so its six cores saturate at roughly six concurrent traces — above
+the memory cap of five in F6d. Memory still binds first.
+
+### F7a. `-F` on Ubuntu — applied 2026-08-27
+
+The three levers are not equivalent, and the difference is **information cost**:
+
+| | effect | cost |
+|---|---|---|
+| `-F` fast singlestep | second altp2m view instead of a full singlestep round trip per hooked event | **none** — same events, same data |
+| `--disable-sysret` | roughly halves the events | syscall **return values** |
+| syscall filter file | largest reduction available | every syscall not on the list |
+
+Only the first is free, so only the first was applied. `sandboxd/guests.py`
+`default_trace_options()` now sets `fast_singlestep=True` for Ubuntu; Android
+has run it evidenced since 2026-08-17, and Dom0's Xen 4.20.1 is well past the
+4.14 minimum.
+
+This **does** change the evidenced Ubuntu pipeline, which CLAUDE.md forbids
+without an explicit request. It was explicitly requested, and the change is one
+argument: revert by dropping `fast_singlestep=True`, since the flag is emitted
+by `TraceOptions.drakvuf_flags()` and read nowhere else.
+
+`test_ubuntu_traces_without_the_android_flags` was renamed to
+`test_ubuntu_keeps_every_syscall_return_value` and now asserts `-F` is present
+and `--disable-sysret` is absent. The old name defended "Ubuntu differs from
+Android", which was never the property worth protecting; the new one defends
+the evidence boundary — Ubuntu may take cheaper delivery of the same trace, and
+may not take a cheaper trace.
+
+EVIDENCE F7a — `xentop` with `-F` live: the clone's CPU(%) against the ~7% above
+
+```
+```
+
+### F7b. If `-F` is not enough
+
+Next is `--disable-sysret`, then a syscall filter — in that order, because that
+is increasing order of what the trace stops recording. **Neither should be
+turned on merely because the guest feels slow.** A DRAKVUF trace is slow by
+construction, and an analysis that runs at 7% but completes inside `-t 120` and
+captures the behaviour has no problem to fix. The question to answer first is
+whether samples are being **cut off** by the trace budget, which is visible in
+the job state rather than in `xentop`:
+
+```sh
+pct exec 102 -- runuser -u platform -- psql -d sandbox_platform -c \
+  "SELECT state, count(*) FROM jobs GROUP BY state"
+```
+
+A rising `timed_out` count is a real problem and justifies paying information
+cost. A slow console with traces that complete is a *console* problem, and
+DRAFT-055 is where it belongs — not a reason to stop recording return values
+for every analysis the lab ever runs.

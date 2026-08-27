@@ -301,14 +301,27 @@ def test_the_handoff_file_is_removed_before_the_sample_runs(tmp_path):
 
 # --- the trace budget -------------------------------------------------------
 
-def test_ubuntu_traces_without_the_android_flags(tmp_path):
-    """Ubuntu is evidenced working and does not have the problem these solve.
-    Adding them would change a working pipeline for no reason -- and
-    `--disable-sysret` costs syscall RETURN values."""
+def test_ubuntu_keeps_every_syscall_return_value(tmp_path):
+    """The line this test defends is **information cost**, not "Ubuntu differs
+    from Android" -- which is what it asserted until 2026-08-27, when `-F` was
+    added to Ubuntu and this failed for the right reason.
+
+    `-F` costs nothing: it swaps the singlestep round trip after a hooked event
+    for a second altp2m view, so the same events arrive carrying the same data.
+    `--disable-sysret` is not like that. It halves the events by discarding
+    syscall RETURN values, and a trace missing them shows that a sample called
+    `openat`/`connect`/`execve` and with what arguments, but not whether any of
+    it succeeded. Attempted behaviour stays visible; outcomes do not.
+
+    So Ubuntu may take cheaper delivery of the same trace, and may not take a
+    cheaper trace. Turning this red is a decision about evidence, not speed.
+    """
     argv = G.argv_trace(job(tmp_path))
 
-    assert "-F" not in argv
-    assert "--disable-sysret" not in argv
+    assert "-F" in argv, "fast singlestep is free and Ubuntu should have it"
+    assert "--disable-sysret" not in argv, (
+        "Ubuntu would stop recording syscall return values -- see the docstring"
+    )
     assert argv[argv.index("-t") + 1] == "120"
 
 
