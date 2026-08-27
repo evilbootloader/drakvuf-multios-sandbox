@@ -623,3 +623,71 @@ def test_the_cache_key_tracks_the_files(tmp_path, monkeypatch):
     os.utime(tmp_path.parent / "static" / "a.css", (later, later))
 
     assert ui._asset_version() != first
+
+
+# --- the artifacts tab's empty states ---------------------------------------
+#
+# None of these branches had a test until 2026-08-27, which is how the ordering
+# defect below survived to be found by an operator rather than by the suite.
+
+def _aged(conn, job_id, days: int) -> None:
+    conn.execute(
+        "UPDATE jobs SET created_at = now() - make_interval(days => %s)"
+        " WHERE id = %s", (days, job_id))
+
+
+def test_a_completed_run_with_no_manifest_does_not_claim_it_produced_nothing(
+        client, conn):
+    """The bug an operator hit: "old jobs can't download anymore".
+
+    `/complete` is the only writer of `jobs.manifest`, and jobs finished before
+    the 2026-08-26 fix reported `completed` through `/state` instead -- so it
+    was never written. Their objects are still in MinIO; nothing records what
+    they are called.
+
+    The tab said **"This run produced no artifacts"**, which asserts a fact
+    about the run that is not known -- it may well have produced plenty. What
+    is known is that nothing wrote them down. An operator reading the old
+    sentence concludes the analysis was empty rather than that the record is
+    missing, and those are different problems with different responses.
+    """
+    job_id = _job(conn, "sample.sh", state="completed")
+
+    page = client.get(f"/ui/jobs/{job_id}?tab=artifacts").text
+
+    assert "No manifest was recorded" in page
+    assert "produced no artifacts" not in page
+
+
+def test_expired_artifacts_say_so_rather_than_claiming_none_were_produced(
+        client, conn):
+    """`artifacts_expired` was UNREACHABLE.
+
+    The template tested `state == 'completed'` first, and artifacts only ever
+    exist on a completed run -- so the expiry branch could never render, and
+    every aged-out job claimed it had produced nothing. Two different facts
+    collapsed onto one misleading sentence.
+    """
+    job_id = _job(conn, "sample.sh", state="completed")
+    _aged(conn, job_id, 400)
+
+    page = client.get(f"/ui/jobs/{job_id}?tab=artifacts").text
+
+    assert "have expired" in page
+    assert "produced no artifacts" not in page
+
+
+def test_a_run_that_genuinely_produced_nothing_still_says_so(client, conn):
+    """The branch the other two must not swallow. A manifest that records zero
+    artifacts is a real and different answer from a missing one: here the run
+    DID write down what it produced, and the answer was nothing."""
+    from psycopg.types.json import Json
+
+    job_id = _job(conn, "sample.sh", state="completed")
+    conn.execute("UPDATE jobs SET manifest = %s WHERE id = %s",
+                 (Json({"schema_version": 1, "artifacts": []}), job_id))
+
+    page = client.get(f"/ui/jobs/{job_id}?tab=artifacts").text
+
+    assert "produced no artifacts" in page
+    assert "No manifest was recorded" not in page

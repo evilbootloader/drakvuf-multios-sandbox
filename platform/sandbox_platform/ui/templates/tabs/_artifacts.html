@@ -1,11 +1,31 @@
 {% if not job.artifacts %}
 <div class="empty">
-  {% if job.state.value == 'completed' %}
-    <strong>This run produced no artifacts.</strong>
-  {% elif job.artifacts_expired %}
+  {#
+    Order matters, and it was wrong until 2026-08-27: `completed` was tested
+    FIRST, so `artifacts_expired` was unreachable for exactly the jobs that can
+    have artifacts -- artifacts only ever exist on a completed run. Every
+    expired job claimed it had produced nothing.
+
+    The `not job.manifest` branch is the same class of defect and the one an
+    operator actually hit. `/complete` is the only writer of `jobs.manifest`,
+    and jobs finished before the 2026-08-26 fix reported `completed` through
+    `/state` instead, so it was never written. Their objects are still in
+    MinIO, but nothing records what they are called. "This run produced no
+    artifacts" asserts a fact about the RUN that is not known -- what is known
+    is that no manifest was recorded.
+  #}
+  {% if job.artifacts_expired %}
     <strong>Artifacts have expired.</strong>
     Objects are removed after the store's retention window; the manifest below
     records what the run produced.
+  {% elif job.state.value == 'completed' and not job.manifest %}
+    <strong>No manifest was recorded for this run.</strong>
+    The run finished, but nothing wrote down what it produced — so there is
+    nothing to offer for download. Any objects it left are still in the store
+    and will age out on the normal retention schedule. Re-submit the sample to
+    get a downloadable result.
+  {% elif job.state.value == 'completed' %}
+    <strong>This run produced no artifacts.</strong>
   {% else %}
     <strong>Not collected yet.</strong> Artifacts appear when the run completes.
   {% endif %}
