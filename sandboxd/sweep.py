@@ -135,8 +135,13 @@ def sweep(
     config_dir: Path = Path("/tmp"),
     staging_dir: Path | None = None,
     settle: int = DESTROY_SETTLE_SECONDS,
+    vlans=(),
 ) -> SweepReport:
-    """Reclaim every clone on this host. Runs before register and claim."""
+    """Reclaim every clone on this host. Runs before register and claim.
+
+    `vlans` is the range this host provisioned. It is what lets the stray hunt
+    find a capture whose domain is already gone -- see `_kill_strays`.
+    """
     report = SweepReport()
 
     domains = _clone_domains(runner, report)
@@ -150,7 +155,7 @@ def sweep(
         if parsed:
             report.dirty_vlans.add(parsed.vlan)
 
-    _kill_strays(runner, domains, bridge, report)
+    _kill_strays(runner, domains, bridge, report, vlans)
 
     for name in domains:
         _destroy(runner, name, settle, report)
@@ -204,7 +209,8 @@ def _clone_lvs(runner, vg: str, report: SweepReport | None) -> list[str]:
 
 # --- removing ----------------------------------------------------------------
 
-def _kill_strays(runner, domains, bridge: str, report: SweepReport) -> None:
+def _kill_strays(runner, domains, bridge: str, report: SweepReport,
+                 vlans=()) -> None:
     """`drakvuf`, `injector` and `tcpdump` left over from a dead sandboxd.
 
     **Exact argv elements, never a regex.** `drakvuf-<os>.sh` finds its own
@@ -213,9 +219,22 @@ def _kill_strays(runner, domains, bridge: str, report: SweepReport) -> None:
     that would also kill the capture on `xenbr1.10` through `xenbr1.19`. It is
     recorded as a KNOWN GAP (DRAFT-011) in the script; here it simply cannot
     happen, because `xenbr1.1` and `xenbr1.10` are different strings.
+
+    **The interfaces come from the PROVISIONED VLAN range, not from surviving
+    domains**, and that is the whole point of `vlans`. A sandboxd that died
+    after `xl destroy` completed but before `tcpdump.stop()` leaves a capture
+    whose domain no longer exists: derived from `domains`, that VLAN produced
+    no interface, matched no process, and the sweep then found nothing on it
+    and admitted it as clean. The next job on that VLAN ran with the previous
+    job's `tcpdump -i xenbr1.<n>` still writing to the previous job's pcap
+    path -- a second sample's traffic recorded into the first sample's
+    capture, with nothing anywhere reporting it.
+
+    `vlans` is empty only in tests that predate it; the daemon always passes
+    the range it provisioned.
     """
     wanted = set(domains)
-    interfaces = set()
+    interfaces = {f"{bridge}.{vlan}" for vlan in vlans}
     for name in domains:
         parsed = parse_clone(name)
         if parsed:

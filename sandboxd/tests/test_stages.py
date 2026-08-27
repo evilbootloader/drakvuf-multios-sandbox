@@ -42,6 +42,7 @@ class FakeApi:
     states: list = field(default_factory=list)
     completed: list = field(default_factory=list)
     uploaded: list = field(default_factory=list)
+    ticket_batches: list = field(default_factory=list)
     cancel_after: int | None = None
     sample_bytes: bytes = b"\x7fELF" + b"\x00" * 60
     beats: int = 0
@@ -95,6 +96,9 @@ class FakeApi:
 
     def artifact_tickets(self, job_id, sizes):
         from sandboxd.api import Ticket
+        # Recorded per call: the platform caps `artifacts` at 64 names PER
+        # REQUEST, so how the names were split matters as much as which ones.
+        self.ticket_batches.append(sorted(sizes))
         return {n: Ticket(url="https://minio/analysis", fields={}, expires_in=900)
                 for n in sizes}
 
@@ -141,9 +145,14 @@ def runner_ready(clone="ubuntu_sandbox-3-clone", origin="ubuntu_sandbox"):
     return r
 
 
-def run(tmp_path, *, api=None, runner=None, lease=None, vlan=3, plugins=None):
+def run(tmp_path, *, api=None, runner=None, lease=None, vlan=3, plugins=None,
+        console_enabled=False):
     cfg = config(tmp_path)
     cfg.plugins = plugins
+    # Off by default here as it is in production, so a test that cares about
+    # the console has to say so -- and every other test runs the shape a real
+    # Dom0 runs, with no relay socket dialled.
+    cfg.console_enabled = console_enabled
     cfg.config_dir.mkdir(parents=True, exist_ok=True)
     api = api or FakeApi()
     a = S.Analysis(api, runner or runner_ready(), cfg)
@@ -567,7 +576,7 @@ def test_the_console_is_dialled_at_the_start_of_the_trace(tmp_path):
     Now the dial happens because the trace started, with nobody having asked.
     """
     r = runner_ready()
-    run(tmp_path, runner=r)
+    run(tmp_path, runner=r, console_enabled=True)
 
     # The port lookup is the first thing a dial does; the FakeRunner answers
     # nothing useful, so the session is abandoned -- but the ATTEMPT is what
@@ -582,7 +591,7 @@ def test_a_console_failure_never_fails_the_analysis(tmp_path):
     r.script(("xenstore-read",), rc=1)
     r.script(("xl", "list", "-l"), rc=1)
 
-    outcome, api = run(tmp_path, runner=r)
+    outcome, api = run(tmp_path, runner=r, console_enabled=True)
 
     assert outcome.state == "completed"
     assert api.completed
@@ -600,6 +609,69 @@ def test_the_console_is_not_dialled_when_disabled_on_this_host(tmp_path):
     S.Analysis(FakeApi(), r, cfg).run(FakeLease(), 3)
 
     assert not r.ran(("xenstore-read",))
+
+
+# --- artifact tickets are batched to the server's cap -----------------------
+
+def test_tickets_are_requested_in_batches_the_server_will_accept(tmp_path):
+    """**`ArtifactRequest.artifacts` is capped at 64 names per call.**
+
+    This asked for all of them in one request, so a run producing more than 64
+    files got a 422 -- raised as a ProtocolError with no retry, caught by
+    `run`'s `except Exception`, and recorded as `failed`. A completely
+    successful analysis was discarded, artifacts and all, and `memdump` alone
+    routinely produces more than 64 files.
+    """
+    job_dir = tmp_path / "results" / "job"
+    (job_dir / "memdump").mkdir(parents=True)
+    for i in range(150):
+        (job_dir / "memdump" / f"0x{i:04x}.dmp").write_bytes(b"\xde\xad" * 8)
+
+    api = FakeApi()
+    outcome = S.Analysis(api, runner_ready(), config(tmp_path))._collect(
+        FakeLease(), job_dir)
+
+    assert outcome.state == "completed"
+    assert len(api.uploaded) == 150, "every artifact must still be uploaded"
+    assert not outcome.manifest["truncated"]
+    assert len(api.ticket_batches) == 3, "150 names over a 64 cap is 3 calls"
+    assert all(len(b) <= S.TICKET_BATCH for b in api.ticket_batches)
+    # No name asked for twice: minting CHARGES the job's byte budget, so a
+    # duplicated request would over-count it.
+    minted = [name for batch in api.ticket_batches for name in batch]
+    assert sorted(minted) == sorted(api.uploaded)
+
+
+def test_a_small_run_still_costs_one_ticket_call(tmp_path):
+    """Batching must not turn the common case into a request per artifact."""
+    job_dir = tmp_path / "results" / "job"
+    job_dir.mkdir(parents=True)
+    for name in ("trace.log", "capture.pcap"):
+        (job_dir / name).write_bytes(b"x")
+
+    api = FakeApi()
+    S.Analysis(api, runner_ready(), config(tmp_path))._collect(
+        FakeLease(), job_dir)
+
+    assert len(api.ticket_batches) == 1
+
+
+def test_the_512_cap_does_not_cut_the_upload_loop_short(tmp_path):
+    """`truncated` is already True from MAX_ARTIFACTS on a run this size.
+    Testing that flag to decide whether to stop uploading -- which an earlier
+    draft of this fix did -- would have sent 64 of 512 and called the rest
+    truncated."""
+    job_dir = tmp_path / "results" / "job"
+    job_dir.mkdir(parents=True)
+    for i in range(S.MAX_ARTIFACTS + 10):
+        (job_dir / f"f{i:04d}.bin").write_bytes(b"x")
+
+    api = FakeApi()
+    outcome = S.Analysis(api, runner_ready(), config(tmp_path))._collect(
+        FakeLease(), job_dir)
+
+    assert outcome.manifest["truncated"] is True
+    assert len(api.uploaded) == S.MAX_ARTIFACTS
 
 
 # --- SANDBOXD_PLUGINS reaches the argv (DRAKVUF #108/#517) ------------------

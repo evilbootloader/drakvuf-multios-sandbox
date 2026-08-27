@@ -477,13 +477,40 @@ def test_the_console_dials_its_own_listener(tmp_path):
 
 def test_an_unset_console_listener_falls_back_and_warns(tmp_path, caplog):
     """Falling back to the worker channel is the behaviour that silently does
-    not work, so it says so rather than looking configured."""
+    not work, so it says so rather than looking configured.
+
+    `console_enabled=True` is now required to reach the warning at all: the
+    console is off unless SANDBOXD_CONSOLE_ENABLED says otherwise, and a host
+    that is not opening relay sockets has nothing to be warned about.
+    """
     import logging
     with caplog.at_level(logging.WARNING):
-        daemon(tmp_path).start()
+        daemon(tmp_path, console_enabled=True).start()
 
     assert any("SANDBOXD_CONSOLE_API is unset" in r.message
                for r in caplog.records)
+
+
+def test_the_console_is_off_unless_the_environment_turns_it_on():
+    """What it enables is a socket dialled OUT of the machine that runs
+    malware, so it fails closed -- including on a typo."""
+    base = {"SANDBOXD_API": "https://p:8443", "WORKER_TOKEN": "t",
+            "SANDBOXD_TOTAL_MIB": "8192"}
+
+    assert D.Settings.from_env(base).console_enabled is False
+    assert D.Settings.from_env(
+        {**base, "SANDBOXD_CONSOLE_ENABLED": "ture"}).console_enabled is False
+    assert D.Settings.from_env(
+        {**base, "SANDBOXD_CONSOLE_ENABLED": "1"}).console_enabled is True
+    assert D.Settings.from_env(
+        {**base, "SANDBOXD_CONSOLE_ENABLED": "on"}).console_enabled is True
+
+
+def test_the_console_setting_reaches_the_analysis_config(tmp_path):
+    """Settings wins over Config for deployment values, as it does for the API
+    base and the worker token."""
+    d = daemon(tmp_path, console_enabled=True)
+    assert d._cfg.console_enabled is True
 
 
 def test_the_console_listener_comes_from_the_environment():

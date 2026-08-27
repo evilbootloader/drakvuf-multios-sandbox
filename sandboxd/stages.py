@@ -67,6 +67,18 @@ HEARTBEAT_INTERVAL = 10.0
 # the cap sets `truncated` rather than silently listing a prefix.
 MAX_ARTIFACTS = 512
 
+# **`ArtifactRequest.artifacts` on the platform is capped at 64 names, and that
+# cap is PER CALL rather than per job** -- routers/worker.py says so and invites
+# a second call. This module used to ask for all of them in one request, so any
+# run producing more than 64 files got a 422, which `_post` raises as a
+# ProtocolError with no retry, which `run` records as `failed`. A completely
+# successful analysis was thrown away, artifacts and all, and `memdump` alone
+# routinely produces more than 64 files.
+#
+# Must not exceed the server's `max_length`. Lower is safe; higher is the bug
+# above.
+TICKET_BATCH = 64
+
 # Reserved names from result-schema.md §4.1.
 TRACE_LOG = "trace.log"
 TRACE_STDERR = "trace.stderr"
@@ -105,11 +117,6 @@ class Heartbeat:
         # flag because the trace is a blocking call: the stage machine waits on
         # this without polling the API itself.
         self.console_wanted = threading.Event()
-        # Consecutive failed beats. The lease has room for one missed beat --
-        # four fit inside LEASE_SECONDS=120 -- but a run of them means the
-        # platform has stopped answering and the lease is lapsing, so carrying
-        # on would trace a job already written off as interrupted.
-        self.missed = 0
         self._thread: threading.Thread | None = None
 
     def __enter__(self) -> Heartbeat:
@@ -129,12 +136,20 @@ class Heartbeat:
                 beat = self._api.heartbeat(self._job_id)
             except Exception:
                 # Not fatal on its own: the platform may be restarting, and the
-                # lease has room for a missed beat. Counted rather than merely
-                # flagged, because "one blip" and "the platform is gone" need
-                # different answers and a boolean cannot tell them apart.
-                self.missed += 1
+                # lease has room for a missed beat -- four fit inside
+                # LEASE_SECONDS=120.
+                #
+                # **A sustained outage is NOT handled here, deliberately.** A
+                # counter of consecutive failures used to be kept, with a
+                # comment arguing that "one blip" and "the platform is gone"
+                # need different answers -- but nothing ever read it, so the
+                # answer was the same either way. Rather than leave a field
+                # describing behaviour that does not exist, the honest position
+                # is recorded: if the platform stays away the lease lapses,
+                # `maintenance.reap` marks the job `interrupted`, and this run
+                # traces to the end of its budget and then gets a 409 on its
+                # terminal report. Wasteful, bounded, and not silent.
                 continue
-            self.missed = 0
             if beat.console_requested:
                 self.console_wanted.set()
             if beat.cancel_requested:
@@ -170,11 +185,22 @@ class Config:
 
     # --- live console (DRAFT-056), off unless the platform asks -------------
     #
-    # `console_enabled` here is a local kill switch. The platform has its own
-    # CONSOLE_ENABLED and will simply never set console_requested when it is
-    # off, so this is a second, Dom0-side "no" -- an operator can refuse
-    # sessions on this host without touching the platform.
-    console_enabled: bool = True
+    # `console_enabled` here is a local kill switch, set from
+    # SANDBOXD_CONSOLE_ENABLED. The platform has its own CONSOLE_ENABLED and
+    # will simply never set console_requested when it is off, so this is a
+    # second, Dom0-side "no" -- an operator can refuse sessions on this host
+    # without touching the platform.
+    #
+    # **Off by default, and it really is off**, which it was not until
+    # 2026-08-27: the field read `True` with no environment override at all,
+    # while the comment below and routers/console.py both said the console was
+    # off by default on both sides. A host therefore opened a relay socket per
+    # analysis with no way to stop it short of editing this file, and only the
+    # platform's own default kept that from reaching anything.
+    #
+    # DEPLOYMENT NOTE: a Dom0 that was relying on the old hard-coded `True`
+    # must now set SANDBOXD_CONSOLE_ENABLED=1 to keep serving consoles.
+    console_enabled: bool = False
     api_base: str = ""
     # The listener the BROWSER reaches -- see Settings.console_api.
     console_api: str = ""
@@ -347,13 +373,41 @@ class Analysis:
         budgets = timing.budgets(job.target_os, job.kind,
                                  job.options.timeout, self._cfg.waits)
 
-        self._runner.run(guests.argv_deliver(job), timeout=budgets.preconfig,
+        # **`budgets.preconfig` guards the PHASE, and this deadline is what
+        # makes that true.** It was passed as the `timeout=` of each command
+        # instead, so the real ceiling was the budget times the number of
+        # injections plus the APK sleep -- up to 320s on the Android APK path
+        # for a phase whose stated guard is 60s. `PhaseBudgets` calls these
+        # "wall-clock guards over a whole stage, distinct from the per-command
+        # timeouts in clone.py", and `timing.budgets` argues the value "cannot
+        # be under-set by arithmetic"; neither was so while each command got
+        # the whole budget to itself.
+        #
+        # RISK, stated plainly because it has not been measured: the Android
+        # APK path must now fit a 12 MB `writefile`, a network injection, a
+        # `pm install`, the 20s install wait, a `readfile` and an `rm` inside
+        # 60s. The 12 MB writefile has never been timed, and the one evidenced
+        # APK run (2026-08-17) completed under the old unbounded behaviour. If
+        # this budget proves too tight the symptom is a preconfig timeout,
+        # clone teardown and a retry -- the loop `timing.budgets` warns about
+        # -- and the fix is to raise the floor in `timing.budgets`, not to
+        # restore the per-command timeouts.
+        deadline = time.monotonic() + budgets.preconfig
+
+        def left(what: str) -> float:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise CommandError(
+                    what, _phase_overran("preconfig", what, budgets.preconfig))
+            return remaining
+
+        self._runner.run(guests.argv_deliver(job), timeout=left("writefile"),
                          what="injector writefile", check=True,
                          stdout_path=log, stderr_path=log.with_suffix(".stderr"))
 
         self._check(beat)
         self._runner.run(guests.argv_configure_network(job, self._cfg.subnet),
-                         timeout=budgets.preconfig,
+                         timeout=left("network configuration"),
                          what="injector network configuration", check=True)
 
         if job.kind is not SampleKind.APK:
@@ -361,21 +415,25 @@ class Analysis:
 
         handoff = f"{guests.PATHS[job.target_os].staging_dir}/.pm.tmp"
         self._runner.run(guests.argv_install_apk(job, handoff),
-                         timeout=budgets.preconfig, what="pm install",
+                         timeout=left("pm install"), what="pm install",
                          check=True)
 
         # execproc returns at process START, so this sleep is the only
         # synchronisation Dom0 has. Returning early would hand a still-running
         # install to the trace, which is the slowdown the split removes.
+        #
+        # Inside the deadline like everything else -- it is the single largest
+        # item in the phase, and `_preconfig_waits` derives the budget's floor
+        # from it precisely so that it fits.
         self._sleep(self._cfg.waits.apk_install, beat)
 
         dest = job.result_dir / "launch-component"
         self._runner.run(guests.argv_read_component(job, handoff, dest),
-                         timeout=budgets.preconfig, what="injector readfile")
+                         timeout=left("readfile"), what="injector readfile")
         # Removed before the sample runs: a file in its own staging directory
         # naming its own component is what an evasive application looks for.
         self._runner.run(guests.argv_remove_handoff(job, handoff),
-                         timeout=budgets.preconfig, what="injector rm")
+                         timeout=left("rm"), what="injector rm")
 
         component = dest.read_text().strip() if dest.exists() else ""
         if not guests.component_is_launchable(component):
@@ -413,7 +471,8 @@ class Analysis:
         # console is enabled on this host, and the platform holds it until a
         # browser arrives or the trace ends. `console_enabled` therefore means
         # "this host opens a relay socket per analysis" rather than "consoles
-        # may be requested" -- which is why it is off by default.
+        # may be requested" -- which is why it is off by default and why
+        # turning it on is a deliberate act (SANDBOXD_CONSOLE_ENABLED).
         console = self._start_console(job, beat)
         try:
             # **DRAKVUF does not create these, and says nothing when they are
@@ -499,7 +558,11 @@ class Analysis:
             session = vnc.ConsoleSession(
                 self._cfg.console_api or self._cfg.api_base,
                 self._cfg.worker_token, job.job_id,
-                ssl_context=self._cfg.ssl_context)
+                ssl_context=self._cfg.ssl_context,
+                # The platform pairs the socket only if this matches the job's
+                # `lease_owner`, so it comes from the same client that took the
+                # lease rather than from configuration that could drift.
+                worker_id=self._api.worker_id)
             session.start(port)
             return session
         except Exception as exc:  # noqa: BLE001 - never fail the analysis
@@ -520,23 +583,41 @@ class Analysis:
 
         deadline = time.monotonic() + timing.COLLECT_BUDGET
         if entries:
-            tickets = self._api.artifact_tickets(
-                lease.job_id, {e["name"]: e["size_bytes"] for e in entries})
             uploaded = []
-            for entry in entries:
+            # Tracked separately from `truncated`, which may ALREADY be set by
+            # the MAX_ARTIFACTS cap above -- testing that one here would break
+            # out after the first batch on any run that produced more than 512
+            # files, uploading 64 of them and calling the rest truncated.
+            out_of_budget = False
+            # Tickets are minted a batch at a time, immediately before that
+            # batch is sent, rather than all of them up front. Two reasons, and
+            # only the first is about the 64-name cap: minting is also what
+            # CHARGES the job's byte budget, so tickets for artifacts that a
+            # budget overrun means we never send would be charged for nothing.
+            for start in range(0, len(entries), TICKET_BATCH):
+                if out_of_budget:
+                    break
+                batch = entries[start:start + TICKET_BATCH]
                 if time.monotonic() > deadline:
                     # Out of budget with artifacts still to send. The manifest
                     # must describe what was UPLOADED, not what was found:
                     # listing an artifact that never reached the store is a
                     # download link that 404s.
-                    truncated = True
+                    out_of_budget = True
                     break
-                ticket = tickets.get(entry["name"])
-                if ticket is None:
-                    continue
-                self._api.upload_artifact(ticket, entry["name"],
-                                          job_dir / entry["name"])
-                uploaded.append(entry)
+                tickets = self._api.artifact_tickets(
+                    lease.job_id, {e["name"]: e["size_bytes"] for e in batch})
+                for entry in batch:
+                    if time.monotonic() > deadline:
+                        out_of_budget = True
+                        break
+                    ticket = tickets.get(entry["name"])
+                    if ticket is None:
+                        continue
+                    self._api.upload_artifact(ticket, entry["name"],
+                                              job_dir / entry["name"])
+                    uploaded.append(entry)
+            truncated = truncated or out_of_budget
             entries = uploaded
 
         manifest = {"schema_version": 1, "artifacts": entries,
@@ -643,6 +724,22 @@ def _digest(path: Path) -> str:
         for chunk in iter(lambda: fh.read(1024 * 1024), b""):
             h.update(chunk)
     return h.hexdigest()
+
+
+def _phase_overran(phase: str, what: str, budget: float):
+    """A phase deadline reached before its next command could start.
+
+    Shaped as a `Completed` with `timed_out` set so it reads like every other
+    timeout the pipeline produces -- the caller is `dirwatch`'s phase guard in
+    a new form, and a phase that overruns tears the clone down and retries.
+    """
+    from .proc import Completed
+    return Completed(
+        argv=(what,), returncode=None, stdout="",
+        stderr=f"the {phase} phase exceeded its {budget:.0f}s budget before "
+               f"{what} could run; the clone is being torn down",
+        duration=budget, timed_out=True,
+    )
 
 
 def _no_component(got: str):

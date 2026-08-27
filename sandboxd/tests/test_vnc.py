@@ -104,9 +104,20 @@ def test_plain_http_gets_a_plain_websocket():
 def test_the_relay_reuses_the_worker_token():
     """Not a credential of its own: the same door on the same LAN, already
     gated by the client certificate at the TLS layer."""
-    s = vnc.ConsoleSession("https://p:9000", "sekrit", "job-1")
+    s = vnc.ConsoleSession("https://p:9000", "sekrit", "job-1",
+                           worker_id="dom0-1")
 
-    assert s.headers() == {"Authorization": "Bearer sekrit"}
+    assert s.headers() == {"Authorization": "Bearer sekrit",
+                           "X-Worker-Id": "dom0-1"}
+
+
+def test_the_relay_identifies_the_worker():
+    """The platform pairs the socket only if this matches the job's
+    `lease_owner`. Without it the token alone would let any registered host
+    attach to any other host's executing job."""
+    s = vnc.ConsoleSession("https://p:9000", "t", "job-1", worker_id="dom0-2")
+
+    assert s.headers()["X-Worker-Id"] == "dom0-2"
 
 
 def test_the_url_carries_the_job_id_encoded():
@@ -255,3 +266,69 @@ def test_a_bridge_failure_is_raised_not_swallowed(monkeypatch):
 
     with pytest.raises(ConnectionResetError, match="relay went away"):
         asyncio.run(vnc.bridge(Boom(), "127.0.0.1", 5900))
+
+
+def test_a_console_nobody_views_gives_up_when_the_trace_ends(monkeypatch):
+    """**The leak.** `bridge` awaited `wait_for_viewer()` before it created the
+    stop watcher, so while waiting the stop flag was unobservable.
+
+    sandboxd dials for EVERY trace whether or not anyone opens the panel, so
+    the common case was: nobody looks, `wait_for_viewer` blocks on `ws.recv()`
+    forever, and at teardown `ConsoleSession.stop()` set a flag nothing was
+    reading, timed out its 5s join, then set `self._thread = None` and dropped
+    the only reference. One thread and one open WebSocket leaked per unviewed
+    analysis, for the life of the daemon.
+    """
+    import threading
+
+    opened = []
+
+    async def fake_open(host, port):
+        opened.append((host, port))
+        raise AssertionError("connected with nobody watching")
+
+    monkeypatch.setattr(vnc.asyncio, "open_connection", fake_open)
+
+    stop = threading.Event()
+    ws = _fake_ws([])          # no viewer ever signals
+
+    async def run():
+        asyncio.get_running_loop().call_later(0.05, stop.set)
+        # No `wait_for`: the point is that the bridge RETURNS on its own.
+        await vnc.bridge(ws, "127.0.0.1", 5900, stop=stop)
+
+    asyncio.run(asyncio.wait_for(run(), timeout=5))
+
+    assert opened == [], "the console was connected with nobody watching"
+
+
+def test_the_stop_flag_still_ends_a_bridged_session(monkeypatch):
+    """The second wait needs its own stop watcher: the first one is cancelled
+    when the viewer arrives, and a cancelled coroutine cannot be reused."""
+    import threading
+
+    class FakeReader:
+        async def read(self, n): await asyncio.sleep(3600)
+
+    class FakeWriter:
+        closed = False
+        def write(self, d): pass
+        async def drain(self): pass
+        def close(self): FakeWriter.closed = True
+        async def wait_closed(self): pass
+
+    async def fake_open(host, port):
+        return FakeReader(), FakeWriter()
+
+    monkeypatch.setattr(vnc.asyncio, "open_connection", fake_open)
+
+    stop = threading.Event()
+    ws = _fake_ws([vnc.PEER_ATTACHED])
+
+    async def run():
+        asyncio.get_running_loop().call_later(0.05, stop.set)
+        await vnc.bridge(ws, "127.0.0.1", 5900, stop=stop)
+
+    asyncio.run(asyncio.wait_for(run(), timeout=5))
+
+    assert FakeWriter.closed, "the console socket was left open"

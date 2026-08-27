@@ -41,6 +41,7 @@ the wait after `xl destroy`, which is not defensive coding: it was measured.
 from __future__ import annotations
 
 import fcntl
+import logging
 import os
 import re
 import time
@@ -50,6 +51,8 @@ from pathlib import Path
 
 from .naming import clone_name
 from .proc import CommandError
+
+log = logging.getLogger("sandboxd.clone")
 
 # `xl destroy` returns before the block device is released -- measured on Dom0
 # 2026-08-14, where lvremove reported "Logical volume in use" and succeeded on
@@ -288,9 +291,40 @@ class CloneBuilder:
             except Exception:
                 # A half-built clone must not survive to block the next run for
                 # this vlan: clone.pl's END block, made explicit.
+                #
+                # **The DOMAIN is destroyed first, and that ordering is the
+                # whole point.** Both failures reachable below this line -- the
+                # budget check and a restore that reports success with no domid
+                # -- happen AFTER `xl restore` has brought a domain up, and a
+                # running domain holds its LV open. Removing the LV first
+                # therefore failed with "Logical volume in use", and the result
+                # was not checked, so a paused domain and its snapshot survived
+                # under this clone's name. `stages.run` sees `clone = None` on
+                # this path and has nothing to tear down either, and the sweep
+                # only runs at startup, so nothing reported it until the next
+                # job on this vlan restored onto a live predecessor.
+                #
+                # `_destroy_stale` is the same destroy-and-settle sequence used
+                # on entry, and is a no-op when no domain came up.
+                try:
+                    self._destroy_stale(name)
+                except Exception as exc:  # noqa: BLE001
+                    # Logged, never raised: this runs inside `except`, and a
+                    # cleanup failure must not replace the CloneError that
+                    # names why the clone failed in the first place.
+                    log.warning("could not destroy the half-built clone %r "
+                                "before removing its volume: %s", name, exc)
                 if created_lv:
-                    self._run.run(argv_lvremove(spec, name), timeout=CMD_TIMEOUT,
-                                  what="cleanup lvremove")
+                    removed = self._run.run(argv_lvremove(spec, name),
+                                            timeout=CMD_TIMEOUT,
+                                            what="cleanup lvremove")
+                    if not removed.ok:
+                        # Loud, because the next job on this vlan would restore
+                        # onto whatever this left behind.
+                        log.error("the snapshot volume for %r survived cleanup "
+                                  "(lvremove exited %s); vlan %d needs a manual "
+                                  "sweep before it is reused",
+                                  name, removed.returncode, spec.vlan)
                 config_path.unlink(missing_ok=True)
                 raise
 

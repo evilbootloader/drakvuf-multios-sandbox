@@ -166,30 +166,56 @@ async def bridge(ws, host: str, port: int, stop=None) -> None:
         while stop is not None and not stop.is_set():
             await asyncio.sleep(0.2)
 
-    try:
-        await wait_for_viewer()
-        reader, writer = await asyncio.open_connection(host, port)
-        log.info("console bridged to %s:%d", host, port)
+    async def first_of(named):
+        """Run the named coroutines; return the names of those that finished.
 
-        tasks = {asyncio.create_task(to_console()),
-                 asyncio.create_task(to_platform())}
-        if stop is not None:
-            tasks.add(asyncio.create_task(watch_stop()))
+        The FIRST to finish ends the group -- a half-open bridge would leave a
+        socket pointed at a malware VM's console with nothing reading it.
 
-        # The FIRST to finish ends the session. A half-open bridge would leave
-        # a socket pointed at a malware VM's console with nothing reading it.
+        **Exceptions are raised, not swallowed.** Both pumps used to sit inside
+        `except Exception: pass`, so a bridge that died on its first read logged
+        "session ended" and nothing else -- the code destroyed the evidence
+        needed to diagnose it, which is how F10 stayed a guess.
+        """
+        tasks = [asyncio.create_task(coro, name=name) for name, coro in named]
         done, pending = await asyncio.wait(
             tasks, return_when=asyncio.FIRST_COMPLETED)
         for task in pending:
             task.cancel()
-
-        # **Raised, not swallowed.** Both pumps used to sit inside
-        # `except Exception: pass`, so a bridge that died on its first read
-        # logged "session ended" and nothing else -- the code destroyed the
-        # evidence needed to diagnose it, which is how F10 stayed a guess.
         for task in done:
             if task.exception() is not None:
                 raise task.exception()
+        return {task.get_name() for task in done}
+
+    def stop_watch():
+        """The stop watcher, for whichever wait is about to run.
+
+        A function rather than a value because each `asyncio.wait` needs its
+        own coroutine object: the first one is cancelled when a viewer arrives,
+        and a cancelled coroutine cannot be awaited again.
+        """
+        return [("stop", watch_stop())] if stop is not None else []
+
+    try:
+        # **The stop flag is watched from the FIRST await, not from after a
+        # viewer has attached.** `wait_for_viewer` blocks on `ws.recv()` with no
+        # timeout, and sandboxd dials for every trace whether or not anyone
+        # opens the panel -- so waiting here unguarded meant `ConsoleSession.
+        # stop()` set a flag nothing was reading, timed out its 5s join, and
+        # then dropped the only reference to a thread still blocked in this
+        # call. One leaked thread and one open WebSocket per unviewed analysis,
+        # for the life of the daemon.
+        if "viewer" not in await first_of(
+                [("viewer", wait_for_viewer())] + stop_watch()):
+            log.info("console for %s:%d stopped before a viewer arrived",
+                     host, port)
+            return
+
+        reader, writer = await asyncio.open_connection(host, port)
+        log.info("console bridged to %s:%d", host, port)
+
+        await first_of([("to_console", to_console()),
+                        ("to_platform", to_platform())] + stop_watch())
     finally:
         if writer is not None:
             writer.close()
@@ -218,12 +244,14 @@ class ConsoleSession:
     """
 
     def __init__(self, api_base: str, token: str, job_id: str,
-                 host: str = "127.0.0.1", ssl_context=None):
+                 host: str = "127.0.0.1", ssl_context=None,
+                 worker_id: str = ""):
         self._base = api_base.rstrip("/")
         self._token = token
         self._job_id = job_id
         self._host = host
         self._ssl = ssl_context
+        self._worker_id = worker_id
         self._thread: threading.Thread | None = None
         self._stop = threading.Event()
 
@@ -237,7 +265,13 @@ class ConsoleSession:
         # The same worker token the rest of the channel uses. The relay does
         # not get a credential of its own: it is the same door on the same
         # LAN, already gated by the client certificate at the TLS layer.
-        return {"Authorization": f"Bearer {self._token}"}
+        #
+        # `X-Worker-Id` is the same header every other worker call sends, and
+        # the platform checks it against the job's `lease_owner` before pairing
+        # the socket. Without it the token alone would let any registered host
+        # attach to any other host's executing job.
+        return {"Authorization": f"Bearer {self._token}",
+                "X-Worker-Id": self._worker_id}
 
     # -- running alongside a synchronous trace ------------------------------
 

@@ -105,6 +105,12 @@ class Settings:
     # So this points at the browser listener. Everything else stays on 8443.
     console_api: str = ""
 
+    # SANDBOXD_CONSOLE_ENABLED. Off unless an operator turns it on, because
+    # what it enables is a relay socket dialled OUT of the malware host on
+    # every trace -- the largest deliberate widening of this design's attack
+    # surface, and the one thing Dom0 does that is not "poll and hang up".
+    console_enabled: bool = False
+
     @classmethod
     def from_env(cls, env=None) -> Settings:
         env = env if env is not None else os.environ
@@ -125,11 +131,20 @@ class Settings:
         cert = env.get("SANDBOXD_CLIENT_CERT")
         key = env.get("SANDBOXD_CLIENT_KEY")
 
+        # Anything but a recognised true value is false, matching the
+        # platform's `config._bool`. A feature flag that turns a capability ON
+        # because someone wrote `SANDBOXD_CONSOLE_ENABLED=ture` is worse than
+        # one that stays off, and this particular flag opens a socket out of
+        # the machine that runs malware.
+        console = env.get("SANDBOXD_CONSOLE_ENABLED", "")
+        console_enabled = console.strip().lower() in {"1", "true", "yes", "on"}
+
         return cls(
             api=env["SANDBOXD_API"],
             token=env["WORKER_TOKEN"],
             worker_id=env.get("SANDBOXD_WORKER_ID", os.uname().nodename),
             console_api=env.get("SANDBOXD_CONSOLE_API", ""),
+            console_enabled=console_enabled,
             total_mib=int(env["SANDBOXD_TOTAL_MIB"]),
             vlans=range(1, max_clones + 1),
             total_slots=int(env.get("SANDBOXD_MAX_SLOTS", str(max_clones))),
@@ -211,6 +226,7 @@ class Daemon:
         self._cfg.api_base = settings.api
         self._cfg.console_api = settings.console_api or settings.api
         self._cfg.worker_token = settings.token
+        self._cfg.console_enabled = settings.console_enabled
         if settings.cacert or settings.client_cert:
             from .tls import ssl_context
             self._cfg.ssl_context = ssl_context(settings.cacert,
@@ -227,7 +243,10 @@ class Daemon:
                              bridge=self._cfg.bridge,
                              config_dir=self._cfg.config_dir,
                              staging_dir=self._cfg.staging_dir,
-                             settle=self._cfg.waits.destroy_settle)
+                             settle=self._cfg.waits.destroy_settle,
+                             # So a capture left behind on a VLAN whose domain
+                             # is already gone is still found and killed.
+                             vlans=self._s.vlans)
         log.info("%s", report.summary())
 
         table = ResourceTable(total_mib=self._s.total_mib,
@@ -371,6 +390,13 @@ class Daemon:
                       "claim loop running?", got.job_id)
             return None
 
+        # Dead threads are dropped before the new one is added. The list used
+        # to be append-only, so a daemon that had run N analyses held N Thread
+        # objects -- each keeping its `args` alive, and a Lease carries the
+        # sample's presigned URL, its submitted filename and its SHA-256. It
+        # also made `_drain` walk every job this process had ever run to find
+        # the one or two still going.
+        self._workers = [t for t in self._workers if t.is_alive()]
         thread = threading.Thread(
             target=self._work, args=(got, held), daemon=False,
             name=f"job-{got.job_id[:8]}")
