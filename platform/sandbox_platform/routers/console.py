@@ -47,7 +47,8 @@ worker_router = APIRouter(prefix="/api/v1/worker/jobs", tags=["console"])
 def _job_row(job_id: UUID):
     with connection() as conn, conn.cursor() as cur:
         cur.execute(
-            "SELECT state, console_requested FROM jobs WHERE id = %s",
+            "SELECT state, console_requested, lease_owner FROM jobs "
+            "WHERE id = %s",
             (job_id,),
         )
         return cur.fetchone()
@@ -137,14 +138,35 @@ async def _relay(websocket: WebSocket, job_id: UUID, side: console.Side):
         if side is console.Side.BROWSER and session.interacted:
             _mark_interacted(job_id)
     finally:
-        if side is console.Side.BROWSER and session.worker is not None:
-            # The viewer has gone. Tell Dom0 so it closes its end of the
-            # console rather than holding a socket into a running malware VM
-            # with nobody watching.
-            try:
+        # **Both departures are announced, but not in the same way, because the
+        # two peers are different kinds of program.**
+        #
+        # The WORKER leaving first is the normal case -- the trace ends and
+        # sandboxd calls `console.stop()`. Until 2026-08-27 only a departing
+        # browser was announced, so the viewer stayed blocked in
+        # `receive_bytes()` inside `pump` (which never re-tests
+        # `session.closed`) until their next mouse movement raised out of
+        # `sink`. noVNC reports that as "Session lost" rather than the clean
+        # "the analysis finished" message console.js exists to show.
+        # `Session.detach` already promised better: "Either side leaving ends
+        # the session."
+        #
+        # Dom0 gets a PEER_GONE text frame because sandboxd is our code and
+        # reads the control channel. The browser gets a socket CLOSE, because
+        # its end is noVNC: it sets `binaryType = "arraybuffer"` and speaks
+        # only RFB, so a text frame is not something it can act on. A close
+        # while it is `connected` is what it reads as a clean end
+        # (novnc/core/rfb.js `_socketClose`), which is precisely the signal we
+        # want to send.
+        try:
+            if side is console.Side.BROWSER and session.worker is not None:
                 await session.worker.send_text(console.PEER_GONE)
-            except Exception:  # noqa: BLE001 - the socket may already be gone
-                pass
+            elif side is console.Side.WORKER and session.browser is not None:
+                await session.browser.close(
+                    status.WS_1000_NORMAL_CLOSURE, "the analysis finished")
+        except Exception:  # noqa: BLE001 - the peer socket may already be gone
+            log.debug("could not tell the peer that the %s side of job %s left",
+                      side.value, job_id)
         await console.registry.close(str(job_id), side)
         if side is console.Side.BROWSER:
             # The request is satisfied or abandoned either way; leaving it set
@@ -223,6 +245,29 @@ async def worker_console(websocket: WebSocket, job_id: UUID):
     row = _job_row(job_id)
     if row is None or JobState(row[0]) is not JobState.EXECUTING:
         await websocket.close(POLICY, "job is not executing")
+        return
+
+    # **The caller must hold this job's lease, not merely the worker token.**
+    #
+    # Every other job-scoped worker route resolves through `auth.leased_job`,
+    # and worker.py's module docstring says why: "a worker reaches the jobs it
+    # currently holds and nothing else". This route checked the token and the
+    # state and stopped there, so any token holder -- a second registered
+    # analysis host, or a compromised Dom0 whose blast radius is supposed to be
+    # the jobs it is running -- could attach as the WORKER side of another
+    # host's job and feed arbitrary RFB bytes to the operator's browser, or
+    # simply occupy the session slot so the real worker was refused.
+    #
+    # Not `Depends(auth.leased_job)` for the same reason the token is read by
+    # hand here: that dependency raises `HTTPException`, which on a WebSocket
+    # surfaces as a dropped connection with no reason. The CHECK is the same
+    # one -- lease_owner against X-Worker-Id -- expressed as a close code.
+    worker_id = websocket.headers.get("x-worker-id", "")
+    if not worker_id or row[2] != worker_id:
+        # Deliberately the same message either way: a worker that guesses a job
+        # id must not learn whether it exists, which is why `leased_job` returns
+        # 404 rather than 403 for someone else's job.
+        await websocket.close(POLICY, "no such job for this worker")
         return
     # **The "nobody asked" refusal is gone, deliberately.** It required
     # `console_requested` to be set before a worker could dial, which made the

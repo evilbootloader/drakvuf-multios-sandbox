@@ -264,12 +264,19 @@ def claim(req: ClaimRequest):
                 # (#37) versus the upload URL being reused after admission.
                 reason = ("sample_expired_or_removed" if status_ == "missing"
                           else "sample_changed_after_admission")
+                # `failure_stage` is the state the job was actually IN, which
+                # `claim` has already moved to `cloning` (queries.CLAIM). It
+                # recorded `queued` until 2026-08-27 -- a stage the job had
+                # left before this check could run, and precisely the
+                # misattribution `failure_stage` exists to prevent. REAP and
+                # RECONCILE both use `failure_stage = state` for the same
+                # reason.
                 with connection() as conn:
                     conn.execute(
                         "UPDATE jobs SET state = %s, failure_stage = %s,"
                         "       failure_reason = %s, lease_owner = NULL,"
                         "       lease_expires_at = NULL WHERE id = %s",
-                        (JobState.FAILED.value, JobState.QUEUED.value,
+                        (JobState.FAILED.value, JobState.CLONING.value,
                          reason, last.job_id),
                     )
                 continue   # take the next job rather than hand back nothing

@@ -173,9 +173,16 @@ class Registry:
     async def end(self, job_id: str) -> None:
         """Terminate a session because the JOB ended.
 
-        Called from teardown: DRAFT-056 scopes a session to a job that is
-        executing, and leaving one open past the trace would leave a socket
-        pointed at a domain that no longer exists.
+        DRAFT-056 scopes a session to a job that is executing, and leaving one
+        open past the trace would leave a socket pointed at a domain that no
+        longer exists.
+
+        **Called from `maintenance._loop`**, which is a real caller and was not
+        always: this said "called from teardown" while nothing anywhere invoked
+        it. The usual path out of a session is a socket closing, which
+        `_relay`'s `finally` turns into `close()`; this covers the case that
+        path cannot -- a worker whose console thread wedges never closes its
+        end, so only something looking at the job's STATE will notice.
         """
         async with self._lock:
             session = self._sessions.pop(job_id, None)

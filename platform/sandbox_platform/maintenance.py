@@ -13,6 +13,14 @@ schedule, and until this module existed nothing did:
 - **Abandoned submissions.** A job whose upload never happened stays in
   `received` forever. With no authentication on the browser routes that is a
   table anyone reachable can grow for free.
+- **Console sessions outliving their job.** `console.Registry.end` was written
+  with a docstring saying it is "called from teardown" and had no caller at
+  all. Normally a session ends when a socket closes, but a worker whose console
+  thread wedges never closes its end -- `ConsoleSession.stop` joins for 5s and
+  then drops the thread -- so the platform kept a session, and a socket, for a
+  job that had already completed. This loop is the teardown that docstring
+  meant: it runs on the event loop, which is where the registry's lock and
+  events live.
 
 **In the application rather than cron** because both need the connection pool
 that the lifespan already owns, and because a cron entry is a second place to
@@ -27,7 +35,7 @@ from __future__ import annotations
 import asyncio
 import logging
 
-from . import jobs
+from . import console, jobs
 from .config import settings
 from .db import connection
 
@@ -49,6 +57,28 @@ def sweep() -> tuple[list, list]:
     return reaped, abandoned
 
 
+def stale_sessions(job_ids: list[str]) -> list[str]:
+    """Which of these jobs no longer have any business holding a console.
+
+    Phrased as "not still executing" rather than "is terminal", so a job id the
+    registry holds that has no row at all -- deleted, or never existed -- is
+    also reported. DRAFT-056 scopes a session to a job that is EXECUTING, and
+    anything else is a socket pointed at a domain being torn down.
+
+    Separated from the loop so a test can call it directly, like `sweep`.
+    """
+    if not job_ids:
+        return []
+    with connection() as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT id::text FROM jobs "
+            "WHERE id = ANY(%s::uuid[]) AND state = 'executing'",
+            (job_ids,),
+        )
+        executing = {row[0] for row in cur.fetchall()}
+    return [job_id for job_id in job_ids if job_id not in executing]
+
+
 async def _loop() -> None:
     while True:
         await asyncio.sleep(settings.maintenance_interval)
@@ -67,6 +97,19 @@ async def _loop() -> None:
                         len(reaped), ", ".join(str(i) for i in reaped))
         if abandoned:
             log.info("abandoned %d submission(s) never uploaded", len(abandoned))
+
+        # Ended here on the event loop, where the registry's lock and its
+        # Events belong -- the request handlers that would otherwise notice are
+        # sync functions running in a threadpool, and setting an asyncio.Event
+        # from another thread is not safe.
+        try:
+            live = console.registry.live
+            for job_id in await asyncio.to_thread(stale_sessions, live):
+                log.info("ending the console session for job %s: it is no "
+                         "longer executing", job_id)
+                await console.registry.end(job_id)
+        except Exception:
+            log.exception("could not reap stale console sessions")
 
 
 def start() -> None:

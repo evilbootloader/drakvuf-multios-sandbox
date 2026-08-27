@@ -187,3 +187,110 @@ def test_owner_is_null_without_access(client):
     assert created.status_code == 201
     job_id = created.json()["job_id"]
     assert client.get(f"/api/v1/jobs/{job_id}").json()["owner"] is None
+
+
+# --- the JWKS cache --------------------------------------------------------
+#
+# An unknown `kid` means one of two things -- Cloudflare rotated a key, or the
+# token is forged -- and only the attacker can produce them at will.
+
+class _CountingFetch:
+    """Stands in for httpx.get against Cloudflare's certs endpoint."""
+
+    def __init__(self):
+        self.calls = 0
+
+    def __call__(self, url, timeout=None):
+        self.calls += 1
+
+        class _Response:
+            @staticmethod
+            def raise_for_status():
+                return _Response
+            @staticmethod
+            def json():
+                return {"keys": []}
+
+        return _Response
+
+
+@pytest.fixture
+def jwks(monkeypatch):
+    """A primed, fresh cache and a counted fetch."""
+    fetch = _CountingFetch()
+    configure(monkeypatch, access_team_domain=TEAM)
+    monkeypatch.setattr(auth.httpx, "get", fetch)
+    monkeypatch.setattr(auth, "_jwks", (time.monotonic(), {KID: "a-key"}))
+    monkeypatch.setattr(auth, "_jwks_attempted", time.monotonic())
+    return fetch
+
+
+def forged(kid: str) -> str:
+    return jwt.encode({"sub": "x"}, "secret", headers={"kid": kid})
+
+
+def test_a_known_kid_is_served_from_cache(jwks):
+    assert auth._signing_key(forged(KID)) == "a-key"
+    assert jwks.calls == 0
+
+
+def test_forged_kids_do_not_each_cost_a_fetch_to_cloudflare(jwks):
+    """**The defect this closes.** Every unrecognised kid refetched the JWKS,
+    before any signature was verified and while holding a process-global lock
+    -- so an unauthenticated caller drove one outbound HTTPS request per
+    request, each able to block for the full 10s timeout, stalling Access
+    verification for every real user."""
+    for i in range(50):
+        with pytest.raises(auth.HTTPException) as exc:
+            auth._signing_key(forged(f"forged-{i}"))
+        assert exc.value.status_code == 401
+
+    assert jwks.calls == 0, "a fresh cache inside the interval must not refetch"
+
+
+def test_a_rotation_still_recovers_by_itself(jwks, monkeypatch):
+    """The trade: a bounded delay on a rare legitimate event, in exchange for
+    the forged path costing nothing to serve."""
+    monkeypatch.setattr(auth, "_jwks_attempted",
+                        time.monotonic() - auth._JWKS_MIN_REFETCH - 1)
+
+    with pytest.raises(auth.HTTPException):
+        auth._signing_key(forged("rotated-in"))
+
+    assert jwks.calls == 1
+
+
+def test_an_expired_cache_always_refetches(jwks, monkeypatch):
+    """The TTL doing its job is not an attacker, so the interval must not
+    suppress it."""
+    monkeypatch.setattr(auth, "_jwks",
+                        (time.monotonic() - auth._JWKS_TTL - 1, {KID: "old"}))
+
+    with pytest.raises(auth.HTTPException):
+        auth._signing_key(forged(KID))
+
+    assert jwks.calls == 1
+
+
+def test_a_failed_fetch_still_counts_against_the_interval(monkeypatch):
+    """Otherwise an unreachable Cloudflare turns every forged token back into
+    an outbound attempt."""
+    calls = []
+
+    def boom(url, timeout=None):
+        calls.append(url)
+        raise RuntimeError("cloudflare unreachable")
+
+    configure(monkeypatch, access_team_domain=TEAM)
+    monkeypatch.setattr(auth.httpx, "get", boom)
+    monkeypatch.setattr(auth, "_jwks", (time.monotonic(), {KID: "a-key"}))
+    monkeypatch.setattr(auth, "_jwks_attempted",
+                        time.monotonic() - auth._JWKS_MIN_REFETCH - 1)
+
+    with pytest.raises(RuntimeError):
+        auth._signing_key(forged("unknown"))
+    for _ in range(10):
+        with pytest.raises(auth.HTTPException):
+            auth._signing_key(forged("unknown"))
+
+    assert len(calls) == 1

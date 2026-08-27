@@ -291,9 +291,38 @@ What bounds it instead:
   coherent thing to leave off.
 - The job must be `executing`. Outside that window the endpoint refuses.
 - The worker token is still required, over mutual TLS on the LAN.
+- **The dialling worker must hold the job's lease**, checked against
+  `jobs.lease_owner` from the `X-Worker-Id` header the rest of the worker
+  channel already sends.
 - The socket terminates at the platform. Reaching it from outside still needs
   Cloudflare Access, unchanged.
 - It closes with the trace, on every path.
+
+> **Amended 2026-08-27, from code review.** Three of the five bullets above
+> described intent rather than behaviour, and are now true as written:
+>
+> - **The Dom0 side was not off by default.** `stages.Config.console_enabled`
+>   was `True` with no environment override, so every sandboxd opened a relay
+>   socket per analysis and only the platform's own default stopped it
+>   reaching anything. It now defaults to `False` and reads
+>   `SANDBOXD_CONSOLE_ENABLED`; a host that was serving consoles must set it.
+> - **The lease was not checked.** The worker endpoint verified the shared
+>   token and the job's state, so any token holder could attach as the WORKER
+>   side of another host's job — the bullet added above.
+> - **"It closes with the trace, on every path" had two gaps.** A console
+>   dialled for a job nobody viewed left `bridge()` blocked in
+>   `wait_for_viewer()` with the stop flag unobserved, leaking a thread and a
+>   socket per unviewed analysis; and `Registry.end` — documented as "called
+>   from teardown" — had no caller anywhere. The stop flag is now watched from
+>   the first await, and `maintenance._loop` ends sessions whose job has left
+>   `executing`.
+>
+> Also corrected: when the WORKER left first, which is the normal case, the
+> browser was never told. It sat attached to a dead session until the next
+> mouse movement failed, which noVNC reports as "Session lost" rather than the
+> clean "the analysis finished" message. Both departures are now announced —
+> the worker by a `PEER_GONE` control frame, the browser by a normal socket
+> close, because its end is noVNC and speaks only RFB.
 
 **How much worse is it, actually?** Less than the paragraph above might
 suggest, and the correction is worth making rather than leaving an

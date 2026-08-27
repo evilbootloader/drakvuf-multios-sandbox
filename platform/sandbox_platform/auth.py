@@ -142,26 +142,57 @@ LeasedJob = Annotated[dict, Depends(leased_job)]
 # decoding with `verify_signature=False`.
 
 _JWKS_TTL = 3600.0
+
+# The shortest gap between two refetches triggered by an unknown `kid`.
+#
+# **This is what stops an unauthenticated caller driving one outbound HTTPS
+# request per request.** An unknown kid means one of two things -- Cloudflare
+# rotated a key, or the token is forged -- and only the attacker can produce
+# them at will. Without a floor here, a stream of forged tokens carrying random
+# kids fetched the JWKS every time, each fetch serialized on `_jwks_lock` and
+# each able to block for the full 10s timeout, so a handful of them stalled
+# Access verification for every real user. Each one also overwrote the cache
+# and reset its TTL.
+#
+# A rotation still recovers by itself, one minute later at worst, which is the
+# trade this makes: a bounded delay on a rare legitimate event, in exchange for
+# the forged path costing nothing to serve.
+_JWKS_MIN_REFETCH = 60.0
+
 _jwks_lock = threading.Lock()
 _jwks: tuple[float, dict] | None = None      # (fetched_at, keys by kid)
+_jwks_attempted = 0.0                        # last fetch, successful or not
 
 
 def _signing_key(token: str):
     """Cloudflare's public key for this token's `kid`, cached for an hour.
 
-    Refetched once on an unknown `kid` so that a key rotation recovers by
-    itself rather than at the next restart -- but only once per call, because
-    an unknown kid is also what a forged token looks like and that path must
-    not become a way to make the API hammer Cloudflare.
+    Refetched on an unknown `kid` so that a key rotation recovers by itself
+    rather than at the next restart -- but at most once per `_JWKS_MIN_REFETCH`,
+    because an unknown kid is also what a forged token looks like and that path
+    must not become a way to make the API hammer Cloudflare.
     """
-    global _jwks
+    global _jwks, _jwks_attempted
     kid = jwt.get_unverified_header(token).get("kid")
 
     with _jwks_lock:
-        fresh = _jwks is not None and time.monotonic() - _jwks[0] < _JWKS_TTL
+        now = time.monotonic()
+        fresh = _jwks is not None and now - _jwks[0] < _JWKS_TTL
         if fresh and kid in _jwks[1]:
             return _jwks[1][kid]
 
+        # A fresh cache that does not hold this kid is the suspicious case, and
+        # the only one that is rate-limited. An absent or expired cache must
+        # always fetch: that is the TTL doing its job, not an attacker.
+        if fresh and now - _jwks_attempted < _JWKS_MIN_REFETCH:
+            raise HTTPException(
+                status.HTTP_401_UNAUTHORIZED, "unknown signing key"
+            )
+
+        # Recorded BEFORE the request, so a fetch that fails still counts
+        # against the interval -- otherwise an unreachable Cloudflare turns
+        # every forged token back into an outbound attempt.
+        _jwks_attempted = now
         url = f"{settings.access_team_domain}/cdn-cgi/access/certs"
         keys = {
             k["kid"]: jwt.PyJWK(k).key

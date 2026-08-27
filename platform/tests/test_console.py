@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 
 import pytest
+from conftest import WORKER_TOKEN
 
 from sandbox_platform.console import (
     AlreadyAttached, Registry, Session, Side, pump,
@@ -332,3 +333,103 @@ def test_the_websocket_dependency_is_pinned_in_requirements():
     assert "websockets==" in req or "wsproto==" in req, (
         "uvicorn's WebSocket support is not pinned in requirements.txt"
     )
+
+
+# --- the worker end must hold the lease --------------------------------------
+#
+# Every other job-scoped worker route resolves through `auth.leased_job`, so a
+# worker reaches the jobs it currently holds and nothing else. This one checked
+# the shared token and the job's state and stopped there.
+
+@pytest.fixture
+def console_on(monkeypatch):
+    import dataclasses
+
+    from sandbox_platform.routers import console as console_router
+
+    monkeypatch.setattr(
+        console_router, "settings",
+        dataclasses.replace(console_router.settings, console_enabled=True))
+
+
+def executing_job(conn, owner: str):
+    return conn.execute(
+        """
+        INSERT INTO jobs (target_os, submitted_filename, state, lease_owner,
+                          lease_expires_at)
+        VALUES ('ubuntu', 'x.bin', 'executing', %s, now() + interval '2 min')
+        RETURNING id
+        """,
+        (owner,),
+    ).fetchone()[0]
+
+
+@pytest.fixture
+def relayed(monkeypatch):
+    """Records whether the handler got as far as pairing.
+
+    The real `_relay` cannot be used here: the WORKER side waits for a viewer
+    with no timeout -- deliberately, because sandboxd dials at the start of a
+    trace and the operator may open the panel a minute later -- so an admitted
+    socket would simply never return.
+    """
+    from sandbox_platform.routers import console as console_router
+
+    reached = []
+
+    async def stub(websocket, job_id, side):
+        reached.append((str(job_id), side))
+        await websocket.close()
+
+    monkeypatch.setattr(console_router, "_relay", stub)
+    return reached
+
+
+def dial(client, job_id, *, worker_id, token=WORKER_TOKEN):
+    """Returns the close code, or None if the socket was accepted."""
+    from starlette.websockets import WebSocketDisconnect
+
+    headers = {"Authorization": f"Bearer {token}"}
+    if worker_id is not None:
+        headers["X-Worker-Id"] = worker_id
+    try:
+        with client.websocket_connect(
+                f"/api/v1/worker/jobs/{job_id}/console", headers=headers):
+            return None
+    except WebSocketDisconnect as exc:
+        return exc.code
+
+
+def test_another_workers_job_is_refused(client, conn, console_on, relayed):
+    """**The defect.** Any holder of the worker token -- a second registered
+    analysis host, or a compromised Dom0 whose blast radius is supposed to be
+    the jobs it is running -- could attach as the WORKER side of someone
+    else's executing job and feed arbitrary RFB bytes to the operator."""
+    job_id = executing_job(conn, owner="dom0-1")
+
+    assert dial(client, job_id, worker_id="dom0-2") == 1008
+    assert relayed == [], "refused before the socket was ever paired"
+
+
+def test_a_missing_worker_id_is_refused(client, conn, console_on, relayed):
+    job_id = executing_job(conn, owner="dom0-1")
+
+    assert dial(client, job_id, worker_id=None) == 1008
+    assert relayed == []
+
+
+def test_a_bad_token_is_refused_before_the_lease_is_read(
+        client, conn, console_on, relayed):
+    job_id = executing_job(conn, owner="dom0-1")
+
+    assert dial(client, job_id, worker_id="dom0-1", token="wrong") == 1008
+    assert relayed == []
+
+
+def test_the_leaseholder_is_admitted(client, conn, console_on, relayed):
+    """The check has to still let through the worker that holds the job."""
+    job_id = executing_job(conn, owner="dom0-1")
+
+    dial(client, job_id, worker_id="dom0-1")
+
+    assert relayed == [(str(job_id), Side.WORKER)]

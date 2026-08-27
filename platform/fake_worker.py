@@ -142,13 +142,20 @@ class FakeWorker:
             if self._heartbeat(job_id):
                 print("  cancel requested; tearing down")
                 self._state(job_id, "cleaning", cleanup_status="cancelled")
-                # No artifacts, and the cancellation is NOT recorded in the
+                # **`cancelled` through /state, NOT /complete.** /complete is
+                # the writer of `completed` and accepts any job in `cleaning`,
+                # so calling it here drove a cancelled job to `completed` --
+                # the UI and the job history then showed a cancellation as a
+                # successful run with an empty manifest. This module is the
+                # reference for the worker protocol, and it was wrong on
+                # exactly the path an operator uses to check that cancellation
+                # works. sandboxd's `_report_terminal` has always been right.
+                #
+                # No artifacts, and the cancellation is NOT recorded in a
                 # manifest: `cleanup_status` above already carries it, and the
                 # manifest describes what a run produced. Two places saying
                 # "cancelled" is two places free to disagree.
-                self._post(f"/api/v1/worker/jobs/{job_id}/complete",
-                           json={"manifest": {"schema_version": 1,
-                                              "notes": "cancelled before upload"}})
+                self._state(job_id, "cancelled")
                 return
             self._state(job_id, stage)
             print(f"  -> {stage}")

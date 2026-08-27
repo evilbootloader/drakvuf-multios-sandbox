@@ -2298,3 +2298,35 @@ A rising `timed_out` count is a real problem and justifies paying information
 cost. A slow console with traces that complete is a *console* problem, and
 DRAFT-055 is where it belongs — not a reason to stop recording return values
 for every analysis the lab ever runs.
+
+---
+
+> ### ANNOTATION 2026-08-27 (code review) — the console env blocks above are now incomplete
+>
+> **An operator following this runbook verbatim will get no console.** The two
+> `sandboxd.env` blocks above (§ the `SANDBOXD_CONSOLE_API` lines) were written
+> when `stages.Config.console_enabled` was hard-coded `True`, so setting
+> `SANDBOXD_CONSOLE_API` was the only thing a host needed. That default
+> contradicted every document describing it — including
+> `docs/architecture/live-console.md` § "What bounds it instead" and the
+> comment directly above the field — and there was no way to turn it off
+> without editing code.
+>
+> It now defaults to `False` and reads `SANDBOXD_CONSOLE_ENABLED`. Add:
+>
+> ```sh
+> # Off unless this is set. What it enables is a relay socket dialled OUT of
+> # the machine that runs malware, once per analysis -- see live-console.md.
+> export SANDBOXD_CONSOLE_ENABLED=1
+> ```
+>
+> Anything but `1`/`true`/`yes`/`on` is false, so a typo leaves the console
+> off rather than switching it on.
+>
+> The blocks above are **not edited**: they are what was run on 2026-08-26 and
+> the outputs below them belong to that configuration. Two other changes from
+> the same review affect what this runbook observes — the worker end of a
+> console session now has to hold the job's lease (`X-Worker-Id` is checked
+> against `jobs.lease_owner`), and a session whose job has left `executing` is
+> ended by `maintenance._loop`. Neither changes a step here for a single-Dom0
+> deployment.
