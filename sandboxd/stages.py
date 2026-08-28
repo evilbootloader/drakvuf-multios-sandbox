@@ -207,7 +207,7 @@ class Config:
     worker_token: str = ""
     ssl_context: object = None
     injection_pids: dict = field(default_factory=lambda: {
-        TargetOs.UBUNTU: 1415, TargetOs.ANDROID: 3174})
+        TargetOs.UBUNTU: 1490, TargetOs.ANDROID: 3174})
     lv_sizes: dict = field(default_factory=lambda: {
         TargetOs.UBUNTU: "64G", TargetOs.ANDROID: "32G"})
     profiles: dict = field(default_factory=lambda: {

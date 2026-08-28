@@ -131,7 +131,7 @@ the filename was never renamed with the rest of the `linux` → `ubuntu` pass.
 | LibVMI profile | `profiles/linux.json` | `profiles/android.json` | — |
 | Saved state | `state/ubuntu_sandbox.bak` | `state/android_sandbox.bak` | — |
 | Guest staging | `/home/carlos/Desktop/` | `/data/local/tmp/` | — |
-| Injection PID | 1415 | 3174 | — |
+| Injection PID | **1490** — anchor `gedit`, 2026-08-28 | 3174 (anchor `nano`, unverified) | — |
 | Clone LV size | 64G | 32G | — |
 | Sample dirs | `/malware_{incoming,processing,finished}/ubuntu` | `…/android` | `…/windows` |
 
