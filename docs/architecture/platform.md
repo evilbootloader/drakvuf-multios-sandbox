@@ -213,15 +213,18 @@ So the orchestrator **registers** it:
 ```text
 POST /api/v1/worker/register
   { worker_id, total_vlans, total_slots,
-    pipelines: [ {os: "ubuntu",  required_mib: 2198},
-                 {os: "android", required_mib: 2198},
+    pipelines: [ {os: "ubuntu",  required_mib: 4246},
+                 {os: "android", required_mib: 4246},
                  {os: "windows", required_mib: 6294} ] }
 ```
 
 Each number is derived on Dom0 as `misc/<os>_sandbox.cfg`'s `memory` plus a
-per-host domain overhead — `2048 + 150` for Ubuntu and Android, `6144 + 150`
-for Windows. Windows is the outlier by roughly 3×, which is the entire reason
-head-of-line reservation is not optional.
+per-host domain overhead — `4096 + 150` for Ubuntu and Android, `6144 + 150`
+for Windows. Ubuntu and Android moved from `2048 + 150 = 2198` on 2026-08-29,
+when both templates were rebuilt at 4096: Ubuntu because 22.04's desktop idles
+near 2 GB and swapped continuously at the old figure, and Android to match.
+Windows is still the outlier, which is the reason head-of-line reservation is
+not optional — though at 4096 the ratio is now roughly 1.5× rather than 3×.
 
 **The overhead figure is unresolved and must be measured on each host before
 it is trusted.** Two observations from the same lab disagree: 112 MiB measured

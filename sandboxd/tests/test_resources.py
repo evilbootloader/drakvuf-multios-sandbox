@@ -36,11 +36,12 @@ def table(*, total_mib=8192, vlans=range(1, 5), total_slots=4) -> ResourceTable:
 
 @pytest.mark.parametrize("cfg", ["ubuntu_sandbox.cfg", "android_sandbox.cfg"])
 def test_required_mib_matches_the_documented_worked_example(cfg):
-    """docs/architecture/platform.md:216 registers `required_mib: 2198` for
-    both Ubuntu and Android. Both templates declare `memory = 2048`, so this is
-    2048 + 150 -- and it is checked against the real files so the number in the
-    document and the number the daemon sends cannot drift."""
-    assert required_mib(MISC / cfg) == 2198
+    """docs/architecture/platform.md:216 registers `required_mib: 4246` for
+    both Ubuntu and Android. Both templates declare `memory = 4096`, so this is
+    4096 + 150 -- and it is checked against the real files so the number in the
+    document and the number the daemon sends cannot drift. It was 2198 until
+    2026-08-29, when both templates were rebuilt at 4096."""
+    assert required_mib(MISC / cfg) == 4246
 
 
 def test_the_overhead_is_above_the_direct_measurement():

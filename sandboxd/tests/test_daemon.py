@@ -164,7 +164,7 @@ def test_capacity_is_registered_from_the_templates_own_configs(tmp_path):
     api = FakeApi()
     daemon(tmp_path, api).start()
 
-    assert api.registered["pipelines"] == {"ubuntu": 2198, "android": 2198}
+    assert api.registered["pipelines"] == {"ubuntu": 4246, "android": 4246}
     assert api.registered["total_vlans"] == 4
 
 
