@@ -421,6 +421,26 @@ class Analysis:
         if job.kind is not SampleKind.APK:
             return None
 
+        # **The APK path is Android's, and this used to branch on `kind` ALONE.**
+        # `guests.argv_install_apk` hardcodes Android's shell, while the handoff
+        # below comes from `PATHS[job.target_os]` -- so an APK submitted against
+        # Ubuntu on 2026-08-29 built `injector -r .../linux.json -e
+        # /system/bin/sh` with a /home/carlos/Desktop handoff and died at execve
+        # with ENOENT, one clone and several minutes in.
+        #
+        # The platform now refuses that combination at submission
+        # (`routers/jobs.py` _CONTRADICTS), which is where it belongs -- this is
+        # the second line, for a job admitted before that rule existed or by a
+        # caller that is not the UI. Failing loudly beats composing a command
+        # out of two guests' paths.
+        if job.target_os is not TargetOs.ANDROID:
+            raise NotImplementedError(
+                f"an APK was routed to {job.target_os.value}: only Android can "
+                f"install one, and the install path is Android-specific. The "
+                f"submission should have been refused as a detected-type "
+                f"contradiction."
+            )
+
         handoff = f"{guests.PATHS[job.target_os].staging_dir}/.pm.tmp"
         self._runner.run(guests.argv_install_apk(job, handoff),
                          timeout=left("pm install"), what="pm install",

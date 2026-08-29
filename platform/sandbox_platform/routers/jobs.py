@@ -382,10 +382,23 @@ def mark_uploaded(job_id: Annotated[UUID, Path()]) -> JobDetail:
 # run. Ambiguity is resolved in the SUBMITTER's favour, per issue #3: if
 # detection cannot tell, the run proceeds on their choice.
 _CONTRADICTS: dict[TargetOs, tuple[str, ...]] = {
-    TargetOs.WINDOWS: ("ELF ",),
-    TargetOs.UBUNTU: ("PE32", "MS-DOS executable"),
+    TargetOs.WINDOWS: ("ELF ", "Android package"),
+    TargetOs.UBUNTU: ("PE32", "MS-DOS executable", "Android package"),
     TargetOs.ANDROID: (),   # APK is a ZIP and an Android ELF is an ELF
 }
+
+# "Android package" is admitted as a contradiction on the two non-Android
+# guests because the mismatch is not merely unrunnable, it routes wrongly.
+# `sandboxd/stages.py` enters the APK install path on `job.kind` ALONE, and
+# `guests.argv_install_apk` hardcodes Android's shell -- so an APK submitted
+# against Ubuntu on 2026-08-29 produced `injector -r .../linux.json -e
+# /system/bin/sh` with an Ubuntu staging path, failing at execve with ENOENT
+# several minutes and one clone later.
+#
+# It stays conservative in the way the note above asks for: it matches
+# libmagic's confident "Android package (APK)" and NOT "Zip archive data",
+# which an APK also is and which a legitimate Windows sample container could
+# be. A submitter whose file libmagic cannot place still gets their choice.
 
 
 def _contradicts(detected: str, target: TargetOs) -> bool:

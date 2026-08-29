@@ -405,6 +405,32 @@ def test_an_apk_with_no_launcher_component_is_not_executed(tmp_path):
     assert not any(c.argv[0] == "drakvuf" for c in r.calls)
 
 
+def test_an_apk_routed_to_ubuntu_fails_instead_of_mixing_two_guests(tmp_path):
+    """`_preconfig` branched on `job.kind` alone, while `argv_install_apk`
+    hardcodes Android's shell and the handoff comes from `PATHS[target_os]`.
+
+    2026-08-29: an APK submitted against Ubuntu produced
+    `injector -r .../linux.json -e /system/bin/sh` with a /home/carlos/Desktop
+    handoff, and died at execve with ENOENT one clone and several minutes in.
+    A command composed out of two guests' paths cannot succeed and should
+    never be built.
+
+    The platform refuses this at submission now (_CONTRADICTS). This is the
+    second line, for a job admitted before that rule or by a caller that is
+    not the UI."""
+    r = runner_ready("ubuntu_sandbox-3-clone", "ubuntu_sandbox")
+    api = FakeApi(sample_bytes=apk_bytes(tmp_path))
+    lease = FakeLease(target_os="ubuntu", submitted_filename="app.apk")
+
+    outcome, _ = run(tmp_path, api=api, runner=r, lease=lease)
+
+    assert outcome.state == "failed"
+    assert not any("/system/bin/sh" in c.argv for c in r.calls), (
+        "Android's shell was sent to a Ubuntu guest"
+    )
+    assert not any(c.argv[0] == "drakvuf" for c in r.calls)
+
+
 def test_the_component_readfile_and_its_cleanup_are_checked(tmp_path):
     """Both used to run with `proc.run`'s default `check=False`, which made an
     injector failure indistinguishable from the test above: `dest` never
