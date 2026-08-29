@@ -206,10 +206,19 @@ class Config:
     console_api: str = ""
     worker_token: str = ""
     ssl_context: object = None
+    # Both OS families anchor on their init: systemd on Ubuntu, Android's
+    # `init` on Android. The anchor must be schedulable with no guest input --
+    # `nano`, `gedit` and a SIGTTIN-stopped background job are all not -- and
+    # PID 1 is the only value a template re-save cannot invalidate, which
+    # removes the re-derivation step that has silently broken injection twice.
+    # On Ubuntu this means samples run as root; on Android the anchor was
+    # already required to be root, so it costs nothing. The accepted trades
+    # are in automation/pipeline-{ubuntu,android}.env.
     injection_pids: dict = field(default_factory=lambda: {
-        TargetOs.UBUNTU: 1490, TargetOs.ANDROID: 3174})
-    lv_sizes: dict = field(default_factory=lambda: {
-        TargetOs.UBUNTU: "64G", TargetOs.ANDROID: "32G"})
+        TargetOs.UBUNTU: 1, TargetOs.ANDROID: 1})
+    # `lv_sizes` was dropped 2026-08-29 with CLONE_LV_SIZE. Clones are thin
+    # snapshots and inherit the golden LV's size, so there is no per-OS
+    # number left to hold -- see clone.argv_lvcreate.
     profiles: dict = field(default_factory=lambda: {
         TargetOs.UBUNTU: "profiles/linux.json",
         TargetOs.ANDROID: "profiles/android.json"})
@@ -310,7 +319,6 @@ class Analysis:
             config=self._cfg.domain_config(os_),
             saved_state=self._cfg.saved_state(os_),
             vg=self._cfg.vg, bridge=self._cfg.bridge,
-            lv_size=self._cfg.lv_sizes[os_],
         )
         builder = CloneBuilder(self._runner,
                                config_dir=self._cfg.config_dir,

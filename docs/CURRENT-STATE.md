@@ -87,13 +87,25 @@ you:
 
 ### Capacity — what actually binds
 
-From §F6d and §F7c of `docs/runbooks/09-verify-sandboxd-and-console.md`:
+Recomputed 2026-08-29 for bare metal, against `xl info total_memory 32605`:
 
-    memory   20479 - 8192 Dom0  ->  12082 free / 2198 per clone  =  5 clones
-    cpu      12 - 6 Dom0        ->   6 pCPU    / 1 vCPU per clone =  6 clones
+    memory   32605 - 8192 Dom0 - 2048 platform -> 22365 / 4246 per clone = 5
+    cpu      pinned to pCPUs 12,14             ->  1 vCPU per clone      = 2
 
-**Memory binds first: 5 concurrent analyses.** `SANDBOXD_MAX_CLONES` is
-currently **2**, well under both.
+**CPU binds first now: 2 concurrent analyses**, and `SANDBOXD_MAX_CLONES` is
+already **2**, so the two agree. The bound moved for two reasons that both
+landed on 2026-08-29 — the templates went to `memory = 4096` (22.04's desktop
+idles near 2 GB and swapped continuously at 2048), and `misc/*_sandbox.cfg`
+went to `cpus = "12,14"`, the only two P-cores Dom0 does not hold.
+
+Raising it past 2 means either lowering `dom0_max_vcpus` or putting clones on
+E-cores, which was measured as identical throughput but a ~1.7× slower guest.
+
+> **Superseded, and kept only to explain older figures:** the nested host read
+> `memory 20479 - 8192 Dom0 -> 12082 / 2198 per clone = 5 clones` against
+> `cpu 12 - 6 Dom0 = 6 clones`, so memory bound at 5. Both halves of that are
+> now wrong — the memory total was L0's allocation to VM 101, and the pCPU
+> count was QEMU's flat 12.
 
 **One Dom0 core is saturated per concurrent trace** — a single DRAKVUF event
 loop, measured at 99.x% of 600% with one trace and ~197% with two. Five cores
@@ -131,8 +143,8 @@ the filename was never renamed with the rest of the `linux` → `ubuntu` pass.
 | LibVMI profile | `profiles/linux.json` | `profiles/android.json` | — |
 | Saved state | `state/ubuntu_sandbox.bak` | `state/android_sandbox.bak` | — |
 | Guest staging | `/home/carlos/Desktop/` | `/data/local/tmp/` | — |
-| Injection PID | **1490** — anchor `gedit`, 2026-08-28 | 3174 (anchor `nano`, unverified) | — |
-| Clone LV size | 64G | 32G | — |
+| Injection PID | **1** — anchor `systemd`; samples run as root, 2026-08-29 | **1** — anchor `init`, 2026-08-29 | — |
+| Clone LV size | inherited: **1 T** | inherited: **128 G** | — |
 | Sample dirs | `/malware_{incoming,processing,finished}/ubuntu` | `…/android` | `…/windows` |
 
 Shared by all three: volume group `vg-root`, analysis bridge `xenbr1`.
@@ -171,6 +183,10 @@ is corrected here instead.
 | `linux.cfg`, `linux_sandbox.cfg` | older docs | `misc/ubuntu.cfg`, `misc/ubuntu_sandbox.cfg` |
 | `clone-ubuntu.pl` | older docs | `automation/clone.pl`, shared by all three OS pipelines |
 | unnumbered runbook filenames | pre-2026-08-27 links | now `NN-<name>.md`, numbered oldest to newest |
+| Injection PID `1415`, `1490` | `baremetal-trial.md` D5.4/D5.7, `09-verify-…` | **`1`** — the anchor is systemd. `nano` and `gedit` are both unschedulable without guest input, so neither can be injected into unattended |
+| Android injection PID `3163`, `3164`, `3174` | `docs/checklists/android.md` §1.4/§1.5 | **`1`** — the anchor is Android `init`. The `ping`-to-loopback anchor those PIDs refer to worked, but had to be re-derived after every re-save |
+| `CLONE_LV_SIZE`, "Clone LV size 64G / 32G" | `pipeline-*.env`, older docs | **retired 2026-08-29.** Clones are thin snapshots and inherit the golden LV's size — 1 T for Ubuntu, 128 G for Android. `-L` never sized the clone; it forced a *thick* snapshot whose exception store came from VG free space |
+| `required_mib: 2198`, `memory = 2048` | `platform.md`, older runbooks | **4246** / `memory = 4096` for both templates as of 2026-08-29 |
 
 ---
 

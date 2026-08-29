@@ -64,7 +64,7 @@ subfolders):
 - `pipeline-ubuntu.env` — sourced config holding every **per-OS** value the
   scripts below need (sandbox domain, `.cfg`, profile, saved state,
   injection PID, clone count, malware directories, guest user and staging
-  dir, resolver, `CLONE_LV_SIZE`). Added in issue #4. Each entry is
+  dir, resolver). Added in issue #4. Each entry is
   `${NAME:-default}`, so the environment wins — that is how CI overrides
   paths without patching files. A second OS pipeline is a copy of this one
   file plus its own `run_analysis-<os>.sh`. `ANALYSIS_BRIDGE` used to live
@@ -75,8 +75,9 @@ subfolders):
   via `FindBin` as `<repo root>/state/<origin>.bak`, so the disk snapshot
   and the memory image cannot name different domains. It does **not** read
   `pipeline-<os>.env` — it is Perl, invoked by `dirwatch` with a fixed
-  3-argument contract — but it does read `CLONE_LV_SIZE` from the
-  environment, which `run_analysis-<os>.sh` exports from that file.
+  3-argument contract — but it does read `VG_NAME` and `ANALYSIS_BRIDGE`
+  from the environment, which `run_analysis-<os>.sh` exports. It read
+  `CLONE_LV_SIZE` too until thin snapshots retired it on 2026-08-29.
 
   *Named `clone-ubuntu.pl` until DRAFT-015 (2026-08-15). It was renamed
   rather than copied to `clone-android.pl` because it holds no OS-specific
@@ -162,8 +163,8 @@ referenced file doesn't exist anywhere in this repo.
 Android's own files, as of 2026-08-17:
 
 - `pipeline-android.env` and `run_analysis-android.sh` — **exist**
-  (DRAFT-015). `CLONE_LV_SIZE=32G`, `GUEST_STAGING_DIR=/data/local/tmp`,
-  `INJECTION_PID=3174`.
+  (DRAFT-015). `GUEST_STAGING_DIR=/data/local/tmp`, `INJECTION_PID=1`
+  (`CLONE_LV_SIZE=32G` and `INJECTION_PID=3174` until 2026-08-29).
 - `preconfig-android.sh` and `drakvuf-android.sh` — **exist**
   (DRAFT-016, reworked 2026-08-17). `preconfig-android.sh` runs up to
   three injections: `writefile` delivery, one Bliss-Bass EthernetConfig
@@ -298,10 +299,10 @@ confirm before changing):
   `network-setup.sh` the `172.16.<vlan>.0/24` scheme. Neither reads
   `pipeline-ubuntu.env`.~~ — **closed 2026-08-15** across DRAFT-015,
   DRAFT-028b and DRAFT-033. `clone.pl` still reads no config *file* — it is
-  Perl on a fixed 3-argument contract — but takes `VG_NAME`,
-  `ANALYSIS_BRIDGE` and `CLONE_LV_SIZE` from the environment, which
-  `run_analysis-<os>.sh` exports from `platform.env` and
-  `pipeline-<os>.env`. `network-setup.sh` takes the subnet from
+  Perl on a fixed 3-argument contract — but takes `VG_NAME` and
+  `ANALYSIS_BRIDGE` from the environment, which `run_analysis-<os>.sh`
+  exports from `platform.env`. `CLONE_LV_SIZE` was the third until thin
+  snapshots retired it on 2026-08-29. `network-setup.sh` takes the subnet from
   `SUBNET_PREFIX`. The defaults still reproduce the old literals exactly,
   so an unset variable is not a behaviour change.
 - Guest DNS pointed at the clone's gateway, where nothing listens, so name
