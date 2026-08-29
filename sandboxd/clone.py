@@ -92,8 +92,9 @@ class CloneSpec:
     saved_state: Path    # state/<origin>.bak
     vg: str = "vg-root"
     bridge: str = "xenbr1"
-    lv_size: str = "64G"
     vif_script: str = "script=vif-openvswitch"
+    # `lv_size` was dropped 2026-08-29. Clones are thin snapshots now and
+    # inherit the origin's size -- see argv_lvcreate.
 
     @property
     def name(self) -> str:
@@ -178,13 +179,13 @@ def argv_lvremove(spec: CloneSpec, target: str) -> list[str]:
 
 
 def argv_lvcreate(spec: CloneSpec) -> list[str]:
-    # -L<size> with no space, exactly as clone.pl emits it. An empty size would
-    # make lvcreate read the device path as its size operand, which is why
-    # clone.pl treats an exported-but-empty CLONE_LV_SIZE as unset.
-    if not spec.lv_size:
-        raise CloneError("lvm", "lv_size is empty; lvcreate would take the "
-                                "device path as its size operand")
-    return ["lvcreate", "-s", "-n", spec.name, f"-L{spec.lv_size}",
+    # A THIN snapshot: no -L, and -kn. Exactly as clone.pl emits it, and the
+    # full rationale lives beside that call -- in short, -L would build a
+    # thick copy-on-write snapshot even of a thin origin, reserving real VG
+    # space per clone and capping concurrency, while -kn is required because
+    # `lvcreate -s` on a thin origin sets the activation-skip flag and the
+    # device node never appears.
+    return ["lvcreate", "-s", "-kn", "-n", spec.name,
             f"/dev/{spec.vg}/{spec.origin}"]
 
 

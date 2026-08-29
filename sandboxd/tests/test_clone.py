@@ -110,7 +110,7 @@ def test_the_rewrite_matches_the_evidenced_output():
     byte-for-byte against a hand-written config on 2026-08-15."""
     s = C.CloneSpec(origin="android_sandbox", vlan=2,
                     config=MISC / "android_sandbox.cfg",
-                    saved_state=Path("/nonexistent"), lv_size="32G")
+                    saved_state=Path("/nonexistent"))
 
     out = C.rewrite_config((MISC / "android_sandbox.cfg").read_text(), s)
 
@@ -168,30 +168,32 @@ def test_the_commands_match_what_clone_pl_runs(tmp_path):
 
     C.CloneBuilder(r, lock_dir=tmp_path, config_dir=tmp_path).build(s)
 
-    assert r.ran(("lvcreate", "-s", "-n", "ubuntu_sandbox-3-clone",
-                  "-L64G", "/dev/vg-root/ubuntu_sandbox"))
+    assert r.ran(("lvcreate", "-s", "-kn", "-n", "ubuntu_sandbox-3-clone",
+                  "/dev/vg-root/ubuntu_sandbox"))
     assert r.ran(("xl", "restore", "-p", "-e"))
 
 
-def test_the_snapshot_size_is_per_os(tmp_path):
-    """32G for Android, 64G for Ubuntu: how much divergence from the origin a
-    clone may accumulate is a property of the OS image."""
-    s = spec(tmp_path, origin="android_sandbox", vlan=2, lv_size="32G")
-    r = ready(FakeRunner(), s.name, s.origin)
-    r.script(("xl", "domid", s.name), rc=0, stdout="7\n")
+def test_no_size_is_passed_so_the_snapshot_is_thin(tmp_path):
+    """`-L` on a THIN origin does not size the clone -- it makes LVM build an
+    old-style thick copy-on-write snapshot instead, whose exception store comes
+    out of the VG's free space rather than the pool. That reserved 64 GiB per
+    clone against `VFree <161g`, capping concurrency at two, and its 4 KiB
+    chunk size amplified every guest write. Without `-L` the snapshot is thin
+    and inherits the origin's size, which is where 1 T and 128 G come from."""
+    s = spec(tmp_path, origin="android_sandbox", vlan=2)
 
-    C.CloneBuilder(r, lock_dir=tmp_path, config_dir=tmp_path).build(s)
+    argv = C.argv_lvcreate(s)
 
-    assert r.ran(("lvcreate", "-s", "-n", "android_sandbox-2-clone", "-L32G",
-                  "/dev/vg-root/android_sandbox"))
+    assert not any(a.startswith("-L") for a in argv), argv
+    assert argv[-1] == "/dev/vg-root/android_sandbox"
 
 
-def test_an_empty_size_is_refused_rather_than_passed(tmp_path):
-    """clone.pl treats an exported-but-empty CLONE_LV_SIZE as unset because
-    `-L` with no argument makes lvcreate read the DEVICE PATH as the size."""
-    s = spec(tmp_path, lv_size="")
-    with pytest.raises(C.CloneError, match="size operand"):
-        C.argv_lvcreate(s)
+def test_activation_skip_is_cleared(tmp_path):
+    """`lvcreate -s` on a thin origin sets the activation-skip flag (`k` in
+    lv_attr) and leaves the volume inactive, so /dev/<vg>/<clone> never appears
+    and `xl restore` fails on a missing block device. Thick snapshots do not
+    behave this way, so nothing caught this before the pool existed."""
+    assert "-kn" in C.argv_lvcreate(spec(tmp_path))
 
 
 # --- ordering, which is where the contamination bug lived ------------------

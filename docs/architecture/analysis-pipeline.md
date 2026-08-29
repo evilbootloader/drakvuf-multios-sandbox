@@ -353,7 +353,7 @@ alone is not enough."*
 | **Per-run** — already `dirwatch` arguments, no configuration needed | profile path, clone domain ID, injection PID, vlan, run folder, input filename, output folder (+ the ignored `utime`) | `CONFIG_CMD`/`DRAKVUF_CMD` |
 | **Per-OS** — genuinely differ by target | sandbox domain, `.cfg`, kernel profile, saved state, the three `/malware_*/<os>` folders, guest staging path, injection PID, the guest network recipe, the guest execution recipe | `pipeline-ubuntu.env`; guest recipes are inline in `preconfig-ubuntu.sh:205` and `drakvuf-ubuntu.sh:150` |
 | **Host-global, but sitting in a per-OS file** | `MAX_CLONES` (`:139`), `ANALYSIS_BRIDGE` (`:141`), `WATCH_MODE` (`:124`), and `GUEST_NAMESERVER` (`:119`) as containment *policy* | `pipeline-ubuntu.env` |
-| **Host-global, and reachable by no configuration at all** | `vg-root` (`clone.pl:161`), `xenbr1` (`:191`) and the `172.16.<vlan>.0/24` scheme (`network-setup.sh:148`) | hard-coded. `-L64G` was here until DRAFT-015 and is now `CLONE_LV_SIZE` |
+| **Host-global, and reachable by no configuration at all** | `vg-root` (`clone.pl:161`), `xenbr1` (`:191`) and the `172.16.<vlan>.0/24` scheme (`network-setup.sh:148`) | hard-coded. `-L64G` was here until DRAFT-015, became `CLONE_LV_SIZE`, and was retired entirely on 2026-08-29 when clones became thin snapshots |
 
 The guest network recipe is the least portable line in the pipeline and is
 worth naming explicitly. `preconfig-ubuntu.sh:205` assumes `eth0`, `sudo`,
@@ -426,6 +426,19 @@ is invalidated. That is a function of how much the guest writes during an
 analysis, which is a property of the OS image and its workload, not of the
 host. Windows will want more, Android likely less. `CLONE_LV_SIZE` belongs
 in `pipeline-<os>.env`, with `64G` as Ubuntu's default.
+
+> **Superseded 2026-08-29.** The paragraph above is a correct account of a
+> *thick* snapshot and is kept for that reason. `vg-root` is now a thin pool,
+> `clone.pl` passes no `-L` at all, and `CLONE_LV_SIZE` is retired. The
+> classification question it settles therefore stops being asked: a thin
+> snapshot inherits the origin's virtual size, so the clone presents 1 T for
+> Ubuntu and 128 G for Android with no value in any config to get wrong.
+>
+> Note what `-L` actually did, because the name misleads: it never sized the
+> clone. The guest always saw the *origin's* size — a snapshot reports its
+> origin's — so `-L` sized only the exception store, and passing a bigger
+> value to "give the sample a bigger disk" would have reserved that much real
+> VG space per clone while changing nothing the guest could see.
 
 That split costs nothing mechanically, which is itself worth noting:
 decision 3 below carries both classes the same way, so a per-OS value and a
@@ -548,12 +561,12 @@ change in one of them is a change to three pipelines at once and takes its
 own issue; a `<os>`-suffixed copy of any of them fails this check
 outright. `clone-<os>.pl` in particular is now a C2 violation rather than
 a C1 requirement — if a target seems to need one, the value that differs
-belongs in `pipeline-<os>.env` and the environment, as `CLONE_LV_SIZE`
-does.
+belongs in `pipeline-<os>.env` and the environment, as `CLONE_LV_SIZE` did
+until it was retired outright on 2026-08-29.
 
 **C3 — `pipeline-<os>.env` defines**: `SANDBOX_DOMAIN`, `DOMAIN_CONFIG`,
 `KERNEL_PROFILE`, `SAVED_STATE`, `TARGET_OS` and the three
-`/malware_*/<os>` folders, `GUEST_STAGING_DIR`, `CLONE_LV_SIZE`,
+`/malware_*/<os>` folders, `GUEST_STAGING_DIR`,
 `INJECTION_PID`, `WATCH_MODE`, `MAX_CLONES` — each as `${NAME:-default}`,
 so the environment wins and CI can override without patching files.
 

@@ -189,8 +189,8 @@ sub fail {
 
 # Empty is treated as unset, matching the ${NAME:-default} idiom every
 # pipeline-<os>.env entry uses. Not cosmetic: Perl's `//` is defined-or,
-# so an exported-but-empty CLONE_LV_SIZE would interpolate to `-L` with no
-# argument and lvcreate would take the device path as its size operand.
+# so an exported-but-empty VG_NAME would interpolate into `/dev//$origin`
+# and lvcreate would fail naming a device nobody meant.
 sub env_or {
     my ($name, $default) = @_;
     return (defined $ENV{$name} && length $ENV{$name})
@@ -230,29 +230,10 @@ sub run {
 # replaced, so an unset variable behaves exactly as before.
 our $lvm_vg = env_or("VG_NAME", "vg-root");
 
-# Size of the LVM copy-on-write snapshot -- the exception store, i.e. how
-# much divergence from the origin a clone may accumulate before the
-# snapshot is invalidated. That is a function of how much the guest writes
-# during an analysis, so it is a property of the OS image and is per-OS
-# (C3): 64G for Ubuntu, 32G for Android, Windows likely more.
-#
-# Read from the environment rather than passed, because dirwatch's
-# CLONE_CMD is a fixed 3-argument contract this may not change (C9).
-# run_analysis-<os>.sh sources pipeline-<os>.env and exports this;
-# dirwatch spawns every callback with envp = NULL (dirwatch.c:178), which
-# inherits the parent environment.
-#
-# The default reproduces the literal this replaced, so an unset variable
-# behaves exactly as before the value was parameterized. Note that this
-# makes a lost value INVISIBLE rather than fatal: an Android clone built
-# at 64G works, and merely over-allocates. Check `lvs` reports the size
-# you expect rather than inferring it from a clone that came up.
-#
-# Empty is treated as unset, matching the ${NAME:-default} idiom every
-# pipeline-<os>.env entry uses. Not cosmetic: `//` alone is defined-or, so
-# an exported-but-empty value would interpolate to `-L` with no argument
-# and lvcreate would take the device path as its size operand.
-our $clone_lv_size = env_or("CLONE_LV_SIZE", "64G");
+# THERE IS NO CLONE SIZE ANY MORE. `CLONE_LV_SIZE` was retired 2026-08-29
+# with the move to a thin pool; see the `lvcreate -s` call in clone() for
+# what replaced it and why the variable could not simply be given a bigger
+# value.
 
 # Clone network bridge name. Host-global (C4) -- see $lvm_vg above.
 our $clone_bridge = env_or("ANALYSIS_BRIDGE", "xenbr1");
@@ -537,15 +518,49 @@ sub clone {
     # the END block before creating it.
     $clone_lv_to_remove = "/dev/$lvm_vg/$clone";
 
+    # A THIN snapshot: no -L, and -kn.
+    #
+    # **Passing -L here does not mean "make the clone this big".** It makes
+    # LVM build an old-style thick copy-on-write snapshot even when the
+    # origin is thin, with -L as its exception store -- allocated from the
+    # VG's free space, not from the pool. That is what this line did until
+    # 2026-08-29, and it was wrong in three ways at once:
+    #
+    #   - It reserved 64 GiB of real VG space per clone against `VFree
+    #     <161g`, capping concurrency at TWO regardless of memory or pCPUs.
+    #   - dm-snapshot defaulted to a 4 KiB chunk, so every first write cost
+    #     a read from the thin origin, a write to the store and a synchronous
+    #     metadata commit. An idle clone was measured filling its store at
+    #     3.5 MiB/s on 2026-08-29 -- pure write amplification.
+    #   - A sample that wrote enough to overflow the store INVALIDATED the
+    #     clone's disk mid-analysis.
+    #
+    # Dropping -L removes all three. A thin snapshot draws from the pool,
+    # costs only what is written, and inherits the ORIGIN's virtual size --
+    # so a clone presents 1 T for Ubuntu and 128 G for Android with no
+    # constant to keep in sync with the golden images. That inheritance is
+    # also why raising CLONE_LV_SIZE was never the fix: the guest already
+    # saw the origin's size, because a snapshot reports its origin's.
+    #
+    # -kn clears the activation-skip flag. `lvcreate -s` on a THIN origin
+    # sets `k` in lv_attr and does not activate the volume, so
+    # /dev/<vg>/<clone> never appears and `xl restore` fails on a missing
+    # block device. Thick snapshots do not behave this way, which is why
+    # this could not surface before the pool existed.
+    #
+    # The pool is now a shared failure domain: a sample that fills a disk
+    # can exhaust capacity under every concurrent clone and the goldens.
+    # `thin_pool_autoextend_threshold` is the guard -- see
+    # docs/CURRENT-STATE.md.
     my ($lv_ok, $lv_out) =
-        run("lvcreate of the clone snapshot", $lvcreate, "-s", "-n", $clone,
-            "-L$clone_lv_size", "/dev/$lvm_vg/$origin");
+        run("lvcreate of the clone snapshot", $lvcreate, "-s", "-kn",
+            "-n", $clone, "/dev/$lvm_vg/$origin");
     unless ($lv_ok) {
         # Nothing was created, so do not let END try to remove it.
         $clone_lv_to_remove = undef;
         fail($EXIT_LVM, $lv_out,
-             "  CLONE_LV_SIZE=$clone_lv_size, VG_NAME=$lvm_vg. "
-           . "If the VG is full this is not transient -- check `vgs`.");
+             "  VG_NAME=$lvm_vg. If the thin pool is full this is not "
+           . "transient -- check `lvs -o +data_percent,metadata_percent`.");
     }
 
     my ($restore_ok, $restore_out) =

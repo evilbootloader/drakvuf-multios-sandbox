@@ -41,13 +41,11 @@ REPO_ROOT="$(
 # dirwatch's fixed CLONE_CMD contract and everything else from the
 # environment, so these have to be exported to reach it.
 #
-# CLONE_LV_SIZE matters more here than it does for Ubuntu. clone.pl's
-# fallback is 64G, which is Ubuntu's correct value and twice what an
-# Android clone needs -- so if this export is ever dropped the clone still
-# works and merely over-allocates. It fails silently, which is why the
-# check after a first run is `lvs` showing 32,00g rather than "the clone
-# came up".
-export CLONE_LV_SIZE VG_NAME ANALYSIS_BRIDGE
+# CLONE_LV_SIZE was exported here too until 2026-08-29. It used to matter
+# more for Android than for Ubuntu -- clone.pl's fallback was Ubuntu's 64G,
+# so a dropped export silently over-allocated an Android clone. Thin
+# snapshots inherit the origin's size, so there is nothing left to drop.
+export VG_NAME ANALYSIS_BRIDGE
 
 # Fail before starting anything rather than after a clone is already
 # running. A missing profile or saved state would otherwise surface as an
