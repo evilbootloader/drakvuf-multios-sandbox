@@ -409,9 +409,25 @@ def argv_install_apk(job: Job, handoff: str) -> list[str]:
     may be held in guest shell VARIABLES and used quoted; what it may not do is
     arrive as text Dom0 pasted into a command.
     """
+    # **`pm install`'s output goes to the handoff, not to /dev/null.**
+    #
+    # The handoff is written FIRST with pm's own diagnostic and only overwritten
+    # by the component on success, so a failed install explains itself instead
+    # of vanishing. It used to be `>/dev/null 2>&1`, which made every install
+    # failure indistinguishable from an APK with no launcher activity: `PKG`
+    # came back empty, the `[ -n "$PKG" ]` guard exited 0 before the redirect
+    # ran, the handoff never existed, and the readfile failed with ENOENT.
+    #
+    # Observed 2026-08-29 against F-Droid.apk, which installs and resolves to
+    # org.fdroid.fdroid/.views.main.MainActivity in one second when injected by
+    # hand. Whatever differs in the pipeline, the guest was the only thing that
+    # knew and it had been told to say nothing.
+    #
+    # This adds no artifact a sample could find: same single file, same `rm` in
+    # stages.py, and it is gone before the sample runs.
     script = (
         'B=$(pm list packages 2>/dev/null); '
-        'pm install -r -t -g "$1" >/dev/null 2>&1; '
+        f'pm install -r -t -g "$1" > {handoff} 2>&1; '
         'PKG=$(pm list packages 2>/dev/null | while read -r p; do '
         'case "$B" in *"$p"*) ;; *) echo "$p";; esac; done | head -1 '
         '| sed "s/^package://"); '
