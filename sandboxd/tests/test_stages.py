@@ -405,6 +405,37 @@ def test_an_apk_with_no_launcher_component_is_not_executed(tmp_path):
     assert not any(c.argv[0] == "drakvuf" for c in r.calls)
 
 
+def test_the_component_readfile_and_its_cleanup_are_checked(tmp_path):
+    """Both used to run with `proc.run`'s default `check=False`, which made an
+    injector failure indistinguishable from the test above: `dest` never
+    appeared, `component` fell back to "" and the run was reported as an APK
+    with no launcher activity.
+
+    2026-08-29: that error was raised for an F-Droid APK whose component
+    resolved to `org.fdroid.fdroid/.views.main.MainActivity` correctly, by hand,
+    in one second. Three rounds of debugging went at the sample because the
+    message named the sample. A stage must name the stage that failed.
+
+    The `rm` is checked for a second reason: the comment beside it states that
+    the handoff is gone before the sample runs, and unchecked it could leave the
+    guest holding exactly the artifact an evasive application looks for --
+    silently, on every later analysis."""
+    r = runner_ready("android_sandbox-3-clone", "android_sandbox")
+    api = FakeApi(sample_bytes=apk_bytes(tmp_path))
+    cfg = config(tmp_path)
+    cfg.config_dir.mkdir(parents=True, exist_ok=True)
+    comp = cfg.results_dir / FakeLease().job_id / "launch-component"
+    comp.parent.mkdir(parents=True, exist_ok=True)
+    comp.write_text("com.example/.MainActivity\n")
+
+    lease = FakeLease(target_os="android", submitted_filename="app.apk")
+    S.Analysis(api, r, cfg).run(lease, 3)
+
+    by_stage = {c.what: c for c in r.calls}
+    assert by_stage["injector readfile"].check is True
+    assert by_stage["injector rm"].check is True
+
+
 # --- inputs that do not exist yet ------------------------------------------
 
 def test_an_unimplemented_interaction_mode_fails_loudly(tmp_path):

@@ -436,12 +436,28 @@ class Analysis:
         self._sleep(self._cfg.waits.apk_install, beat)
 
         dest = job.result_dir / "launch-component"
+        # `check=True`, because without it a failed injection is indistinguishable
+        # from an APK with no launcher activity. `proc.run` defaults to
+        # check=False, so this step used to fail silently, `dest` never appeared,
+        # and `component` fell back to "" -- reported below as "no usable
+        # launcher component", which names the sample for a fault that may be
+        # entirely on Dom0's side. Observed 2026-08-29 sending an F-Droid APK
+        # whose component resolved correctly, and by hand, in one second.
         self._runner.run(guests.argv_read_component(job, handoff, dest),
-                         timeout=left("readfile"), what="injector readfile")
+                         timeout=left("readfile"), what="injector readfile",
+                         check=True)
         # Removed before the sample runs: a file in its own staging directory
         # naming its own component is what an evasive application looks for.
+        #
+        # Checked for the same reason, and one more: the comment above states a
+        # guarantee. Unchecked, a failed `rm` leaves the guest holding exactly
+        # the artifact this exists to remove, silently, for every subsequent
+        # analysis. It is also not plausibly an isolated failure -- the readfile
+        # immediately above proves injection works, so an `rm` that fails here
+        # means something changed underneath the run and the trace is not worth
+        # starting.
         self._runner.run(guests.argv_remove_handoff(job, handoff),
-                         timeout=left("rm"), what="injector rm")
+                         timeout=left("rm"), what="injector rm", check=True)
 
         component = dest.read_text().strip() if dest.exists() else ""
         if not guests.component_is_launchable(component):
