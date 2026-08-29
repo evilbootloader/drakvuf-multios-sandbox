@@ -178,6 +178,34 @@ def test_android_uses_the_bliss_bass_configurator(tmp_path):
     assert "app_process64" in script
 
 
+def test_android_builds_a_runtime_environment_for_app_process64(tmp_path):
+    """The anchor is PID 1, and a child of `init` inherits init's environment:
+    PATH, `_`, and init's own SELINUX_STARTED_AT and FIRST_STAGE_STARTED_AT.
+    That is all. The classpath import supplies BOOTCLASSPATH and its three
+    siblings and nothing else -- it was written to top up a SHELL's
+    environment, when the anchor was a backgrounded `ping` from a booted
+    session.
+
+    Without the ANDROID_* roots, app_process64 cannot find its dalvik-cache or
+    APEX roots and EXITS 0 HAVING DONE NOTHING. `execproc` returns at process
+    start, so Dom0 sees success either way and every clone runs with no
+    address. Measured on a live clone 2026-08-29: with them, `SUCCESS` and
+    172.16.1.2/24 on eth0; without them, silence and no address.
+
+    Deleting any of these is not a cleanup -- it restores a silent failure.
+    """
+    script = G.argv_configure_network(job(tmp_path, TargetOs.ANDROID))[-1]
+
+    for var in ("ANDROID_DATA=/data", "ANDROID_ROOT=/system",
+                "ANDROID_ART_ROOT=/apex/com.android.art",
+                "ANDROID_I18N_ROOT=/apex/com.android.i18n",
+                "ANDROID_TZDATA_ROOT=/apex/com.android.tzdata"):
+        assert var in script, f"{var} missing; app_process64 will no-op"
+
+    # Before app_process64 runs, or they are set too late to matter.
+    assert script.index("ANDROID_ROOT") < script.index("app_process64")
+
+
 def test_android_turns_private_dns_off(tmp_path):
     """REQUIRED, not tuning. Left at its default the clone resolved over DoT to
     1.1.1.1:853 and the pcap recorded an encrypted stream instead of the

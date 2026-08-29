@@ -225,6 +225,25 @@ fi
 # repository-wide it would hide the real mistake of writing an intended
 # Dom0 expansion in single quotes.
 NETCFG='while IFS=" " read -r a n v; do [ "$a" = export ] && export "$n=$v"; done < /data/system/environ/classpath; '
+# THE ANDROID_* EXPORTS ARE REQUIRED BECAUSE THE ANCHOR IS PID 1 (2026-08-29).
+#
+# A child of `init` inherits init's environment, which on this build is four
+# variables: PATH, _, and init's own SELINUX_STARTED_AT and
+# FIRST_STAGE_STARTED_AT. The classpath import above adds only BOOTCLASSPATH
+# and its three siblings -- it was written to top up a SHELL's environment,
+# back when the anchor was a backgrounded `ping` started from a booted
+# session, and it does not build one from nothing.
+#
+# Without these, app_process64 cannot find its dalvik-cache or APEX roots and
+# EXITS 0 HAVING PRINTED NOTHING AND DONE NOTHING. execproc returns at process
+# start, so Dom0 sees a successful injection either way: every clone ran with
+# no address while reporting success. Measured on a live clone -- with the
+# exports the same command prints SUCCESS and `ip addr show eth0` reports
+# 172.16.1.2/24; without them, silence and no address.
+#
+# `pm` does not need this, which is why the install path kept working: it is a
+# two-line wrapper around `cmd`, which is native. Only the runtime needs it.
+NETCFG="${NETCFG}"'export ANDROID_DATA=/data ANDROID_ROOT=/system ANDROID_ART_ROOT=/apex/com.android.art ANDROID_I18N_ROOT=/apex/com.android.i18n ANDROID_TZDATA_ROOT=/apex/com.android.tzdata; '
 # shellcheck disable=SC2016
 NETCFG="${NETCFG}"'APK="$(pm path com.example.ethernetconfig | sed "s/^package://")"; '
 # shellcheck disable=SC2016

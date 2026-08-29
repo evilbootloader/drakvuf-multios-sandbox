@@ -368,11 +368,34 @@ def _android_netcfg(job: Job, subnet: str) -> str:
     clone resolved over DoT to 1.1.1.1:853 and the pcap recorded an encrypted
     stream instead of the domains the sample looked up. Silently, with nothing
     failing. Pcap-evidenced both ways in 06-verify-android-isolation.md.
+
+    **The ANDROID_* exports are required because the anchor is PID 1.** A child
+    of `init` inherits `init`'s environment, which on this build is four
+    variables -- `PATH`, `_`, and init's own `SELINUX_STARTED_AT` and
+    `FIRST_STAGE_STARTED_AT`. The `classpath` import above only adds
+    BOOTCLASSPATH and its three siblings; it was written to top up a SHELL's
+    environment, back when the anchor was a backgrounded `ping` started from a
+    booted session, and it does not build one from nothing.
+
+    Without them `app_process64` cannot locate its dalvik-cache or its APEX
+    roots, so it **exits 0 having printed nothing and done nothing** -- and
+    since `execproc` returns at process start, Dom0 sees a successful
+    injection either way. Every clone ran with no address while reporting
+    success. Measured 2026-08-29 on a live clone: with the exports the same
+    command prints `SUCCESS` and `ip addr show eth0` reports 172.16.1.2/24;
+    without them, silence and no address.
+
+    `pm` is unaffected and that is why the install path kept working -- it is a
+    two-line wrapper around `cmd`, which is native. Only the runtime needs this.
     """
     ns = PATHS[TargetOs.ANDROID].nameserver
     return (
         'while IFS=" " read -r a n v; do [ "$a" = export ] && export "$n=$v"; '
         'done < /data/system/environ/classpath; '
+        'export ANDROID_DATA=/data ANDROID_ROOT=/system '
+        'ANDROID_ART_ROOT=/apex/com.android.art '
+        'ANDROID_I18N_ROOT=/apex/com.android.i18n '
+        'ANDROID_TZDATA_ROOT=/apex/com.android.tzdata; '
         'APK="$(pm path com.example.ethernetconfig | sed "s/^package://")"; '
         'CLASSPATH="$APK" /system/bin/app_process64 / '
         'com.example.ethernetconfig.network.EthernetConfigurator STATIC eth0 '
