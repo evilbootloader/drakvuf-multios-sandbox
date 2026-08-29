@@ -105,16 +105,26 @@ def submit_view(request: Request) -> HTMLResponse:
 def _budget(os_: TargetOs) -> dict:
     """Trace-budget defaults for this guest.
 
-    `disable_sysret` defaults ON for Android because it is not optional there:
-    an idle BlissOS clone emits thousands of binder ioctls and Looper polls
-    before anything is analysed, and without it an APK could not finish
-    drawing inside the trace window. Ubuntu is deliberately left alone -- it is
-    evidenced working and does not have the problem this solves.
+    `disable_sysret` defaults ON for both Linux guests, for different reasons.
+    On Android it is not optional: an idle BlissOS clone emits thousands of
+    binder ioctls and Looper polls before anything is analysed, and without it
+    an APK could not finish drawing inside the trace window. Ubuntu adopted it
+    on 2026-08-29 for throughput -- 2.06x, 415 -> 856 syscalls/s -- accepting
+    that syscall return values are lost. See `guests.default_trace_options`
+    for the full trade and the condition it rests on.
+
+    **KNOWN GAP: this checkbox is decorative.** `disable_sysret` is not on the
+    jobs table, not in `jobs.py`, and not on `sandboxd.api.Lease`, so a
+    per-job tick or untick never reaches Dom0 in either direction --
+    `sandboxd/stages.py:339` takes the flag from `guests.default_trace_options`
+    and moves only the plugin list. Keeping this default aligned with that
+    function is therefore cosmetic honesty, not wiring; the wiring is its own
+    change.
     """
     return {
         "timeout": 180,
         "linux": os_ is not TargetOs.WINDOWS,
-        "disable_sysret": os_ is TargetOs.ANDROID,
+        "disable_sysret": os_ is not TargetOs.WINDOWS,
     }
 
 

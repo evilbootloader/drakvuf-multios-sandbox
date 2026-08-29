@@ -208,19 +208,38 @@ def default_trace_options(os_: TargetOs, kind: SampleKind) -> TraceOptions:
         # was paused ~93% of wall time waiting for Dom0 to service traps. That
         # is per-event cost, and no amount of scheduling fixes it.
         #
-        # **`-F` is the only lever here with no information cost**, which is
-        # why it is the one applied to Ubuntu. It swaps the full singlestep
+        # **`-F` costs no information at all.** It swaps the full singlestep
         # round trip after each hooked event for a second altp2m view: the same
-        # events, carrying the same data, delivered more cheaply. Contrast
-        # `--disable-sysret`, which halves the events by discarding syscall
-        # return values, and a syscall filter file, which discards every
-        # syscall not on the list -- both are still off here.
+        # events, carrying the same data, delivered more cheaply. Requires Xen
+        # 4.14+; Dom0 runs 4.20.1, and Android has run it evidenced since
+        # 2026-08-17.
         #
-        # Requires Xen 4.14+; Dom0 runs 4.20.1. Android has run it evidenced
-        # since 2026-08-17. Revert by dropping this argument -- the flag is
-        # emitted by TraceOptions.drakvuf_flags() and nothing else reads it.
+        # **`--disable-sysret` DOES cost information, and was adopted anyway on
+        # 2026-08-29.** It stops hooking syscall returns, so the trace still
+        # shows that a sample called openat/connect/execve and with what
+        # arguments, but not whether any of it succeeded and not the fd or
+        # handle that came back. Attempted behaviour stays visible; outcomes do
+        # not.
+        #
+        # What bought it: 2.06x on this host -- 415 -> 856 syscalls/s -- and
+        # Dom0 coming off saturation entirely, against four levers that do NOT
+        # remove events (CPU placement, -F, compiler hardening) which moved
+        # nothing beyond 0.6%. Full series in baremetal-trial.md Part H.
+        #
+        # §F7a declined this trade on the grounds that it costs return values.
+        # What overturned it is that nothing consumes them: `disable_sysret`
+        # appears in the platform only as a UI default and a template, the
+        # trace JSONL is collected and uploaded as an artifact, and no code in
+        # this repository parses it. **That is the condition of the trade, not
+        # a footnote** -- a return-value consumer added later (CAPA is on
+        # ideas.md) makes this silent data loss, and whoever adds one owns
+        # revisiting this line.
+        #
+        # DRAFT-052's syscall filter is strictly better and would replace it:
+        # it removes syscall ENTRIES too while keeping returns for the calls
+        # actually analysed. Blocked on a curated list of what detection needs.
         return TraceOptions(plugins=_LINUX_PLUGINS, timeout=120,
-                            fast_singlestep=True)
+                            fast_singlestep=True, disable_sysret=True)
 
     if os_ is TargetOs.ANDROID:
         return TraceOptions(

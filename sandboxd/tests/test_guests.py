@@ -329,27 +329,36 @@ def test_the_handoff_file_is_removed_before_the_sample_runs(tmp_path):
 
 # --- the trace budget -------------------------------------------------------
 
-def test_ubuntu_keeps_every_syscall_return_value(tmp_path):
-    """The line this test defends is **information cost**, not "Ubuntu differs
-    from Android" -- which is what it asserted until 2026-08-27, when `-F` was
-    added to Ubuntu and this failed for the right reason.
+def test_ubuntu_trades_syscall_return_values_for_2x(tmp_path):
+    """**This test used to assert the opposite**, and the reversal is the
+    point: until 2026-08-29 Ubuntu kept every return value, because §F7a
+    declined the trade on the grounds that `--disable-sysret` costs them.
 
-    `-F` costs nothing: it swaps the singlestep round trip after a hooked event
-    for a second altp2m view, so the same events arrive carrying the same data.
-    `--disable-sysret` is not like that. It halves the events by discarding
-    syscall RETURN values, and a trace missing them shows that a sample called
+    It does. The trace still shows that a sample called
     `openat`/`connect`/`execve` and with what arguments, but not whether any of
-    it succeeded. Attempted behaviour stays visible; outcomes do not.
+    it succeeded, and not the fd or handle that came back. Attempted behaviour
+    stays visible; outcomes do not.
 
-    So Ubuntu may take cheaper delivery of the same trace, and may not take a
-    cheaper trace. Turning this red is a decision about evidence, not speed.
+    What bought the reversal: 2.06x on this host -- 415 -> 856 syscalls/s --
+    and Dom0 off saturation entirely, where four levers that do NOT remove
+    events moved nothing beyond 0.6% (baremetal-trial.md Part H). And the
+    claim that overturned §F7a: nothing consumes the return values.
+    `disable_sysret` appears in the platform only as a UI default and a
+    template, the trace JSONL is uploaded as an artifact, and no code here
+    parses it.
+
+    **That condition is load-bearing.** Add a consumer of syscall returns --
+    CAPA is on ideas.md -- and this becomes silent data loss. Whoever adds one
+    owns revisiting this. DRAFT-052's syscall filter is the strictly better
+    replacement: it removes entries too, while keeping returns for the calls
+    actually analysed.
+
+    `-F` is separate and still free: same events, same data, cheaper delivery.
     """
     argv = G.argv_trace(job(tmp_path))
 
     assert "-F" in argv, "fast singlestep is free and Ubuntu should have it"
-    assert "--disable-sysret" not in argv, (
-        "Ubuntu would stop recording syscall return values -- see the docstring"
-    )
+    assert "--disable-sysret" in argv
     assert argv[argv.index("-t") + 1] == "120"
 
 
