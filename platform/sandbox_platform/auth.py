@@ -3,18 +3,33 @@
 Issue #36 (DRAFT-043).
 
 Dom0 holds exactly one credential: a bearer token valid only for
-`/api/v1/worker/*`. In deployment it sits behind mTLS as well, and the two
-answer different questions -- the client certificate says *which host*, the
-token says *what it may do*. mTLS is terminated by the reverse proxy, so it
-does not appear here; this module is the second half.
+`/api/v1/worker/*`. In deployment it sits behind mTLS as well. mTLS is
+terminated by the listener and the certificate is never read by this
+application, so it is a transport gate rather than an identity source; this
+module is the second half.
 
-The token is not enough on its own for job-scoped routes. Every
-`/worker/jobs/{id}/...` route additionally requires that the job's
-`lease_owner` matches the caller, so a compromised Dom0 reaches the jobs it
-is currently running and nothing else. That check is `leased_job` below, and
-it is a dependency rather than a line in each handler for the same reason the
-token is attached to the router rather than to routes: something added later
-cannot forget it.
+Every `/worker/jobs/{id}/...` route additionally requires that the job's
+`lease_owner` matches the caller, which is `leased_job` below -- a dependency
+rather than a line in each handler, for the same reason the token is attached
+to the router rather than to routes: something added later cannot forget it.
+
+**KNOWN GAP (DRAFT-043/046): that check is scoping, not authentication.** The
+caller's identity is the `X-Worker-Id` header, and `lease_owner` was itself
+set from `ClaimRequest.worker_id`. Nothing binds either to the credential, and
+`WORKER_TOKEN` is one shared string, so any token holder can present any
+worker id. `POST /worker/reconcile` and `/worker/register` take a `worker_id`
+in the body with no lease gate at all, and `reconcile` writes.
+
+This module previously claimed the check meant "a compromised Dom0 reaches the
+jobs it is currently running and nothing else". It does not, and two other
+things already contradicted it: on the mTLS listener `REQUIRE_ACCESS_JWT` is
+deliberately unset, so that credential already reaches the whole jobs API
+unauthenticated; and `docs/architecture/platform.md` records that a compromised
+Dom0 "owns the platform outright" because it is the hypervisor holding the
+platform's disks. `leased_job` is worth keeping -- it stops an honest worker
+touching another's job by mistake, and it withholds job ids from a caller that
+has not been given them -- but it is not a boundary against a hostile token
+holder, and closing that needs per-worker credentials rather than a header.
 """
 
 from __future__ import annotations
