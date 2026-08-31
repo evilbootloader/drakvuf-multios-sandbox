@@ -32,7 +32,7 @@ instead of open.
 
 DRAFT-028 built the posture into five dedicated chains and left one thing
 open, which it said so explicitly
-(`docs/runbooks/04-deploy-network-isolation.md:764`):
+(`docs/runbooks/04-deploy-network-isolation.md:746`):
 
 > What this deployment does **not** establish, and must not be read as
 > establishing: no terminal policy is set on `FORWARD` or `INPUT`
