@@ -117,7 +117,17 @@ ip link set "$ANALYSIS_BRIDGE" up
 # than none, because it looks like a working one -- clones would run with
 # no inter-clone isolation, no LAN block and no Dom0 protection, and
 # nothing would say so.
-if ! "$SCRIPT_DIR/network-setup.sh" "$MAX_CLONES"; then
+# Egress mode, opt-in. See the long note in run_analysis-ubuntu.sh: DRAFT-057
+# made egress per-job, `dirwatch` cannot ask for a mode, and `direct` is the
+# residential line. Unset ALLOW_DIRECT means clones run isolated and offline,
+# announced loudly by network-setup.sh rather than silently.
+if [ "${ALLOW_DIRECT:-0}" = "1" ]; then
+    EGRESS_MODE=direct
+else
+    EGRESS_MODE=offline
+fi
+
+if ! "$SCRIPT_DIR/network-setup.sh" "$MAX_CLONES" "$EGRESS_MODE"; then
     echo "run_analysis-android.sh: network provisioning failed; refusing to start dirwatch" >&2
     exit 1
 fi

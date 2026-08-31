@@ -23,6 +23,7 @@ from typing import Annotated, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from psycopg.types.json import Jsonb
 from pydantic import BaseModel, Field, field_validator
 
 from .. import jobs as dal
@@ -31,7 +32,7 @@ from .. import objects
 from ..auth import LeasedJob, require_worker_token
 from ..config import settings
 from ..db import connection
-from ..enums import JobState, TargetOs
+from ..enums import EgressMode, JobState, TargetOs
 
 router = APIRouter(
     prefix="/api/v1/worker",
@@ -74,12 +75,33 @@ class PipelineCapacity(BaseModel):
     required_mib: int = Field(gt=0)
 
 
+class EgressExit(BaseModel):
+    """One way out, as the analysis host declares it (DRAFT-057).
+
+    No `interface` field, and its absence is deliberate: a Dom0 device name is
+    internal topology, the platform has no use for it, and it would end up
+    rendered on a form in a browser.
+    """
+
+    name: str = Field(min_length=1, max_length=64)
+    mode: EgressMode
+    # ISO 3166-1 alpha-2 where it means anything. Free text rather than an enum
+    # because it is a label shown to a person, never a routing input -- `name`
+    # is what selects the exit.
+    country: str | None = Field(default=None, max_length=8)
+    caveats: list[str] = Field(default_factory=list, max_length=16)
+
+
 class RegisterRequest(BaseModel):
     worker_id: str = Field(min_length=1, max_length=64)
     total_mib: int = Field(gt=0)
     total_vlans: int = Field(gt=0)
     total_slots: int = Field(gt=0)
     pipelines: list[PipelineCapacity]
+    # Defaulted, so a worker deployed before this field existed still
+    # registers -- it simply offers nothing, and every job on it runs offline.
+    # That is the correct reading of an old worker's silence.
+    exits: list[EgressExit] = Field(default_factory=list, max_length=32)
 
 
 class ReconcileRequest(BaseModel):
@@ -107,6 +129,17 @@ class LeaseResponse(BaseModel):
     # holds no object-store credential; this is the whole of its access, and
     # it is scoped to one key with a short expiry.
     sample_url: str
+
+    # Where this job's traffic may go (DRAFT-057). The NAME of an exit the host
+    # itself declared, never an endpoint a submitter supplied -- so this is the
+    # platform handing back a token the worker gave it, not an instruction the
+    # worker must trust.
+    #
+    # `egress_exit` is None for `offline`, which has no exit to name. sandboxd
+    # reads a missing or null exit as offline, so the two agree by default
+    # rather than by agreement.
+    egress_mode: EgressMode
+    egress_exit: str | None = None
 
 
 class ReservedResponse(BaseModel):
@@ -137,6 +170,16 @@ class StateRequest(BaseModel):
     cleanup_status: str | None = None
     clone_domain: str | None = None
     vlan: int | None = None
+
+    # What the host ACTUALLY installed (DRAFT-057), reported at `preparing`
+    # alongside clone_domain and vlan because it is learned at the same moment.
+    #
+    # Not validated field by field, deliberately. This is a diagnostic record
+    # whose shape varies by mode and is still being decided by Phases 2-5, and
+    # a strict model here would reject a worker that learned something new
+    # before the platform did -- turning extra information into a failed run.
+    # It is written to jsonb and rendered escaped; it never routes anything.
+    egress: dict | None = None
 
 
 class HeartbeatResponse(BaseModel):
@@ -186,6 +229,9 @@ def register(req: RegisterRequest) -> None:
             total_vlans=req.total_vlans,
             total_slots=req.total_slots,
             pipelines={p.os.value: p.required_mib for p in req.pipelines},
+            exits=[{"name": e.name, "mode": e.mode.value,
+                    "country": e.country, "caveats": e.caveats}
+                   for e in req.exits],
         )
 
 
@@ -291,6 +337,8 @@ def claim(req: ClaimRequest):
                 attempt=last.attempt,
                 sample_url=objects.presigned_get(key, objects.Audience.WORKER,
                                                  ttl=settings.lease_seconds),
+                egress_mode=EgressMode(last.egress_mode),
+                egress_exit=last.egress_exit,
             )
 
         if time.monotonic() >= deadline:
@@ -330,13 +378,15 @@ def report_state(job: LeasedJob, req: StateRequest) -> None:
                    failure_reason = COALESCE(%s, failure_reason),
                    cleanup_status = COALESCE(%s, cleanup_status),
                    clone_domain   = COALESCE(%s, clone_domain),
-                   vlan           = COALESCE(%s, vlan)
+                   vlan           = COALESCE(%s, vlan),
+                   egress_applied = COALESCE(%s, egress_applied)
              WHERE id = %s
             """,
             (
                 req.state.value, req.queue_reason, req.failure_stage,
                 req.failure_reason, req.cleanup_status, req.clone_domain,
-                req.vlan, job["id"],
+                req.vlan, Jsonb(req.egress) if req.egress is not None else None,
+                job["id"],
             ),
         )
 

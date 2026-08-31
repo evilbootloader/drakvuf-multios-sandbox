@@ -23,6 +23,8 @@ MinIO. It still verifies the CA, because the internal store is signed by ours.
 
 from __future__ import annotations
 
+import hashlib
+import hmac
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -30,6 +32,7 @@ from typing import Any
 
 import httpx
 
+from . import naming
 from .tls import ssl_context
 
 # The API long-polls /claim (20s in production) so an idle worker is not a
@@ -54,6 +57,17 @@ class ProtocolError(RuntimeError):
     """
 
 
+class SampleMismatch(RuntimeError):
+    """The downloaded bytes are not the ones the platform admitted.
+
+    Its own class, not a `ProtocolError`, because it is not a disagreement
+    about the protocol -- both sides spoke it correctly. It means the object
+    in the store changed between admission and this download, and the only
+    safe response is to refuse the job: the whole value of a report is that
+    it describes the file its SHA-256 names.
+    """
+
+
 @dataclass(frozen=True)
 class Lease:
     job_id: str
@@ -64,6 +78,14 @@ class Lease:
     sample_url: str
     sha256: str | None
     lease_expires_at: str
+    # Where this job's traffic may go (DRAFT-057). The NAME of an exit this
+    # host declared, never an endpoint the submitter supplied.
+    #
+    # `None` means the platform said nothing -- an older deployment, or a job
+    # queued before egress existed -- and `stages._resolve_exit` reads that as
+    # `offline`. The safe reading of "nobody said" is "no way out".
+    egress_exit: str | None = None
+    egress_mode: str | None = None
 
 
 @dataclass(frozen=True)
@@ -159,7 +181,8 @@ class WorkerAPI:
     # 3am against a platform that was upgraded.
 
     def register_body(self, *, total_mib: int, total_vlans: int,
-                      total_slots: int, pipelines: dict[str, int]) -> dict:
+                      total_slots: int, pipelines: dict[str, int],
+                      exits: tuple = ()) -> dict:
         return {
             "worker_id": self.worker_id,
             "total_mib": total_mib,
@@ -171,6 +194,20 @@ class WorkerAPI:
             # failure platform.env exists to prevent.
             "pipelines": [{"os": os_, "required_mib": mib}
                           for os_, mib in sorted(pipelines.items())],
+            # The ways out this host has (DRAFT-057), for exactly the same
+            # reason `pipelines` is declared here rather than assumed there:
+            # only Dom0 knows what its own interfaces are. The platform offers
+            # the submitter this set and nothing else, which is the whole
+            # mechanism keeping `direct` off the web UI -- a host that does not
+            # declare it makes it unselectable, with no second switch to
+            # disagree with the first.
+            #
+            # `interface` is deliberately NOT sent. The platform has no use for
+            # a Dom0 device name, and a browser has less; it would be internal
+            # topology published to every reader of the submit form.
+            "exits": [{"name": e.name, "mode": e.mode.value,
+                       "country": e.country, "caveats": list(e.caveats)}
+                      for e in exits],
         }
 
     def claim_body(self, *, free_mib: int, free_vlans: int,
@@ -184,11 +221,11 @@ class WorkerAPI:
     # -- calls --------------------------------------------------------------
 
     def register(self, *, total_mib: int, total_vlans: int, total_slots: int,
-                 pipelines: dict[str, int]) -> None:
+                 pipelines: dict[str, int], exits: tuple = ()) -> None:
         """Announce what this host can afford. Upsert; safe on every restart."""
         self._post("/api/v1/worker/register", json=self.register_body(
             total_mib=total_mib, total_vlans=total_vlans,
-            total_slots=total_slots, pipelines=pipelines))
+            total_slots=total_slots, pipelines=pipelines, exits=exits))
 
     def reconcile(self, live_job_ids: list[str]) -> list[str]:
         """Tell the platform what is genuinely still running here.
@@ -216,15 +253,35 @@ class WorkerAPI:
         body = r.json()
         status = body.get("status")
         if status == "leased":
+            # **Validated at the boundary, before anything joins them to a
+            # path.** These two become directory and file names under root on
+            # Dom0; `naming` says why that cannot be left to the sender. A
+            # violation is a `ProtocolError` because it is exactly that -- the
+            # platform's own validator should have made it unreachable, so a
+            # lease carrying one means the two sides disagree about what a
+            # lease may say, and repeating the request cannot fix that.
+            try:
+                job_id = naming.job_id_admissible(str(body["job_id"]))
+                filename = naming.sample_name_admissible(
+                    body["submitted_filename"])
+            except ValueError as exc:
+                raise ProtocolError(f"unusable lease: {exc}") from exc
+
             return Lease(
-                job_id=str(body["job_id"]),
+                job_id=job_id,
                 target_os=body["target_os"],
-                submitted_filename=body["submitted_filename"],
+                submitted_filename=filename,
                 required_mib=body["required_mib"],
                 attempt=body["attempt"],
                 sample_url=body["sample_url"],
                 sha256=body.get("sha256"),
                 lease_expires_at=body["lease_expires_at"],
+                # `.get`, like console_requested above: the worker channel has
+                # to tolerate the two sides being deployed minutes apart, and
+                # a missing egress field must mean `offline` rather than an
+                # exception that strands the job.
+                egress_exit=body.get("egress_exit"),
+                egress_mode=body.get("egress_mode"),
             )
         if status == "reserved":
             return Reserved(blocking_job_id=str(body["blocking_job_id"]),
@@ -284,9 +341,9 @@ class WorkerAPI:
 
     # -- the object store ---------------------------------------------------
 
-    def fetch_sample(self, url: str, dest: Path,
-                     *, timeout: float | None = None) -> int:
-        """Download the sample to a Dom0 path, streaming.
+    def fetch_sample(self, url: str, dest: Path, *, expected_sha256: str | None,
+                     timeout: float | None = None) -> int:
+        """Download the sample to a Dom0 path, streaming, and verify its digest.
 
         **It has to reach disk**, and that is worth saying plainly because
         `fake_worker` says the opposite: `injector -m writefile -B` takes a
@@ -297,8 +354,42 @@ class WorkerAPI:
         Streamed rather than held in memory: a sample is bounded by the API's
         upload cap, not by anything here, and this process also holds every
         clone's bookkeeping.
+
+        **The digest is checked HERE, over the bytes that will actually be
+        executed.** The platform records a SHA-256 at admission and sends it
+        with the lease; until 2026-08-31 nothing ever looked at it, and the
+        only guard was the platform comparing the store's ETag at claim time.
+        That ETag is an MD5 for a single-part upload, so it establishes that
+        two objects have the same MD5 -- constructible to order -- and it is
+        read one round trip before Dom0's own GET, so bytes could change after
+        it passed. Hashing the downloaded stream closes both: a collision does
+        not survive SHA-256, and there is no window left because this is the
+        copy that runs.
+
+        What this does NOT defend against is a compromised platform, which
+        chooses both the digest and the URL. It defends against the submitter,
+        whose upload capability outlives admission -- which is the actual
+        threat, because the presigned POST stays valid for its whole TTL and
+        the store permits overwriting the key.
+
+        Verified while streaming rather than by re-reading the file: one pass,
+        and no window in which the verified copy and the executed copy could
+        differ.
         """
+        if not expected_sha256:
+            # Fail closed. Admission writes `sha256` in the same UPDATE that
+            # moves a job to `admitted`, so every claimable job has one and a
+            # lease without it is an impossible state -- the same reading
+            # `objects.sample_status` takes of a missing ETag. Running the
+            # sample anyway would be detonating bytes nothing can identify.
+            raise SampleMismatch(
+                "the lease carries no sha256, so the downloaded sample cannot "
+                "be identified. Refusing to run it: a report is only worth "
+                "anything if it describes the file its digest names."
+            )
+
         dest.parent.mkdir(parents=True, exist_ok=True)
+        digest = hashlib.sha256()
         written = 0
         with self._store.stream("GET", url,
                                  timeout=timeout or DEFAULT_TIMEOUT) as r:
@@ -306,7 +397,22 @@ class WorkerAPI:
             with open(dest, "wb") as fh:
                 for chunk in r.iter_bytes():
                     fh.write(chunk)
+                    digest.update(chunk)
                     written += len(chunk)
+
+        got = digest.hexdigest()
+        if not hmac.compare_digest(got, expected_sha256.lower()):
+            # Removed before raising. These are bytes an attacker chose and
+            # the pipeline has just decided not to run; leaving them on Dom0's
+            # filesystem serves nothing. The staging sweep would get them at
+            # the next start, which is not soon enough to be the answer.
+            dest.unlink(missing_ok=True)
+            raise SampleMismatch(
+                f"sample digest does not match the one admitted: expected "
+                f"{expected_sha256}, got {got}. The object in the store "
+                f"changed after admission, so the trace and the report would "
+                f"describe a different file than the one that ran."
+            )
         return written
 
     def upload_artifact(self, ticket: Ticket, name: str, path: Path) -> None:

@@ -34,6 +34,51 @@
     </p>
   </fieldset>
 
+  {#
+    Network egress (DRAFT-057). Deliberately NOT inside the "Advanced"
+    disclosure below: this decides whether live malware reaches the Internet,
+    which is a safety choice rather than a tuning knob, and a collapsed control
+    is one nobody reads.
+
+    Rendered from what the analysis hosts actually declare, so a mode no host
+    can provide is not shown at all. That is the whole mechanism keeping
+    `direct` off this page -- there is no template condition hiding it, and
+    therefore none that can fall out of step with the host's real posture.
+
+    Safest first (see egress.MODES); the first entry is pre-selected.
+  #}
+  <fieldset>
+    <legend>Network</legend>
+    {% for offer in egress_offers %}
+    <label class="egress-option">
+      <input type="radio" name="egress" value="{{ offer.name }}"
+             data-mode="{{ offer.mode.value }}"
+             {% if loop.first %}checked{% endif %}>
+      <strong>{{ offer.info.label }}</strong>
+      {%- if offer.country %} <span class="mono">({{ offer.country }})</span>{% endif %}
+      {%- if offer.info.live %} <span class="state" data-state="failed">live</span>{% endif %}
+      <span class="note">{{ offer.info.describes }}</span>
+      {% if offer.info.caution %}
+      <span class="note">{{ offer.info.caution }}</span>
+      {% endif %}
+      {% if offer.caveat_text %}
+      {# Stated where the choice is made, not discovered later in a report
+         that showed nothing. DRAFT-057 acceptance criterion 7. #}
+      <span class="note">Limits: {{ offer.caveat_text | join('; ') }}.</span>
+      {% endif %}
+    </label>
+    {% endfor %}
+
+    {% if egress_offers | length == 1 %}
+    <p class="note">
+      Only <strong>no network</strong> is available: no analysis host has
+      declared a way out. That is the correct state for a host that has not
+      been configured for egress — see <code>SANDBOXD_ALLOW_DIRECT</code> and
+      <code>EXITS</code> in <code>sandboxd/config.py</code>.
+    </p>
+    {% endif %}
+  </fieldset>
+
   <details class="advanced">
     <summary>Advanced — plugins and trace budget</summary>
     <div id="plugin-picker">

@@ -42,10 +42,11 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.requests import Request
 
-from .. import auth, catalogue
+from .. import auth, catalogue, egress
+from .. import jobs as dal
 from ..config import settings
 from ..db import connection
-from ..enums import TERMINAL_STATES, JobState, TargetOs
+from ..enums import TERMINAL_STATES, EgressMode, JobState, TargetOs
 from ..routers.jobs import _detail, count_jobs, query_jobs
 
 _HERE = Path(__file__).resolve().parent
@@ -99,7 +100,33 @@ def submit_view(request: Request) -> HTMLResponse:
         os=first.value,
         plugins=catalogue.for_os(first),
         budget=_budget(first),
+        egress_offers=_egress_offers(),
     )
+
+
+def _egress_offers() -> list[egress.Offer]:
+    """The ways out a submitter may actually choose, from `worker_egress`.
+
+    Read live rather than cached: an operator who unsets SANDBOXD_ALLOW_DIRECT
+    and restarts sandboxd expects `direct` to be gone from the form on the next
+    page load, not on the next deploy. The query is one small indexed table.
+
+    `offline` is prepended and never comes from the database. On Dom0 it is the
+    absence of a rule, so every host can always provide it -- and a form with no
+    options at all, on a deployment with no analysis host registered, would
+    leave a submitter unable even to ask for the safest thing.
+    """
+    offers = [egress.Offer(name="offline", mode=EgressMode.OFFLINE,
+                           caveats=("no-real-internet",))]
+    with connection() as conn:
+        for row in dal.offered_exits(conn):
+            offers.append(egress.Offer(
+                name=row["name"],
+                mode=EgressMode(row["mode"]),
+                country=row["country"],
+                caveats=tuple(row["caveats"] or ()),
+            ))
+    return egress.sort_offers(offers)
 
 
 def _budget(os_: TargetOs) -> dict:

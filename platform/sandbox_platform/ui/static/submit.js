@@ -43,7 +43,13 @@
         no_capacity: "No registered host is large enough to run this job.",
         rejected_size: "The stored file did not match the size declared.",
         unreadable: "The uploaded object could not be read back.",
-        unsupported_type: "That file type is not analysed on this target."
+        unsupported_type: "That file type is not analysed on this target.",
+        /* Distinct from no_workers on purpose: a host IS here, it just cannot
+         * route the sample where you asked. Between choosing the mode and
+         * admission running, the host may have stopped offering it. */
+        no_egress: "No analysis host offers the network option you chose. " +
+                   "It may have been withdrawn since this page loaded — " +
+                   "reload and pick again."
     };
 
     form.addEventListener("submit", async function (event) {
@@ -57,12 +63,29 @@
         button.disabled = true;
 
         try {
-            say("Reserving a job…");
-            var created = await post("/api/v1/jobs", {
+            /* The egress choice carries BOTH the exit name and its mode, and
+             * the mode comes from the radio's data attribute rather than from
+             * a second control. One selection, so the two cannot disagree --
+             * a form that let them drift would let a submitter pair a real
+             * exit name with a different mode, and the mode is what the report
+             * says happened. */
+            var egress = form.querySelector('input[name="egress"]:checked');
+            var payload = {
                 target_os: targetOs,
                 filename: file.name,
                 size_bytes: file.size
-            });
+            };
+            if (egress) {
+                payload.egress_mode = egress.dataset.mode;
+                /* `offline` names no exit; sending one is a 422 by design,
+                 * because a row saying both would contradict itself. */
+                if (egress.dataset.mode !== "offline") {
+                    payload.egress_exit = egress.value;
+                }
+            }
+
+            say("Reserving a job…");
+            var created = await post("/api/v1/jobs", payload);
 
             /* Fields BEFORE the file part: S3 stops reading at the file, so a
              * policy field after it is never seen. FormData preserves append

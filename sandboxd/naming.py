@@ -94,5 +94,63 @@ def parse_clone(name: str) -> CloneName | None:
     return CloneName(m.group("origin"), vlan)
 
 
+# --- what the platform is allowed to name ------------------------------------
+#
+# `job_id` and `submitted_filename` arrive in the claim response and are joined
+# into Dom0 paths -- the results directory, the staging directory, and from
+# there into `open(dest, "wb")` and `shutil.rmtree`, all as root. Neither was
+# validated before 2026-08-31.
+#
+# `pathlib` does not make that safe. `Path(a) / b` neither normalises `..` nor
+# resists an absolute `b`: `Path("/var/lib/x") / "/etc/cron.d/e"` is
+# `/etc/cron.d/e`, and `.parent` of it is `/etc/cron.d`. So a lease naming
+# `/etc/cron.d/pwn` writes attacker-chosen bytes into cron as root, and one
+# naming `../../../..` hands that path to `rmtree`.
+#
+# The platform does validate this at submission and its own check is tight --
+# but it is one check, on the other side of a network boundary, guarding a
+# root-owned write on the machine the whole lab depends on. sandboxd already
+# treats platform-supplied lease fields as untrusted for `egress_exit`
+# (`stages._resolve_exit` refuses a name it did not declare); these are the
+# same kind of value and get the same treatment.
+_JOB_ID = re.compile(r"\A[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}"
+                     r"-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\Z")
+
+
+def job_id_admissible(job_id: str) -> str:
+    """A canonical UUID, or raise. It becomes a directory name under root."""
+    if not isinstance(job_id, str) or not _JOB_ID.match(job_id):
+        raise ValueError(
+            f"job_id is not a UUID: {job_id!r}. It becomes a path component "
+            f"on Dom0, so it is matched against a grammar rather than trusted."
+        )
+    return job_id
+
+
+def sample_name_admissible(name: str) -> str:
+    """One safe path component, or raise.
+
+    Mirrors `sample_name_admissible()` in `automation/dirwatch.c:250` and
+    `_reject_unsafe_filename` in the platform's `routers/jobs.py` -- three
+    copies of one rule, which is a real cost, but the alternative is a
+    root-owned `open()` whose only guard is on another machine.
+
+    **Deliberately no wider than a path check.** `"`, `$`, a backtick and `;`
+    stay admissible: a sample really can be called `a$(id).exe` and byte-exact
+    delivery of that name is part of what is being analysed. What stops those
+    hurting is the `sh -c '…' sh "$UNSAFE"` idiom in `guests.py`, not this.
+    This rejects only what makes the name stop being a single component.
+    """
+    if not isinstance(name, str) or not name:
+        raise ValueError(f"sample name must be a non-empty string, got {name!r}")
+    if "/" in name or "\\" in name:
+        raise ValueError(f"sample name contains a path separator: {name!r}")
+    if name in (".", ".."):
+        raise ValueError(f"sample name is a directory entry, not a file: {name!r}")
+    if any(ord(c) < 0x20 or ord(c) == 0x7F for c in name):
+        raise ValueError(f"sample name contains a control character: {name!r}")
+    return name
+
+
 def is_clone(name: str) -> bool:
     return parse_clone(name) is not None

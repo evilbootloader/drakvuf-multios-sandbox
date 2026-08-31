@@ -15,6 +15,7 @@ connection that drops, a 500 that clears).
 
 from __future__ import annotations
 
+import hashlib
 import os
 import sys
 from pathlib import Path
@@ -32,7 +33,7 @@ os.environ.setdefault("DATABASE_URL", "postgresql:///unused")
 os.environ.setdefault("WORKER_TOKEN", "unused")
 
 from sandboxd.api import (  # noqa: E402
-    Idle, Lease, ProtocolError, Reserved, Ticket, WorkerAPI,
+    Idle, Lease, ProtocolError, Reserved, SampleMismatch, Ticket, WorkerAPI,
 )
 
 from sandbox_platform.routers.worker import (  # noqa: E402
@@ -143,6 +144,67 @@ def test_a_lease_carries_everything_the_run_needs():
     # keeps it that way because extension dispatch and argv[0] self-checks are
     # real evasion surface.
     assert got.submitted_filename == "a b.exe"
+
+
+def _leased(**over) -> dict:
+    payload = {
+        "status": "leased", "job_id": "11111111-1111-1111-1111-111111111111",
+        "target_os": "ubuntu", "submitted_filename": "a b.exe",
+        "required_mib": 2198, "attempt": 1, "sample_url": "https://s3/x",
+        "sha256": "b" * 64, "lease_expires_at": "2026-08-26T10:00:00Z",
+    }
+    payload.update(over)
+    return payload
+
+
+@pytest.mark.parametrize("name", [
+    "/etc/cron.d/pwn",          # absolute: pathlib REPLACES the join
+    "../../../../etc/passwd",   # relative: pathlib does not normalise it
+    "..",
+    ".",
+    "sub/dir.bin",
+    "back\\slash.bin",
+    "nul\x00byte.bin",
+    "bell\x07.bin",
+])
+def test_a_lease_naming_a_path_is_refused(name):
+    """These become a filename under root on Dom0.
+
+    `staging / job_id / name` is handed to `open(dest, "wb")` and its parent to
+    `shutil.rmtree`, both as root. An absolute name replaces the join outright
+    and a relative one is left unnormalised, so without this the platform is
+    the only thing standing between a lease and a write into /etc.
+    """
+    with pytest.raises(ProtocolError, match="unusable lease"):
+        api(ok(_leased(submitted_filename=name))).claim(
+            free_mib=8192, free_vlans=4, free_slots=2)
+
+
+@pytest.mark.parametrize("job_id", [
+    "../../etc", "/etc/passwd", "not-a-uuid", "", "11111111-1111-1111-1111",
+])
+def test_a_lease_with_a_job_id_that_is_not_a_uuid_is_refused(job_id):
+    """It becomes a directory name under both the results and staging roots."""
+    with pytest.raises(ProtocolError, match="unusable lease"):
+        api(ok(_leased(job_id=job_id))).claim(
+            free_mib=8192, free_vlans=4, free_slots=2)
+
+
+def test_shell_metacharacters_in_a_sample_name_still_pass():
+    """**Deliberately admitted, and this is the rule the project already has.**
+
+    A sample really can be called `a$(id).exe`, and byte-exact delivery of that
+    name is part of what is being analysed -- extension dispatch and argv[0]
+    self-checks are real evasion surface. What stops those characters hurting
+    is the `sh -c '…' sh "$UNSAFE"` idiom in guests.py, not a name filter.
+    Widening this check to reject them would break the pipeline's purpose while
+    adding nothing, so a test pins the narrow scope.
+    """
+    hostile = 'a$(id)`whoami`;reboot &"\'.exe'
+    got = api(ok(_leased(submitted_filename=hostile))).claim(
+        free_mib=8192, free_vlans=4, free_slots=2)
+
+    assert got.submitted_filename == hostile
 
 
 def test_reserved_is_a_distinct_outcome_not_an_error():
@@ -268,7 +330,8 @@ def test_the_worker_token_never_reaches_the_object_store(tmp_path):
         return httpx.Response(200, content=b"\x7fELF")
 
     client = api(ok({}), store=store)
-    client.fetch_sample("https://minio/samples/x", tmp_path / "s.bin")
+    client.fetch_sample("https://minio/samples/x", tmp_path / "s.bin",
+                        expected_sha256=hashlib.sha256(b"\x7fELF").hexdigest())
 
     assert "authorization" not in {k.lower() for k in seen["headers"]}
     assert "x-worker-id" not in {k.lower() for k in seen["headers"]}
@@ -298,10 +361,59 @@ def test_the_sample_is_written_to_a_dom0_path(tmp_path):
     dest = tmp_path / "staging" / "job-1" / "sample.bin"
 
     n = api(ok({}), store=lambda r: httpx.Response(200, content=body)
-            ).fetch_sample("https://minio/x", dest)
+            ).fetch_sample("https://minio/x", dest,
+                           expected_sha256=hashlib.sha256(body).hexdigest())
 
     assert n == len(body)
     assert dest.read_bytes() == body
+
+
+def test_a_sample_that_changed_after_admission_is_refused(tmp_path):
+    """The check the platform's ETag comparison cannot make.
+
+    That ETag is an MD5 for a single-part upload, so it says two objects have
+    the same MD5 -- constructible to order -- and it is read a round trip
+    before this download, so the bytes can change after it passed. Hashing what
+    actually arrived closes both, because this is the copy that runs.
+    """
+    body = b"\x7fELF" + b"\x00" * 100
+    dest = tmp_path / "staging" / "job-1" / "sample.bin"
+
+    with pytest.raises(SampleMismatch, match="does not match"):
+        api(ok({}), store=lambda r: httpx.Response(200, content=body)
+            ).fetch_sample("https://minio/x", dest,
+                           expected_sha256="00" * 32)
+
+
+def test_a_refused_sample_does_not_stay_on_dom0(tmp_path):
+    """Bytes an attacker chose, which the pipeline has just declined to run.
+
+    The staging sweep would remove them at the next start, which is not soon
+    enough to be the answer.
+    """
+    body = b"\x7fELF" + b"\x00" * 100
+    dest = tmp_path / "staging" / "job-1" / "sample.bin"
+
+    with pytest.raises(SampleMismatch):
+        api(ok({}), store=lambda r: httpx.Response(200, content=body)
+            ).fetch_sample("https://minio/x", dest,
+                           expected_sha256="00" * 32)
+
+    assert not dest.exists()
+
+
+def test_a_lease_with_no_digest_is_refused_rather_than_run(tmp_path):
+    """Fail closed. Admission writes `sha256` in the same UPDATE that moves a
+    job to `admitted`, so every claimable job has one and a lease without it is
+    an impossible state. Running it anyway would detonate bytes that nothing
+    can identify afterwards."""
+    dest = tmp_path / "staging" / "job-1" / "sample.bin"
+
+    with pytest.raises(SampleMismatch, match="no sha256"):
+        api(ok({}), store=lambda r: httpx.Response(200, content=b"x")
+            ).fetch_sample("https://minio/x", dest, expected_sha256=None)
+
+    assert not dest.exists()
 
 
 def test_an_artifact_upload_sends_the_policy_before_the_file(tmp_path):

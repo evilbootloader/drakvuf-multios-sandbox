@@ -46,7 +46,7 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from . import proc
+from . import egress, proc
 from .clone import CMD_TIMEOUT, DESTROY_SETTLE_SECONDS
 from .naming import is_clone, parse_clone
 
@@ -179,7 +179,65 @@ def sweep(
 
     report.clean_vlans = report.dirty_vlans - still_dirty
     report.dirty_vlans = still_dirty
+
+    _revoke_egress(runner, vlans, bridge, report)
+
     return report
+
+
+def _revoke_egress(runner, vlans, bridge: str, report: SweepReport) -> None:
+    """Remove per-VLAN egress rules a dead process left behind (DRAFT-057).
+
+    **This is the only thing that clears the PER-VLAN ones, and it is why they
+    are safe to install at all.** `network-setup.sh` deliberately never flushes
+    `DRAKVUF_EGRESS`: a re-run while clones are live would cut the network of
+    every analysis in progress. That makes the startup sweep the sole owner of
+    stale per-VLAN rules, and this is the right place for it -- everything has
+    just been destroyed, so a leftover chain is unambiguous rather than racing
+    a running teardown.
+
+    The qualifier is load-bearing and was missing. "Sole owner of stale rules"
+    was read as covering everything in the chain, and the wildcard `direct`
+    rules are in the chain and were owned by nobody -- see below.
+
+    Run over the WHOLE provisioned range, not only the dirty VLANs. A clone
+    that was destroyed cleanly by a previous process which then died before
+    revoking would leave a permit on a VLAN nothing here flagged, and that
+    permit would be inherited by the next clone to take the slot -- a sample
+    silently getting the previous sample's way out.
+
+    Unchecked, and almost every command is expected to fail: the normal case is
+    a VLAN that never had rules. `iptables -D` on an absent rule and `-X` on an
+    absent chain both exit 1, so failure here is the ordinary outcome and says
+    nothing.
+
+    **The blanket rules are cleared too, and they are not per-VLAN.** A
+    wildcard permit from `network-setup.sh <n> direct` matches every clone and
+    names no VLAN, so every delete in `argv_revoke` misses it. For as long as
+    that was the only cleanup, one `ALLOW_DIRECT=1` run gave every later job
+    egress out the uplink -- `offline` ones included, since they install
+    nothing that could collide with the leftovers. `network-setup.sh`'s
+    `offline` branch now removes them as well; this is the second of the two,
+    because a host can reach sandboxd without that branch having run.
+    """
+    for vlan in vlans:
+        for argv in egress.argv_revoke(vlan, bridge=bridge):
+            try:
+                runner.run(argv, timeout=CMD_TIMEOUT, what="egress revoke")
+            except Exception:  # noqa: BLE001 - the sweep never raises
+                # Deliberately silent, unlike the rest of this module. A
+                # per-VLAN log line here would print several hundred lines of
+                # expected failure on every start and train the operator to
+                # ignore the sweep's output, which is where the messages that
+                # matter live.
+                pass
+
+    # Once, not once per VLAN: there is one wildcard, not one per slot.
+    for argv in egress.argv_revoke_blanket(bridge=bridge):
+        try:
+            runner.run(argv, timeout=CMD_TIMEOUT, what="egress revoke blanket")
+        except Exception:  # noqa: BLE001 - the sweep never raises
+            pass
 
 
 # --- finding -----------------------------------------------------------------

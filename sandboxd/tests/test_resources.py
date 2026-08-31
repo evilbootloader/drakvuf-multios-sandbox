@@ -156,6 +156,50 @@ def test_a_released_vlan_goes_to_the_back_of_the_queue():
     assert t.acquire("c", 100).vlan != first.vlan
 
 
+def test_an_unclean_release_frees_the_memory_but_not_the_vlan():
+    """A dirty teardown must not hand its VLAN to the next sample.
+
+    Both halves matter. The hold has to go -- the job is over and must stop
+    counting against memory, or a failing host slowly stops claiming work for
+    the wrong reason. The VLAN must not come back, because whatever survived
+    teardown is still on it.
+    """
+    t = table(vlans=[1])
+    t.acquire("a", 100)
+
+    assert t.release("a", clean=False) is not None
+    assert t.acquire("b", 100) is None, "a dirty vlan was handed out again"
+    assert t.free().mib == t.total.mib, "the memory was not given back"
+
+
+def test_an_unclean_release_is_one_operation():
+    """Not `release()` then `withhold()`.
+
+    Those two are separated by a lock release, and the claim thread can take
+    the VLAN in between -- putting a new sample on exactly the dirty VLAN the
+    withhold was about to remove. Asserted as the absence of any window: after
+    an unclean release the VLAN is not in the pool at any point, so there is
+    nothing for a racing acquire to find.
+    """
+    t = table(vlans=[1])
+    t.acquire("a", 100)
+    t.release("a", clean=False)
+
+    assert t.free().vlans == 0
+    # And the sweep is the way back, not a second release.
+    t.admit(1)
+    assert t.acquire("b", 100) is not None
+
+
+def test_a_clean_release_is_still_the_default():
+    """Every other caller passes no flag and must keep the old behaviour."""
+    t = table(vlans=[1])
+    t.acquire("a", 100)
+    t.release("a")
+
+    assert t.acquire("b", 100) is not None
+
+
 def test_releasing_twice_is_not_an_error():
     """Teardown runs on the success path, the timeout path and the failure
     path. Making the second call fatal turns tidy-up into a new failure."""

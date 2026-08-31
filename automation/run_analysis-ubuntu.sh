@@ -114,7 +114,33 @@ ip link set "$ANALYSIS_BRIDGE" up
 # half-provisioned analysis network is worse than none, because it looks
 # like a working one -- clones would run with no inter-clone isolation, no
 # LAN block and no Dom0 protection, and nothing would say so.
-if ! "$SCRIPT_DIR/network-setup.sh" "$MAX_CLONES"; then
+# The second argument is the egress mode, and it exists because DRAFT-057
+# (2026-08-31) made egress a per-JOB choice that sandboxd installs per VLAN.
+# `dirwatch` predates that and cannot ask for a mode, so without this it
+# would launch clones with no route out -- an analysis that completes and
+# observes nothing, which is indistinguishable from a sample that chose not
+# to talk. That is the failure mode this pipeline has been bitten by twice.
+#
+# `direct` restores exactly the pre-DRAFT-057 behaviour: every clone NATs
+# out the uplink. **The uplink is a residential line**, so it is opt-in per
+# invocation rather than the default:
+#
+#     ALLOW_DIRECT=1 ./run_analysis-ubuntu.sh ...
+#
+# Unset, this path provisions the network and starts dirwatch with clones
+# isolated and offline. That is the safe default, and it is deliberately
+# NOT silent -- network-setup.sh says so on every run.
+#
+# The web UI can never reach this. Egress there is chosen per job from the
+# set the host declares, and `direct` is only declared when a Dom0 operator
+# sets SANDBOXD_ALLOW_DIRECT=1.
+if [ "${ALLOW_DIRECT:-0}" = "1" ]; then
+    EGRESS_MODE=direct
+else
+    EGRESS_MODE=offline
+fi
+
+if ! "$SCRIPT_DIR/network-setup.sh" "$MAX_CLONES" "$EGRESS_MODE"; then
     echo "run_analysis-ubuntu.sh: network provisioning failed; refusing to start dirwatch" >&2
     exit 1
 fi

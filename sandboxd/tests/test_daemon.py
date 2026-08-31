@@ -6,6 +6,7 @@ Everything Dom0 and the platform is faked; what is under test is the sequence.
 
 from __future__ import annotations
 
+import hashlib
 import sys
 import threading
 import time
@@ -17,11 +18,17 @@ import pytest
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
+from sandboxd import api as A  # noqa: E402
+from sandboxd import config as C  # noqa: E402
 from sandboxd import daemon as D  # noqa: E402
 from sandboxd import timing as T  # noqa: E402
 from sandboxd.api import Idle, Lease, ProtocolError, Reserved  # noqa: E402
 from sandboxd.stages import Config  # noqa: E402
 from sandboxd.tests.fake import FakeRunner  # noqa: E402
+
+#: The bytes the fake store serves. Its digest is what a lease declares, so
+#: the fake's verification passes for the same reason the real one does.
+SAMPLE = b"\x7fELF" + b"\x00" * 60
 
 XL_EMPTY = "Name      ID   Mem VCPUs\tState\tTime(s)\nDomain-0   0  4096  4  r----- 1.0\n"
 LVS_EMPTY = "  root\n  ubuntu_sandbox\n  android_sandbox\n"
@@ -64,10 +71,16 @@ class FakeApi:
         return HB(lease_expires_at="2026-08-26T10:05:00Z",
                   cancel_requested=False)
 
-    def fetch_sample(self, url, dest, *, timeout=None):
+    def fetch_sample(self, url, dest, *, expected_sha256, timeout=None):
+        # Verifies like the real one; see the same fake in test_stages.py.
+        if not expected_sha256:
+            raise A.SampleMismatch("the lease carries no sha256")
         dest.parent.mkdir(parents=True, exist_ok=True)
-        dest.write_bytes(b"\x7fELF" + b"\x00" * 60)
-        return 64
+        dest.write_bytes(SAMPLE)
+        if hashlib.sha256(SAMPLE).hexdigest() != expected_sha256:
+            dest.unlink(missing_ok=True)
+            raise A.SampleMismatch("sample digest does not match")
+        return len(SAMPLE)
 
     def artifact_tickets(self, job_id, sizes):
         from sandboxd.api import Ticket
@@ -89,7 +102,8 @@ class FakeApi:
 def lease(job_id="j1", os_="ubuntu", mib=2198) -> Lease:
     return Lease(job_id=job_id, target_os=os_, submitted_filename="s.bin",
                  required_mib=mib, attempt=1, sample_url="https://minio/s",
-                 sha256=None, lease_expires_at="2026-08-26T10:00:00Z")
+                 sha256=hashlib.sha256(SAMPLE).hexdigest(),
+                 lease_expires_at="2026-08-26T10:00:00Z")
 
 
 def settings(tmp_path, **kw) -> D.Settings:
@@ -234,6 +248,75 @@ def test_a_lease_is_acquired_and_run(tmp_path):
     assert table.free() == table.total, "the vlan was not released"
 
 
+def test_a_dirty_teardown_does_not_get_its_vlan_back(tmp_path):
+    """The VLAN is withheld, not recycled.
+
+    `_teardown` has always reported "dirty: ..." and nothing consumed it, so a
+    domain that survived `xl destroy` handed its VLAN straight to the next
+    sample -- a restore onto the previous sample's snapshot, which is DRAFT-033.
+    `ResourceTable.withhold` was written for this and had no caller.
+
+    Recovery is a restart: the startup sweep destroys what survived and
+    re-admits the VLAN. Until then the host is one slot down, which is the
+    visible cost `admit` argues is better than the invisible one.
+    """
+    r = runner()
+    r.script(("xl", "destroy"), rc=1)
+
+    api = FakeApi(queue=[lease()])
+    d = daemon(tmp_path, api, r=r)
+    table = d.start()
+    before = table.free().vlans
+
+    d._claim_once(table)
+    for t in d._workers:
+        t.join(timeout=10)
+
+    assert table.free().vlans == before - 1, (
+        "a VLAN whose clone survived teardown went back into the pool")
+
+
+def test_a_clean_teardown_does_get_its_vlan_back(tmp_path):
+    """The other half, so the check above cannot pass by withholding always.
+
+    Withholding on every teardown would drain the pool to nothing within a few
+    jobs and stop the host taking work -- safe, and useless.
+    """
+    api = FakeApi(queue=[lease()])
+    d = daemon(tmp_path, api)
+    table = d.start()
+
+    d._claim_once(table)
+    for t in d._workers:
+        t.join(timeout=10)
+
+    assert table.free() == table.total
+
+
+def test_surviving_egress_chains_withhold_the_vlan(tmp_path):
+    """The case the exit codes could not report.
+
+    Most revoke commands fail legitimately, so teardown asks `iptables -S`
+    instead: a chain that still answers is a permit the next sample would
+    inherit. Scripted to rc=0 here -- the fake's default is rc=1, "no chain by
+    that name", which is what a real host says after a successful revoke.
+    """
+    r = runner()
+    r.script(("iptables", "-w", str(C.IPTABLES_WAIT_SECONDS), "-S"), rc=0)
+
+    api = FakeApi(queue=[lease()])
+    d = daemon(tmp_path, api, r=r)
+    table = d.start()
+    before = table.free().vlans
+
+    d._claim_once(table)
+    for t in d._workers:
+        t.join(timeout=10)
+
+    assert table.free().vlans == before - 1, (
+        "a VLAN whose egress chains outlived the revoke was reused")
+
+
 def test_reserved_is_not_treated_as_a_failure(tmp_path):
     """A job too large for current capacity is holding its place rather than
     being starved by smaller ones behind it."""
@@ -361,9 +444,10 @@ def test_shutdown_waits_for_an_analysis_in_flight(tmp_path):
     slow = threading.Event()
 
     class Slow(FakeApi):
-        def fetch_sample(self, url, dest, *, timeout=None):
+        def fetch_sample(self, url, dest, *, expected_sha256, timeout=None):
             slow.wait(timeout=5)
-            return super().fetch_sample(url, dest)
+            return super().fetch_sample(url, dest,
+                                        expected_sha256=expected_sha256)
 
     api = Slow(queue=[lease()])
     d = daemon(tmp_path, api)
@@ -384,7 +468,7 @@ def test_shutdown_waits_for_an_analysis_in_flight(tmp_path):
 def test_a_worker_error_does_not_take_the_daemon_down(tmp_path):
     """One bad job must not stop the host analysing everything else."""
     class Broken(FakeApi):
-        def fetch_sample(self, url, dest, *, timeout=None):
+        def fetch_sample(self, url, dest, *, expected_sha256, timeout=None):
             raise RuntimeError("boom")
 
     api = Broken(queue=[lease()])

@@ -33,7 +33,13 @@ from .. import objects
 from .. import packaging
 from ..config import settings
 from ..db import connection
-from ..enums import TERMINAL_STATES, JobState, RejectReason, TargetOs
+from ..enums import (
+    TERMINAL_STATES,
+    EgressMode,
+    JobState,
+    RejectReason,
+    TargetOs,
+)
 
 # The identity dependency is attached to the ROUTER, not to routes, so a
 # route added later cannot forget it. It is a no-op unless
@@ -164,6 +170,49 @@ class CreateJobRequest(BaseModel):
     filename: str = Field(min_length=1, max_length=_MAX_SAMPLE_NAME)
     size_bytes: int = Field(gt=0)
 
+    # The second untrusted routing input (DRAFT-057), validated at this same
+    # boundary and for the same reasons. Two fields rather than one because
+    # they answer different questions: the mode is what KIND of way out, the
+    # exit is WHICH one -- and one deployment will have several `routed` exits
+    # in different countries.
+    #
+    # BOTH OPTIONAL, and the server resolves what is missing -- see
+    # `_resolve_egress`. Requiring them would break every existing client, and
+    # more importantly it would make the API unusable during the phases where a
+    # mode exists in this enum but no host implements it yet: a hard default of
+    # `simulated` refuses every submission on a deployment with no responder,
+    # which is a fleet-wide outage caused by a default.
+    #
+    # `None` means "whatever is safest here", never "whatever is convenient".
+    # The resolver only ever picks a mode that does not reach the Internet.
+    egress_mode: EgressMode | None = None
+    #: The NAME of an exit an analysis host declared. **Never an endpoint.**
+    #: A submitter naming a tunnel endpoint would be choosing where Dom0 sends
+    #: traffic, which is a different feature with a different threat model.
+    #: Length-bounded to match `worker_egress.name`; content is checked against
+    #: the declared set at admission, not here.
+    egress_exit: str | None = Field(default=None, max_length=64)
+
+    @model_validator(mode="after")
+    def _exit_suits_the_mode(self) -> CreateJobRequest:
+        """Reject only what is incoherent no matter what any host offers.
+
+        That is exactly one combination: `offline` with an exit named. There is
+        nowhere for the traffic to go, so the name cannot mean anything, and
+        accepting it would record a job whose row says two contradictory things.
+
+        The opposite case -- a mode with no exit named -- is NOT an error. It
+        means "any exit that does this", which `_resolve_egress` answers
+        against what the hosts actually declare. Deciding it here would mean
+        deciding it without that knowledge.
+        """
+        if self.egress_mode is EgressMode.OFFLINE and self.egress_exit:
+            raise ValueError(
+                "offline names no exit -- there is nowhere for the traffic to "
+                f"go, so {self.egress_exit!r} cannot mean anything"
+            )
+        return self
+
     # A model validator rather than a field one, because the rules depend on
     # `target_os` and a field validator cannot see a sibling field.
     @model_validator(mode="after")
@@ -200,6 +249,30 @@ class JobSummary(BaseModel):
 
 class JobDetail(JobSummary):
     updated_at: datetime
+
+    # What was ASKED FOR, and what the host actually DID (DRAFT-057).
+    #
+    # Both, always, because they can differ and the difference is the point: a
+    # run that requested `simulated` on a host whose responder was down ran
+    # `offline`, and an empty network section means something completely
+    # different in those two cases. DRAFT-057 calls recording the mode a
+    # correctness requirement for exactly this reason -- "a report showing no
+    # network activity means nothing without knowing whether egress existed".
+    #
+    # `egress_applied` is null until the worker reaches `preparing`. That is
+    # not missing data: before then, nothing had been installed.
+    #
+    # **`egress_mode` has NO DEFAULT, deliberately.** It carried
+    # `= EgressMode.OFFLINE` for about an hour, and in that hour every report
+    # said `offline` regardless of what the job actually did -- because
+    # `_detail` builds this model from an explicit key list and the column had
+    # not been added to it, so the default answered instead. A required field
+    # makes that a loud construction error rather than a plausible-looking lie
+    # on a report, and "the sample had no network" is exactly the lie that
+    # costs an analyst the most.
+    egress_mode: EgressMode
+    egress_exit: str | None = None
+    egress_applied: dict | None = None
     detected_type: str | None
     queue_reason: str | None
     failure_stage: str | None
@@ -250,6 +323,66 @@ class CancelResponse(BaseModel):
 
 # --- submission -----------------------------------------------------------
 
+#: Tried in order when a submitter expresses no preference. **Every entry must
+#: be a mode that cannot reach the Internet.** Extending this list with a live
+#: mode would make "I didn't say" mean "detonate it on the network", which is
+#: the one thing DRAFT-057 exists to stop happening by accident.
+#:
+#: `simulated` first because it is the more faithful of the two -- a black-holed
+#: network is itself a sandbox signal -- and `offline` behind it because it
+#: needs no responder and therefore always works. On a deployment where Phase 3
+#: has not shipped, no host offers `simulated` and this resolves to `offline`
+#: silently and correctly, rather than refusing every submission.
+_SAFE_DEFAULT_MODES = (EgressMode.SIMULATED, EgressMode.OFFLINE)
+
+
+def _resolve_egress(conn, req: CreateJobRequest) -> tuple[str, str | None]:
+    """Fill in whatever the submitter left unsaid, from what hosts declare.
+
+    Three cases, and the middle one is the reason this exists:
+
+    * **Nothing said** -- take the first mode in `_SAFE_DEFAULT_MODES` that
+      some host offers. Never a live mode, whatever the hosts have.
+    * **A mode, no exit** -- "any exit that does this". Resolved to the
+      lowest-named one, deterministically, so two identical submissions get the
+      same answer and a report can be compared with another report.
+    * **Both said** -- taken as given. Whether it is actually available is
+      admission's question, asked later against the same table, because a host
+      can deregister between these two moments.
+
+    Resolved at CREATE rather than at admission so the row records a concrete
+    decision from the first instant it exists. A row that said "decide later"
+    would leave a window where the job's own record could not answer what would
+    happen to the sample -- and that record is the thing the report rests on.
+    """
+    offers = dal.offered_exits(conn)
+
+    if req.egress_mode is None:
+        for mode in _SAFE_DEFAULT_MODES:
+            if mode is EgressMode.OFFLINE:
+                # Always available: on Dom0 it is the absence of a rule, so it
+                # needs no declaration and cannot be unavailable.
+                return EgressMode.OFFLINE.value, None
+            named = sorted(o["name"] for o in offers if o["mode"] == mode.value)
+            if named:
+                return mode.value, named[0]
+
+    if req.egress_mode is EgressMode.OFFLINE:
+        return EgressMode.OFFLINE.value, None
+
+    if req.egress_exit:
+        return req.egress_mode.value, req.egress_exit
+
+    named = sorted(o["name"] for o in offers
+                   if o["mode"] == req.egress_mode.value)
+    # An empty list is left as-is rather than downgraded. The submitter asked
+    # for a specific kind of way out; admission refuses with `no_egress`, which
+    # tells them their request could not be met. Quietly running it offline
+    # would produce a report whose empty network section they would read as a
+    # finding about the sample.
+    return req.egress_mode.value, (named[0] if named else None)
+
+
 @router.post("", status_code=status.HTTP_201_CREATED)
 def create_job(req: CreateJobRequest,
                owner: auth.Identity = None) -> CreateJobResponse:
@@ -267,15 +400,16 @@ def create_job(req: CreateJobRequest,
         )
 
     with connection() as conn, conn.cursor() as cur:
+        egress_mode, egress_exit = _resolve_egress(conn, req)
         cur.execute(
             """
             INSERT INTO jobs (target_os, submitted_filename, size_bytes,
-                              state, owner)
-            VALUES (%s, %s, %s, %s, %s)
+                              state, owner, egress_mode, egress_exit)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
             RETURNING id
             """,
             (req.target_os.value, req.filename, req.size_bytes,
-             JobState.RECEIVED.value, owner),
+             JobState.RECEIVED.value, owner, egress_mode, egress_exit),
         )
         job_id = cur.fetchone()[0]
 
@@ -311,7 +445,8 @@ def mark_uploaded(job_id: Annotated[UUID, Path()]) -> JobDetail:
     with connection() as conn:
         with conn.cursor(row_factory=dict_row) as cur:
             cur.execute(
-                "SELECT id, state, target_os, submitted_filename FROM jobs"
+                "SELECT id, state, target_os, submitted_filename,"
+                "       egress_mode, egress_exit FROM jobs"
                 " WHERE id = %s",
                 (job_id,),
             )
@@ -365,6 +500,28 @@ def mark_uploaded(job_id: Annotated[UUID, Path()]) -> JobDetail:
         if reason := capacity.reject_reason:
             _reject(conn, job_id, RejectReason(reason))
             return _detail(conn, job_id)
+
+        # Can any host route this sample where the submitter asked?
+        #
+        # Asked here, with the capacity questions, because the answer is the
+        # same KIND of answer: a job no host can serve belongs in 'rejected'
+        # where the submitter can act on it, not at the head of a queue holding
+        # everything behind it.
+        #
+        # `offline` is skipped rather than checked. It is the absence of a rule
+        # on Dom0, so every host can always provide it and there is nothing to
+        # look up -- checking would create a way for the safest mode to be
+        # refused, which is the wrong direction to fail in.
+        #
+        # **This is the gate on `direct`.** A host that has not opted in never
+        # declared it, so `worker_egress` has no row and the submission is
+        # refused here -- with no separate rule about `direct` anywhere in this
+        # file that could fall out of step with the host's actual posture.
+        if job["egress_mode"] != EgressMode.OFFLINE.value:
+            if not dal.exit_available(conn, name=job["egress_exit"],
+                                      mode=job["egress_mode"]):
+                _reject(conn, job_id, RejectReason.NO_EGRESS)
+                return _detail(conn, job_id)
 
         conn.execute(
             "UPDATE jobs SET state = %s, required_mib = ("
@@ -464,6 +621,7 @@ def _detail(conn, job_id: UUID) -> JobDetail:
             "state", "sha256", "size_bytes", "detected_type", "queue_reason",
             "failure_stage", "failure_reason", "attempt", "cancel_requested",
             "owner", "interacted",
+            "egress_mode", "egress_exit", "egress_applied",
         )},
         manifest=row["manifest"] if isinstance(row["manifest"], dict) else None,
         artifacts=artifacts,

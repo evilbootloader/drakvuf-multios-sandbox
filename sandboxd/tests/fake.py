@@ -128,6 +128,22 @@ class FakeRunner:
                              duration=0.0, timed_out=rule["timed_out"])
         if self.default is not None:
             return self.default
+
+        # `iptables -S <chain>` for a chain nothing created FAILS on a real
+        # host, and the blanket "everything succeeds" default would otherwise
+        # model a host where every chain always exists.
+        #
+        # That is not a detail. `stages._teardown` asks exactly this question
+        # to decide whether a VLAN is clean enough to reuse, so a fake that
+        # answers "yes, still there" makes every teardown dirty and every VLAN
+        # withheld -- which is what happened when the probe was added. Scripted
+        # responses are matched first, so a test that wants a surviving chain
+        # still says so explicitly with `.script(..., rc=0)`.
+        if argv_t[0] == "iptables" and "-S" in argv_t:
+            return Completed(argv=argv_t, returncode=1, stdout="",
+                             stderr="No chain/target/match by that name.",
+                             duration=0.0)
+
         return Completed(argv=argv_t, returncode=0, stdout="", stderr="",
                          duration=0.0)
 

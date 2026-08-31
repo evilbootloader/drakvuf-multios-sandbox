@@ -216,8 +216,16 @@ class ResourceTable:
             self._held[job_id] = held
             return held
 
-    def release(self, job_id: str) -> Held | None:
+    def release(self, job_id: str, *, clean: bool = True) -> Held | None:
         """Give the VLAN back. **Call this AFTER teardown, never before.**
+
+        `clean=False` drops the hold WITHOUT returning the VLAN to the pool,
+        for a teardown that did not finish. It is one operation rather than
+        `release()` then `withhold()` because those two are separated by a
+        lock release, and the claim thread can take the VLAN in between --
+        starting a new analysis on the dirty VLAN that the withhold was about
+        to remove. Deciding inside the lock closes that window; `withhold`
+        stays for the sweep and for an operator, where nothing is racing.
 
         `dirwatch.c:697` destroys the clone and only then calls
         `release_thread()`, with the reason recorded in place: the slot index
@@ -236,6 +244,12 @@ class ResourceTable:
             held = self._held.pop(job_id, None)
             if held is None:
                 return None
+            if not clean:
+                # The hold is gone -- the job is over and must not keep
+                # counting against capacity -- but the VLAN is not offered
+                # again. The startup sweep re-admits it once it has confirmed
+                # there is nothing on it.
+                return held
             # Back on the END, not the front. A VLAN that has just carried an
             # analysis is the LAST one to reuse: it maximises the gap before
             # its `xenbr1.<n>` and iptables state are reused, so a lingering
@@ -277,8 +291,16 @@ class ResourceTable:
         """Take a VLAN out of the pool. The counterpart to `admit`.
 
         For a teardown that did not finish: the domain survived `xl destroy`,
-        or the LV would not release. Reusing that VLAN is what DRAFT-033
-        describes -- a restore onto the previous sample's snapshot.
+        the LV would not release, or the egress rules outlived their revoke.
+        Reusing that VLAN is what DRAFT-033 describes -- a restore onto the
+        previous sample's snapshot, or a sample inheriting the previous one's
+        way out of the network.
+
+        Called from `daemon._work` on any teardown that did not report
+        `clean`, and on one that reported nothing because the analysis raised
+        before it could. It had no production caller until 2026-08-31, which
+        meant `cleanup_status` was recorded on the job row, logged, and then
+        ignored: every dirty VLAN went straight back into the pool.
 
         Returns False if a job currently holds it, in which case the caller is
         confused about who owns what and should not be quietly obeyed.

@@ -58,7 +58,7 @@ UPDATE jobs
        )
    AND required_mib <= %(free_mib)s
 RETURNING id, target_os, sha256, submitted_filename, required_mib,
-          lease_expires_at, attempt
+          lease_expires_at, attempt, egress_mode, egress_exit
 """
 
 # --------------------------------------------------------------------------
@@ -238,4 +238,57 @@ INSERT INTO worker_pipelines (worker_id, os, required_mib)
 VALUES (%(worker_id)s, %(os)s, %(required_mib)s)
 ON CONFLICT (worker_id, os) DO UPDATE
    SET required_mib = EXCLUDED.required_mib
+"""
+
+# --------------------------------------------------------------------------
+# Egress exits (DRAFT-057)
+# --------------------------------------------------------------------------
+
+# DELETE-then-INSERT rather than upsert, and this is the one place in this file
+# where that is the right shape.
+#
+# An exit that a host has STOPPED offering must disappear. Upserting would leave
+# it behind, and a stale row here is not a cosmetic problem: it offers the
+# submitter a way out the host can no longer provide, so the job is accepted,
+# queued, claimed, and then refused on Dom0 after a clone has been built.
+#
+# The concrete case this prevents: an operator unsets SANDBOXD_ALLOW_DIRECT and
+# restarts. `direct` must be gone from the UI on the next registration, not
+# linger because nothing deleted it. Registration is the only writer, so the
+# host's current view is authoritative by construction.
+CLEAR_EGRESS = "DELETE FROM worker_egress WHERE worker_id = %(worker_id)s"
+
+INSERT_EGRESS = """
+INSERT INTO worker_egress (worker_id, name, mode, country, caveats)
+VALUES (%(worker_id)s, %(name)s, %(mode)s, %(country)s, %(caveats)s)
+ON CONFLICT (worker_id, name) DO UPDATE
+   SET mode    = EXCLUDED.mode,
+       country = EXCLUDED.country,
+       caveats = EXCLUDED.caveats
+"""
+
+# What the submit form may offer: the UNION across hosts, not one host's set.
+#
+# Deduplicated by name because two analysis hosts configured alike both offer
+# `es-vps-1`, and the submitter is choosing a destination rather than a machine.
+# Which host runs the job is the queue's decision, made later.
+#
+# The caveats of the FIRST host to declare a name win. That is a real
+# simplification and worth naming: two hosts declaring the same exit name with
+# different upstream port blocks would be a misconfiguration -- the name is
+# supposed to identify the way out -- and this makes the disagreement invisible
+# rather than loud. Acceptable at one analysis host; revisit at two.
+OFFERED_EXITS = """
+SELECT DISTINCT ON (name) name, mode, country, caveats
+  FROM worker_egress
+ ORDER BY name, worker_id
+"""
+
+# Does ANY host offer this exit? Asked at submission, like CAPACITY, and for the
+# same reason: a job nothing can run belongs in 'rejected' where the submitter
+# can act on it, not at the head of a queue holding everything behind it.
+EXIT_AVAILABLE = """
+SELECT EXISTS (
+    SELECT 1 FROM worker_egress WHERE name = %(name)s AND mode = %(mode)s
+) AS available
 """

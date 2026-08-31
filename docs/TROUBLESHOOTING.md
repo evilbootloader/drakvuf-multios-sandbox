@@ -395,6 +395,64 @@ same reason.
 
 # Dom0, Xen and the guests
 
+### Every `DRAKVUF_*` chain vanished and clones are running unfiltered
+
+**Symptom.** `iptables -S DRAKVUF_ISOLATION` reports no such chain, on a host
+where it existed minutes ago. Clones that were mid-analysis keep running, with
+no inter-clone isolation, no LAN block and no Dom0 protection. Nothing logged
+an error, and the pipeline reports nothing wrong — the analyses complete and
+look normal.
+
+**Cause. FakeNet-NG was started with its default `LinuxFlushIptables: Yes`.**
+That option "flush[es] all `iptables` rules before adding rules for
+FakeNet-NG" (its README), which on this host means the entire containment
+posture, for every clone currently running, while they run.
+
+Its README promises "the Linux Diverter will restore the old rules as long as
+its termination sequence is not interrupted". **That conditional is the whole
+trap.** A `kill -9`, an OOM kill, a crash, or a host reset means they are never
+restored, and Dom0 comes back with malware VMs on an unfiltered network.
+
+**Fix.** `LinuxFlushIptables: No` in `automation/fakenet.ini`, which is how the
+reference config ships. `sandboxd/tests/test_egress.py` asserts it, so this
+cannot regress silently. Then re-run `automation/network-setup.sh <clones>` to
+rebuild the chains, and treat any clone that was running as contaminated — it
+had unrestricted network access for an unknown interval.
+
+**The related setting, same file, different failure.** `DivertTraffic: Yes`
+(also FakeNet's default) makes its diverter install a **blanket** `REDIRECT` in
+`PREROUTING`, capturing every analysis VLAN rather than the ones running in
+`simulated`. A clone submitted as `offline` would then be answered by the fake
+Internet — `offline` silently stops meaning offline, and the report shows a
+sample talking happily to something it was never supposed to reach. There is no
+error to see; it looks exactly like a result. Ships as `No`, also asserted.
+
+### A clone in `tor` or `simulated` reports that nothing would connect
+
+**Symptom.** The analysis completes. The pcap shows the clone sending SYNs, or
+DNS queries, and getting nothing back or an instant RST. The report reads as a
+sample whose infrastructure is down.
+
+**Cause.** The redirect rules were installed but **nothing is listening on the
+port they point at** — tor not started, FakeNet not running, or either bound
+somewhere other than expected. A `REDIRECT` to a closed port is refused
+immediately, which looks identical to a dead C2.
+
+**This should not reach you**, and if it did, say so: `sandboxd` probes the
+listener before offering the mode at all, and probes it again at launch,
+falling back to `offline` and recording the reason in `egress_applied`. Check
+the report — a run that fell back says so:
+
+```
+requested: simulated   applied: offline
+reason: simulated responder not listening on 127.0.0.1:38926 at launch
+```
+
+If the report shows `applied: simulated` and the traffic still went nowhere,
+the listener was up but not answering, which is a FakeNet or tor problem rather
+than a firewall one. `journalctl -u tor` and FakeNet's own stdout are the next
+stop, not `iptables -S`.
+
 ### A clone drops to an initramfs shell with `UNEXPECTED INCONSISTENCY`
 
 **Symptom.**
@@ -1358,6 +1416,136 @@ cannot show whether all three runs agreed.
 
 **Fix.** `diff` the full `iptables-save` output between runs and record all
 three.
+
+### A job fails with `sample digest does not match the one admitted`
+
+**Symptom.** The run ends `failed` before any clone is built. The daemon log
+carries the expected and actual SHA-256.
+
+**Cause.** The object in the store is not the one admission hashed. Since
+2026-08-31 `sandboxd` verifies the digest the lease carries against the bytes
+it actually downloads, and refuses rather than detonating something the report
+would then misdescribe.
+
+Two ways to get here, and they are not equally innocent:
+
+- **Benign.** MinIO's retention rule expired the object and a different one now
+  occupies the key, or an operator overwrote it by hand.
+- **Not benign.** The presigned POST issued at submission stays valid for
+  `upload_ttl` (900s) and the store permits overwriting, so a submitter can
+  replace the sample *after* admission recorded its hash. That is the case this
+  check exists for: without it, the trace, the verdict and the SHA-256 all
+  describe a file that never ran.
+
+The platform's own claim-time check compares the store's ETag, which for a
+single-part upload is an MD5 — it makes the ordinary swap loud, but MD5
+collisions are constructible, so it is not the guarantee. The SHA-256 check on
+Dom0 is.
+
+**Fix.** Do not retry blindly. Look at whether the job's `created_at` is inside
+`upload_ttl` of the failure: if it is, treat it as a deliberate substitution and
+keep the row as evidence. Re-submitting produces a fresh job id and a fresh
+upload ticket, which is the correct response to the benign cases.
+
+**Do not "fix" it by skipping the check.** A lease that carries no `sha256` is
+also refused, deliberately: admission writes that column in the same UPDATE
+that moves a job to `admitted`, so a claimable job without one is an impossible
+state, and running it would mean detonating bytes nothing can identify
+afterwards.
+
+### A job fails with `unusable lease`
+
+**Symptom.** `sandboxd` refuses a claim with `unusable lease: sample name
+contains a path separator` (or `job_id is not a UUID`), and does not run it.
+
+**Cause.** The platform sent a `submitted_filename` or `job_id` that cannot be
+a single path component. Both become directory and file names under root on
+Dom0 — `staging/<job_id>/<filename>` is opened for writing and its parent is
+handed to `shutil.rmtree` — and `pathlib` offers no protection: an absolute
+name replaces the join outright, and a relative one is not normalised.
+
+The platform validates this at submission and its check is tight, so in
+practice this means the two sides disagree about what a lease may say. Treat it
+as a platform bug or, if the platform is not the one you deployed, as an
+attempt to write outside the staging tree.
+
+**Fix.** Look at the job row on the platform. Note that shell metacharacters in
+a filename — `$`, backtick, `"`, `;` — are **admissible and must stay that
+way**: a sample really can be called `a$(id).exe` and byte-exact delivery of
+that name is part of what is analysed. What makes them safe is the
+`sh -c '…' sh "$UNSAFE"` idiom in `guests.py`, not a name filter. Only path
+separators, `.`/`..` and control characters are refused.
+
+### The host runs fewer clones than it has VLANs, and capacity keeps dropping
+
+**Symptom.** `capacity: N vlan(s) usable` falls over a daemon's lifetime.
+Restarting `sandboxd` restores it, and it falls again.
+
+**Cause.** Working as intended, and the log says which VLAN and why:
+
+```text
+vlan 3 withheld after job <id>: cleanup was 'dirty: destroy'
+```
+
+Since 2026-08-31 a teardown that did not finish keeps its VLAN out of the pool
+instead of handing it to the next sample. Before that, `cleanup_status` was
+recorded on the job row, logged, and ignored — a domain that survived
+`xl destroy`, an LV that would not release, or egress rules that outlived
+their revoke all had their VLAN recycled immediately. `ResourceTable.withhold`
+existed for this and had no caller.
+
+**Fix.** Do not raise `SANDBOXD_MAX_CLONES` to compensate — that hands out
+more VLANs without fixing the ones stuck. Find the withheld VLAN in the log
+and deal with what survived on it:
+
+```sh
+xl list | grep -- -3-clone          # a domain that outlived xl destroy
+lvs | grep -- -3-clone              # a snapshot LV that would not release
+iptables -S DRAKVUF_EGRESS_V3       # egress rules that outlived their revoke
+```
+
+A restart is the supported recovery: the startup sweep destroys whatever
+survived and re-admits the VLAN. If capacity falls again immediately
+afterwards, the teardown is failing repeatably and the log line names the
+stage — treat that as the real fault rather than restarting on a schedule.
+
+`dirty: egress` specifically means `iptables -S` still answered for one of
+that VLAN's chains after the revoke ran. Note that an emptied but undeleted
+chain is harmless and still counts as dirty; that is deliberate, and the
+sweep reclaims it.
+
+### A job reported `offline` and the capture shows it reached the Internet
+
+**Symptom.** A report whose Network section reads `offline`, beside a pcap full
+of real outbound traffic. `iptables -S DRAKVUF_EGRESS_V<n>` shows no chain for
+that VLAN, which looks like confirmation that nothing was installed — and
+nothing was.
+
+**Cause.** A **wildcard rule left by an earlier `direct` run**, not a per-job
+rule at all. `network-setup.sh <n> direct` writes
+`-i xenbr1.+ -o xenbr0 -j ACCEPT` into `DRAKVUF_EGRESS` and a matching
+`MASQUERADE` into `DRAKVUF_EGRESS_NAT`. Both name no VLAN, so every delete in
+`sandboxd/egress.py::argv_revoke` — all of which name one — missed them, and
+nothing removed them. The grant lasted for the host's uptime and applied to
+every later job. `offline` was the worst-affected mode, not the safest: it
+installs nothing, so it has nothing that could collide with a leftover, and
+`argv_apply` returning `[]` means no `iptables -N` fails to warn you.
+
+Fixed 2026-08-31. Look for it on any host that ran `ALLOW_DIRECT=1` before
+that date without rebooting since.
+
+**Fix.** `iptables -S DRAKVUF_EGRESS` and read the whole chain, not the
+per-VLAN sub-chain. Anything there that does not end in `-j
+DRAKVUF_EGRESS_V<n>` applies to every clone. `network-setup.sh` now prints
+exactly those lines as a warning on an `offline` run, deletes the legacy pair
+by exact spec on that same branch, and `sweep._revoke_egress` deletes it again
+at daemon start. Note that a reboot also clears it — there is no
+`iptables-persistent` here — so a host that has been restarted since the
+`direct` run will look clean and was not.
+
+**Do not fix it with `iptables -F DRAKVUF_EGRESS`.** That takes the per-VLAN
+jumps with it and cuts the network of every clone currently under analysis,
+mid-trace. Delete the one spec.
 
 ### `bash: !xenbr0: event not found`
 

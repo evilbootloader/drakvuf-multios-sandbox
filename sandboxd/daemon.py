@@ -46,7 +46,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import guests, proc, resources, sweep
+from . import egress, guests, proc, resources, sweep
 from .api import Idle, Lease, ProtocolError, Reserved, WorkerAPI
 from .guests import TargetOs
 from .resources import Exhausted, ResourceTable, required_mib
@@ -284,6 +284,29 @@ class Daemon:
                 "SANDBOXD_PLUGINS overrides the plugin set for EVERY job on "
                 "this host: %s. This is a measurement tool (DRAKVUF #108); "
                 "unset it when the measurement is done.", ", ".join(override))
+        # What this host can offer as a way out (DRAFT-057). Resolved once, at
+        # construction, for the same reason the plugin list is: a job is not
+        # the place to discover that the host's egress configuration is wrong.
+        #
+        # SANDBOXD_ALLOW_DIRECT is read here rather than in egress.py so that
+        # the environment is consulted in one place, and so `available_exits`
+        # stays a pure function of its arguments.
+        allow_direct = os.environ.get("SANDBOXD_ALLOW_DIRECT", "") == "1"
+        self._cfg.exits = tuple(egress.available_exits(allow_direct=allow_direct))
+        if allow_direct:
+            # WARNING, not INFO, and worth the noise. This is the switch that
+            # puts malware on the host's own uplink -- a residential line on
+            # this deployment, which is the entire subject of roadmap risk #13.
+            # It exists to reproduce pre-DRAFT-057 behaviour for a regression
+            # run, not to get a sample online.
+            log.warning(
+                "SANDBOXD_ALLOW_DIRECT=1: this host now offers 'direct', which "
+                "NATs clones out %s with no per-job control. On a residential "
+                "uplink that is the posture DRAFT-057 exists to replace. Unset "
+                "it when the regression run is done.", self._cfg.bridge)
+        log.info("egress exits offered: %s",
+                 ", ".join(f"{e.name} ({e.mode.value})" for e in self._cfg.exits))
+
         self._runner = runner or Runner()
         self._api = api or WorkerAPI(
             settings.api, settings.token, settings.worker_id,
@@ -355,7 +378,8 @@ class Daemon:
         self._api.register(total_mib=self._s.total_mib,
                            total_vlans=len(self._s.vlans),
                            total_slots=self._s.total_slots,
-                           pipelines=pipelines)
+                           pipelines=pipelines,
+                           exits=self._cfg.exits)
 
         # Empty by construction: the sweep destroyed everything. Whatever the
         # platform thought this host held is marked interrupted, which is true.
@@ -474,9 +498,11 @@ class Daemon:
 
     def _work(self, lease: Lease, held: resources.Held) -> None:
         """One analysis, then release. **Workers never acquire.**"""
+        cleanup_status = None
         try:
             outcome = Analysis(self._api, self._runner, self._cfg).run(
                 lease, held.vlan)
+            cleanup_status = outcome.cleanup_status
             log.info("job %s -> %s (%s)", lease.job_id, outcome.state,
                      outcome.cleanup_status)
         except Exception:  # noqa: BLE001 - a worker must not take the daemon down
@@ -487,7 +513,38 @@ class Daemon:
             # `<origin>-<vlan>-clone` while this domain is still being
             # destroyed (dirwatch.c:697 records the same ordering).
             if self._table is not None:
-                self._table.release(lease.job_id)
+                # **A dirty teardown does not get its VLAN back.**
+                #
+                # `_teardown` has always returned "dirty: destroy,lvremove"
+                # and nothing consumed it, so a domain that survived
+                # `xl destroy`, an LV that would not release, or egress rules
+                # that outlived their revoke all handed the VLAN straight to
+                # the next sample. `ResourceTable.withhold` was written for
+                # exactly this and had no caller outside its own tests.
+                #
+                # `cleanup_status is None` means `run()` itself raised, so the
+                # teardown's outcome never came back. Unknown is not clean --
+                # the same reading `admit` takes of a VLAN the sweep could not
+                # confirm.
+                #
+                # Recovery is a daemon restart: the sweep destroys whatever
+                # survived and re-admits the VLAN. Until then the host runs one
+                # slot short, which is the visible cost `admit` argues is
+                # preferable to the invisible one.
+                #
+                # Passed to `release` rather than done as a following
+                # `withhold` call: those two are separated by a lock release,
+                # and the claim thread can take the VLAN in between -- putting
+                # a new sample on the dirty VLAN this is trying to hold back.
+                clean = cleanup_status == "clean"
+                self._table.release(lease.job_id, clean=clean)
+                if not clean:
+                    log.error(
+                        "vlan %d withheld after job %s: cleanup was %r. "
+                        "This host is one slot down until it is restarted "
+                        "-- the startup sweep is what reclaims it.",
+                        held.vlan, lease.job_id,
+                        cleanup_status or "never reported")
 
     # -- shutdown -----------------------------------------------------------
 

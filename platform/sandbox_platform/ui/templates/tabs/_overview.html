@@ -9,6 +9,56 @@
   <dt>Detected type</dt><dd>{{ job.detected_type or 'not yet determined' }}</dd>
   <dt>Plugins</dt>
   <dd class="mono">{{ plugins | join(' ') if plugins else 'pipeline defaults' }}</dd>
+
+  {#
+    Network egress (DRAFT-057), and it belongs on Overview rather than only on
+    the Network tab: it is the fact that decides how every OTHER fact here
+    should be read. A run that observed no traffic means nothing until you know
+    whether traffic was possible.
+
+    REQUESTED and APPLIED are both shown whenever they differ. They can: a host
+    whose responder was down runs `offline` and says so, and an empty Network
+    tab means something completely different in those two cases.
+  #}
+  <dt>Network</dt>
+  <dd>
+    <span class="mono">{{ job.egress_mode }}</span>
+    {%- if job.egress_exit %} via <span class="mono">{{ job.egress_exit }}</span>{% endif %}
+
+    {% if job.egress_applied %}
+      {% if job.egress_applied.get('mode') != job.egress_mode %}
+      <span class="state" data-state="failed">applied:
+        {{ job.egress_applied.get('mode') }}</span>
+      {% endif %}
+      {% if job.egress_applied.get('country') %}
+      <span class="mono">({{ job.egress_applied.get('country') }})</span>
+      {% endif %}
+    {% elif job.state not in ('received', 'admitted', 'queued', 'rejected') %}
+      {# Past the point where the host would have reported it. Not silence to
+         gloss over: it means the run happened and nothing recorded what its
+         network actually was. #}
+      <span class="note">no host report — what actually applied is unknown</span>
+    {% endif %}
+  </dd>
+
+  {% if job.egress_applied and job.egress_applied.get('caveats') %}
+  {#
+    The acceptance criterion this whole feature turns on: an exit that blocks a
+    port must make the report distinguish "no SMTP traffic" from "SMTP was
+    blocked upstream". Without this line an upstream policy silently becomes a
+    finding about the sample.
+  #}
+  <dt>Network limits</dt>
+  <dd>
+    {% for caveat in job.egress_applied.get('caveats') %}
+    <span class="mono">{{ caveat }}</span>{% if not loop.last %}, {% endif %}
+    {% endfor %}
+    <span class="note">
+      Absence of matching traffic in this report may be caused by these limits
+      rather than by the sample.
+    </span>
+  </dd>
+  {% endif %}
 </dl>
 
 <div class="empty" style="margin-top:1rem">

@@ -184,3 +184,123 @@ HEARTBEAT_INTERVAL = 20.0
 #: way to stop it short of editing this file. Overridable at runtime with
 #: `SANDBOXD_CONSOLE_ENABLED`, because turning it off is an emergency action.
 CONSOLE_ENABLED = False
+
+
+# ===========================================================================
+# Egress -- where a clone's traffic goes (DRAFT-057)
+# ===========================================================================
+#
+# **This host declares what it can offer; the platform offers only that.** A
+# mode the host does not declare cannot be selected in the UI, cannot be
+# submitted through the API, and would be refused here if it somehow arrived.
+# That chain is what keeps `direct` off the web entirely.
+#
+# `offline` is not listed and never needs to be. It is the absence of a rule,
+# so every host can always provide it and nothing can fail to install it -- see
+# sandboxd/egress.py.
+
+#: How long an `iptables` call waits for the xtables lock before giving up.
+#:
+#: **Every egress rule carries this, and the teardown path is why.** Several
+#: worker threads apply and revoke rules at once, and `network-setup.sh` fires
+#: dozens more when it is re-run; without a wait, the loser of a collision
+#: exits 4 ("Another app is currently holding the xtables lock"). On the APPLY
+#: path that is survivable -- `check=True`, so the job fails and no clone runs
+#: with a half-built mode. On the REVOKE path it was not: those calls are
+#: unchecked by necessity, because most of them fail legitimately when there
+#: was nothing to remove, so a lock collision was indistinguishable from the
+#: normal case and left a live permit behind.
+#:
+#: Bounded rather than a bare `-w`, which waits forever: teardown would then
+#: stall until `timing.CLEANUP_BUDGET` killed it, twelve times over. Five
+#: seconds is far longer than any rule edit here takes and still an order of
+#: magnitude inside that budget.
+#:
+#: `-w <seconds>` needs iptables >= 1.6.0 (2016). Dom0 is Ubuntu 24.04
+#: (kernel 6.8.0-138, CURRENT-STATE.md §1, confirmed 2026-08-28), which ships
+#: 1.8.10.
+IPTABLES_WAIT_SECONDS = 5
+
+#: Whether this host will NAT clones out its OWN uplink.
+#:
+#: **On this deployment the uplink is a residential line**, which is the whole
+#: reason DRAFT-057 exists: the binding constraint on detonating real malware
+#: is the ISP's acceptable-use terms, enforced with no prosecutor by a party
+#: that already knows the subscriber. Roadmap risk #13.
+#:
+#: So this is off, and turning it on is a deliberate act by someone at the
+#: host with `SANDBOXD_ALLOW_DIRECT=1`. It exists for one purpose: reproducing
+#: the pre-2026-08-31 behaviour that the evidenced Ubuntu pipeline was measured
+#: on, so that a regression run compares like with like. It is not a
+#: convenience for getting a sample online.
+ALLOW_DIRECT = False
+
+#: Exits this host can route through, as `name -> (mode, interface, country)`.
+#:
+#: Empty until an exit exists. A `routed` entry must not be added before its
+#: kill-switch has been proven by packet capture -- DRAFT-057 makes that a
+#: precondition of the mode being usable, and declaring it here is what makes
+#: it selectable. The check is the operator's; the code cannot verify a capture.
+#:
+#: Peers are configuration, NEVER a submitter-supplied endpoint. A submitter
+#: naming a tunnel endpoint would be choosing where Dom0 sends traffic, which
+#: is a different feature with a different threat model.
+#:
+#: To offer Tor, install `automation/torrc` as `/etc/tor/torrc`, start tor, and
+#: add::
+#:
+#:     EXITS = {
+#:         "tor-default": {
+#:             "mode": "tor",
+#:             "caveats": ["tcp-only", "smtp-blocked-upstream",
+#:                         "smb-blocked-upstream"],
+#:         },
+#:     }
+#:
+#: **The caveats are not decoration.** They are what makes the report say "SMTP
+#: was blocked upstream" instead of showing nothing and letting a reader
+#: conclude the sample was quiet. Tor's default exit policy rejects 25 and 445
+#: among others, and it carries TCP only -- so a run that observed no UDP
+#: observed nothing about whether the sample uses UDP.
+#:
+#: `tor` is withheld automatically if nothing is listening on TOR_TRANS_PORT,
+#: so a declaration here is a statement of intent rather than a promise the
+#: daemon takes on trust.
+EXITS: dict[str, dict] = {}
+
+#: Tor's transparent-proxy ports, as `automation/torrc` configures them.
+#:
+#: **These two numbers appear in three places and all three must agree**:
+#: here, in `automation/torrc`, and in `network-setup.sh`'s uplink DROP rules
+#: (which are literals, because that script cannot import Python). Changing one
+#: alone gives a clone whose TCP is redirected to a port nothing listens on --
+#: every connection times out, and the report reads as a sample that tried to
+#: talk and got nowhere. `sandboxd/tests/test_egress.py` pins the pair against
+#: the torrc so the divergence fails a test instead of an analysis.
+#:
+#: 9040/9053 rather than Tor's defaults (9050 SOCKS, 9051 control) so that a
+#: system tor started by the distribution's own unit cannot be mistaken for
+#: this one, and so a SOCKS client on the host cannot accidentally reach the
+#: transparent proxy.
+TOR_TRANS_PORT = 9040
+TOR_DNS_PORT = 9053
+
+#: FakeNet-NG's proxy listeners, as `automation/fakenet.ini` configures them.
+#: Both TCP and UDP use 38926, which is FakeNet's own default.
+#:
+#: This is the CATCH-ALL, and using it is what stops our rules carrying a copy
+#: of FakeNet's port table. `DefaultTCPListener: ProxyTCPListener` means the
+#: proxy identifies the protocol from the content and hands off to the right
+#: listener, so one redirect rule covers every port a sample might pick --
+#: including the unusual ones malware actually uses. Enumerating 80, 443, 25,
+#: 21, 110, 6667 in our chains instead would be a second copy of a list that
+#: lives in FakeNet's config, free to drift, with "the sample's traffic was
+#: silently unanswered" as the symptom.
+FAKENET_PROXY_PORT = 38926
+
+#: DNS is redirected to FakeNet's DNS listener DIRECTLY rather than through the
+#: proxy above. One extra rule, and it buys certainty about the single most
+#: load-bearing protocol in a sandbox: a sample that cannot resolve its C2
+#: domain does nothing at all, and the report looks like a dud sample rather
+#: than a broken responder.
+FAKENET_DNS_PORT = 53

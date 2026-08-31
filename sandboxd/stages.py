@@ -41,8 +41,9 @@ import time
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
-from . import config, guests, timing, vnc
+from . import config, egress, guests, timing, vnc
 from .clone import CloneBuilder, CloneError, CloneSpec
+from .egress import EgressUnavailable, Exit
 from .guests import Interaction, Job, SampleKind, TargetOs
 from .proc import CommandError
 
@@ -61,6 +62,24 @@ from .proc import CommandError
 log = logging.getLogger("sandboxd.stages")
 
 HEARTBEAT_INTERVAL = 10.0
+
+
+def _must_stay_inside(path: Path, root: Path, what: str) -> None:
+    """Refuse a path that escaped the directory it was built from.
+
+    `naming` rejects the values that could do this before they are joined, so
+    reaching here means either that check was weakened or a new caller built a
+    path some other way. Either is worth stopping for: the paths guarded by
+    this are handed to `open(..., "wb")` and `shutil.rmtree` as root.
+
+    `resolve()` on both sides, so `..` and any symlink in the staging or
+    results tree are settled before the comparison rather than after it.
+    """
+    if not path.resolve().is_relative_to(root.resolve()):
+        raise ValueError(
+            f"{what} path escapes its root: {path} is not inside {root}. "
+            f"Refusing the job rather than writing outside the tree."
+        )
 
 # DRAFT-018 bounds a manifest at 512 artifacts. `extracted/` is named after
 # files the SAMPLE wrote, so the real ceiling is however many it drops; hitting
@@ -228,6 +247,19 @@ class Config:
         TargetOs.UBUNTU: "profiles/linux.json",
         TargetOs.ANDROID: "profiles/android.json"})
 
+    # --- egress (DRAFT-057) -------------------------------------------------
+    #
+    # What this host can offer, resolved once at startup from `config.EXITS`
+    # and `SANDBOXD_ALLOW_DIRECT`. Read per job to match the name the lease
+    # carries; a name not in here is refused rather than approximated.
+    #
+    # Defaults to offline-only, which is also what an unconfigured host gets.
+    # That is the correct failure direction: a host that cannot work out what
+    # it offers runs samples with no way out, rather than with whichever way
+    # out happened to be lying around.
+    exits: tuple[Exit, ...] = field(
+        default_factory=lambda: (egress.OFFLINE_EXIT,))
+
     def origin(self, os_: TargetOs) -> str:
         return f"{os_.value}_sandbox"
 
@@ -260,6 +292,16 @@ class Analysis:
         os_ = TargetOs(lease.target_os)
         job_dir = self._cfg.results_dir / lease.job_id
         sample = self._cfg.staging_dir / lease.job_id / lease.submitted_filename
+
+        # Belt and braces over `api.py`'s grammar check, and cheap.
+        #
+        # The grammar is what SHOULD make these containable; this asserts that
+        # they actually are, on the joined result, which is the thing that gets
+        # opened and rmtree'd as root. Two independent mechanisms, for the same
+        # reason the isolation chain denies clone-to-clone twice: the property
+        # is worth more than either check.
+        _must_stay_inside(job_dir, self._cfg.results_dir, "results")
+        _must_stay_inside(sample, self._cfg.staging_dir, "staging")
         clone = None
         outcome = Outcome(state="failed")
 
@@ -273,16 +315,33 @@ class Analysis:
                 #    HTTP client's default: a sample is bounded by the API's
                 #    upload cap, not by anything here, and a stalled download
                 #    would otherwise hold a worker slot indefinitely.
+                # The digest the platform admitted, checked against the bytes
+                # that will actually run. `fetch_sample` raises rather than
+                # returning on a mismatch, so `classify` below can only ever
+                # see the admitted sample.
                 self._api.fetch_sample(lease.sample_url, sample,
+                                       expected_sha256=lease.sha256,
                                        timeout=timing.FETCH_BUDGET)
                 kind = guests.classify(sample)
 
                 clone = self._clone(os_, vlan, lease)
                 job = self._job(lease, os_, kind, clone, vlan, job_dir, sample)
 
+                # 2. Egress, BEFORE the guest's network is configured and long
+                #    before the sample runs. Ordered this way so that a clone
+                #    never holds an address on a VLAN whose way out has not
+                #    been decided -- the window in which it would be routed by
+                #    whatever rule happened to be there.
+                #
+                #    Deliberately AFTER the clone exists: the rules name the
+                #    VLAN, and installing them for a clone that then fails to
+                #    build would leave a permit with nothing behind it.
                 self._check(beat)
+                applied = self._apply_egress(lease, vlan)
+
                 self._api.report_state(lease.job_id, "preparing",
-                                       clone_domain=clone.name, vlan=vlan)
+                                       clone_domain=clone.name, vlan=vlan,
+                                       egress=applied)
                 component = self._preconfig(job, beat)
 
                 self._check(beat)
@@ -330,6 +389,92 @@ class Analysis:
                                budget=timing.CLONE_BUDGET,
                                settle=self._cfg.waits.destroy_settle)
         return builder.build(spec)
+
+    def _resolve_exit(self, lease) -> Exit:
+        """Match the name the job asked for against what this host declares.
+
+        **Fails closed twice.** A lease naming no exit -- an older platform, or
+        a job created before DRAFT-057 -- gets `offline`, because the safe
+        reading of "nobody said" is "no way out". A lease naming an exit this
+        host does not have is refused outright rather than downgraded: the
+        submitter asked a specific question about where their sample's traffic
+        goes, and silently answering a different one produces a report whose
+        network section means something other than what it says.
+        """
+        wanted = getattr(lease, "egress_exit", None)
+        if not wanted:
+            return egress.OFFLINE_EXIT
+
+        for candidate in self._cfg.exits:
+            if candidate.name == wanted:
+                return candidate
+
+        raise EgressUnavailable(
+            f"job asked for exit {wanted!r}, which this host does not offer. "
+            f"Available: {', '.join(e.name for e in self._cfg.exits)}. The "
+            f"platform should have refused this at submission -- it offers only "
+            f"what this host declared, so the two have diverged."
+        )
+
+    def _apply_egress(self, lease, vlan: int) -> dict:
+        """Install this job's way out, and return what was actually installed.
+
+        The return value goes on the job row and onto the report. It records
+        what the host DID, which is not always what was asked for, and the
+        difference is the point: DRAFT-057 makes recording the mode a
+        correctness requirement, because a report showing no network activity
+        means nothing without knowing whether egress existed at all.
+        """
+        exit_ = self._resolve_exit(lease)
+        fallback_reason = None
+
+        # **Re-checked here, not just at startup.** A responder that was up
+        # when the host registered can be down by the time a job actually
+        # runs -- tor restarted, FakeNet crashed, the operator stopped it.
+        # Installing the rules anyway would redirect the clone's traffic to a
+        # closed port, and the analysis would complete having observed a sample
+        # that "could not connect" when in fact nothing was listening.
+        #
+        # Falling back to `offline` is the maintainer's decision (2026-08-31)
+        # and it only ever moves towards LESS egress. It is recorded rather
+        # than silent: the report shows what was requested beside what ran.
+        if exit_.mode in egress.LISTENER_PORT:
+            port = egress.LISTENER_PORT[exit_.mode]
+            if not egress.listener_ready(port):
+                fallback_reason = (
+                    f"{exit_.mode.value} responder not listening on "
+                    f"127.0.0.1:{port} at launch; ran with no network instead"
+                )
+                log.warning("job %s: %s", lease.job_id, fallback_reason)
+                exit_ = egress.OFFLINE_EXIT
+
+        for argv in egress.argv_apply(vlan, exit_, bridge=self._cfg.bridge,
+                                      subnet=self._cfg.subnet):
+            # check=True throughout. A partly-installed rule set is the one
+            # outcome worse than none: the jumps are added last, so failing
+            # here leaves the clone with no egress, which is safe -- but
+            # continuing as though the mode were applied would put a sample on
+            # a network nobody chose.
+            self._runner.run(argv, timeout=timing.CLEANUP_BUDGET,
+                             what="egress apply", check=True)
+
+        log.info("job %s: egress %s via %s", lease.job_id, exit_.mode.value,
+                 exit_.interface or "no interface (nothing is forwarded)")
+
+        applied = {
+            "mode": exit_.mode.value,
+            "exit": exit_.name,
+            "interface": exit_.interface,
+            "country": exit_.country,
+            # Rendered on the report so that "no SMTP traffic" and "SMTP was
+            # blocked upstream" are different sentences on the page.
+            "caveats": list(exit_.caveats),
+        }
+        if fallback_reason:
+            # Present ONLY when something was downgraded, so its absence is a
+            # positive statement that the job got what it asked for.
+            applied["reason"] = fallback_reason
+        return applied
 
     def _trace_options(self, os_, kind) -> guests.TraceOptions:
         """The measured defaults, unless this host is being measured.
@@ -689,6 +834,68 @@ class Analysis:
         next sample happened to take the same VLAN slot.
         """
         problems = []
+
+        # Egress FIRST, before the domain is destroyed.
+        #
+        # The clone is paused below and then destroyed, but between the last
+        # trace instruction and `xl destroy` it is still running and still
+        # holding its address. Removing its way out first shrinks that window
+        # to nothing: the sample loses the network before anything else about
+        # the teardown can go slowly or fail.
+        #
+        # Runs even when `clone is None` -- a build that failed part-way may
+        # still have left rules, and this is the only place that removes them
+        # on the failure path.
+        #
+        # UNCHECKED, and that is not laziness: every command here fails
+        # legitimately when there was nothing to remove, which is the normal
+        # case for an `offline` job. `iptables -D` on an absent rule and `-X`
+        # on an absent chain both exit 1. What matters is that the chain ends
+        # up gone, and `-X` failing because it is already gone is success.
+        #
+        # Which is exactly why the loop below has to ask separately. Unchecked
+        # here means these exit codes carry no signal at all, so "the revoke
+        # worked" cannot be inferred from them -- it has to be observed.
+        for argv in egress.argv_revoke(vlan, bridge=self._cfg.bridge,
+                                       subnet=self._cfg.subnet):
+            try:
+                self._runner.run(argv, timeout=timing.CLEANUP_BUDGET,
+                                 what="egress revoke")
+            except Exception:  # noqa: BLE001 - teardown never raises
+                log.warning("job cleanup: egress revoke failed on vlan %d: %s",
+                            vlan, " ".join(argv))
+
+        # Then ASK whether it worked, rather than assuming it did.
+        #
+        # The revoke loop above cannot tell us: most of its commands fail on
+        # the ordinary path, so its exit codes carry no signal (see
+        # `egress.argv_probe_chains`). This used to be left to the startup
+        # sweep on the grounds that a leftover chain is unambiguous there --
+        # true, but the sweep runs at START, and the VLAN is reused minutes
+        # later by this same long-lived process. With the default pool of two
+        # slots the gap before reuse is one job.
+        #
+        # A surviving chain therefore becomes a recorded problem, which
+        # withholds the VLAN (daemon._work). That is the same trade `admit`
+        # already makes for the sweep: reduced capacity is a visible cost,
+        # handing out a contaminated VLAN is an invisible one.
+        for argv in egress.argv_probe_chains(vlan, bridge=self._cfg.bridge):
+            try:
+                probe = self._runner.run(argv, timeout=timing.CLEANUP_BUDGET,
+                                         what="egress probe")
+            except Exception:  # noqa: BLE001 - teardown never raises
+                # Could not ask. Unknown is not clean.
+                problems.append("egress")
+                break
+            if probe.ok:
+                # `-S` succeeded, so the chain is still there.
+                log.error(
+                    "job cleanup: vlan %d still has egress chains after "
+                    "revoke (%s). Withholding it: the next sample would "
+                    "inherit this one's way out.", vlan, argv[-1])
+                problems.append("egress")
+                break
+
         if clone is not None:
             for argv, what in (
                 (["xl", "pause", clone.name], "pause"),

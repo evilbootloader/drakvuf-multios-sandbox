@@ -386,6 +386,97 @@ DRAFT-022 rather than on this — see roadmap risk #13.
 
 ## Proposed containment design (not yet implemented)
 
+> **Where the exit-provider material lives.** Which host carries analysis
+> egress, what each one's acceptable-use policy permits, and the correspondence
+> that establishes it are **not in this repository** — see `private/README.md`.
+> That is a publication decision, not a secrecy one: this document is intended
+> to be public and the *mechanism* below belongs in it, while analysis of the
+> operator's own liability and commercial intent do not. Do not restate them
+> here; point at them.
+
+### Partly built, 2026-08-31 — DRAFT-057 Phase 1
+
+The mode *framework* exists and two modes work. Recorded here rather than in
+the list below, which describes what was proposed and is kept for the rest.
+
+| Mode | State |
+|---|---|
+| `offline` | **Built, and it is the absence of a rule** rather than a rule |
+| `direct` | **Built**, host-gated behind `SANDBOXD_ALLOW_DIRECT=1`, never offered in the UI |
+| `simulated` | Enum, UI and API only. Needs a responder — Phase 3 |
+| `tor` | **Built.** Needs `automation/torrc` installed and tor running; withheld automatically if not |
+| `routed` | Enum, UI and API only. Needs a peer and a kill-switch capture — Phase 4 |
+
+What changed in `network-setup.sh`: the unconditional `MASQUERADE` in
+`DRAKVUF_NAT` is gone, and `DRAKVUF_ISOLATION`'s wildcard
+`-i xenbr1.+ -o xenbr0 -j ACCEPT` is now `-j DRAKVUF_EGRESS` — a chain this
+script creates **empty and never flushes**, because flushing it on a re-run
+would cut the network of every clone then under analysis. `sandboxd` fills it
+per job with a VLAN sub-chain pair and empties it at teardown; the startup
+sweep clears any **per-VLAN** rules a dead process left behind.
+
+The qualifier matters, and its absence was a real defect. The legacy
+`network-setup.sh <n> direct` path writes a *wildcard* pair — `-i xenbr1.+ -o
+xenbr0 -j ACCEPT` plus a matching `MASQUERADE` — that names no VLAN, so no
+per-VLAN delete could match it and nothing removed it. One
+`ALLOW_DIRECT=1 ./run_analysis-ubuntu.sh` therefore granted egress for the
+host's whole uptime, and every later job used it, including jobs recorded and
+reported as `offline` — which install no rules at all and so had nothing that
+could collide with the leftovers. Two things now remove it: the `offline`
+branch of `network-setup.sh` (by exact spec, never a flush, so live clones'
+per-VLAN jumps survive) and `egress.argv_revoke_blanket` from the startup
+sweep. `direct` is per-invocation again, which is what it always claimed to
+be.
+
+The clone-to-clone rule changed shape with it, from `! -o xenbr0` to
+`-o xenbr1.+`. The old form meant "leaving by anything other than the uplink",
+which is correct only while the uplink is the single way out — with a tunnel
+interface in play it would drop exactly the traffic `routed` exists to permit.
+Nothing is lost: clone-to-clone is still denied twice (by interface here, by
+the `172.16.0.0/12` destination rule below), and egress by an unauthorised
+interface is denied by the chain being terminal.
+
+**A mode a host does not declare cannot be chosen.** The host reports its exits
+at registration; the platform offers that set and nothing else. There is no
+rule about `direct` in the API — it is unreachable purely because an
+unconfigured host never declares it, which is what stops the two from falling
+out of step.
+
+**Which host carries `routed` traffic is not in this repository** — see
+`private/README.md`. The mechanism is public; the provider relationship is not.
+
+#### `tor` redirects; it does not forward
+
+Worth stating separately because it is the part that surprises people reading
+the chains. `tor` installs no `FORWARD` accept and no `MASQUERADE`. A
+`REDIRECT` in `nat PREROUTING` rewrites the destination to the clone's **own
+gateway**, so the packet stops being transit traffic and becomes traffic
+addressed to Dom0 — delivered to `INPUT`, where a per-VLAN sub-chain admits it
+on 9040 (TCP) and 9053 (DNS) and drops the rest.
+
+Three things follow, and all three are wanted:
+
+- **The guest is not reconfigured.** It keeps `1.1.1.1` and its real
+  destination addresses; the rewrite happens underneath it. Same property
+  `networking.md` already reasons through for FakeNet, and it is what keeps
+  the agentless design intact.
+- **UDP other than 53, and ICMP, die in `DRAKVUF_ISOLATION`'s terminal DROP**
+  with no rule needed. Not a gap — Tor carries TCP only, so forwarding them to
+  it would make a sample hang instead of fail.
+- **The onion range overlaps a rule that drops it, harmlessly.** `torrc` maps
+  `.onion` names into `10.192.0.0/10`, which sits inside the `10.0.0.0/8` this
+  chain drops as RFC1918. `nat PREROUTING` rewrites the destination before
+  `FORWARD` is consulted, so the packet never reaches that rule. Written down
+  so nobody "fixes" the overlap.
+
+`TransPort` and `DNSPort` bind `0.0.0.0`, because a `REDIRECT` targets the
+address of the interface the packet arrived on and that differs per VLAN.
+`network-setup.sh` therefore **drops both ports arriving on the uplink**, as
+the first rules in `DRAKVUF_INPUT`. Without those two rules this host is an
+open proxy for anyone who can reach it.
+
+---
+
 Carried over from the brainstormed workstream list, for later design work,
 not decided:
 

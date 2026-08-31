@@ -125,13 +125,47 @@
 #   clone -> link-local       DROP  (incl. 169.254.169.254 metadata)
 #   clone -> Dom0 itself      DROP  (INPUT chain; replies to Dom0-initiated
 #                                    traffic still allowed)
-#   clone -> Internet         ALLOW (MASQUERADE out the uplink)
+#   clone -> Internet         DENY unless a per-VLAN rule says otherwise
+#                                   (DRAFT-057; see below)
 #   clone -> anything, IPv6   DROP  (FORWARD and INPUT, no exceptions)
 #
-# All of it lives in five dedicated chains -- DRAKVUF_NAT,
-# DRAKVUF_ISOLATION and DRAKVUF_INPUT for IPv4, plus DRAKVUF_ISOLATION6
-# and DRAKVUF_INPUT6 for IPv6 -- so the whole posture is readable as a unit
-# with `iptables -S DRAKVUF_ISOLATION` and removable in five flushes.
+# The Internet row changed on 2026-08-31 and it is the only one that did.
+# It used to read ALLOW, implemented as one unconditional MASQUERADE plus
+# one unconditional `-o xenbr0` ACCEPT, so every clone this host ever ran
+# reached the Internet through the operator's uplink whether anyone had
+# decided that or not. Now egress is a PER-JOB choice applied to ONE VLAN
+# at the moment a clone is launched, and "offline" is what happens when no
+# rule was installed -- an absence, which is why it cannot be misconfigured.
+#
+# Chains, split by OWNER, and the split is load-bearing:
+#
+#   this script owns    DRAKVUF_NAT, DRAKVUF_ISOLATION, DRAKVUF_INPUT,
+#                       DRAKVUF_ISOLATION6, DRAKVUF_INPUT6
+#                       -- flushed and rebuilt on every run
+#
+#   sandboxd owns       DRAKVUF_EGRESS, DRAKVUF_EGRESS_NAT,
+#                       DRAKVUF_EGRESS_PRE
+#                       -- created here, NEVER flushed here
+#
+# Flush-and-rebuild is this script's idempotence mechanism, and it must not
+# cross an ownership line: flushing DRAKVUF_EGRESS on a re-run would cut the
+# network of every clone currently under analysis, silently, mid-trace.
+# Stale per-VLAN rules are cleared by sandboxd's startup sweep instead --
+# which already reclaims domains, captures and VLANs, and knows nothing is
+# running because it just destroyed it all.
+#
+# ONE exception, and it is narrow on purpose: section 9's `offline` branch
+# deletes the legacy WILDCARD rules -- and only those, by exact spec, never
+# with a flush. They belong to this script (section 9 is the only thing that
+# writes them) and they name no VLAN, so removing them cannot touch a live
+# clone's per-VLAN jump. Without that deletion `direct` was permanent rather
+# than per-invocation: nothing else in either program could match a wildcard,
+# so one opt-in run silently gave every later job -- `offline` ones included
+# -- egress out the uplink. See section 9.
+#
+# The whole posture is still readable as a unit with
+# `iptables -S DRAKVUF_ISOLATION`, and now `iptables -S DRAKVUF_EGRESS`
+# answers the second question: which clone, right now, may reach what.
 #
 # Every one of those chains is TERMINAL for analysis-VLAN traffic as of
 # DRAFT-029 (2026-08-12): no packet with xenbr1.<n> as its input or output
@@ -151,7 +185,30 @@
 # network unvalidated, which Ubuntu never checks), and clones retain
 # deliberate unrestricted Internet egress (DRAFT-022, roadmap risk #13).
 #
-# Usage: ./network-setup.sh <number of clone slots>
+# Usage: ./network-setup.sh <number of clone slots> [default egress mode]
+#
+# The optional second argument exists for ONE caller: the legacy
+# dirwatch/run_analysis-<os>.sh path, which predates per-job egress and has
+# no way to ask for a mode. It takes `offline` (the default) or `direct`.
+#
+#   offline  no per-VLAN egress is installed, so clones have NO route out
+#            until sandboxd installs one, AND any wildcard left by a previous
+#            `direct` run is removed. Announced at the end from what the
+#            chain actually holds, because a clone with no network reads as a
+#            sample that chose not to talk -- the exact false negative this
+#            project keeps being bitten by.
+#
+#   direct   installs ONE wildcard rule restoring the pre-2026-08-31
+#            behaviour: every VLAN NATs out the uplink. This is the
+#            residential line. run_analysis-ubuntu.sh passes it only when
+#            ALLOW_DIRECT=1 is set, so it is opt-in per invocation and
+#            never reachable from the web UI.
+#
+# The two are a PAIR: `direct` installs the wildcard and `offline` removes
+# it. Neither is idempotent alone, and the mode is a property of the host
+# rather than of the invocation, so the branch that does not want the rule is
+# the one that has to delete it. Dropping the `offline` side is what made a
+# single opt-in run permanent.
 
 # --- Section 1: shell safety and arguments ------------------------------
 
@@ -228,11 +285,25 @@ step="argument validation"
 
 # `seq 1 $1` with an empty $1 silently produced zero iterations, so a
 # missing argument provisioned nothing and still exited 0.
-[ $# -eq 1 ] || fail "usage: $0 <number of clone slots>"
+[ $# -ge 1 ] && [ $# -le 2 ] ||
+    fail "usage: $0 <number of clone slots> [offline|direct]"
 case "$1" in
     '' | *[!0-9]*) fail "clone count must be a positive integer, got: '$1'" ;;
 esac
 [ "$1" -ge 1 ] || fail "clone count must be at least 1, got: $1"
+
+# Validated against a closed set rather than passed through. This value
+# decides whether clones reach the Internet, so an unrecognised one must
+# not be able to mean "whatever the last caller meant" -- and defaulting a
+# typo to `direct` would put malware on a residential line because someone
+# wrote `dircet`. An unknown mode is fatal.
+EGRESS_DEFAULT="${2:-offline}"
+case "$EGRESS_DEFAULT" in
+    offline | direct) ;;
+    *) fail "unknown egress mode: '$EGRESS_DEFAULT' (expected offline or direct).
+  Per-job modes -- simulated, tor, routed -- are installed by sandboxd per
+  VLAN, not here. This argument only serves the legacy dirwatch path." ;;
+esac
 
 # Upper bound comes from the addressing scheme, not from 802.1Q -- which
 # would allow 4094. The slot index is the third octet of 172.16.<slot>.0/24
@@ -342,15 +413,80 @@ iptables -t nat -F "$NAT_CHAIN"
 iptables -t nat -C POSTROUTING -j "$NAT_CHAIN" 2>/dev/null ||
     iptables -t nat -A POSTROUTING -j "$NAT_CHAIN"
 
-# Gives every analysis clone outbound Internet access. This is the current
-# lab's deliberate default, not an oversight -- but there is no offline or
-# simulated network mode to switch to yet. The three proposed modes are in
-# docs/architecture/networking.md; DRAFT-013 records the observed
-# behaviour as a test result before any of them is chosen.
+# **This chain is now deliberately EMPTY, and that is the change.**
 #
-# NAT alone reaches the LAN as well as the Internet, because both are
-# behind the uplink. Section 6 is what narrows it to the Internet only.
-iptables -t nat -A "$NAT_CHAIN" -o "$UPLINK_BRIDGE" -j MASQUERADE
+# It used to hold one line:
+#
+#     iptables -t nat -A "$NAT_CHAIN" -o "$UPLINK_BRIDGE" -j MASQUERADE
+#
+# which gave every clone on every VLAN outbound Internet access through the
+# host's uplink, unconditionally, from the moment this script ran. That was
+# the lab's deliberate default rather than an oversight -- but the uplink is
+# a residential line, and the decision to use it was never made per sample
+# because there was nowhere to make it.
+#
+# Source NAT is now per-VLAN and lives in DRAKVUF_EGRESS_NAT, installed by
+# sandboxd when a clone launches with a mode that needs it and removed when
+# the clone is destroyed. A VLAN with no rule there is not NATted anywhere,
+# which is half of what `offline` means; section 6 is the other half.
+#
+# The chain and its jump stay because the alternative -- adding both at
+# clone-launch time -- would put a POSTROUTING edit on the hot path of every
+# analysis, where this script's one-time cost is free.
+
+# --- Section 3a: the chains sandboxd fills, per VLAN, per job -----------
+#
+# DRAFT-057. Created here so they exist and are jumped to before any clone
+# runs; populated by sandboxd/egress.py at launch and emptied at teardown.
+#
+# **Created, never flushed.** Every other chain in this file is flushed and
+# rebuilt, which is what makes re-running idempotent. Doing that here would
+# reach across an ownership boundary and cut the network of every clone
+# currently under analysis -- and re-running this script while clones are
+# live is normal: run_analysis-<os>.sh calls it on every launch.
+#
+# `-N` on an existing chain is an error, so the `|| true` is what makes
+# "already there" the success it is. Nothing else in this section is
+# destructive, so a re-run converges by doing nothing.
+EGRESS_CHAIN=DRAKVUF_EGRESS
+EGRESS_NAT_CHAIN=DRAKVUF_EGRESS_NAT
+EGRESS_PRE_CHAIN=DRAKVUF_EGRESS_PRE
+EGRESS_IN_CHAIN=DRAKVUF_EGRESS_IN
+
+step="creating the per-VLAN egress chains"
+
+iptables -N "$EGRESS_CHAIN" 2>/dev/null || true
+
+# The INPUT half, and it exists because of how the redirect modes work.
+#
+# `tor` and `simulated` do not FORWARD a clone's traffic anywhere. They rewrite
+# its destination to the clone's own gateway (see EGRESS_PRE below), which
+# makes the packet locally destined -- so it is delivered to INPUT and never
+# reaches FORWARD or DRAKVUF_ISOLATION at all. Section 7's blanket
+# "drop everything from a clone to Dom0" would then discard it.
+#
+# This chain is where sandboxd punches the one hole that mode needs: the
+# listener's port, on one VLAN, for as long as one clone is running. It is
+# jumped to from DRAKVUF_INPUT between the ESTABLISHED accept and the blanket
+# drop -- see section 7.
+iptables -N "$EGRESS_IN_CHAIN" 2>/dev/null || true
+
+iptables -t nat -N "$EGRESS_NAT_CHAIN" 2>/dev/null || true
+iptables -t nat -C POSTROUTING -j "$EGRESS_NAT_CHAIN" 2>/dev/null ||
+    iptables -t nat -A POSTROUTING -j "$EGRESS_NAT_CHAIN"
+
+# PREROUTING, not POSTROUTING: `tor` and `simulated` work by REDIRECTing a
+# clone's packets to a listener on Dom0, and a REDIRECT rewrites the
+# destination before the routing decision. That is also why those two modes
+# need no change inside the guest -- the clone keeps its configured resolver
+# and its real destination address, and the rewrite happens underneath it.
+#
+# The jump from FORWARD is NOT what carries redirected traffic: once the
+# destination is rewritten to a local address the packet is delivered to
+# INPUT instead, where DRAKVUF_INPUT decides. See section 7.
+iptables -t nat -N "$EGRESS_PRE_CHAIN" 2>/dev/null || true
+iptables -t nat -C PREROUTING -j "$EGRESS_PRE_CHAIN" 2>/dev/null ||
+    iptables -t nat -A PREROUTING -j "$EGRESS_PRE_CHAIN"
 
 # --- Section 4: isolation chain scaffolding -----------------------------
 
@@ -443,13 +579,36 @@ step="installing isolation rules"
 # there and the on_exit trap.
 iptables -F "$ISOLATION_CHAIN"
 
-# Deny clone-to-clone traffic: anything arriving from an analysis VLAN and
-# not leaving via the uplink. This is the rule NET-01 was about -- it was
-# written `-o !xenbr0`, the negation form deprecated in iptables 1.4.3
-# (2008), which current versions parse as an interface literally named
-# "!xenbr0". Combined with the absent exit-status check, a rejected rule
-# left NO inter-clone isolation and reported nothing.
-iptables -A "$ISOLATION_CHAIN" -i "$ANALYSIS_BRIDGE.+" ! -o "$UPLINK_BRIDGE" -j DROP
+# Deny clone-to-clone traffic, stated as what it is.
+#
+# This rule NET-01 was about -- it was written `-o !xenbr0`, the negation
+# form deprecated in iptables 1.4.3 (2008), which current versions parse as
+# an interface literally named "!xenbr0". Combined with the absent
+# exit-status check, a rejected rule left NO inter-clone isolation and
+# reported nothing.
+#
+# **Rewritten 2026-08-31 (DRAFT-057), and this is a semantic change.** It
+# read `! -o $UPLINK_BRIDGE -j DROP`: "leaving by anything other than the
+# uplink? drop". That was correct only while the uplink was the single way
+# out. With `routed` sending a clone's traffic through a tunnel interface,
+# the old form drops exactly the traffic the mode exists to permit -- and
+# the symptom would be a configured clone with no network, which reads as a
+# sample that chose not to talk.
+#
+# The new form says the thing the old one was approximating: traffic from an
+# analysis VLAN to an analysis VLAN is denied. Nothing is lost, because the
+# guarantee never depended on this rule alone:
+#
+#   * clone-to-clone is ALSO denied by destination, by the 172.16.0.0/12
+#     rule below -- two independent mechanisms, as before;
+#   * egress by an interface nobody authorised is denied by the chain being
+#     TERMINAL. The final `-i $ANALYSIS_BRIDGE.+ -j DROP` catches anything
+#     no rule accepted, so permission comes only from DRAKVUF_EGRESS.
+#
+# So the chain moves from "deny one named exception" to "deny by default and
+# accept what was asked for", which is the same posture reached from the
+# safer direction.
+iptables -A "$ISOLATION_CHAIN" -i "$ANALYSIS_BRIDGE.+" -o "$ANALYSIS_BRIDGE.+" -j DROP
 
 # Deny the private address space. NAT alone reaches the LAN as readily as
 # the Internet, because both sit behind the uplink -- so without these a
@@ -483,8 +642,25 @@ done
 # permit below is the same unrestricted egress the lab has always had; see
 # DRAKVUF_NAT above and roadmap risk #13 for why that is a live question.
 
-# The intended egress, stated rather than inherited.
-iptables -A "$ISOLATION_CHAIN" -i "$ANALYSIS_BRIDGE.+" -o "$UPLINK_BRIDGE" -j ACCEPT
+# The intended egress -- now a QUESTION asked per VLAN rather than a
+# blanket answer.
+#
+# This was `-i $ANALYSIS_BRIDGE.+ -o $UPLINK_BRIDGE -j ACCEPT`: every clone,
+# every VLAN, out the uplink, always. It is replaced by a jump to the chain
+# sandboxd fills per job, so a clone reaches the Internet only if a rule was
+# installed naming ITS vlan and the exit interface its mode chose.
+#
+# Position is unchanged and still load-bearing: BELOW the four RFC1918 and
+# link-local drops. A LAN destination leaves via the uplink like any other,
+# so a per-VLAN ACCEPT placed above them would accept exactly the traffic
+# they exist to block -- and that is now a rule written by another program,
+# which makes the ordering a guarantee this script owes it.
+#
+# An empty DRAKVUF_EGRESS returns here and falls through to the terminal
+# DROP below. **That is `offline`, and it is the default by construction
+# rather than by configuration** -- there is no rule that expresses it, so
+# there is none to get wrong.
+iptables -A "$ISOLATION_CHAIN" -i "$ANALYSIS_BRIDGE.+" -j "$EGRESS_CHAIN"
 
 # The return path. Without it, egress still depends on FORWARD's policy,
 # because every rule above matches on the INPUT interface only and a reply
@@ -536,12 +712,41 @@ iptables -F "$INPUT_CHAIN"
 iptables -C INPUT -j "$INPUT_CHAIN" 2>/dev/null ||
     iptables -I INPUT 1 -j "$INPUT_CHAIN"
 
+# The transparent-proxy listeners must not be reachable from the uplink.
+#
+# `tor` binds its TransPort and DNSPort on 0.0.0.0 -- it has to, because a
+# REDIRECT rewrites the destination to the INCOMING interface's address, which
+# is a different gateway for every VLAN, and binding one port per VLAN would
+# mean a torrc regenerated and tor restarted whenever the clone count changes.
+#
+# The cost of that choice is that the ports are also listening on xenbr0, so
+# these two rules are what stop the lab becoming an open proxy for anyone who
+# can reach the host. They come FIRST in the chain, above everything about
+# analysis VLANs, because their correctness must not depend on any rule below.
+#
+# Stated as a DROP on the uplink rather than an ACCEPT on the VLANs: this rule
+# stays right even if a future mode adds another way for clone traffic to reach
+# a local listener.
+for tor_port in 9040 9053; do
+    iptables -A "$INPUT_CHAIN" -i "$UPLINK_BRIDGE" -p tcp --dport "$tor_port" -j DROP
+    iptables -A "$INPUT_CHAIN" -i "$UPLINK_BRIDGE" -p udp --dport "$tor_port" -j DROP
+done
+
 # Replies to traffic Dom0 itself started. Without this, an operator
 # pinging or curling a clone from Dom0 gets nothing back -- the reply
 # arrives on INPUT and is dropped. Clone-initiated connections remain
 # blocked; only what Dom0 opened is allowed back.
 iptables -A "$INPUT_CHAIN" -i "$ANALYSIS_BRIDGE.+" \
     -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+
+# The per-VLAN exceptions for the redirect modes, between the ESTABLISHED
+# accept above and the blanket drop below. Empty unless a clone is running in
+# `tor` or `simulated`, and emptied again when it stops -- so the hole exists
+# only for the VLAN that needs it and only while it needs it.
+#
+# Created in section 3a and NEVER flushed here, for the reason given there:
+# this script re-runs while clones are live.
+iptables -A "$INPUT_CHAIN" -i "$ANALYSIS_BRIDGE.+" -j "$EGRESS_IN_CHAIN"
 
 # Everything else from a clone to any Dom0 address, all protocols, all
 # ports. The gateway is deliberately not pingable from inside the guest.
@@ -615,5 +820,110 @@ Install iptables' IPv6 support, or disable IPv6 with
   sysctl -w net.ipv6.conf.all.disable_ipv6=1"
 fi
 
+# --- Section 9: the legacy default egress mode --------------------------
+#
+# For the dirwatch/run_analysis-<os>.sh path only. sandboxd passes no second
+# argument and installs its own per-VLAN rules instead, so this section is a
+# no-op under the orchestrator.
+
+if [ "$EGRESS_DEFAULT" = direct ]; then
+    step="installing the legacy wildcard direct egress"
+
+    # The pre-2026-08-31 behaviour, restored deliberately and only when
+    # asked for: every VLAN, out the uplink, NATted. This is the residential
+    # line, and it is what the evidenced Ubuntu pipeline was measured on --
+    # which is the entire reason it is still reachable. It is opt-in per
+    # invocation (ALLOW_DIRECT=1 in run_analysis-ubuntu.sh) and the web UI
+    # can never select it.
+    #
+    # Written as a wildcard rather than a loop over VLANs to keep it one
+    # rule whatever MAX_CLONES is, matching the rest of this chain -- and to
+    # make it obvious in `iptables -S DRAKVUF_EGRESS` that this is the blunt
+    # legacy rule rather than a per-job one, which names a single VLAN.
+    #
+    # `-C` first: this chain is never flushed here, so a re-run would
+    # otherwise append a duplicate on every launch -- the exact defect
+    # DRAFT-028 removed from POSTROUTING.
+    iptables -C "$EGRESS_CHAIN" -i "$ANALYSIS_BRIDGE.+" -o "$UPLINK_BRIDGE" \
+        -j ACCEPT 2>/dev/null ||
+        iptables -A "$EGRESS_CHAIN" -i "$ANALYSIS_BRIDGE.+" -o "$UPLINK_BRIDGE" \
+            -j ACCEPT
+
+    iptables -t nat -C "$EGRESS_NAT_CHAIN" -o "$UPLINK_BRIDGE" -j MASQUERADE \
+        2>/dev/null ||
+        iptables -t nat -A "$EGRESS_NAT_CHAIN" -o "$UPLINK_BRIDGE" -j MASQUERADE
+
+    echo "network-setup.sh: WARNING -- egress mode 'direct': every clone NATs" >&2
+    echo "  out $UPLINK_BRIDGE with no per-job control. On a residential line" >&2
+    echo "  this is the posture DRAFT-057 exists to replace." >&2
+else
+    step="removing any legacy wildcard direct egress"
+
+    # **The counterpart to the branch above, and it is what makes `direct`
+    # actually mean "this invocation".**
+    #
+    # Without this the grant was permanent. These two chains are never
+    # flushed here (section 3a), `argv_revoke` in sandboxd/egress.py deletes
+    # only per-VLAN specs -- `-i xenbr1.<n> -j DRAKVUF_EGRESS_V<n>` -- which
+    # cannot match a wildcard, and sandboxd invokes this script with no second
+    # argument, so it took this branch and did nothing. One
+    # `ALLOW_DIRECT=1 ./run_analysis-ubuntu.sh` therefore left both rules
+    # standing for the rest of the host's uptime, and every later job --
+    # including one submitted, recorded and REPORTED as `offline` -- NATted
+    # out the uplink through them. `offline` installs no rules at all, so
+    # there was nothing to notice the leftovers.
+    #
+    # **Deleted by exact spec, never with `-F`.** A flush would take the
+    # per-VLAN jumps with it and cut the network of every clone currently
+    # under analysis, mid-trace -- the ownership rule in section 3a, and the
+    # reason that rule exists. One spec is removed; nothing else is touched.
+    #
+    # `while` rather than a single `-D` because `-D` removes one match at a
+    # time. The `-C` guard above means at most one copy should exist, but a
+    # host that ran a version without that guard can hold several, and the
+    # loop is what converges rather than leaving one behind on each run.
+    while iptables -D "$EGRESS_CHAIN" -i "$ANALYSIS_BRIDGE.+" \
+        -o "$UPLINK_BRIDGE" -j ACCEPT 2>/dev/null; do :; done
+
+    while iptables -t nat -D "$EGRESS_NAT_CHAIN" -o "$UPLINK_BRIDGE" \
+        -j MASQUERADE 2>/dev/null; do :; done
+fi
+
 step=""
 echo "network-setup.sh: provisioned $CLONES VLAN sub-interface(s) on $ANALYSIS_BRIDGE"
+
+if [ "$EGRESS_DEFAULT" = offline ]; then
+    # **Read from the chain, not assumed.** This announcement used to be
+    # unconditional, which made it the loudest false statement in the file:
+    # on a host still carrying the legacy wildcard it printed "clones have NO
+    # route out" while every clone had full NAT egress. An announcement about
+    # containment that does not look at the containment is worth less than
+    # none, because it is believed.
+    #
+    # Everything legitimate in this chain is either the chain declaration or
+    # a per-VLAN jump sandboxd installed for a live clone. Anything else is a
+    # blanket permit -- by definition, since a per-job rule names its VLAN --
+    # and is reported rather than summarised away.
+    egress_stray=$(iptables -S "$EGRESS_CHAIN" 2>/dev/null |
+        grep -v -e "^-N $EGRESS_CHAIN\$" \
+                -e "-j ${EGRESS_CHAIN}_V[0-9][0-9]*\$" || true)
+
+    if [ -n "$egress_stray" ]; then
+        echo "network-setup.sh: WARNING -- $EGRESS_CHAIN still holds rules that" >&2
+        echo "  name no VLAN, so they apply to EVERY clone regardless of the" >&2
+        echo "  mode its job asked for:" >&2
+        echo "$egress_stray" | sed 's/^/    /' >&2
+        echo "  A job recorded as 'offline' will reach the network through" >&2
+        echo "  these. Remove them before running anything you care about." >&2
+    else
+        # A clone with no route out produces an analysis that looks complete
+        # and observed nothing, and that is indistinguishable from a sample
+        # that decided not to talk. Under sandboxd this is the correct and
+        # expected state -- it installs egress per job -- so the wording says
+        # which case the reader is in rather than implying something is broken.
+        echo "network-setup.sh: no per-VLAN egress installed -- clones have NO route"
+        echo "  out until an egress mode is applied. Expected under sandboxd, which"
+        echo "  installs one per job. If you are running dirwatch directly, pass"
+        echo "  'direct' as the second argument or clones will observe nothing."
+    fi
+fi

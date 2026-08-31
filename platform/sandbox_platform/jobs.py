@@ -13,6 +13,7 @@ from uuid import UUID
 
 import psycopg
 from psycopg.rows import dict_row
+from psycopg.types.json import Jsonb
 
 from . import queries
 
@@ -34,6 +35,12 @@ class Lease:
     required_mib: int
     lease_expires_at: datetime
     attempt: int
+    # Where this job's traffic may go (DRAFT-057). Snapshotted onto the row at
+    # submission, so a host that stops offering an exit after a job was queued
+    # cannot silently change where that job's sample ends up talking -- Dom0
+    # refuses instead, which is the loud outcome.
+    egress_mode: str = "offline"
+    egress_exit: str | None = None
 
 
 @dataclass(frozen=True)
@@ -84,6 +91,8 @@ def claim(
                 required_mib=row["required_mib"],
                 lease_expires_at=row["lease_expires_at"],
                 attempt=row["attempt"],
+                egress_mode=row["egress_mode"],
+                egress_exit=row["egress_exit"],
             )
 
         # Zero rows is ambiguous -- empty queue, or head does not fit -- so
@@ -196,11 +205,16 @@ def register_worker(
     total_vlans: int,
     total_slots: int,
     pipelines: dict[str, int],
+    exits: list[dict] | None = None,
 ) -> None:
     """Record what an analysis host can afford, as the host reports it.
 
     pipelines maps target_os -> required_mib, each derived ON DOM0 from
     misc/<os>_sandbox.cfg plus that host's own measured domain overhead.
+
+    `exits` is the set of ways out this host can provide (DRAFT-057), declared
+    for the same reason: only Dom0 knows what its own interfaces are. It is
+    REPLACED rather than merged -- see queries.CLEAR_EGRESS.
     """
     with conn.cursor() as cur:
         cur.execute(queries.UPSERT_WORKER, {
@@ -212,3 +226,43 @@ def register_worker(
                 "worker_id": worker_id, "os": os_name,
                 "required_mib": required_mib,
             })
+
+        # Cleared first, unconditionally, INCLUDING when `exits` is empty. A
+        # host that now offers nothing must end up offering nothing, and
+        # skipping the delete on an empty list would leave its previous set
+        # standing -- which is exactly the case that matters, because the empty
+        # list is what an operator revoking `direct` produces.
+        cur.execute(queries.CLEAR_EGRESS, {"worker_id": worker_id})
+        for exit_ in exits or []:
+            cur.execute(queries.INSERT_EGRESS, {
+                "worker_id": worker_id,
+                "name": exit_["name"],
+                "mode": exit_["mode"],
+                "country": exit_.get("country"),
+                "caveats": Jsonb(exit_.get("caveats") or []),
+            })
+
+
+def offered_exits(conn: psycopg.Connection) -> list[dict]:
+    """Every exit any registered host can provide, deduplicated by name.
+
+    This is the whole of what a submitter may choose from. A mode absent here is
+    unselectable in the UI and refused at admission, which is how `direct` stays
+    off the web without a second switch that could disagree with the first.
+    """
+    with conn.cursor(row_factory=dict_row) as cur:
+        cur.execute(queries.OFFERED_EXITS)
+        return cur.fetchall()
+
+
+def exit_available(conn: psycopg.Connection, *, name: str, mode: str) -> bool:
+    """Can any host route a job to this exit, in this mode?
+
+    Both are checked together on purpose. Matching the name alone would let a
+    submitter pair a real exit name with a different mode and have it accepted
+    -- the name would resolve on Dom0 and the mode recorded on the report would
+    be a lie about what happened.
+    """
+    with conn.cursor(row_factory=dict_row) as cur:
+        cur.execute(queries.EXIT_AVAILABLE, {"name": name, "mode": mode})
+        return bool(cur.fetchone()["available"])

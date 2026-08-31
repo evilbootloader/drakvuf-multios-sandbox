@@ -7,6 +7,7 @@ because that is what the server enforces and what dirwatch got wrong.
 
 from __future__ import annotations
 
+import hashlib
 import sys
 import zipfile
 from dataclasses import dataclass, field
@@ -17,10 +18,24 @@ import pytest
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
+from sandboxd import api as A  # noqa: E402
 from sandboxd import stages as S  # noqa: E402
 from sandboxd import timing as T  # noqa: E402
 from sandboxd.guests import Interaction, TargetOs, TraceOptions  # noqa: E402
 from sandboxd.tests.fake import FakeRunner  # noqa: E402
+
+
+#: The default sample the fake store serves, and its digest.
+#:
+#: Kept together because they must agree: `fetch_sample` verifies the bytes it
+#: wrote against the digest the lease carries, exactly as the real one does, so
+#: a fake that served one and declared the other would fail every test for a
+#: reason unrelated to what the test is about.
+_ELF = b"\x7fELF" + b"\x00" * 60
+
+
+def digest(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
 
 
 @dataclass
@@ -31,7 +46,7 @@ class FakeLease:
     attempt: int = 1
     required_mib: int = 2198
     sample_url: str = "https://minio/sample"
-    sha256: str | None = None
+    sha256: str | None = digest(_ELF)
     lease_expires_at: str = "2026-08-26T10:00:00Z"
 
 
@@ -44,7 +59,7 @@ class FakeApi:
     uploaded: list = field(default_factory=list)
     ticket_batches: list = field(default_factory=list)
     cancel_after: int | None = None
-    sample_bytes: bytes = b"\x7fELF" + b"\x00" * 60
+    sample_bytes: bytes = _ELF
     beats: int = 0
     # /claim leaves a job here; the worker reports from `preparing` onward.
     job_state: str = "cloning"
@@ -83,9 +98,18 @@ class FakeApi:
         return HB(lease_expires_at="2026-08-26T10:05:00Z",
                   cancel_requested=cancel)
 
-    def fetch_sample(self, url, dest, *, timeout=None):
+    def fetch_sample(self, url, dest, *, expected_sha256, timeout=None):
+        # Verifies like the real one. A fake that accepted the argument and
+        # ignored it would let every test pass against a pipeline that had
+        # stopped checking, which is the failure this argument exists to stop.
+        if not expected_sha256:
+            raise A.SampleMismatch("the lease carries no sha256")
         dest.parent.mkdir(parents=True, exist_ok=True)
         dest.write_bytes(self.sample_bytes)
+        if digest(self.sample_bytes) != expected_sha256:
+            dest.unlink(missing_ok=True)
+            raise A.SampleMismatch(
+                f"expected {expected_sha256}, got {digest(self.sample_bytes)}")
         if self.cancel_after is not None:
             # A real fetch takes time; without it the whole analysis finishes
             # in ~5ms and no heartbeat ever lands, which is what made the
@@ -379,7 +403,8 @@ def test_an_apk_is_installed_before_the_trace_and_launched_with_am(tmp_path):
     comp.parent.mkdir(parents=True, exist_ok=True)
     comp.write_text("com.example/.MainActivity\n")
 
-    lease = FakeLease(target_os="android", submitted_filename="app.apk")
+    lease = FakeLease(target_os="android", submitted_filename="app.apk",
+                      sha256=digest(api.sample_bytes))
     S.Analysis(api, r, cfg).run(lease, 3)
 
     installs = [c for c in r.calls if "pm install" in " ".join(c.argv)]
@@ -397,7 +422,8 @@ def test_an_apk_with_no_launcher_component_is_not_executed(tmp_path):
     record a run that never happened."""
     r = runner_ready("android_sandbox-3-clone", "android_sandbox")
     api = FakeApi(sample_bytes=apk_bytes(tmp_path))
-    lease = FakeLease(target_os="android", submitted_filename="app.apk")
+    lease = FakeLease(target_os="android", submitted_filename="app.apk",
+                      sha256=digest(api.sample_bytes))
 
     outcome, _ = run(tmp_path, api=api, runner=r, lease=lease)
 
@@ -420,7 +446,8 @@ def test_an_apk_routed_to_ubuntu_fails_instead_of_mixing_two_guests(tmp_path):
     not the UI."""
     r = runner_ready("ubuntu_sandbox-3-clone", "ubuntu_sandbox")
     api = FakeApi(sample_bytes=apk_bytes(tmp_path))
-    lease = FakeLease(target_os="ubuntu", submitted_filename="app.apk")
+    lease = FakeLease(target_os="ubuntu", submitted_filename="app.apk",
+                      sha256=digest(api.sample_bytes))
 
     outcome, _ = run(tmp_path, api=api, runner=r, lease=lease)
 
@@ -454,7 +481,8 @@ def test_the_component_readfile_and_its_cleanup_are_checked(tmp_path):
     comp.parent.mkdir(parents=True, exist_ok=True)
     comp.write_text("com.example/.MainActivity\n")
 
-    lease = FakeLease(target_os="android", submitted_filename="app.apk")
+    lease = FakeLease(target_os="android", submitted_filename="app.apk",
+                      sha256=digest(api.sample_bytes))
     S.Analysis(api, r, cfg).run(lease, 3)
 
     by_stage = {c.what: c for c in r.calls}
@@ -500,7 +528,7 @@ def test_a_bug_in_sandboxd_is_labelled_as_one(tmp_path):
     diagnosed as a batch of bad samples.
     """
     class Broken(FakeApi):
-        def fetch_sample(self, url, dest, *, timeout=None):
+        def fetch_sample(self, url, dest, *, expected_sha256, timeout=None):
             raise TypeError("fetch_sample() got an unexpected keyword")
 
     outcome, api = run(tmp_path, api=Broken())

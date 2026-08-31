@@ -28,6 +28,33 @@ class TargetOs(StrEnum):
     WINDOWS = "windows"
 
 
+class EgressMode(StrEnum):
+    """Where a job's traffic is allowed to go. Authority: migration 0006.
+
+    **The second untrusted routing input in the system**, and the more
+    consequential one -- `target_os` picks a guest image, this decides whether
+    live malware reaches the Internet and through whose address. Closed set,
+    validated at the same single boundary, for the same reasons.
+
+    Which of these a submitter may actually pick is NOT decided here. It is
+    whatever the analysis host declared it can provide (`worker_egress`), so a
+    mode listed in this enum and offered by no host is unselectable. That is
+    what keeps `direct` off the web UI.
+    """
+
+    #: No route out at all. On Dom0 this is the absence of a rule rather than a
+    #: rule, so it cannot fail to apply.
+    OFFLINE = "offline"
+    #: A responder on the clone's gateway answers instead of the Internet.
+    SIMULATED = "simulated"
+    #: Transparently through Tor. **TCP only** -- see the exit's caveats.
+    TOR = "tor"
+    #: Out through a tunnel to a VPS we rent, with a chosen exit country.
+    ROUTED = "routed"
+    #: NAT out the analysis host's own uplink. Requires the host to opt in.
+    DIRECT = "direct"
+
+
 class JobState(StrEnum):
     """The analysis lifecycle, as specified in analysis-pipeline.md.
 
@@ -97,3 +124,13 @@ class RejectReason(StrEnum):
     UNSUPPORTED_TYPE = "unsupported_type"
     NO_CAPACITY = "no_capacity"
     NO_WORKERS = "no_workers"
+    # No registered host offers the requested way out. Distinct from
+    # no_workers for the reason the comment above gives: "no analysis host has
+    # registered" and "the host is here but cannot route your sample where you
+    # asked" are different problems with different fixes.
+    #
+    # Rejected rather than silently downgraded. A submitter asked a specific
+    # question about where their sample's traffic goes; running it somewhere
+    # else and reporting success answers a different question than the one on
+    # the report.
+    NO_EGRESS = "no_egress"

@@ -76,3 +76,25 @@ __pycache__/
 # Evidence archives dropped in the working tree. Diagnostic captures belong
 # in docs/checklists/ or docs/runbooks/ as text, not as tarballs.
 *.tar.gz
+
+# Compliance, legal position and host correspondence. **This repository is
+# intended to become public**, and three things in here must not go with it:
+# analysis of the operator's own liability (which is a written record that the
+# question was considered), commercial intent (which commits a third party as
+# well as us), and which host agreed to carry analysis egress (whose value is
+# partly that it is not advertised).
+#
+# The mechanism stays public and should -- egress modes, the per-VLAN chains,
+# the kill-switch, the throttles are ordinary engineering documentation. The
+# line is in private/README.md: a public document may say what the system does
+# and why that is the right design, not what the operator fears, owes or
+# intends commercially.
+#
+# `private/*` rather than `private/`: git does not descend into an ignored
+# directory, so the negation below cannot work without listing the contents --
+# the same idiom `.claude/*` uses above.
+#
+# **A move does not fix history.** Anything already committed stays in every
+# clone, and a repository going public publishes its history too.
+private/*
+!private/README.md

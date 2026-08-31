@@ -80,6 +80,12 @@ needs no prosecutor.
 
 ## TOR is the wrong tool here
 
+> **OVERRIDDEN by the maintainer, 2026-08-31, and BUILT (Phase 2).** The
+> analysis below is unchanged and still correct — every objection in it is a
+> real property of Tor. What changed is the conclusion drawn from them, and
+> the reasoning is at the end of this section. ANY.RUN offers the same
+> capability with the same limitations.
+
 `ideas.md` suggests TOR so a dirty line is not needed. Three reasons against,
 and the first is disqualifying:
 
@@ -90,6 +96,36 @@ and the first is disqualifying:
   personally.** It moves the problem onto them rather than solving it.
 - **Many families fingerprint and avoid Tor**, so you measure evasion rather
   than behaviour.
+
+### Why it was built anyway
+
+**The first objection is about the REPORT, not about Tor.** "A false negative
+delivered confidently" is a property of a report that does not say what was
+blocked — and that is fixable, by the same mechanism acceptance criterion 7
+already requires for upstream port blocking. So `tor` carries
+`caveats: [tcp-only, smtp-blocked-upstream, smb-blocked-upstream]`, the report
+renders them next to the network section, and "no UDP traffic" and "UDP could
+not leave" are different sentences on the page. The objection is answered by
+building the disclosure, not by declining the mode.
+
+**A finding that arrived with the Phase 0 research and sharpens this**: Tor's
+default exit policy rejects **the same ports Mullvad blocks** — 25, 135–139,
+445. So the intuition that Tor is the free way around a commercial VPN's port
+blocking is simply wrong, and worth stating because it is the reason someone
+would reach for Tor first. It is not a cheaper `routed`; it is a different
+thing with its own limits.
+
+**What it actually buys is time.** `routed` needs a provider decision, a
+purchase, and a kill-switch capture before it can be enabled. `tor` needs a
+package and a config file. It is the mode that makes the lab useful on real
+samples *before* an exit has been rented — which, given this issue is the
+binding constraint on detonating anything at all, is worth a documented
+limitation.
+
+**The volunteer-operator objection stands and is not answered by anything
+technical.** It is a judgment the maintainer has made knowingly. The
+throttles in Phase 5 bound what a single run can push through an exit, which
+is a partial mitigation and not a full one.
 
 # Dependencies
 

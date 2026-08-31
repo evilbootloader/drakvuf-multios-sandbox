@@ -1,0 +1,97 @@
+# Tor as the analysis network's transparent proxy. DRAFT-057 Phase 2.
+#
+# Reference copy. Install on Dom0 as /etc/tor/torrc (or an include under
+# /etc/tor/torrc.d/) and `systemctl restart tor`. Nothing in this repository
+# deploys it -- the development container is not Dom0.
+#
+# WHAT THIS IS FOR, AND WHAT IT COSTS
+#
+# `tor` is one of the ways out a clone can be given per job. Its whole appeal
+# is that it needs no purchase, no provider relationship and no VPS: it is the
+# mode that lets real samples be detonated before an exit has been rented.
+#
+# Its cost is real and is surfaced on every report rather than argued away:
+#
+#   * Tor carries TCP only. UDP command-and-control and direct DNS DO NOT
+#     LEAVE. They are dropped by the analysis firewall, because sending them
+#     to a proxy that cannot carry them would be worse -- the sample would
+#     hang instead of failing.
+#   * Tor's default exit policy rejects 25, 119, 135-139, 445, 563 and several
+#     P2P ranges. A spam bot's SMTP and an SMB worm's 445 will not appear.
+#   * Exit operators are volunteers who absorb abuse complaints personally.
+#
+# The first two are recorded as `caveats` on the exit so the report can say
+# "SMTP was blocked upstream" rather than showing nothing and letting a reader
+# conclude the sample was quiet. That distinction is the whole reason this mode
+# is safe to offer.
+
+# --- the transparent proxy ---------------------------------------------------
+#
+# Bound on 0.0.0.0, and this needs justifying because it looks careless.
+#
+# A REDIRECT rewrites a packet's destination to the address of the interface it
+# ARRIVED on -- which is a different gateway for every analysis VLAN
+# (172.16.1.1, 172.16.2.1, ...). Binding per VLAN would mean one TransPort line
+# per clone slot, regenerated and tor restarted whenever the clone count
+# changes, for no gain.
+#
+# The exposure that creates -- these ports also listening on the uplink -- is
+# closed in `automation/network-setup.sh`, which DROPs both ports arriving on
+# xenbr0 as the FIRST rules in DRAKVUF_INPUT. Without those two rules this host
+# is an open proxy for anyone who can reach it. They are not optional.
+#
+# **These port numbers appear in three places** -- here, `sandboxd/config.py`,
+# and network-setup.sh's DROP rules -- and all three must agree. Change one
+# alone and every clone's TCP is redirected to a port nothing listens on, which
+# reads as a sample that tried to talk and got nowhere.
+TransPort 0.0.0.0:9040
+DNSPort 0.0.0.0:9053
+
+# Onion addresses, for samples that use them.
+#
+# Tor hands out a synthetic address from this range for a .onion name and maps
+# it back on connect. 10.192.0.0/10 sits inside the 10.0.0.0/8 that
+# DRAKVUF_ISOLATION drops as RFC1918 -- harmless, because nat PREROUTING
+# rewrites the destination to the gateway before FORWARD is consulted, so the
+# packet never reaches that rule. Worth knowing before someone "fixes" the
+# overlap.
+AutomapHostsOnResolve 1
+VirtualAddrNetworkIPv4 10.192.0.0/10
+
+# --- what this tor is not ----------------------------------------------------
+
+# No SOCKS port. Nothing on this host should be reaching Tor through a proxy
+# it configured for itself; the only intended client is a redirected clone.
+# `0` disables it entirely rather than binding it somewhere harmless.
+SOCKSPort 0
+
+# No relaying. This host must never carry other people's traffic: it would mix
+# our analysis egress with strangers' and make the exit address' reputation
+# somebody else's to spend.
+ORPort 0
+ExitRelay 0
+
+# Log to syslog at notice. Enough to see circuits built and exits chosen --
+# which is what makes "the sample could not connect" distinguishable from
+# "Tor could not build a circuit" -- without recording per-connection detail
+# about what a sample contacted. That belongs in the pcap, which is the
+# evidence, not in a daemon log nobody collects.
+Log notice syslog
+
+# --- exit country selection (NOT enabled) ------------------------------------
+#
+# Country pinning is deliberately left off, and the reason is a trap worth
+# recording rather than a preference.
+#
+#   ExitNodes {es}
+#   StrictNodes 1
+#
+# `StrictNodes 1` makes Tor FAIL rather than fall back when no exit in that
+# country will carry a circuit. That is the correct behaviour -- silently
+# leaving from elsewhere would make the report's country field a lie -- but it
+# means a run can fail for a reason that has nothing to do with the sample, and
+# nothing currently distinguishes those two on the report.
+#
+# Enable it only alongside a caveat that says so. Country selection proper
+# belongs to `routed`, where the exit is a machine we rent and its location is
+# a fact rather than a request.
