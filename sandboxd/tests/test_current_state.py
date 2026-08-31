@@ -68,8 +68,14 @@ def test_the_hand_maintained_sections_survive_regeneration():
     stop = text.index(gen.END) + len(gen.END)
     spliced = text[:start] + gen.build() + text[stop:]
 
+    # These headings are load-bearing and they DO change: the 2026-08-28
+    # migration renamed all three at once ("L0 — Proxmox host", "L1 — VM 101",
+    # "CT 102"), and this list had to be updated with them. That is working as
+    # intended -- the test asserts the generator does not EAT the sections, not
+    # that they are never edited. Update it deliberately when a section is
+    # renamed; do not weaken it to a substring that survives anything.
     for marker in ("# 1. Capabilities", "# 2. Superseded facts",
-                   "## 1.1 L0", "## 1.2 L1", "## 1.3 CT 102"):
+                   "## 1.1 The host", "## 1.2 Dom0", "## 1.3 The `platform` DomU"):
         assert marker in spliced, f"regeneration would lose {marker!r}"
 
     # The operator's half is byte-identical either side of the generated block.
@@ -83,6 +89,12 @@ def test_the_hand_maintained_sections_survive_regeneration():
     "no systemd unit exists",
     "/root/drakvuf-multios-sandbox",
     "dom0_max_vcpus=8",
+    # Added 2026-08-29. The bare-metal migration made a whole class of these at
+    # once, and they are the most dangerous kind: they still read as current in
+    # runbooks 01-10, which are append-only and cannot be corrected in place.
+    "Dom0 hostname `drakvuf`",
+    "`total_memory 20479`",
+    "unprivileged **LXC**",
 ])
 def test_the_superseded_traps_are_still_recorded(fact):
     assert fact in STATE.read_text(), (

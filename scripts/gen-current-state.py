@@ -40,10 +40,24 @@ def sh(*argv: str) -> str:
                           text=True, check=False).stdout.strip()
 
 
+# Every host whose shell prompt counts as evidence. **This list is the one part
+# of the generator that a host rename silently invalidates**, and the
+# 2026-08-28 migration did exactly that: Dom0 stopped being the nested VM
+# `drakvuf` and became bare-metal `dom0`. Until `dom0` was added here,
+# `platform-domu.md` -- four pasted Dom0 prompts and a booted domain -- would
+# have been published as `no`, evidence-free, which is the precise error class
+# this file exists to remove.
+#
+# **Add a host here whenever one joins the lab**, and prefer an explicit list to
+# a wildcard: a bare `root@\S+` would also match prompts quoted inside prose,
+# examples and findings, which are not evidence of anything.
+_EVIDENCE_HOSTS = ("pve1", "drakvuf", "dom0", "platform", "pbs1")
+
 # A pasted shell prompt from one of the real hosts. This is the only reliable
 # signal that a runbook was actually run: the status banner is written before
 # execution and is frequently never updated afterwards.
-_PROMPT = re.compile(r"^\s*root@(pve1|drakvuf|platform)[^\n]*[#$]", re.M)
+_PROMPT = re.compile(r"^\s*root@(" + "|".join(_EVIDENCE_HOSTS) + r")[^\n]*[#$]",
+                     re.M)
 
 # The document's own claim, matched on the **Status:** line specifically rather
 # than anywhere in the header. A corrected runbook quotes its superseded banner
