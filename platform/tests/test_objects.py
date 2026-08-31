@@ -43,6 +43,60 @@ def _client(region: str = None, **creds):
     )
 
 
+# --- the sample's identity is read atomically with its bytes ----------------
+
+def test_inspect_reads_the_etag_from_the_get_not_a_second_request(
+        put_object, monkeypatch):
+    """The digest and the ETag must describe the same object version.
+
+    `inspect` used to stream the body and then issue a separate HEAD, with a
+    comment asserting the ETag therefore "belonged to the bytes just hashed".
+    It did not. The submitter's upload capability outlives admission and they
+    choose when `/uploaded` runs, so an overwrite landing between the GET and
+    the HEAD recorded `sha256` of the old bytes beside the `etag` of the new
+    ones -- and the claim-time check then compared the new ETag against itself
+    and said "ok".
+
+    Pinned by making a follow-up HEAD fail the test outright: a GET is served
+    from one object version, so the ETag on that response and the bytes on it
+    cannot disagree, and nothing else is needed.
+    """
+    key = objects.sample_key(uuid.uuid4(), "s.bin")
+    put_object(key, b"\x7fELF" + b"\x00" * 64)
+
+    def forbidden(*_a, **_kw):
+        raise AssertionError(
+            "inspect() issued a second request for the ETag; it must come "
+            "from the same GET that supplied the bytes")
+
+    monkeypatch.setattr(objects, "head", forbidden)
+    facts = objects.inspect(key)
+
+    assert facts.etag
+    assert len(facts.sha256) == 64
+    assert facts.size_bytes == 68
+
+
+def test_inspect_reports_the_etag_of_the_bytes_it_hashed(put_object):
+    """End to end against real MinIO: the pair is self-consistent.
+
+    A single-part upload's ETag is the object's MD5, which is exactly why it
+    is not the integrity guarantee -- but it must at least describe the object
+    that was hashed, because `sample_status` compares it later.
+    """
+    import hashlib
+
+    body = b"MZ" + b"\x00" * 100
+    key = objects.sample_key(uuid.uuid4(), "s.bin")
+    put_object(key, body)
+
+    facts = objects.inspect(key)
+
+    assert facts.sha256 == hashlib.sha256(body).hexdigest()
+    assert facts.etag == hashlib.md5(body).hexdigest()
+    assert objects.sample_status(key, facts.etag) == "ok"
+
+
 # --- what an unauthenticated caller can learn ------------------------------
 
 def test_anonymous_access_reveals_nothing_about_a_key(put_object):

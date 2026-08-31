@@ -234,6 +234,19 @@ def sample_status(key: str, expected: str | None) -> str:
     `expected is None` is `"changed"`, not `"ok"`: admission always records an
     ETag, so a queued job without one should not exist, and the safe reading of
     an impossible state is to refuse it.
+
+    **What this does NOT establish.** For a single-part upload -- which is what
+    `generate_presigned_post` produces -- MinIO's ETag is the object's MD5. So
+    a match here says the two objects have the same MD5, not that they are the
+    same bytes, and MD5 collisions are constructible to order. This is a cheap
+    early check that makes the ordinary swap loud; it is not the integrity
+    guarantee.
+
+    The guarantee is `sandboxd`'s: it verifies the SHA-256 that this same
+    admission recorded against the bytes it actually downloads, before the
+    sample reaches a guest (`sandboxd/api.py::fetch_sample`). That is the check
+    a collision cannot pass, and it covers the window between this HEAD and
+    Dom0's GET, which nothing here can close.
     """
     current = head(key)
     if current is None:
@@ -254,15 +267,30 @@ def chunks(key: str, chunk_size: int = 1 << 20) -> Iterator[bytes]:
     return _chunks(key, chunk_size)
 
 
-def _chunks(key: str, chunk_size: int = 1 << 20) -> Iterator[bytes]:
-    body = _client(Audience.WORKER).get_object(
+def _get(key: str) -> dict:
+    """One GET. The response carries the bytes AND their ETag, together.
+
+    Split out from `_chunks` so `inspect` can read the ETag off the SAME
+    response it streams. A GET is served from one object version, so the
+    header and the body cannot disagree -- which a following HEAD can, and
+    did. See `inspect`.
+    """
+    return _client(Audience.WORKER).get_object(
         Bucket=settings.s3_bucket, Key=key
-    )["Body"]
+    )
+
+
+def _body_chunks(response: dict, chunk_size: int = 1 << 20) -> Iterator[bytes]:
+    body = response["Body"]
     try:
         while chunk := body.read(chunk_size):
             yield chunk
     finally:
         body.close()
+
+
+def _chunks(key: str, chunk_size: int = 1 << 20) -> Iterator[bytes]:
+    yield from _body_chunks(_get(key), chunk_size)
 
 
 def inspect(key: str, head_limit: int | None = None) -> ObjectFacts:
@@ -282,16 +310,29 @@ def inspect(key: str, head_limit: int | None = None) -> ObjectFacts:
     size = 0
     head_bytes = b""
 
-    for chunk in _chunks(key):
+    # **ONE request, and the ETag comes out of it rather than out of a second.**
+    #
+    # This read the body and then issued a separate HEAD, with a comment
+    # claiming the ETag therefore "belongs to the bytes just hashed". It did
+    # not. The submitter's upload capability outlives admission (see
+    # `sample_status`), and they choose when `/uploaded` runs -- so an
+    # overwrite landing between the end of the GET and the HEAD produced
+    # `sha256` of the old bytes beside the `etag` of the new ones. The
+    # claim-time check then compared the new ETag against itself, said "ok",
+    # and Dom0 detonated bytes the record did not describe. No hash collision
+    # was needed: the guard was simply reading two different objects.
+    #
+    # A GET is served from a single object version, so the ETag on this
+    # response and the bytes on this response are the same object by
+    # construction. That is a property of the request, not of the timing.
+    response = _get(key)
+    etag = response["ETag"].strip('"')
+
+    for chunk in _body_chunks(response):
         digest.update(chunk)
         size += len(chunk)
         if len(head_bytes) < limit:
             head_bytes += chunk[: limit - len(head_bytes)]
-
-    # Read AFTER the body, so the ETag belongs to the bytes just hashed rather
-    # than to whatever was there when the request started.
-    current = head(key)
-    etag = current[1] if current else ""
 
     return ObjectFacts(size_bytes=size, sha256=digest.hexdigest(),
                        head_bytes=head_bytes, etag=etag)
