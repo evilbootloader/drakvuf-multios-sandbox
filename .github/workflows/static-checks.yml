@@ -242,24 +242,6 @@ jobs:
           --health-retries 5
         ports:
           - 5432:5432
-      minio:
-        image: minio/minio:latest
-        env:
-          MINIO_ROOT_USER: devroot
-          MINIO_ROOT_PASSWORD: devrootpass
-          # **Must equal S3_REGION.** The region is part of the SigV4 signing
-          # scope, and without it MinIO accepts a signature scoped to any
-          # region — which fails exactly one test,
-          # test_objects.py::test_the_region_is_enforced, in a way that reads
-          # as a code regression in whatever was just changed.
-          MINIO_SITE_REGION: eu-central-1
-        options: >-
-          --health-cmd "curl -sf http://localhost:9000/minio/health/live"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-        ports:
-          - 9000:9000
     steps:
       - uses: actions/checkout@v4
 
@@ -274,12 +256,57 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r platform/requirements.txt pytest
 
+      - name: Start MinIO
+        # **A `services:` block cannot do this**, and that is why it is a step.
+        # GitHub Actions services accept `options` but no *command*, and
+        # `minio/minio` needs `server /data` -- without it the container prints
+        # its usage and exits, which the first version of this job did.
+        #
+        # MINIO_SITE_REGION must equal S3_REGION. The region is part of the
+        # SigV4 signing scope, and without it MinIO accepts a signature scoped
+        # to any region -- failing exactly one test,
+        # test_objects.py::test_the_region_is_enforced, in a way that reads as a
+        # code regression in whatever was just changed.
+        #
+        # Pinned, not `:latest`. This job asserts behaviour about signature
+        # scoping; an image that moves under it turns a real regression and an
+        # upstream change into the same red X.
+        run: |
+          docker run -d --name minio -p 9000:9000 \
+            -e MINIO_ROOT_USER=devroot \
+            -e MINIO_ROOT_PASSWORD=devrootpass \
+            -e MINIO_SITE_REGION=eu-central-1 \
+            minio/minio:RELEASE.2025-09-07T16-13-09Z server /data
+          for _ in $(seq 1 30); do
+            if curl -sf http://localhost:9000/minio/health/live >/dev/null; then
+              echo "minio healthy"; exit 0
+            fi
+            sleep 2
+          done
+          echo "minio did not become healthy"; docker logs minio; exit 1
+
+      - name: Create the analysis bucket
+        # `conftest.py` writes objects with `put_object` and never creates the
+        # bucket -- on the deployment `minio/provision.sh` does that, and here
+        # nothing would.
+        run: |
+          pip install boto3
+          python - <<'PY'
+          import boto3
+          boto3.client("s3", endpoint_url="http://127.0.0.1:9000",
+                       aws_access_key_id="devroot",
+                       aws_secret_access_key="devrootpass",
+                       region_name="eu-central-1").create_bucket(Bucket="analysis")
+          print("bucket 'analysis' created")
+          PY
+
       - name: pytest
         working-directory: platform
+        # Only the database URL. Every S3 value conftest.py needs is already its
+        # own default -- devroot/devrootpass/analysis/eu-central-1 against
+        # 127.0.0.1:9000 -- and the first version of this job set `S3_ENDPOINT`,
+        # which conftest does not read. It wants S3_INTERNAL_ENDPOINT and
+        # S3_PUBLIC_ENDPOINT.
         env:
           TEST_DATABASE_URL: postgresql://platform:platform@localhost:5432/sandbox_platform_test
-          S3_ENDPOINT: http://localhost:9000
-          S3_REGION: eu-central-1
-          S3_ACCESS_KEY: devroot
-          S3_SECRET_KEY: devrootpass
         run: python -m pytest -q
