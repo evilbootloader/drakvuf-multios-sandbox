@@ -131,3 +131,155 @@ jobs:
         run: |
           echo "Known ps|grep sites (DRAFT-011 owns replacing these):"
           grep -Rns 'ps aux.*grep' automation/ || echo "none found"
+  # -------------------------------------------------------------------------
+  # Secrets. Runs on every push and PR, and scans HISTORY as well as the tree.
+  #
+  # The pre-push hook (.githooks/pre-push) is the fast local guard and only
+  # scans the working tree. This is the backstop that catches a push made with
+  # --no-verify, or from a clone that never ran
+  # `git config core.hooksPath .githooks`.
+  #
+  # **A finding here is already worse than a finding locally.** By the time
+  # this job runs the commit is on the remote, so the remedy is a history
+  # rewrite AND rotating the credential, not an edit.
+  # -------------------------------------------------------------------------
+  secrets:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Full history, not the default depth-1 clone: a shallow checkout
+          # would scan one commit and report clean, which is the failure mode
+          # this whole job exists to avoid.
+          fetch-depth: 0
+
+      - name: Install TruffleHog
+        run: |
+          V=$(curl -fsSL https://api.github.com/repos/trufflesecurity/trufflehog/releases/latest \
+              | grep -m1 '"tag_name"' | sed 's/.*"v\([^"]*\)".*/\1/')
+          mkdir -p "$HOME/.local/bin"
+          curl -fsSL "https://github.com/trufflesecurity/trufflehog/releases/download/v$V/trufflehog_${V}_linux_amd64.tar.gz" \
+              | tar xz -C "$HOME/.local/bin" trufflehog
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: TruffleHog + project-specific patterns
+        # No --tree: this is the tier that scans history.
+        run: scripts/check-secrets.sh
+
+  # -------------------------------------------------------------------------
+  # sandboxd. Needs no infrastructure, which is the property that lets it run
+  # here at all — the platform suite requires Postgres and MinIO.
+  #
+  # This one command also runs all three generators and the reference checker
+  # in --check mode, because the suite shells out to them. So a stale
+  # docs/CURRENT-STATE.md, docs/INDEX.md or misc/*.cfg, or a dead
+  # cross-reference, can no longer reach master through a PR.
+  # -------------------------------------------------------------------------
+  sandboxd:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          # Dom0's own interpreter, which is where this code runs. Ubuntu
+          # noble ships 3.12.
+          #
+          # **If the suite fails here it is a real finding, not a reason to
+          # move to a newer runner.** docs/CURRENT-STATE.md 1.2 still records
+          # Dom0's Python as UNCONFIRMED after the move from jammy to noble;
+          # confirm it with `python3 -V` on the host and change this to match,
+          # rather than the other way round.
+          python-version: '3.12'
+
+      - name: Install dependencies
+        # **Both requirement files, and platform/ is not a mistake.**
+        # `sandboxd/tests/test_api.py` validates what the client sends against
+        # the SERVER's own pydantic models, imported from `sandbox_platform` —
+        # so a shape change in `RegisterRequest` or `ClaimRequest` fails here
+        # rather than, in that file's words, "at 3am on Dom0 against a platform
+        # that was upgraded".
+        #
+        # So "needs no infrastructure" is true of *services* — no Postgres, no
+        # MinIO, no running API — and not of *packages*. Installing only
+        # sandboxd/requirements.txt fails collection with
+        # `ModuleNotFoundError: No module named 'fastapi'`.
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r sandboxd/requirements.txt -r platform/requirements.txt pytest
+
+      - name: pytest
+        run: python -m pytest sandboxd/tests -q
+
+  # -------------------------------------------------------------------------
+  # platform. The ONLY safe home for this suite.
+  #
+  # Its `conn` fixture runs
+  # `TRUNCATE jobs, worker_pipelines, workers RESTART IDENTITY CASCADE`, so it
+  # destroys job history wherever it points. Here that is a throwaway service
+  # container; on the deployment it is the record of every analysis ever run.
+  # CLAUDE.md carries the standing rule, and it was attempted against the
+  # deployment once already, on 2026-08-25.
+  #
+  # `mc` and the Playwright browser tests are absent and skip loudly. Adding
+  # them is a later change — a browser download on every PR for the XSS-
+  # execution tests is a real cost, and those tests already skip rather than
+  # silently passing.
+  # -------------------------------------------------------------------------
+  platform:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: platform
+          POSTGRES_PASSWORD: platform
+          POSTGRES_DB: sandbox_platform_test
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+      minio:
+        image: minio/minio:latest
+        env:
+          MINIO_ROOT_USER: devroot
+          MINIO_ROOT_PASSWORD: devrootpass
+          # **Must equal S3_REGION.** The region is part of the SigV4 signing
+          # scope, and without it MinIO accepts a signature scoped to any
+          # region — which fails exactly one test,
+          # test_objects.py::test_the_region_is_enforced, in a way that reads
+          # as a code regression in whatever was just changed.
+          MINIO_SITE_REGION: eu-central-1
+        options: >-
+          --health-cmd "curl -sf http://localhost:9000/minio/health/live"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 9000:9000
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          # The platform runs in its own DomU, not on Dom0, so it is not tied
+          # to Dom0's interpreter the way sandboxd is.
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r platform/requirements.txt pytest
+
+      - name: pytest
+        working-directory: platform
+        env:
+          TEST_DATABASE_URL: postgresql://platform:platform@localhost:5432/sandbox_platform_test
+          S3_ENDPOINT: http://localhost:9000
+          S3_REGION: eu-central-1
+          S3_ACCESS_KEY: devroot
+          S3_SECRET_KEY: devrootpass
+        run: python -m pytest -q

@@ -1,0 +1,48 @@
+# sandboxd's runtime dependencies, for the Dom0 venv and for CI.
+#
+# **These existed only as a hand-typed pip line in a runbook until 2026-08-31.**
+# `docs/runbooks/09-verify-sandboxd-and-console.md` carried them inside a
+# transcript, which is evidence of what was installed once and not a thing a
+# fresh Dom0 or a CI job can install from.
+#
+#     python3 -m venv .venv-sandboxd
+#     .venv-sandboxd/bin/pip install -r sandboxd/requirements.txt
+#
+# Deliberately short. `sandboxd` runs on the machine that traces malware as
+# root, so every dependency is attack surface reachable from a compromised
+# guest by way of the platform's responses. Both below are load-bearing; there
+# is no third.
+
+# The worker channel: claim, heartbeat, upload, all over mutual TLS.
+# Pinned to the same version platform/requirements.txt pins, because the two
+# halves of that channel are developed together.
+httpx==0.28.1
+
+# The live console relay (DRAFT-056) only.
+#
+# **`websockets`, not `httpx-ws`**, and `sandboxd/vnc.py:236` records why:
+# httpx-ws would reuse the existing httpx client and so put the console on the
+# same connection path as the worker channel. These are different trust
+# situations -- one is Dom0 talking to the platform, the other carries guest
+# framebuffer bytes out of the machine running malware.
+#
+# **The pin is a Dom0 constraint, not a preference.** Newer releases require a
+# Python this Dom0 does not have; see docs/CURRENT-STATE.md 1.2, where the
+# interpreter version is still UNCONFIRMED after the move to noble. If a
+# `pip install` here reports `from versions: none`, read
+# docs/TROUBLESHOOTING.md before loosening it -- that message means the index
+# returned nothing, not that the pin is wrong.
+websockets==16.1.1
+
+# --- Running the tests -----------------------------------------------------
+#
+# `pytest`, plus **platform/requirements.txt**. That second one is not a
+# mistake and not needed on Dom0: `sandboxd/tests/test_api.py` validates what
+# this client sends against the SERVER's own pydantic models, imported from
+# `sandbox_platform`, so a shape change fails in CI rather than at 3am on Dom0.
+#
+#     pip install -r sandboxd/requirements.txt -r platform/requirements.txt pytest
+#     python -m pytest sandboxd/tests -q
+#
+# "sandboxd needs no infrastructure" is true of *services* -- no Postgres, no
+# MinIO, no running API -- and not of *packages*.

@@ -1,0 +1,28 @@
+#!/bin/sh
+# Refuse to push if a secret would enter git history.
+#
+# **Pre-push, not pre-commit, and that is deliberate.** A local commit is
+# recoverable -- amend it, reset it, rewrite the branch, nobody else has seen
+# it. A push is not: once a secret is on the remote, the remedy is a history
+# rewrite AND rotating the credential, because it has been served to anyone who
+# fetched. This hook guards the last reversible moment.
+#
+# Enable it once per clone (hooks are not cloned with the repository):
+#
+#     git config core.hooksPath .githooks
+#
+# `--tree` only: `scripts/check-secrets.sh` without it also scans the whole
+# history, which is the right thing in CI and too slow to run on every push.
+# CI runs the full form -- see .github/workflows/static-checks.yml.
+
+set -eu
+
+SCRIPT_DIR="$(cd -- "$(dirname -- "$0")" && pwd)"
+REPO_ROOT="$(cd -- "$SCRIPT_DIR/.." && pwd)"
+
+if [ ! -x "$REPO_ROOT/scripts/check-secrets.sh" ]; then
+    printf 'pre-push: scripts/check-secrets.sh missing or not executable\n' >&2
+    exit 1
+fi
+
+exec "$REPO_ROOT/scripts/check-secrets.sh" --tree
