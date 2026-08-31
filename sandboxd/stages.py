@@ -41,7 +41,7 @@ import time
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
-from . import guests, timing, vnc
+from . import config, guests, timing, vnc
 from .clone import CloneBuilder, CloneError, CloneSpec
 from .guests import Interaction, Job, SampleKind, TargetOs
 from .proc import CommandError
@@ -161,13 +161,18 @@ class Heartbeat:
 class Config:
     """Everything about this Dom0 that an analysis needs."""
 
-    vg: str = "vg-root"
-    bridge: str = "xenbr1"
-    subnet: str = "172.16"
-    staging_dir: Path = Path("/var/lib/sandboxd/staging")
-    results_dir: Path = Path("/var/lib/sandboxd/results")
-    config_dir: Path = Path("/tmp")
-    repo_root: Path = Path("/root/drakvuf-multios-sandbox")
+    # **Defaults come from `sandboxd/config.py`, which is where an operator
+    # tunes this host.** They were literals here until 2026-08-31, duplicating
+    # `automation/platform.env` -- so changing the bridge there moved the shell
+    # pipeline and left sandboxd writing the old name into every clone config.
+    # A clone on a bridge with no isolation rules looks like a working analysis.
+    vg: str = config.VG_NAME
+    bridge: str = config.ANALYSIS_BRIDGE
+    subnet: str = config.SUBNET_PREFIX
+    staging_dir: Path = config.STAGING_DIR
+    results_dir: Path = config.RESULTS_DIR
+    config_dir: Path = config.CONFIG_DIR
+    repo_root: Path = config.DOM0_REPO_ROOT
     # Per-host, like pipeline-android.env's ${APK_INSTALL_WAIT:-20}. Lowering
     # one below what was measured is how a preconfig starts handing a
     # still-running install to the trace.
@@ -175,7 +180,7 @@ class Config:
     # Well inside LEASE_SECONDS=120, so two consecutive failures still leave
     # margin. Configurable because the lease TTL is, and because a fixed value
     # made cancellation untestable without waiting a real interval.
-    heartbeat_interval: float = HEARTBEAT_INTERVAL
+    heartbeat_interval: float = config.HEARTBEAT_INTERVAL
     # SANDBOXD_PLUGINS. None means "use the measured per-OS defaults", which is
     # what an unset variable gives -- so absence is exactly today's behaviour.
     # A measurement tool for sizing a plugin's cost (DRAKVUF #108) rather than
@@ -200,7 +205,7 @@ class Config:
     #
     # DEPLOYMENT NOTE: a Dom0 that was relying on the old hard-coded `True`
     # must now set SANDBOXD_CONSOLE_ENABLED=1 to keep serving consoles.
-    console_enabled: bool = False
+    console_enabled: bool = config.CONSOLE_ENABLED
     api_base: str = ""
     # The listener the BROWSER reaches -- see Settings.console_api.
     console_api: str = ""
@@ -215,7 +220,7 @@ class Config:
     # already required to be root, so it costs nothing. The accepted trades
     # are in automation/pipeline-{ubuntu,android}.env.
     injection_pids: dict = field(default_factory=lambda: {
-        TargetOs.UBUNTU: 1, TargetOs.ANDROID: 1})
+        TargetOs.UBUNTU: 1, TargetOs.ANDROID: 3251})
     # `lv_sizes` was dropped 2026-08-29 with CLONE_LV_SIZE. Clones are thin
     # snapshots and inherit the golden LV's size, so there is no per-OS
     # number left to hold -- see clone.argv_lvcreate.

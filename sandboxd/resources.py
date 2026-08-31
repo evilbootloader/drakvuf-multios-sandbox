@@ -42,20 +42,12 @@ from .naming import MAX_VLAN, MIN_VLAN
 # misc/<os>_sandbox.cfg's `memory` plus a per-host domain overhead. From
 # docs/architecture/platform.md, "Where required_mib comes from".
 #
-# **The overhead is unresolved and this default is a guard, not a measurement.**
-# Two observations from the same lab disagree: 112 MiB measured directly,
-# against ~2063 MiB consumed for a 2048 MiB clone. Neither is wrong on its face
-# -- the methods differ and nobody has reconciled them. Both numbers are kept
-# here rather than in a runbook, because the next person to touch this needs to
-# know the figure is contested before they tune it down.
-#
-# 150 sits above the direct measurement deliberately. A guard set below the
-# real cost overcommits the host, and the symptom is a clone that fails to
-# restore under memory pressure rather than a number anyone reads.
-#
-# A second Dom0 needs its own pass: capacity is a property of the machine even
-# when the overhead is a property of Xen.
-DOMAIN_OVERHEAD_MIB = 150
+# **The value lives in sandboxd/config.py**, which is where an operator
+# tunes this host, and which records why 150 is a guard rather than a
+# measurement -- two observations from this lab disagree by an order of
+# magnitude. Re-exported here because `required_mib` takes it as a default
+# argument and callers pass it by name.
+from .config import DOMAIN_OVERHEAD_MIB
 
 _MEMORY = re.compile(r"^\s*memory\s*=\s*(\d+)", re.M)
 
