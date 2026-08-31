@@ -242,10 +242,15 @@ available = xl info -> free_memory, minus a fixed reserve
 admit if    required <= available
 ```
 
-Dom0 is pinned at `dom0_mem=4096M,max:4096M`
-(`docs/drakvuf-on-xen-nested-within-proxmox.md:280`) and so does not
-balloon; the reserve exists for Xen's own allocation and for the restore
-burst, not for Dom0. `xl restore` reinstates a full memory image, so
+Dom0 is pinned and so does not balloon; the reserve exists for Xen's own
+allocation and for the restore burst, not for Dom0.
+
+> **Corrected 2026-08-29.** This said `dom0_mem=4096M,max:4096M`, citing
+> `docs/drakvuf-on-xen-nested-within-proxmox.md:280`. That was the value in the
+> original setup guide and has not been the deployed value for a long time:
+> the Xen boot line has read **`dom0_mem=8192M,max:8192M`** since well before
+> the migration, and still does. `docs/CURRENT-STATE.md` §1.2 is authoritative;
+> the historical guides are not. `xl restore` reinstates a full memory image, so
 admission has to be sized against that peak rather than steady-state
 usage — this is the part most likely to be wrong on first attempt and
 should be measured before the rule is trusted.

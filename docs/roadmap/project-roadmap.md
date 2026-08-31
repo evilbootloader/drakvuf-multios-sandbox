@@ -1,6 +1,6 @@
 # DRAKVUF Multi-OS Sandbox — Project Roadmap
 
-> Last updated: 2026-08-11. This roadmap is a living document — update it as
+> Last updated: 2026-08-29. This roadmap is a living document — update it as
 > milestones close, decisions get made, and new gaps are found. It does not
 > replace the per-OS checklists under `docs/checklists/`; those track
 > execution evidence, this tracks direction and sequencing.
@@ -8,16 +8,30 @@
 ## Context
 
 The project automates a DRAKVUF malware-analysis sandbox on
-`Proxmox/KVM → Xen Dom0 + DRAKVUF/LibVMI → {Ubuntu, Android/BlissOS, Windows}`.
-All three are **current targets**. Ubuntu automation (`automation/*-ubuntu.sh`,
-`clone.pl`, orchestrated by a modified `dirwatch.c`) mostly works.
-Android automation has real evidenced progress through
-`docs/checklists/android.md` Phase 1 (golden→sandbox clone, injection anchor,
-saved memory state), but Phase 2 onward — the actual Android scripts,
-sample-type handling, artifact collection, containment, testing, reliability
-hardening — is 100% unstarted "Candidate" content. Windows has no execution
-evidence yet, but its track is open and its design constraints are already
-fixed by issue #6's conformance checklist; DRAFT-034 is its head.
+`Xen Dom0 on bare metal + DRAKVUF/LibVMI → {Ubuntu, Android/BlissOS, Windows}`,
+with a web platform in its own PVH DomU alongside. All three OS targets are
+**current**.
+
+> **Updated 2026-08-29.** This paragraph read
+> `Proxmox/KVM → Xen Dom0 → …` until the bare-metal migration removed L0 on
+> 2026-08-28, and described Android Phase 2 as *"100% unstarted Candidate
+> content"* long after it was written and evidenced. `docs/CURRENT-STATE.md`
+> §2a lists everything the migration invalidated.
+
+- **Ubuntu** — evidenced end to end, including through the platform. This is
+  the protected path: do not change its behaviour without being asked.
+- **Android/BlissOS** — Phase 1 (golden→sandbox clone, injection anchor, saved
+  memory state) and the Phase 2 automation are both done:
+  `preconfig-android.sh`, `drakvuf-android.sh`, `run_analysis-android.sh` and a
+  shared `clone.pl`. **Both sample kinds are now evidenced through the
+  platform** — native ELF, and APK install + `am start` (operator, 2026-08-29).
+  That closes the last "implemented but never run" item on this track.
+- **Windows** — no execution evidence. The track is open and its design
+  constraints are fixed by issue #6's conformance checklist; DRAFT-034 is its
+  head. `catalogue.py` raises rather than defaulting to the Linux options,
+  deliberately, so nothing invents evidence for it.
+- **The platform** — M7 delivered and serving; M8 partly open. See
+  `docs/checklists/platform.md`.
 
 This roadmap exists because writing more automation directly on top of the
 brainstormed workstream list would have meant redoing work once the shared
@@ -108,7 +122,7 @@ for full sourced detail. Condensed:
 | capa post-processing | Reuse/Adapt | Apache-2.0, no licensing friction. capa v7.2.0 added a native DRAKVUF-log feature extractor. |
 | Result/artifact schema | Reference-only / gap | No published JSON Schema found; define this project's own contract. |
 | Web/API architecture | Reference-only | Small Flask MVP is a fine reference; frontend stack unconfirmed. |
-| VM lifecycle (snapshot-restore) | **Not applicable, and ruled out for Windows too** | This project clones per-run via LVM/OVS. Confirmed 2026-08-07: snapshot-restore is not viable in this nested Xen-inside-Proxmox setup at all — `xl save`/`xl restore` leaves the base and cloned disk images read-only — so the Windows track will also use clone-per-run, not just Ubuntu/Android. |
+| VM lifecycle (snapshot-restore) | **Not applicable, and ruled out for Windows too** | This project clones per-run via LVM/OVS. Confirmed 2026-08-07: snapshot-restore is not viable in this nested Xen-inside-Proxmox setup at all — `xl save`/`xl restore` leaves the base and cloned disk images read-only — so the Windows track will also use clone-per-run, not just Ubuntu/Android. **Qualified 2026-08-29:** that finding was made on the nested host, which no longer exists, and **has not been re-tested on bare metal**. Treat it as unconfirmed rather than as a standing constraint. It does not change the decision either way — clone-per-run is now load-bearing for thin snapshots, per-VLAN isolation and `sandboxd`'s admission control, none of which snapshot-restore would simplify. |
 | Config presets (`[preset.x]` TOML) | Reuse/Adapt | Low-risk pattern, directly portable to per-OS presets. |
 
 ## Repository layout
@@ -251,9 +265,10 @@ for the fully specified first batch (DRAFT-001 through DRAFT-008).
    parsing) — ambiguous cases (Android ELF vs. Linux ELF) need experiments
    before the classification contract is finalized (DRAFT-014).
 3. ~~Windows VM lifecycle: clone-per-run vs. snapshot-restore~~ — **resolved
-   2026-08-07, not an open decision.** Snapshot-restore is ruled out in this
-   nested Xen-inside-Proxmox setup entirely (`xl save`/`xl restore` leaves
-   disk images read-only), so Windows uses clone-per-run like Ubuntu/Android.
+   2026-08-07, not an open decision.** Snapshot-restore was ruled out in the
+   nested Xen-inside-Proxmox setup this project used until 2026-08-28
+   (`xl save`/`xl restore` leaves disk images read-only) — **not re-tested on
+   bare metal** — so Windows uses clone-per-run like Ubuntu/Android.
    DRAFT-020 is reframed from "decide the model" to "confirm clone-per-run
    works for a Windows guest specifically and select a baseline."
 4. **TLS-visibility strategy for Linux/Android** — hypervisor memory

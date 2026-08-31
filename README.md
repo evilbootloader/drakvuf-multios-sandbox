@@ -3,24 +3,45 @@
 Automation for a DRAKVUF malware-analysis laboratory.
 
 ```
-L0: Proxmox/KVM
-└── L1: Xen Dom0 + DRAKVUF/LibVMI
-    ├── L2 Ubuntu analysis VM
-    ├── L2 Android/BlissOS analysis VM
-    └── L2 Windows analysis VM
+Xen Dom0 on bare metal + DRAKVUF/LibVMI
+├── Ubuntu analysis guest        (HVM, disposable clone per sample)
+├── Android/BlissOS analysis guest
+├── Windows analysis guest
+└── platform                     (PVH DomU: Postgres, MinIO, the web API)
 ```
 
-The goal is a sandbox where a sample dropped into `/malware_incoming/<os>/`
-is analysed under DRAKVUF in a disposable clone of that OS's guest. The
-target OS is chosen by which directory the sample is submitted to, with one
-watcher per OS.
+Until 2026-08-28 this ran nested inside Proxmox, three layers deep. Proxmox was
+erased in the bare-metal migration; documents naming `pve1`, VM 101 or CT 102
+predate it. `docs/CURRENT-STATE.md` §2a lists what that invalidated.
 
-All three OS targets are current, at different stages:
+A sample is analysed under DRAKVUF inside a disposable clone of the guest for
+its target OS, and the clone is destroyed afterwards. **There are two ways in**,
+and they share the clone machinery rather than duplicating it:
+
+| Path | How a sample arrives | Status |
+|---|---|---|
+| **The platform** | uploaded through the web UI, queued in Postgres, claimed by `sandboxd` on Dom0 over mutual TLS | the current path |
+| **The per-OS watcher** | dropped into `/malware_incoming/<os>/`, picked up by `dirwatch` | the original path, still present |
+
+## The components
+
+| | |
+|---|---|
+| **`automation/`** | the analysis pipeline itself — clone, isolate, trace, collect, destroy. Driven either by `dirwatch` or by `sandboxd` |
+| **`sandboxd/`** | the Dom0 orchestrator. Claims jobs from the platform, admits them against real host capacity, runs the pipeline, uploads artifacts, and reports state. Python; runs in the foreground with **no systemd unit** |
+| **`platform/`** | the web tier: FastAPI, Postgres job queue, MinIO object store, server-rendered UI, Cloudflare Access at the edge and an internal CA inward. Runs in its own PVH DomU and **never executes a sample** — that asymmetry is what the whole trust boundary rests on |
+
+Dom0 opens every connection and has no inbound listener; the platform answers
+requests and never makes them.
+
+## The OS targets
+
+All three are current, at different stages:
 
 | Target | State |
 |---|---|
-| **Ubuntu** | Mostly done, evidenced end to end on Dom0 |
-| **Android/BlissOS** | Phase 1 evidenced (golden→sandbox clone, injection anchor, saved state); no automation scripts yet |
+| **Ubuntu** | Evidenced end to end, including through the platform |
+| **Android/BlissOS** | Automation complete (`preconfig-android.sh`, `drakvuf-android.sh`, `run_analysis-android.sh`, shared `clone.pl`). **Both sample kinds evidenced through the platform** — native ELF, and APK install + `am start` |
 | **Windows** | Track open, design contract fixed (issue #6's C1–C10), no execution evidence yet |
 
 ## Running it
@@ -41,34 +62,45 @@ guest state in `state/`; neither is git-tracked. See `profiles/README.md`,
 
 ## Repository layout
 
-- `automation/` — the Ubuntu automation scripts (`dirwatch.c`,
-  `clone.pl`, `preconfig-ubuntu.sh`, `drakvuf-ubuntu.sh`,
-  `cleanup.sh`, `tcpdump.sh`, `network-setup.sh`, `run_analysis-ubuntu.sh`)
-  plus `pipeline-ubuntu.env`, the per-OS configuration they all source.
-  See `docs/architecture/analysis-pipeline.md` for how they fit together.
-- `misc/` — tracked Xen guest configs: `ubuntu.cfg` (golden `ubuntu`),
-  `ubuntu_sandbox.cfg` (`ubuntu_sandbox`), `android.cfg` (golden `android`),
-  `android_sandbox.cfg` (`android_sandbox`). Renamed from `linux.cfg` /
-  `linux_sandbox.cfg` in issue #1 — those names were historical and misleading,
-  since the files define Ubuntu domains, not a generic "linux" one.
-- `profiles/` — LibVMI/DRAKVUF kernel profiles (`linux.json`,
-  `android.json`). **Not git-tracked**: ~48 MB and ~62 MB of `dwarf2json`
-  output regenerated per kernel build. `profiles/README.md` has the
-  regeneration commands and the SHA-256 of each.
-- `state/` — Xen `xl save` memory images for the sandbox templates, named
-  after the origin domain. **Not git-tracked** (`*.bak`).
-- `docs/roadmap/` — the living project roadmap: milestones, dependency
-  graph, risk register, architecture decisions still needing experiments.
-- `docs/architecture/` — the analysis pipeline, networking, result schema,
-  upstream-DRAKVUF strategy, and licensing research write-ups.
+- `automation/` — the analysis pipeline, shared across all three OS targets.
+  `dirwatch.c` (the watcher), `clone.pl` (shared), the per-OS
+  `preconfig-<os>.sh` / `drakvuf-<os>.sh` / `run_analysis-<os>.sh`, plus
+  `cleanup.sh`, `tcpdump.sh`, `network-setup.sh`. Configuration is
+  `pipeline-<os>.env` per target and `platform.env` host-global. See
+  `docs/architecture/analysis-pipeline.md`.
+- `sandboxd/` — the Dom0 orchestrator and its tests. Runs the same pipeline as
+  `dirwatch` but driven by the platform's queue, with host-global admission
+  control instead of fixed clone slots.
+- `platform/` — the FastAPI service, SQL migrations, MinIO provisioning, the
+  server-rendered UI, and its tests. See `docs/architecture/platform.md`.
+- `misc/` — tracked Xen guest configs: `ubuntu.cfg` / `ubuntu_sandbox.cfg`,
+  `android.cfg` / `android_sandbox.cfg`, `windows.cfg`, and `platform.cfg`
+  (the PVH domain the web tier runs in).
+- `scripts/` — repository tooling, including `gen-current-state.py`, which
+  regenerates the derived half of `docs/CURRENT-STATE.md`.
+- `profiles/` — LibVMI/DRAKVUF kernel profiles (`linux.json`, `android.json`).
+  **Not git-tracked**: ~48 MB and ~62 MB of `dwarf2json` output regenerated per
+  kernel build. `profiles/README.md` has the commands and the SHA-256 of each.
+- `state/` — Xen `xl save` memory images for the sandbox templates, named after
+  the origin domain. **Not git-tracked** (`*.bak`).
+- `docs/INDEX.md` — generated index of every heading in `docs/`, as
+  `path:line — heading`. Start here when looking for where a topic is covered.
+- `docs/CURRENT-STATE.md` — what the lab actually is right now, with a
+  confirmed date per fact and a superseded-facts table. **Read before asserting
+  any deployment fact.**
+- `docs/roadmap/` — milestones, dependency graph, risk register, architecture
+  decisions still needing experiments.
+- `docs/architecture/` — the analysis pipeline, the platform, networking, the
+  live console, result schema, upstream-DRAKVUF strategy, licensing.
 - `docs/checklists/` — per-OS implementation checklists with execution
-  evidence (`android.md`, `ubuntu.md`, `windows.md`, `platform.md`). These
-  track what's actually been done and evidenced, distinct from the roadmap.
-- `docs/runbooks/` — dated execution transcripts from real Dom0 work
-  (`01-verify-user-placeholder.md`, `02-deploy-repo-relative-paths.md`).
-  Append-only evidence: annotate, never edit in place.
-- `docs/workflow-ci.md` — the CI design: a GitHub-hosted static tier and a
-  self-hosted Xen integration tier (DRAFT-026a/b). Neither is implemented.
+  evidence. These track what has been done, distinct from the roadmap.
+- `docs/runbooks/` — dated execution transcripts from real Dom0 work, numbered
+  oldest to newest. Append-only evidence: annotate, never edit in place.
+  **01–10 describe the nested Proxmox lab** that was erased on 2026-08-28.
+- `docs/reviews/` — dated whole-project assessments.
+- `docs/workflow-ci.md` — the CI design: a GitHub-hosted static tier
+  (implemented, `.github/workflows/static-checks.yml`) and a self-hosted Xen
+  integration tier (DRAFT-026b, not implemented).
 - `docs/Project-definition.txt`,
   `docs/drakvuf-on-xen-nested-within-proxmox.md`, `docs/android_setup.md` —
   the original infrastructure setup guides. Historical provenance, kept
@@ -88,7 +120,16 @@ bash -n SCRIPT       # shell scripts
 dash -n SCRIPT       # they execute under dash in production — see CLAUDE.md
 shellcheck SCRIPT
 perl -c SCRIPT       # Perl scripts
+
+platform/.venv/bin/python -m pytest sandboxd/tests -q   # sandboxd; needs no infrastructure
+scripts/dev-services.sh                                  # bring up Postgres + MinIO locally
+cd platform && .venv/bin/python -m pytest -q             # platform; needs both
 ```
+
+**Never run the platform suite against the deployment.** Its `conn` fixture
+truncates the jobs table. `TEST_DATABASE_URL` defaults to
+`sandbox_platform_test`, which is why it is safe in a development container and
+destructive anywhere else.
 
 `shellcheck` exits 0 as of DRAFT-031 (2026-08-11) — run it bare, without a
 severity flag, since it reads `.shellcheckrc` automatically and that is the

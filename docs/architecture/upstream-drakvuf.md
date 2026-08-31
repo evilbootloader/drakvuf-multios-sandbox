@@ -148,6 +148,7 @@ tlsmon: Windows-only, therefore **applicable to the Windows track and to
 nothing else** — not the blanket "not applicable" this line used to read,
 now that Windows is current; VM lifecycle via snapshot-restore:
 not applicable to this project's clone-per-run model, and additionally
-confirmed non-viable in this nested Xen-inside-Proxmox setup at all, per
+confirmed non-viable in the nested Xen-inside-Proxmox setup this project used
+until 2026-08-28 — not re-tested on bare metal — per
 `docs/checklists/windows.md`; capa integration: reuse/adapt, capa v7.2.0
 added a native DRAKVUF-log feature extractor).

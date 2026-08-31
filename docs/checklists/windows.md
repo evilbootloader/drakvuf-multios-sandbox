@@ -39,7 +39,7 @@
 | Analysis bridge | TBD |
 | Saved state | TBD |
 | Windows baseline (version/build) | **Windows 11 first, Windows 10 as fallback** (direction set 2026-08-19). Exact build not yet recorded — §0.1's profile step keys on one kernel GUID |
-| VM lifecycle model | clone-per-run (current Ubuntu/Android model) — decided by elimination: snapshot-restore (DRAKVUF Sandbox's model) does not work in this nested Xen-inside-Proxmox setup, since `xl save`/`xl restore` leaves the base and cloned disk images read-only; see roadmap "Architecture decisions needing experiments" |
+| VM lifecycle model | clone-per-run (current Ubuntu/Android model) — decided by elimination: snapshot-restore (DRAKVUF Sandbox's model) does not work in the nested Xen-inside-Proxmox setup this project used until 2026-08-28, since `xl save`/`xl restore` leaves the base and cloned disk images read-only. **Not re-tested on bare metal**; the decision stands on its own merits regardless — see roadmap "Architecture decisions needing experiments" |
 | Current phase | Phase 0 — golden VM installed 2026-08-21 (operator-reported); `windows_sandbox.cfg` and the LibVMI profile outstanding |
 | Current blocker | No `misc/windows_sandbox.cfg`; no kernel PDB fetched, so no `profiles/windows.json` |
 
@@ -121,9 +121,9 @@ making it the project's only working TLS-visibility route (DRAFT-023).
   constraints to expect.
 - [x] Decide golden-VM lifecycle model — **clone-per-run, decided by
   elimination** (roadmap "Architecture decisions needing experiments" #3;
-  the status table above records the same). Snapshot-restore is not viable
-  in this nested Xen-inside-Proxmox setup at all, so there was never a
-  Windows-specific choice to make. What remains is confirming clone-per-run
+  the status table above records the same). Snapshot-restore was not viable
+  in the nested Xen-inside-Proxmox setup used until 2026-08-28, so there was
+  never a Windows-specific choice to make. What remains is confirming clone-per-run
   works against a Windows guest specifically — DRAFT-034, not this item.
 - [ ] Determine profile/symbol requirements for the selected baseline.
   **Procedure recorded in §0.1 (Candidate).** It is volatility3's

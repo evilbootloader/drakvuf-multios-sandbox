@@ -66,13 +66,43 @@ DRAFT-040's D4 and the `DRAKVUF_INPUT` posture `networking.md` describes. The
 platform server cannot reach Dom0 at all; it answers requests and does not
 make them.
 
-Both are Proxmox guests on L0, siblings rather than nested. Their resources
-come out of L0's budget, **not** Dom0's — `dom0_mem` stays pinned at 8192M
-and the clone pool above it is untouched.
+> ## SUPERSEDED 2026-08-28 — the platform is a Xen PVH DomU, not an LXC
+>
+> **The reasoning in this section survives; its conclusion and its cost model
+> do not.** Proxmox was erased in the bare-metal migration
+> (`docs/runbooks/12-baremetal-trial.md` §A1b), and with it went the L0 that
+> could host a sibling container. The platform was rebuilt as a PVH domain,
+> `misc/platform.cfg`, argued in full at `platform-domu.md` §A1.
+>
+> Three things change, and the third is the one that bites:
+>
+> - **"Their resources come out of L0's budget, not Dom0's" is now false.** A
+>   DomU is carved out of the same memory the clone pool draws on. That is why
+>   the platform was **halved from 4096 to 2048 MiB**: an LXC's `--memory` was
+>   a cgroup *cap* that unused memory stayed available beneath, and a DomU
+>   reservation is not. 4096 now costs a concurrent analysis outright.
+> - **"Unprivileged, always" no longer applies** — there is no shared kernel to
+>   escape into. It is replaced by the PVH choice itself: no QEMU device model,
+>   so no `qemu-system-*` process in Dom0's 8192 MiB per guest, which is memory
+>   adjacent to the constraint that caps concurrent analyses.
+> - **The M8 re-examination below already argued for a VM** — an
+>   internet-facing service parsing attacker-controlled bytes on a shared
+>   kernel. That is now settled in the direction it predicted, though for
+>   migration reasons rather than security ones. **Do not read it as still
+>   open.**
+>
+> The storage bullet is *more* true, not less: see below.
+
+Both were guests on the same host, siblings rather than nested — the platform
+in its own domain, Dom0 in another.
 
 ### The platform is an unprivileged LXC container, not a VM
 
-Decided 2026-08-21. It is proportionate because **the platform never
+Decided 2026-08-21. **Superseded 2026-08-28, see the block above.** Kept
+because the argument for putting the safe side somewhere cheap is the argument
+that still governs what may run there.
+
+It is proportionate because **the platform never
 executes a sample**: that is the asymmetry the whole design rests on, and it
 is why Dom0 dials out and never listens. Putting the safe side in a
 container buys cheap provisioning, live resize, and snapshots cheap enough
@@ -98,6 +128,14 @@ Three things that follow, and must not be lost:
   and Dom0 share a storage failure domain that the trust boundaries below do
   not describe. Isolation of *access* was designed; isolation of *capacity*
   was not, and is unresolved.
+
+  > **Still unresolved after the migration, and the blast radius grew
+  > (2026-08-28).** `platform_data` is now a thin LV in **`vg-root/thinpool`**,
+  > the same pool that holds the golden images *and every clone snapshot*.
+  > Autoextend is configured now, which the Proxmox pool did not have, but the
+  > pool still cannot grow past the VG. The shared failure domain did not go
+  > away when the container did — it moved one level down and got one tenant
+  > bigger.
 - **Revisit at M8, when the web tier becomes internet-facing.** Two surfaces
   argue for a VM eventually and neither is urgent now: the API computes
   SHA-256 and runs `libmagic` over attacker-controlled bytes, and an
@@ -456,6 +494,55 @@ all are live inside a double-quoted guest shell word. Two consequences:
 
 ### Trust boundaries, stated
 
+> ## REVISED 2026-08-28 — the migration inverted the Dom0/platform relationship
+>
+> **This is the most consequential thing the bare-metal migration changed, and
+> it is not a tense correction.** The table below was written when Dom0 (a
+> Proxmox VM) and the platform (a Proxmox LXC) were **siblings**: neither
+> contained the other, and L0 mediated between them. That is no longer the
+> shape.
+>
+> **Dom0 is now the physical host, and the platform is a DomU running on it.**
+> The platform sits *below* Dom0 in the hierarchy rather than beside it, and
+> the consequences follow from Xen's architecture rather than from any
+> configuration choice:
+>
+> - **A compromised Dom0 owns the platform outright.** Dom0 is the privileged
+>   domain: it can `xl save platform` and read Postgres straight out of the
+>   memory image, or simply mount `/dev/vg-root/platform` and
+>   `/dev/vg-root/platform_data`. Both are LVs in Dom0's own volume group.
+> - **So the "Dom0 → platform" row below is no longer a containment
+>   boundary.** The scoped token over mTLS is still worth having — it is what
+>   limits a compromise of the `sandboxd` *process* short of root — but it
+>   does not survive Dom0 root, and it must not be cited as though it does.
+> - **The "Dom0 → L0" row describes a boundary that no longer exists.** There
+>   is nothing beneath Dom0 to escape into. A Dom0 compromise is a bare-metal
+>   compromise of the whole lab, immediately.
+> - **The one thing that still holds is the CA.** Runbook 08 step 16 put the
+>   signing key on the operator's workstation and deliberately not on the
+>   platform. That decision was made for a different reason and pays off here:
+>   it is the only secret in this system that a full host compromise does not
+>   reach.
+>
+> **What this does not mean.** The design is not broken — a sandbox host with
+> hypervisor privileges over its own control plane is a normal shape, and the
+> alternative (platform on separate hardware) is a real option with real cost.
+> What is required is that the document stop claiming a boundary it no longer
+> has. The revised table is below; the original is kept beneath it because the
+> reasoning about *why* each boundary mattered is still the reasoning.
+
+| Boundary | Holds | If it falls |
+|---|---|---|
+| L2 clone → Dom0 | Xen guest isolation, altp2m, per-VLAN network isolation | **Attacker gets the whole lab.** Dom0 is the metal, and the platform is its guest |
+| Dom0 → platform | **Nothing, against Dom0 root.** Dom0 is the platform's hypervisor and owns its disks | Job history, artifacts, the MinIO service account, the API's TLS key |
+| `sandboxd` → platform | Scoped worker token over mTLS — least privilege, **not containment** | A compromise of the daemon short of root can update job state and upload artifacts; it cannot read the DB or enumerate MinIO |
+| Platform → CA | **The signing key is not on this machine** | Nothing: a full host compromise cannot mint worker certificates |
+| Browser → API | Cloudflare Access, JWT `iss` + `aud` verified | Ordinary web auth surface; M8/#40 owns multi-tenancy |
+| Platform → internet | Cloudflare Tunnel outward only | M8 |
+
+<details>
+<summary>The pre-migration table, kept for its reasoning</summary>
+
 | Boundary | Holds | If it falls |
 |---|---|---|
 | L2 clone → Dom0 | Xen guest isolation | Attacker gets Dom0: one scoped API token, current leases only |
@@ -475,6 +562,13 @@ The firewall work matters more with the platform in a container than it
 would with a VM: Dom0 and the platform are both guests of the same L0, so
 "Dom0 reaches only the API" has to be *enforced* at L0 rather than inferred
 from the fact that nothing routes between them today.
+
+</details>
+
+**What survives from that reasoning:** the first row is now the *only* row that
+separates a sample from everything else, which makes "a sample must not escape
+the Xen L2 guest" more load-bearing than it was, not less. It is still
+untested.
 
 ---
 
@@ -630,15 +724,19 @@ implementation issues that follow:
 Not blocking the design, but each has to be answered before the matching
 implementation issue:
 
-1. **Network path between the two VMs, and API authentication.** Assumed for
+1. **Network path between the two, and API authentication.** ~~Assumed for
    now: Dom0 (a VM) and the platform (an LXC) are guests of the same L0, on
    a private bridge that is neither the analysis bridge nor the clone
    uplink, with **mTLS** between `sandboxd` and the API so both ends are
    pinned. Because they share a host, the Proxmox firewall is what makes
-   "Dom0 reaches the API and nothing else" true; it is not true by topology.
-   If they ever end up on separate hosts, this needs WireGuard rather than
-   bare TLS, and the assumption should be corrected here rather than in the
-   implementation.
+   "Dom0 reaches the API and nothing else" true; it is not true by topology.~~
+   **Rewritten 2026-08-28.** The platform is a **DomU on Dom0**, reachable at
+   `192.168.1.10` over `xenbr0`, with mTLS between `sandboxd` and the API. The
+   mTLS survives and is still the right mechanism. What does not survive is the
+   Proxmox firewall as the enforcement layer — see the trust-boundary revision
+   above. If the platform ever moves to separate hardware this needs WireGuard
+   rather than bare TLS, and that move is now the *remedy* for the inverted
+   boundary rather than a hypothetical.
 2. **Does `/malware_incoming/<os>` survive as an operator submission route?**
    Recommended: keep it, but as a thin local adapter that calls the same API
    over localhost, so there is exactly one queue and one order — not a second
@@ -658,11 +756,16 @@ implementation issue:
 Recorded on 2026-08-21 at the maintainer's direction, as work for the coming
 days:
 
-- **A sample must not escape the Xen L2 guest.** Untested. The first trust
-  boundary in the table above rests on it.
-- **Dom0 must not reach the Proxmox internal network.** To be enforced with
-  Proxmox firewall rules. Until it is, "a compromised Dom0 reaches only the
-  API" is a design intent rather than an enforced property.
+- **A sample must not escape the Xen guest.** Untested — and **more important
+  after the migration, not less.** It is now the only boundary between a sample
+  and the whole lab, since Dom0 is the metal and the platform is its guest.
+- ~~**Dom0 must not reach the Proxmox internal network.** To be enforced with
+  Proxmox firewall rules.~~ **Void 2026-08-28.** There is no Proxmox and no
+  internal network to be kept off; Dom0 *is* the host. The concern this
+  encoded — that a compromised Dom0 should reach only the API — cannot be
+  enforced from below any more, because there is no longer a below. It has to
+  be replaced, not merely re-hosted, and `ideas.md` already carries the
+  successor question as *"DOM0 isolation if malware escapes"*.
 
 Neither is designed here, and neither should be assumed discharged by the
 existence of this document.
