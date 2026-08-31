@@ -221,10 +221,15 @@ jobs:
   # CLAUDE.md carries the standing rule, and it was attempted against the
   # deployment once already, on 2026-08-25.
   #
-  # `mc` and the Playwright browser tests are absent and skip loudly. Adding
-  # them is a later change — a browser download on every PR for the XSS-
-  # execution tests is a real cost, and those tests already skip rather than
-  # silently passing.
+  # `mc` is absent and its three service-account policy tests skip loudly.
+  #
+  # The Playwright browser tests do NOT skip, which an earlier version of this
+  # comment got wrong: they skip when the *package* is missing, and `playwright`
+  # is in platform/requirements.txt, so what was missing was the browser binary
+  # — 38 errors, not 38 skips. Chromium is installed below and cached. They are
+  # the XSS-execution tests, which assert that a hostile filename is not
+  # executed by a browser rendering the job page; on a malware-analysis platform
+  # that is worth a cached download.
   # -------------------------------------------------------------------------
   platform:
     runs-on: ubuntu-latest
@@ -299,6 +304,19 @@ jobs:
                        region_name="eu-central-1").create_bucket(Bucket="analysis")
           print("bucket 'analysis' created")
           PY
+
+      - name: Cache the Playwright browser
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          # Keyed on the pinned playwright version, so an upgrade fetches a new
+          # browser instead of reusing one built for the old client.
+          key: playwright-${{ hashFiles('platform/requirements.txt') }}
+
+      - name: Install Chromium
+        # --with-deps pulls the shared libraries a headless browser needs on a
+        # bare runner. A no-op when the cache hit.
+        run: python -m playwright install --with-deps chromium
 
       - name: pytest
         working-directory: platform
