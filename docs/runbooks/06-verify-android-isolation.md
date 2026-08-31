@@ -122,15 +122,10 @@ ls -l /root/sandbox_project/state/android_sandbox.bak
 sha256sum /root/sandbox_project/state/android_sandbox.bak
 ```
 
-> **The expected checksum is NOT `1844fc0a…` any more.** That value belongs to
-> the pre-EthernetConfig template. The rebuilt template has a new one, and a
-> mismatch here is the expected result rather than a sign of corruption.
-> **Record the new value and treat it as the baseline from now on**, including
-> in `03-rebuild-android-sandbox.md`.
->
-> Likewise the **anchor PID is no longer 3163** unless the rebuild happened to
-> reproduce it. Read it from the new template's rebuild transcript, not from
-> memory.
+> **A checksum mismatch here is expected, not corruption.** `1844fc0a…` belongs
+> to the pre-EthernetConfig template, and the anchor PID moved with it. Record
+> the new values as the baseline; see
+> [TROUBLESHOOTING](../TROUBLESHOOTING.md#a-stale-injection_pid-after-a-template-re-save).
 
 The template must have been rebuilt from the new golden image before this
 runs — `docs/android_setup_good.md` §25, via
@@ -250,12 +245,9 @@ vif  = [ 'type=ioemu,model=e1000,script=vif-openvswitch,bridge=xenbr1.1' ]
 #  NOT bridge=xenbr1. See "Read this before you start".
 ```
 
-> **Keep the domain name and the config's `name =` in agreement.** On
-> 2026-08-12 the config said `android_sandbox_test` while the runbook drove
-> `android_isolation_test`, and `xl network-list android_isolation_test`
-> returned `invalid domain identifier (rc=-6)` before the operator noticed.
-> Harmless there, but the same slip in an automated path is a clone that
-> never gets checked.
+> **Keep the domain name and the config's `name =` in agreement** — a mismatch
+> gives `invalid domain identifier (rc=-6)`. See
+> [TROUBLESHOOTING](../TROUBLESHOOTING.md#xl-network-list--invalid-domain-identifier-rc-6).
 
 ```text
 root@drakvuf:~# sudo lvcreate -s -n android_sandbox-13-clone -L32G /dev/vg-root/android_sandbox
@@ -618,11 +610,9 @@ nslookup google.com 1.1.1.1     # if present: bypasses the configured resolver
 nslookup google.com             # uses it
 ```
 
-> **`getent` is absent on this build** (bionic ships no such tool), so
-> Ubuntu's verification command has no direct equivalent. `ping <name>` is
-> the replacement and is the stronger test: it resolves through
-> bionic → `netd`, the same path an application takes, and proves resolution
-> *and* reachability where `getent hosts` proved only the former.
+> **`getent` is absent on this build**; `ping <name>` replaces it and is the
+> stronger test. See
+> [TROUBLESHOOTING](../TROUBLESHOOTING.md#getent-is-not-available-in-the-android-guest).
 
 
 ```text

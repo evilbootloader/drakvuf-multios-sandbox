@@ -303,15 +303,11 @@ DATABASE_URL is not set
 Aug 26 19:24:50 platform systemd[1]: Started sandbox-api.service - DRAKVUF sandbox platform API.
 ```
 
-> **F1 — the migration did not apply.** `DATABASE_URL is not set`, and the step
-> above is wrong: `su - platform` is a **login shell**, so it inherits none of
-> the environment the systemd unit supplies. The runner refused rather than
-> falling back to a default, which is the behaviour it was given deliberately
-> — but the pull and the restart both succeeded, so the API came up running
-> code that reads columns the schema does not have yet.
->
-> **`GET /api/v1/jobs/<id>` and the job page will 500 until A1b runs**, because
-> `_detail` selects `*` and then reads `row["interacted"]`.
+> **F1 — the migration did not apply.** `su - platform` is a login shell and
+> inherits none of the systemd unit's environment, so `DATABASE_URL is not set`.
+> The pull and restart still succeeded, leaving the API running code against an
+> unmigrated schema — `GET /api/v1/jobs/<id>` 500s until A1b runs. See
+> [TROUBLESHOOTING](../TROUBLESHOOTING.md#database_url-is-not-set-when-running-a-migration-by-hand).
 
 ## A1b. Apply the migration, with the environment the service uses
 
@@ -361,15 +357,10 @@ applied  0005_console.sql
 
 ## A2. The API answers, and the schema took the new columns
 
-> **F2 — the first version of this step was wrong twice.** It used
-> `http://127.0.0.1:9000` and got *"Client sent an HTTP request to an HTTPS
-> server"*. **9000 is MinIO**, not the API, and it is TLS on this deployment
-> (#39) — so the error was about the wrong service AND the wrong scheme. The
-> step also carried a stray `""")`, debris from a bad edit that would have gone
-> straight into a shell.
->
-> Worth noting what this rules out: it is not evidence the API is down. It is
-> evidence the check was pointed at the object store.
+> **F2 — the first version of this step pointed at 9000, which is MinIO, not
+> the API** — so the error was about the wrong service and the wrong scheme.
+> It is not evidence the API is down. See
+> [TROUBLESHOOTING](../TROUBLESHOOTING.md#client-sent-an-http-request-to-an-https-server-against-the-api).
 
 Two listeners, two different proofs of identity
 (`08-deploy-platform-lxc.md:1422`):
@@ -398,16 +389,9 @@ pct exec 102 -- runuser -u platform -- psql -d sandbox_platform -Atc \
   "SELECT column_name, data_type, column_default FROM information_schema.columns WHERE table_name = 'jobs' AND column_name IN ('console_requested','interacted') ORDER BY column_name"
 ```
 
-> **`runuser`, not `su -c`, and that is what makes the quoting survivable.**
-> `pct exec` passes argv, `runuser -u platform --` passes argv, and psql
-> receives the SQL as one argument — so **no shell ever parses it**. With
-> `su - platform -s /bin/bash -c "..."` there is an extra shell in the middle
-> that eats a level of quoting, which is what mangled the first version of this
-> step.
->
-> `information_schema` rather than `\d` for the same reason: `\d` is a psql
-> meta-command whose backslash has to survive every layer, where this is a
-> plain query.
+> **`runuser`, not `su -c`** — the extra shell eats a level of quoting, and
+> `information_schema` rather than `\d` for the same reason. See
+> [TROUBLESHOOTING](../TROUBLESHOOTING.md#sql-quoting-was-eaten-by-an-extra-shell).
 
 Expect exactly two rows, both `boolean` defaulting to `false`:
 
@@ -609,11 +593,9 @@ export SANDBOXD_CLIENT_CERT=/root/dom0.crt
 export SANDBOXD_CLIENT_KEY=/root/dom0.key
 ```
 
-> **8443, not 9000.** 9000 is MinIO, which is also TLS on this deployment —
-> pointing `sandboxd` there produces a TLS error that looks like a certificate
-> problem rather than a wrong port. 8443 is the listener that demands a client
-> certificate (`--ssl-cert-reqs 2`), which is what the `SANDBOXD_CLIENT_CERT`
-> and `SANDBOXD_CLIENT_KEY` above are for.
+> **8443, not 9000.** 8443 demands a client certificate (`--ssl-cert-reqs 2`),
+> which is what `SANDBOXD_CLIENT_CERT`/`_KEY` above are for; 9000 is MinIO. See
+> [TROUBLESHOOTING](../TROUBLESHOOTING.md#client-sent-an-http-request-to-an-https-server-against-the-api).
 
 > `SANDBOXD_MAX_CLONES` and `network-setup.sh`'s argument size the same thing
 > from two sides — the VLAN pool and the `xenbr1.<n>` sub-interfaces. Raise one
@@ -705,10 +687,9 @@ curl --cacert /etc/sandboxd/tls/ca.crt \
 # {"status":"ok"}
 ```
 
-> If this returns an unexplained EOF rather than an error, that is the httpx
-> trap `client_tls.py` documents in reverse: under TLS 1.3 the server completes
-> the handshake **before** validating the client certificate, so a rejected
-> certificate looks like the connection simply ending.
+> An unexplained EOF here is a **rejected client certificate**, not a network
+> fault — see
+> [TROUBLESHOOTING](../TROUBLESHOOTING.md#curl-56-openssl-ssl_read--unexpected-eof-while-reading-exit-56).
 
 ```text
 root@drakvuf:~# curl --cacert /etc/sandboxd/tls/ca.crt \
@@ -775,19 +756,10 @@ Take Xen's `free_memory` and leave headroom. Two clones at 2198 MiB each need
 ### C3d. Provision the analysis network — **nothing else does it**
 
 > **F4 — this step was missing, and the runbook was wrong without it.**
-> `run_analysis-<os>.sh:106,121` brings the bridge up and runs
-> `network-setup.sh` before launching `dirwatch`. `sandboxd` replaces the
-> launcher but **not** that call — #41 scoped it out on the reasoning that
-> "the launcher still does it", which stops being true the moment you run
-> `sandboxd` instead of the launcher.
->
-> Nothing in `sandboxd` creates `xenbr1.<n>`, the `172.16.<n>.1` gateways or
-> the isolation chains. A clone handed a VLAN with no gateway boots, gets an
-> address nothing routes, and **reads as a sample that chose not to talk** —
-> a false negative wearing the clothes of a result.
->
-> If the previous `dirwatch` era left the interfaces in place this appears to
-> work, which is exactly how it would go unnoticed.
+> `sandboxd` replaces the launcher but not its `network-setup.sh` call, so
+> nothing creates `xenbr1.<n>`, the gateways or the isolation chains. A clone
+> then reads as a sample that chose not to talk. See
+> [TROUBLESHOOTING](../TROUBLESHOOTING.md#a-clone-got-an-address-and-the-sample-chose-not-to-talk).
 
 ```bash
 # On Dom0. The OVS bridge itself is a one-time install step and is NOT created

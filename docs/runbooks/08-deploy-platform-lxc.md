@@ -1117,22 +1117,10 @@ pct exec 102 -- bash -lc '
 '
 ```
 
-> **`/etc/minio` itself must be traversable by `minio-user`.** This cost three
-> rounds of debugging on 2026-08-23. The directory was `root:root`, so
-> `minio-user` could not descend into `/etc/minio/certs` no matter what the
-> certs' own ownership said — and MinIO **started anyway, on HTTP, without
-> logging a reason.**
->
-> The symptom is indistinguishable from "the flag was ignored": `--certs-dir`
-> is right there in the argv, and the server speaks plain HTTP. Check the
-> parent, not just the leaf:
->
-> ```bash
-> pct exec 102 -- ls -ld /etc/minio /etc/minio/certs
-> pct exec 102 -- su -s /bin/sh minio-user -c 'ls -l /etc/minio/certs/'
-> # if that second command cannot list, MinIO cannot read them either
-> pct exec 102 -- chown root:minio-user /etc/minio && pct exec 102 -- chmod 750 /etc/minio
-> ```
+> **`/etc/minio` itself must be traversable by `minio-user`**, or MinIO starts
+> on plain HTTP with `--certs-dir` in the argv and logs no reason. Check the
+> parent, not just the leaf. See
+> [TROUBLESHOOTING](../TROUBLESHOOTING.md#minio-started-on-plain-http-with---certs-dir-right-there-in-the-argv).
 
 Then bind it to the LAN address and pin the region, in `/etc/minio/minio.env`:
 
@@ -1446,18 +1434,10 @@ Created symlink '/etc/systemd/system/multi-user.target.wants/sandbox-api-browser
 LISTEN 0      2048    192.168.1.10:8443       0.0.0.0:*    users:(("python",pid=3701,fd=9))        
 ```
 
-> **That `sed` produces a unit that cannot start, and the output above is the
-> proof: only `8443` is listening.** `enable` succeeded — it only creates a
-> symlink — so the failure is silent unless you read the `ss` line.
->
-> The cause is the `-e "/ssl-cert-reqs/d"` deletion. `ExecStart` is a
-> line-continued block, and `--ssl-cert-reqs 2` is its **last** line, the only
-> one without a trailing `\`. Deleting it leaves the previous line ending in a
-> backslash with nothing after it, and systemd rejects the unit.
->
-> `sed` was the wrong tool: deriving one unit from another by text
-> substitution makes the result depend on line breaks in the original.
-> Write it out instead:
+> **That `sed` produces a unit that cannot start** — only `8443` is listening
+> above. `enable` succeeds anyway, because it only creates a symlink. Do not
+> derive one unit from another by text substitution; write it out:
+> [TROUBLESHOOTING](../TROUBLESHOOTING.md#systemctl-enable-succeeded-and-the-service-never-listened).
 
 ```bash
 pct exec 102 -- bash -lc 'cat > /etc/systemd/system/sandbox-api-browser.service <<EOF
@@ -1877,10 +1857,8 @@ EOF
   systemctl restart sandbox-api-browser'
 ```
 
-> **`daemon-reload` is not enough — the unit must be restarted.** A drop-in
-> reaches a *running* process only on restart, and the symptom is the check
-> below returning 200 with everything looking correctly configured. Cost a
-> round on 2026-08-24.
+> **`daemon-reload` is not enough — the unit must be restarted.** See
+> [TROUBLESHOOTING](../TROUBLESHOOTING.md#a-drop-in-was-configured-correctly-and-had-no-effect).
 
 Verify the drop-in landed, and that it did **not** land on the mTLS unit:
 
@@ -2933,26 +2911,11 @@ so a flaw in the API cannot reach the rest of the cluster. The migration
 runner needs only `CREATE` inside that database, which ownership already
 grants.
 
-> **CORRECTED 2026-08-22 — `createdb` above is missing `-E UTF8`, and that
-> caused F2 below.** The container has no UTF-8 locale, so this cluster's
-> `initdb` defaulted to `SQL_ASCII` and every database inherits it. Use:
->
-> ```bash
-> su - postgres -c "createdb -O platform -E UTF8 -T template0 sandbox_platform"
-> ```
->
-> `-T template0` is required: `template1` is itself SQL_ASCII on this cluster
-> and a new database cannot have an encoding its template lacks. Verified on a
-> C-locale cluster — the result is `UTF8` with `C.UTF-8` collation, and the
-> migrations apply and re-apply cleanly against it.
->
-> Confirm before continuing:
->
-> ```bash
-> psql -d postgres -tAc \
->   "SELECT pg_encoding_to_char(encoding) FROM pg_database WHERE datname='sandbox_platform'"
-> # expect: UTF8   -- NOT SQL_ASCII
-> ```
+> **CORRECTED 2026-08-22 — `createdb` above is missing `-E UTF8 -T template0`,
+> and that caused F2.** The database was created `SQL_ASCII` and migrations
+> silently re-applied on every run; a database cannot be re-encoded in place.
+> See
+> [TROUBLESHOOTING](../TROUBLESHOOTING.md#migrations-silently-re-applied-on-every-run).
 
 ## Step 9 — a read-only deploy key
 

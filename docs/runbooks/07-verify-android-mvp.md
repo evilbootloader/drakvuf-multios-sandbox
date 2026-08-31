@@ -470,33 +470,12 @@ tcpdump.pcap in the right directory (y/n): y
 Stray /malware_finished/ubuntu/tcpdump.pcap present? (expect: no): no
 ```
 
-> **ANNOTATION 2026-08-17 — the guest-path check above uses the wrong line
-> and cannot work. See F6.** The commands are left as executed; the
-> corrected method is here.
->
-> `injector` writes the **Dom0-side** path into the `[INJECT]` line's
-> `FILE:` field — which is why the evidence above reads
-> `FILE:"/malware_processing/ubuntu/benign sample.sh"`, the *processing*
-> path, not the guest destination. `grep -i writefile` therefore confirms
-> nothing about `$GUEST_STAGING_DIR/<submitted filename>` (C5).
->
-> The follow-up `grep -o '/home/carlos/Desktop/[^ "]*'` is worse than
-> ineffective: `[^ "]*` stops at the first space, so on a sample named
-> `benign sample.sh` it would print `/home/carlos/Desktop/benign` and
-> truncate away the exact property this step exists to test. Its output was
-> not pasted above, so nothing caught it.
->
-> The guest destination appears only in `injector`'s own startup line.
-> Use:
->
-> ```bash
-> # Both injections, full guest paths, spaces intact:
-> grep -n 'Injector starting' "/malware_finished/ubuntu/$MD5/preconfig.log"
->
-> # Just the path, bracketed so leading/trailing whitespace is visible:
-> sed -n 's/^Injector starting \(.*\) through PID .*/[\1]/p' \
->     "/malware_finished/ubuntu/$MD5/preconfig.log"
-> ```
+> **ANNOTATION 2026-08-17 — the guest-path check above cannot work. See F6.**
+> The commands are left as executed. `injector` writes the *Dom0-side* path
+> into `FILE:`, so `grep -i writefile` confirms nothing about the guest
+> destination — and the follow-up `grep -o '…[^ "]*'` truncates at the first
+> space, discarding the exact property the step tests. Corrected method in
+> [TROUBLESHOOTING](../TROUBLESHOOTING.md#injectors-file-field-is-the-dom0-path-not-the-guest-destination).
 >
 > Expected first line: `[/home/carlos/Desktop/benign sample.sh]` — one
 > bracketed path containing a space. The second `Injector starting` line is
@@ -1078,10 +1057,10 @@ sha256sum /root/sandbox_project/state/ubuntu_sandbox.bak
 Compare all four against step 0. **Any difference means a golden image or a
 template was written to**, which no part of this PR should ever do.
 
-> `lvremove` may report `Logical volume ... in use` on the first attempt.
-> `xl destroy` returns before the block device is released; retry once.
-> Record which attempt succeeded — `clone.pl` now waits for the domain to go
-> before its own `lvremove`, and this is the check on that.
+> `lvremove` may report `Logical volume ... in use` on the first attempt; retry
+> once, and record which attempt succeeded — `clone.pl` waits for the domain to
+> go before its own `lvremove`, and this is the check on that. See
+> [TROUBLESHOOTING](../TROUBLESHOOTING.md#lvremove--logical-volume--in-use).
 
 ```text
 Domains still running before teardown: none -- cleanup.sh had already

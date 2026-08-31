@@ -10,6 +10,21 @@
 > be run from the development container, which is neither Dom0 nor the Proxmox
 > host.
 >
+> **ANNOTATION 2026-08-29 — never executed, and never will be. Not pending.**
+> The question is *"can L0 give Dom0 more CPU?"* **There is no L0.** Proxmox was
+> erased on 2026-08-28 (`12-baremetal-trial.md` §A1b) and Dom0 now boots the
+> metal, so the premise is gone rather than the answer being outstanding. The
+> derived table in `docs/CURRENT-STATE.md` shows this runbook as `Executed: no`,
+> which is accurate and will stay that way — read it as *closed*, not as work
+> waiting for an operator.
+>
+> **The underlying question was answered elsewhere, better.** What Dom0 should
+> get on bare metal is settled by `dom0_max_vcpus=6` pinned to the first six
+> *online* pCPUs (`0,2,4,6,8,10` under `smt=0`) with clones on `12,14`; see
+> `CURRENT-STATE.md` §1.2. Whether CPU placement moves throughput at all was
+> then measured directly in `12-baremetal-trial.md` §H2 — three placement
+> variants inside 0.6% of each other. Both supersede everything below.
+>
 > **`sandboxd` is not a systemd service.** It runs in the foreground and logs to
 > stderr via `logging.basicConfig` (`sandboxd/daemon.py:454`). There is no
 > journal to query, so §0.3 starts it under `tee` and every later step reads

@@ -90,50 +90,31 @@ step 5), so something changed on the host in between.
 
 > ## ANNOTATION 2026-08-12 — the two numbered claims above are WRONG
 >
-> *Appended, not edited: the text above is the record of what was believed
-> at the time, and the error in it is the most instructive thing in this
-> runbook.*
+> *Appended, not edited: the text above records what was believed at the time,
+> and the error in it is the most instructive thing in this runbook.*
 >
-> **There was no readback failure.** On this host `iptables -S` reports any
-> chain that does not exist as "incompatible". Tested directly, with the
-> `ip filter` table present and populated:
->
-> ```text
-> root@drakvuf:~/sandbox_project# sudo iptables -S NO_SUCH_CHAIN_12345
-> # Warning: iptables-legacy tables present, use iptables-legacy to see them
-> iptables v1.8.7 (nf_tables): chain `NO_SUCH_CHAIN_12345' in table `filter' is incompatible, use 'nft' tool.
-> ```
->
-> So the 2026-08-12 message meant one thing only: **the chains did not
-> exist**, because the host had been rebooted and `network-setup.sh` had not
-> been run since. Nothing changed on the host between the 11th and the 12th.
-> The maintainer raised this possibility; it had not been tested before
-> being written up, and it should have been.
->
-> Correcting each claim:
+> **There was no readback failure.** `iptables -S` on this host reports any
+> chain that does not exist as "incompatible", so the message meant only that
+> **the chains did not exist** — the host had been rebooted and
+> `network-setup.sh` had not been run since. Nothing changed between the 11th
+> and the 12th.
 >
 > 1. **"Filtering has not stopped" was false, and dangerously so.** Filtering
->    had stopped completely — there were no rules, no chains and no VLAN
->    interfaces. The sentence asserted a security property with no evidence
->    and offered reassurance where the true answer was "containment is
->    currently absent".
+>    had stopped completely: no rules, no chains, no VLAN interfaces.
 > 2. **"Those commands ran against the deployed DRAFT-028 chains" was false.**
->    They ran post-reboot against nothing. This was inferred from the order
->    of messages in a conversation, not from any timestamp.
+>    They ran post-reboot against nothing, inferred from the order of messages
+>    in a conversation rather than from any timestamp.
 >
-> **The real finding is sharper than the one it replaces.** On this host,
-> "chain absent" and "chain unreadable" are indistinguishable from the error
-> text — and *absent means containment is entirely off*. The failure mode is
-> a human reading that message as a tooling quirk and proceeding. That is
-> exactly what happened here, in writing, and it took the maintainer to
-> catch it. Carried into DRAFT-038 as **F2′**, which is why that issue's
-> first verification property is "the chain exists and holds the expected
-> rules" rather than "the chain is readable".
+> Both the technical trap and the reasoning error are in TROUBLESHOOTING:
+> [chain absent vs unreadable](../TROUBLESHOOTING.md#iptables--s-says-a-chain-is-incompatible-and-the-chain-is-simply-absent),
+> [asserting containment without testing](../TROUBLESHOOTING.md#a-containment-claim-was-written-up-without-being-tested).
+> Carried into DRAFT-038 as **F2′**, which is why that issue's first
+> verification property is "the chain exists and holds the expected rules"
+> rather than "the chain is readable".
 >
-> Steps 0b and 2b were therefore chasing a phantom. They are left in place
-> because what they *did* establish is real and independently useful: F1
-> (two live iptables backends), and the first hard evidence that the `-C`
-> guards work and jumps do not accumulate.
+> Steps 0b and 2b were chasing a phantom. They are left in place because what
+> they *did* establish is real: F1 (two live iptables backends), and the first
+> hard evidence that the `-C` guards work and jumps do not accumulate.
 
 ### The host was then rebooted (2026-08-12)
 
@@ -606,12 +587,10 @@ Any chain unexpectedly empty?  no
 its jumps before installing them, at `:333` (FORWARD), `:483` (INPUT) and
 the NAT equivalent.
 
-> ⚠️ **QUOTED SOURCE — DO NOT PASTE THIS INTO A SHELL.** `$ISOLATION_CHAIN`
-> is a variable internal to `network-setup.sh`. In an interactive shell it
-> expands to nothing, giving `iptables -I FORWARD 1 -j ""` and the error
-> `Invalid target name (too short)`. That error is a paste artifact and says
-> nothing about the host; no rule is inserted. The runnable commands are in
-> the two `bash` blocks below.
+> ⚠️ **QUOTED SOURCE — DO NOT PASTE THIS INTO A SHELL.** `$ISOLATION_CHAIN` is
+> internal to `network-setup.sh` and expands to nothing interactively. The
+> runnable commands are in the two `bash` blocks below. See
+> [TROUBLESHOOTING](../TROUBLESHOOTING.md#invalid-target-name-too-short-after-pasting-a-command-from-a-script).
 >
 > ```
 > iptables -C FORWARD -j "$ISOLATION_CHAIN" 2>/dev/null ||

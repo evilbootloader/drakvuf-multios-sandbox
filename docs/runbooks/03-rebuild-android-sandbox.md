@@ -285,19 +285,11 @@ Tombstones / system_server_watchdog entries: Not checked
 > *procedure* that DRAFT-013 found while building on it.
 >
 > **1. `android_test.cfg` attaches to the bare bridge, so no isolation
-> applies.** The config is described as "same as `android_sandbox.cfg` but
-> `name` and `disk`" — which means it inherits `bridge=xenbr1`.
->
-> The isolation rules match the `xenbr1.+` wildcard. That matches
-> `xenbr1.1`, `xenbr1.2` and so on, and **deliberately does not match
-> `xenbr1` itself** (`automation/network-setup.sh:369-372`). A guest on the
-> bare bridge is therefore covered by **no isolation rule at all**.
->
-> Consequence for the 2026-08-11 run: harmless. It was a boot and anchor
-> check, no sample was involved, and the golden LV was untouched. Recorded
-> because anyone repeating the procedure falls into the same trap, and
-> because it is a concrete instance of the gap DRAFT-038 exists to close —
-> nothing checked the attachment, and nothing would have.
+> applies.** It inherits `bridge=xenbr1`, and the isolation rules match
+> `xenbr1.+` — which deliberately excludes `xenbr1` itself. Harmless in the
+> 2026-08-11 run (boot and anchor check, no sample), but anyone repeating the
+> procedure falls into it. See
+> [TROUBLESHOOTING](../TROUBLESHOOTING.md#a-test-domain-on-the-bare-bridge-had-no-isolation-at-all).
 >
 > **Next time, specify the VLAN explicitly and confirm before unpausing:**
 >

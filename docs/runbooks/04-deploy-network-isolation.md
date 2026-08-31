@@ -153,26 +153,14 @@ root@drakvuf:~/sandbox_project# iptables -t nat -S POSTROUTING
 > reading of this step was wrong, and the eventual answer is worse than
 > the draft predicted.**
 >
-> **The output above does not answer NET-01.** The empty `FORWARD` chain
-> looks like proof the old rule was rejected. It is not: **`POSTROUTING`
-> was empty too**, and `MASQUERADE` is valid syntax that would have
-> installed without complaint. Its absence means only that
-> `network-setup.sh` had not run since the host last booted — iptables
-> rules are runtime state and nothing in this project persists them. The
-> missing DROP rules are explained entirely by the script not having run.
+> **The output above does not answer NET-01.** `POSTROUTING` was empty too, so
+> the empty `FORWARD` chain means only that `network-setup.sh` had not run
+> since the host last booted —
+> [iptables rules are runtime state](../TROUBLESHOOTING.md#an-empty-forward-chain-read-as-proof-a-rule-was-rejected).
 >
-> **Answered separately, the same day.** Two attempts were needed:
->
-> ```text
-> # First attempt, interactively in bash:
-> $ sudo iptables -A FORWARD -i xenbr1.1 -o !xenbr0 -j DROP
-> bash: !xenbr0: event not found
-> ```
->
-> That is bash history expansion consuming the `!` before iptables sees
-> it — an interactive-shell behaviour. `network-setup.sh` runs under
-> `/bin/sh` (dash), which has no history expansion, so reproducing the
-> production path means going through `sh`:
+> **Answered separately, the same day**, by going through `sh` rather than an
+> interactive bash, which eats the `!`
+> ([why](../TROUBLESHOOTING.md#bash-xenbr0-event-not-found)):
 >
 > ```text
 > $ sudo sh -c 'iptables -A FORWARD -i xenbr1.1 -o !xenbr0 -j DROP' ; echo "rc=$?"
@@ -398,10 +386,9 @@ CONVERGED printed?
 ```
 
 > **Method corrected 2026-08-11, during execution.** The step originally
-> compared `sudo iptables-save | wc -l` three times. That is a weaker test
-> than it looks: it detects growth but not substitution, and the recorded
-> result was a single number, which cannot show whether all three runs
-> agreed. Re-run with the `diff` form above and record all three outputs.
+> compared `iptables-save | wc -l` three times, which detects growth but not
+> substitution. Use the `diff` form above and record all three outputs. See
+> [TROUBLESHOOTING](../TROUBLESHOOTING.md#iptables-save--wc--l-is-a-weaker-idempotency-test-than-it-looks).
 
 ## Step 7 — Missing-bridge failure
 
@@ -419,15 +406,11 @@ sudo ./network-setup.sh 2 ; echo "exit=$? (expect 0)"
 ip -br addr show | grep xenbr1
 ```
 
-> **Corrected 2026-08-11, during execution.** This step originally read
-> `sudo ip link set xenbr1 down && sudo ip link delete xenbr1 2>/dev/null
-> || true`. `xenbr1` is an **OVS** bridge, so `ip link delete` cannot
-> remove it — and the trailing `|| true` would have swallowed the failure.
-> The bridge would still have been present, `network-setup.sh 2` would have
-> exited 0, and a pass would have been recorded for a test that never ran:
-> a false pass on the one step whose entire purpose is proving the script
-> fails safely. `ovs-vsctl del-br` is the correct removal and is what was
-> actually executed.
+> **Corrected 2026-08-11, during execution.** The step originally used
+> `ip link delete xenbr1 … || true`, which cannot remove an OVS bridge and
+> swallowed the failure — a false pass on the one step whose purpose is proving
+> the script fails safely. `ovs-vsctl del-br` is correct and is what ran. See
+> [TROUBLESHOOTING](../TROUBLESHOOTING.md#ip-link-delete-did-not-remove-xenbr1-and-the-test-passed-anyway).
 
 ```text
 Message when bridge absent:

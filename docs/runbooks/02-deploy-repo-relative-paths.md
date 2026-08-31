@@ -126,11 +126,10 @@ tell whether Dom0's scripts matched the repository's; the answer took a
 runbook and a set of recorded SHA-256s to establish. A checkout answers it
 in one line, permanently.
 
-> **Never pull while an analysis is in flight.** `dirwatch` spawns the
-> worker scripts per sample, re-reading them from disk each time, so a
-> pull mid-run can hand one sample the old preconfig and the new trace
-> script. Confirm the watch directories are empty and no `dirwatch` is
-> running first.
+> **Never pull while an analysis is in flight** — `dirwatch` re-reads the
+> worker scripts per sample, so one sample can get two different versions.
+> Confirm the watch directories are empty and no `dirwatch` is running. See
+> [TROUBLESHOOTING](../TROUBLESHOOTING.md#a-git-pull-mid-run-gave-one-sample-two-different-script-versions).
 
 **To revoke:** `gh repo deploy-key delete <id>`, or remove the key in the
 GitHub UI under Settings → Deploy keys. Deleting it does not affect the

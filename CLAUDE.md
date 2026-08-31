@@ -3,8 +3,14 @@
 Automation for a DRAKVUF malware-analysis laboratory.
 
 ```
-L0: Proxmox/KVM  →  L1: Xen Dom0 + DRAKVUF  →  L2: Ubuntu / BlissOS / Windows guest
+Dom0: Xen on bare metal + DRAKVUF  →  guests: Ubuntu / BlissOS / Windows
+                                   →  platform: a PVH DomU (Postgres, MinIO, API)
 ```
+
+**Two layers, not three.** Proxmox was erased on 2026-08-28 and Xen boots the
+metal. Anything naming `pve1`, VM 101, CT 102, `qm` or `pct` predates that —
+see `docs/CURRENT-STATE.md` §2a, which lists every fact the migration
+invalidated.
 
 A watcher sees a sample, launches a disposable clone of the right OS, traces it
 under DRAKVUF, collects artifacts, destroys the clone.
@@ -36,6 +42,7 @@ Its derived half is generated: `scripts/gen-current-state.py`, enforced by
 
 | Need | Read |
 |---|---|
+| **Which document covers a topic** | **`docs/INDEX.md`** — generated, one `path:line — heading` per section. Grep it before grepping the tree |
 | Current deployment state | `docs/CURRENT-STATE.md` |
 | Sequencing, open decisions | `docs/roadmap/project-roadmap.md` |
 | Per-OS progress | `docs/checklists/{android,ubuntu,windows,platform}.md` |
@@ -43,16 +50,53 @@ Its derived half is generated: `scripts/gen-current-state.py`, enforced by
 | The `automation/` scripts in detail | `docs/architecture/automation-files.md` |
 | Other design records | `docs/architecture/` |
 | Dated execution evidence | `docs/runbooks/NN-*.md`, numbered oldest to newest |
+| Dated project reviews | `docs/reviews/` |
 | Full contribution lifecycle | `CONTRIBUTING.md` |
 
-**Runbooks are append-only evidence.** Never edit a dated block or an imported
-source guide in place — annotate, and record the discrepancy in the living docs
-or in `CURRENT-STATE.md`.
+**`docs/` is 43k lines across 30 documents**, and the four largest are over
+1,000 lines each. `docs/INDEX.md` exists so that finding the right section costs
+one grep instead of reading a 3,000-line checklist or guessing at keywords.
+
+### The tree
+
+| | |
+|---|---|
+| `automation/` | the pipeline: `dirwatch.c`, `clone.pl`, and the per-OS `preconfig-`/`drakvuf-`/`run_analysis-` scripts, plus `pipeline-<os>.env` and host-global `platform.env` |
+| `misc/` | **the Xen guest `.cfg` files** — golden, `_sandbox` templates, and `platform.cfg`. Not in `automation/` |
+| `sandboxd/` | the Dom0 orchestrator, Python, with its own tests |
+| `platform/` | the FastAPI service, migrations, MinIO provisioning, UI, tests |
+| `scripts/` | repository tooling: the three generators (`gen-current-state.py`, `gen-doc-index.py`, `gen-xen-configs.py`), `check-refs.py`, `dev-services.sh` |
+| `.claude/skills/` | **tracked** — routers to the docs below: `deployment-state`, `runbook`, `dom0-handoff`. The rest of `.claude/` is not |
+| `profiles/`, `state/`, `tls/` | LibVMI profiles, saved guest memory images, certificates — **none git-tracked** |
+
+**A runbook is the commands that worked**, in order, with the output they
+printed and the date they were run — the procedure for deploying an
+environment, a guest or a piece of tooling. Someone should be able to follow it
+top to bottom. The pasted output is what makes it evidence rather than a plan.
+
+**Everything that went wrong goes to `docs/TROUBLESHOOTING.md`** — failed
+attempts, dead ends, commands that turned out to be wrong, tools whose errors
+mean something other than what they say. That file is symptom-first, so it is
+findable by someone who has only the symptom. Superseded *facts* still go to
+`CURRENT-STATE.md` §2.
+
+So a wrong step is **replaced** by the right one rather than annotated beside
+it, and the trap moves to `TROUBLESHOOTING.md`. Two things stay: the dated
+output of the command that worked, which is never rewritten, and a one-line
+pointer wherever a reader could otherwise repeat the mistake.
 
 **`docs/Project-definition.txt`, `docs/drakvuf-on-xen-nested-within-proxmox.md`
 and `docs/android_setup.md` are historical.** Kept verbatim, deliberately not
 synced with later renames. Read them for original setup procedure, never for
 what the project currently supports.
+
+**Runbooks 01–10 describe the nested Proxmox lab**, which was erased on
+2026-08-28. They are correct as dated evidence and wrong as a description of
+this host. `CURRENT-STATE.md` §2a lists what changed. A runbook parked at the
+repository root is one written but not yet fully executed — it moves to
+`docs/runbooks/NN-` when its evidence blocks are filled, because
+`gen-current-state.py` counts `docs/**/*.md` off the filesystem and a new file
+there fails the test until the generator is re-run.
 
 Commands labelled **Candidate** in the checklists are unproven. Do not treat
 them as working until validated.
@@ -66,10 +110,6 @@ them as working until validated.
 script carries on, which silently turned `SCRIPT_DIR` into `$PWD`. Check with
 `dash -n` as well as `bash -n`. `run_analysis-ubuntu.sh` is the one genuine
 bash script; it uses `$0` too, so the idiom stays uniform.
-
-**Check `misc/` before concluding a referenced file is missing.** The Xen guest
-`.cfg` files live there, not in `automation/`. A previous pass reported them
-absent because it never looked.
 
 **Untrusted filenames must never be spliced into a guest shell string.**
 `sample_name_admissible()` rejects only `/` and control characters, so `"`,
@@ -120,8 +160,21 @@ requested.** It is the evidenced path.
 bash -n SCRIPT && dash -n SCRIPT && shellcheck SCRIPT     # shell
 perl -c SCRIPT                                            # perl
 platform/.venv/bin/python -m pytest sandboxd/tests -q     # sandboxd, no infra needed
-cd platform && .venv/bin/python -m pytest -q              # platform, needs postgres + minio
+scripts/dev-services.sh                                   # bring up postgres + minio first
+cd platform && .venv/bin/python -m pytest -q              # platform, needs both
 ```
+
+The sandboxd suite re-runs all three generators and the reference checker
+(`--check`), so a stale `docs/CURRENT-STATE.md`, `docs/INDEX.md` or `misc/*.cfg`
+fails it, as does a dead cross-reference. Regenerate rather than edit by hand:
+
+```
+scripts/gen-current-state.py    scripts/gen-doc-index.py
+scripts/gen-xen-configs.py      scripts/check-refs.py
+```
+
+**The CPU partition lives in `automation/platform.env`**, and `misc/*.cfg` are
+generated from it. Editing a `cpus =` line by hand is reverted on the next run.
 
 After changing shared Ubuntu/Android code, verify Ubuntu behaviour is unchanged.
 
