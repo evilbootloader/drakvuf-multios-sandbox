@@ -521,3 +521,62 @@ def test_the_console_listener_comes_from_the_environment():
 
     assert s.api == "https://192.168.1.10:8443"
     assert s.console_api == "https://192.168.1.10:8000"
+
+
+# --- the analysis network, provisioned at startup ---------------------------
+#
+# `sandboxd` replaced `run_analysis-<os>.sh` but not its `network-setup.sh`
+# call, so nothing created the VLAN interfaces, gateways or isolation chains.
+# The clone then booted, took an address nothing routed, and read as a sample
+# that chose not to talk -- a false negative that looks exactly like a result.
+# These pin the two properties that matter: it is CALLED, and a failure REFUSES
+# to start rather than running an analysis with no isolation.
+
+
+def _fake_script(tmp_path, rc=0, stderr="") -> Path:
+    """A stand-in for network-setup.sh. The real one needs root, iptables and
+    Open vSwitch, none of which exist in the development container."""
+    script = tmp_path / "network-setup.sh"
+    script.write_text(f'#!/bin/sh\nprintf %s "{stderr}" >&2\nexit {rc}\n')
+    script.chmod(0o755)
+    return script
+
+
+def test_the_clone_count_is_passed_through_to_the_script(tmp_path):
+    """**The argument is the point.** `network-setup.sh N` creates `xenbr1.1..N`
+    and the daemon hands out VLANs `1..N`; the two must agree, and until this
+    they were two numbers set by hand in two places.
+    """
+    seen = tmp_path / "argv"
+    script = tmp_path / "network-setup.sh"
+    script.write_text(f'#!/bin/sh\necho "$@" > {seen}\n')
+    script.chmod(0o755)
+
+    D.provision_analysis_network(7, script=script)
+    assert seen.read_text().strip() == "7"
+
+
+def test_a_failure_refuses_to_start_and_says_why(tmp_path):
+    """A half-provisioned analysis network is worse than none: it looks like a
+    working one, and clones run with no inter-clone isolation and no LAN block.
+    """
+    script = _fake_script(tmp_path, rc=3, stderr="xenbr1 does not exist")
+
+    with pytest.raises(D.NetworkSetupFailed) as exc:
+        D.provision_analysis_network(2, script=script)
+
+    assert "rc=3" in str(exc.value)
+    assert "xenbr1 does not exist" in str(exc.value)
+
+
+def test_a_missing_script_is_named_rather_than_ignored(tmp_path):
+    with pytest.raises(D.NetworkSetupFailed) as exc:
+        D.provision_analysis_network(2, script=tmp_path / "absent.sh")
+    assert "absent.sh" in str(exc.value)
+
+
+def test_the_shipped_script_path_resolves(tmp_path):
+    """The default points at the real `automation/network-setup.sh`. A rename
+    would otherwise only surface on Dom0, at startup, in production."""
+    assert D.NETWORK_SETUP.is_file(), D.NETWORK_SETUP
+    assert D.NETWORK_SETUP.name == "network-setup.sh"

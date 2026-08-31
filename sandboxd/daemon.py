@@ -75,6 +75,13 @@ class AlreadyRunning(RuntimeError):
     pass
 
 
+class NetworkSetupFailed(RuntimeError):
+    """The analysis network could not be provisioned. Distinct from
+    `AlreadyRunning` because the operator action differs: one means stop the
+    other orchestrator, the other means fix the network before any job runs.
+    """
+
+
 @dataclass
 class Settings:
     """Everything an operator must decide, read from the environment.
@@ -193,6 +200,67 @@ def refuse_if_another_orchestrator_runs(lock_path: Path = LOCK_PATH):
     # a crashed daemon does not leave a lock nobody can prove is stale.
     os.write(fd, f"{os.getpid()}\n".encode())
     return fd
+
+
+NETWORK_SETUP = Path(__file__).resolve().parents[1] / "automation" / "network-setup.sh"
+
+# Long enough for the slowest observed provisioning run with room to spare, not
+# a measured constant: the script's cost is dominated by `iptables` calls that
+# scale with the clone count, and no run has been timed. Generous on purpose --
+# a timeout here refuses to start a daemon whose network is probably fine.
+NETWORK_SETUP_TIMEOUT = 120.0
+
+
+def provision_analysis_network(max_clones: int, script: Path = NETWORK_SETUP):
+    """Create the VLAN interfaces, gateways and isolation chains clones need.
+
+    **`sandboxd` used to skip this, and the symptom was a clean report.**
+    `run_analysis-<os>.sh:106,121` runs `network-setup.sh` before launching
+    `dirwatch`; `sandboxd` replaced the launcher but not that call, because #41
+    reasoned "the launcher still does it" -- which stops being true the moment
+    `sandboxd` runs instead of the launcher. Nothing else creates
+    `xenbr1.<n>`, the `172.16.<n>.1` gateways or the `DRAKVUF_*` chains, so a
+    clone booted, took an address nothing routed, and **read as a sample that
+    chose not to talk**. A false negative that looks exactly like a result is
+    the worst failure a sandbox has, and if a previous `dirwatch` era left the
+    interfaces behind it appears to work.
+
+    **The argument is the point, more than the call.** `max_clones` sizes the
+    worker pool and `network-setup.sh`'s argument sizes the VLAN pool; they have
+    to agree, and until now they were two numbers set by hand in two places
+    (see `Settings.from_env`, which carries the warning). Passing the same value
+    makes disagreement unrepresentable.
+
+    Nothing is configured here on purpose. The script sources
+    `automation/platform.env` itself, so this cannot become a second source of
+    truth for `ANALYSIS_BRIDGE` -- the exact divergence DRAFT-028b removed.
+
+    Safe to run every start: DRAFT-028 made it idempotent and fail-loud. It
+    does not create the bridge, and says so clearly when `xenbr1` is missing,
+    naming the `ovs-vsctl add-br` install step.
+    """
+    if not script.is_file():
+        raise NetworkSetupFailed(
+            f"{script} is missing. It provisions the VLAN interfaces, gateways "
+            f"and isolation chains every clone needs; without it a clone gets "
+            f"an address nothing routes and the analysis looks empty."
+        )
+
+    log.info("provisioning the analysis network for %d clone slot(s)", max_clones)
+    result = proc.run([str(script), str(max_clones)],
+                      timeout=NETWORK_SETUP_TIMEOUT, what="network-setup.sh")
+
+    if not result.ok:
+        # **Refuse to start rather than continue.** A half-provisioned analysis
+        # network is worse than none, because it looks like a working one:
+        # clones run with no inter-clone isolation, no LAN block and no Dom0
+        # protection. `run_analysis-ubuntu.sh` takes the same position.
+        raise NetworkSetupFailed(
+            f"{script.name} failed (rc={result.returncode}"
+            f"{', timed out' if result.timed_out else ''}). Refusing to start: "
+            f"a half-provisioned analysis network looks like a working one.\n"
+            f"{result.stderr.strip() or result.stdout.strip()}"
+        )
 
 
 class Daemon:
@@ -460,6 +528,19 @@ def main(argv=None) -> int:
     try:
         refuse_if_another_orchestrator_runs()
     except AlreadyRunning as exc:
+        log.error("%s", exc)
+        return 1
+
+    # After the lock, deliberately: provisioning rebuilds host-wide iptables
+    # chains, and doing that while another orchestrator is mid-analysis would
+    # disturb a running clone's isolation.
+    try:
+        # `len(settings.vlans)`, not a re-read of SANDBOXD_MAX_CLONES: the
+        # script must create exactly the VLANs this daemon will hand out, and
+        # `vlans` IS that pool. Deriving it from the same object removes the
+        # possibility of the two disagreeing.
+        provision_analysis_network(len(settings.vlans))
+    except NetworkSetupFailed as exc:
         log.error("%s", exc)
         return 1
 
