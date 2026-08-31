@@ -50,7 +50,19 @@ tls/ca/
 # Same for .devcontainer/ — it is what makes bash/dash/shellcheck/perl
 # available for the static checks, so an ignored copy means the toolchain is
 # reproduced by hand on each machine (shellcheck is not in the base image).
-.claude/
+#
+# **`.claude/skills/` is the exception, tracked since 2026-08-31.** A skill
+# here is a router to committed documentation — the runbook lifecycle, the
+# Dom0 handoff procedure, where deployment facts live — and that is knowledge
+# about the project rather than about one developer's machine. Ignoring it
+# meant every checkout rediscovered the same conventions.
+#
+# `.claude/*` rather than `.claude/`: git does not descend into an ignored
+# directory, so the negation below cannot work without listing the contents.
+# settings.local.json (a per-machine sandbox override) and .cc-writes stay
+# ignored by that first line.
+.claude/*
+!.claude/skills/
 .devcontainer/
 prompts/
 
