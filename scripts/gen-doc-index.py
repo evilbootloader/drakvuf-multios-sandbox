@@ -1,0 +1,197 @@
+#!/usr/bin/env python3
+"""Regenerate `docs/INDEX.md` — a greppable map of every heading under `docs/`.
+
+**Why this exists.** `docs/` is 43k lines across 28 documents and the four
+largest are over 1,000 lines each; `docs/checklists/android.md` alone is 3,195.
+Answering one narrow question — "where is the staging directory constraint
+described?" — cost either a blind `grep` returning unstructured hits or a read
+of a file that is most of a context window. Neither scales, and both were
+happening routinely.
+
+So every heading becomes one line carrying its own `path:line`, which is the
+form a targeted `Read(path, offset=N, limit=60)` needs. **Grep this file, then
+read the one section** — that is the whole intended workflow, and it is why the
+path is repeated on every line rather than written once per group: a grep hit
+has to be usable on its own.
+
+    scripts/gen-doc-index.py            # rewrite docs/INDEX.md
+    scripts/gen-doc-index.py --check    # exit 1 if out of date
+
+Unlike `gen-current-state.py`, this file is generated **whole**. There is no
+hand-maintained half to preserve, so there are no markers to respect.
+
+**The two generators are coupled, in one direction.** `gen-current-state.py`
+counts `docs.rglob("*.md")` for its repository-size table, so creating
+`docs/INDEX.md` changed that count and made *its* `--check` fail. Any change
+that adds or removes a file under `docs/` needs both generators re-run; the
+test suite fails until they are, which is the intended and only warning.
+
+**Depth stops at `###`.** That is not a style preference — it is the depth at
+which the index is useful. At `##` the average section is 84 lines and
+`analysis-pipeline.md` gets 5 entries for 1,182 lines, which is not a map. At
+`###` the average is 34 lines: one `Read` with `limit=60` lands on the section
+and its surrounding context. Going deeper roughly doubles the index for
+sub-points a reader reaches by reading the section anyway.
+"""
+
+from __future__ import annotations
+
+import argparse
+import re
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+DOCS = ROOT / "docs"
+TARGET = DOCS / "INDEX.md"
+
+# ATX headings only, `#` through `###`, and the space is required: `#!/bin/sh`
+# and a `#4` cross-reference are not headings. Setext (`===` underline) is not
+# matched because this repository does not use it -- check before assuming that
+# is still true if entries start going missing.
+_HEADING = re.compile(r"^(#{1,3}) +(\S.*?)\s*#*\s*$")
+
+# **Fence tracking is not optional here.** Runbooks are mostly pasted shell,
+# and a shell comment (`# now start the daemon`) is indistinguishable from a
+# heading once you are looking at lines in isolation. Ignoring fences inflated
+# a trial run from 861 real headings to 944 -- 83 shell comments indexed as
+# document structure, in exactly the files where a wrong line number costs the
+# most.
+_FENCE = re.compile(r"^\s*(```|~~~)")
+
+# Markdown that adds nothing once the heading is one line of a flat list.
+_LINK = re.compile(r"\[([^\]]+)\]\([^)]*\)")
+
+
+def anchor(text: str) -> str:
+    """GitHub's heading-slug algorithm, reproduced.
+
+    Lowercase, drop everything that is not word/space/hyphen, spaces to hyphens.
+    Backticks are stripped *before* the class filter so `` `foo` `` and `foo`
+    slug identically, which is what GitHub does.
+
+    **This is a reimplementation of someone else's undocumented behaviour**, so
+    it is checked rather than trusted: `scripts/check-refs.py` resolves every
+    `#anchor` in the tree against the headings that actually exist, and fails on
+    one that does not. If GitHub changes the algorithm, that gate goes red
+    rather than the links quietly rotting.
+    """
+    text = text.replace("`", "").lower()
+    text = re.sub(r"[^\w\s-]", "", text, flags=re.UNICODE)
+    return re.sub(r"\s", "-", text.strip())
+
+
+def _clean(text: str) -> str:
+    """`[a](b)` -> `a`, collapse whitespace. Inline code backticks are kept:
+    `## §0.1 — `dwarf2json` toolchain` is easier to grep with them than without.
+    """
+    return re.sub(r"\s+", " ", _LINK.sub(r"\1", text)).strip()
+
+
+def headings(path: Path) -> list[tuple[int, int, str]]:
+    """`(line number, depth, text)` for one file, skipping fenced blocks."""
+    found = []
+    in_fence = False
+    for n, line in enumerate(path.read_text(errors="replace").splitlines(), 1):
+        if _FENCE.match(line):
+            in_fence = not in_fence
+            continue
+        if in_fence:
+            continue
+        m = _HEADING.match(line)
+        if m:
+            found.append((n, len(m.group(1)), _clean(m.group(2))))
+    return found
+
+
+def documents() -> list[Path]:
+    """Sorted, and **excluding INDEX.md itself** -- it would index its own
+    entries on the first run and grow on every run after that.
+    """
+    return sorted(p for p in DOCS.rglob("*.md") if p != TARGET)
+
+
+def build() -> str:
+    out = [
+        "# Documentation index",
+        "",
+        "*Generated by `scripts/gen-doc-index.py`. Do not edit by hand — your "
+        "edits are overwritten on the next run, and "
+        "`sandboxd/tests/test_doc_index.py` fails until it is re-run.*",
+        "",
+        "**Grep this file, then read the one section.** Every entry carries its "
+        "own `path:line`, so a grep hit is directly usable as "
+        "`Read(path, offset=line, limit=60)` — the sections average 34 lines. "
+        "Grepping here instead of across `docs/` is the difference between one "
+        "hit with a line number and forty hits without.",
+        "",
+        "It maps **headings, not content**: a fact stated in the middle of a "
+        "section is not in here. Use it to find the right section, not to "
+        "decide a topic is undocumented.",
+        "",
+        "`docs/Project-definition.txt` is not indexed — it is not markdown. "
+        "Runbooks `01`–`10` describe the nested Proxmox lab erased on "
+        "2026-08-28; their headings are indexed because they remain valid dated "
+        "evidence, not because they describe this host.",
+        "",
+    ]
+
+    total = 0
+    for path in documents():
+        rel = path.relative_to(ROOT)
+        entries = headings(path)
+        total += len(entries)
+        lines = len(path.read_text(errors="replace").splitlines())
+
+        out.append(f"## `{rel}`")
+        out.append("")
+        if not entries:
+            # Worth saying out loud rather than emitting an empty section: a
+            # document with no headings is not indexable, and the reader needs
+            # to know the index cannot help them with this one.
+            out.append(f"*{lines} lines, no headings — not indexable.*")
+            out.append("")
+            continue
+
+        # The path:line stays bare text so a grep hit is copy-pasteable; the
+        # heading carries the link, so the same line works in a terminal and in
+        # a browser. `href` is relative to docs/, since that is where INDEX.md
+        # lives.
+        href = path.relative_to(DOCS)
+        for n, depth, text in entries:
+            indent = "  " * (depth - 1)
+            out.append(f"{indent}- `{rel}:{n}` — [{text}]({href}#{anchor(text)})")
+        out.append("")
+
+    out.append("---")
+    out.append("")
+    out.append(f"*{total} headings across {len(documents())} documents.*")
+    return "\n".join(out) + "\n"
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--check", action="store_true",
+                    help="exit 1 if the committed file is out of date")
+    args = ap.parse_args()
+
+    updated = build()
+    current = TARGET.read_text() if TARGET.exists() else None
+
+    if args.check:
+        if current != updated:
+            print("docs/INDEX.md is out of date -- run scripts/gen-doc-index.py",
+                  file=sys.stderr)
+            return 1
+        return 0
+
+    if current != updated:
+        TARGET.write_text(updated)
+        print(f"updated {TARGET.relative_to(ROOT)}")
+    else:
+        print("already up to date")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
