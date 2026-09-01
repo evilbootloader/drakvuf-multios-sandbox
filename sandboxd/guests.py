@@ -252,6 +252,14 @@ def default_trace_options(os_: TargetOs, kind: SampleKind) -> TraceOptions:
     # No drakvuf-windows.sh exists and nothing has ever run on a Windows
     # guest. Returning the Linux defaults would be inventing evidence, which
     # catalogue.py refuses to do for the same reason -- so this is explicit.
+
+    if os_ is TargetOs.WINDOWS:
+        return TraceOptions(
+            plugins=_WINDOWS_PLUGINS, timeout=120
+            fast_singlestep=True,
+            disable_sysret=True,
+        )
+
     raise NotImplementedError(
         "no Windows analysis package: DRAFT-034 owns the guest and DRAFT-020 "
         "what is installed in it. Nothing has executed on a Windows guest, so "
@@ -282,6 +290,9 @@ PATHS = {
     # neither. All three measured by DRAFT-013.
     TargetOs.ANDROID: GuestPaths(staging_dir="/data/local/tmp",
                                  shell="/system/bin/sh"),
+
+    TargetOs.WINDOWS: GuestPaths(staging_dir="C:\\Users\\carlos\\Desktop",
+                                 shell="C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"),
 }
 
 
@@ -422,6 +433,24 @@ def _android_netcfg(job: Job, subnet: str) -> str:
         'settings put global private_dns_mode off'
     )
 
+def _windows_netcfg(job: Job, subnet: str) -> str:
+    paths = PATHS[TargetOs.WINDOWS]
+    return (
+        "powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "
+        f"\"$if='Ethernet'; "
+        f"Get-NetIPAddress -InterfaceAlias $if -AddressFamily IPv4 "
+        f"-ErrorAction SilentlyContinue | Remove-NetIPAddress -Confirm:$false; "
+        f"Get-NetRoute -InterfaceAlias $if -AddressFamily IPv4 "
+        f"-ErrorAction SilentlyContinue | "
+        f"Where-Object {{$_.DestinationPrefix -eq '0.0.0.0/0'}} | "
+        f"Remove-NetRoute -Confirm:$false; "
+        f"New-NetIPAddress -InterfaceAlias $if "
+        f"-IPAddress '{subnet}.{job.vlan}.2' -PrefixLength 24 "
+        f"-DefaultGateway '{subnet}.{job.vlan}.1'; "
+        f"Set-DnsClientServerAddress -InterfaceAlias $if "
+        f"-ServerAddresses '{paths.nameserver}'\""
+    )
+
 
 def argv_configure_network(job: Job, subnet: str = "172.16") -> list[str]:
     """Give the clone its address. A separate injection from delivery.
@@ -432,8 +461,14 @@ def argv_configure_network(job: Job, subnet: str = "172.16") -> list[str]:
     and the nameserver; everything else expands in the guest.
     """
     shell = PATHS[job.target_os].shell
-    script = (_android_netcfg(job, subnet) if job.target_os is TargetOs.ANDROID
-              else _ubuntu_netcfg(job, subnet))
+
+    if job.target_os == TargetOs.ANDROID:
+        script = (_android_netcfg(job, subnet))
+    elif job.target_os == TargetOs.UBUNTU:
+        script = (_ubuntu_netcfg(job, subnet))
+    elif job.target_os == TargetOs.WINDOWS:
+        script = (_windows_netcfg(job, subnet))
+        
     return [
         "injector", "-r", str(job.profile), "-d", str(job.domid),
         "-i", str(job.injection_pid), "-m", "execproc",
