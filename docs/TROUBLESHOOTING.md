@@ -1676,11 +1676,21 @@ wildcard bind collides with the specific one. Any listener that raises during
 start is fatal to the process (`sys.exit(1)`), so one port conflict looks like
 FakeNet being broken.
 
-**Fix.** Move the port, not the resolver. Change `config.FAKENET_DNS_PORT` and
-`[DNS Server] Port` in `automation/fakenet.ini` together, and add the new port
-to the `fakenet_udp` DROP list in `network-setup.sh`. Nothing in the guest sees
-the number — the redirect matches on interface and protocol, never on
-destination.
+**Fix, applied 2026-09-01.** FakeNet's DNS listener moved to **5300**:
+`config.FAKENET_DNS_PORT`, `[DNS Server] Port` in `automation/fakenet.ini`, and
+the `fakenet_udp` DROP list in `network-setup.sh`, which must agree —
+`sandboxd/tests/test_egress.py` fails when they drift.
+
+Nothing in the guest sees the number. The redirect still **matches** the
+clone's `--dport 53` and only rewrites the target, so no preconfig script and
+no guest resolver setting changes.
+
+Keep any replacement **below 32768**, outside `ip_local_port_range`. A port
+inside it can be held by one of Dom0's own outbound connections at the moment
+FakeNet starts, which turns this same fatal bind failure into an intermittent
+one. FakeNet's proxy port, 38926, is inside that range — inherited from
+upstream and not yet observed to collide, but it is the first thing to check if
+`[Errno 98]` ever names 38926 instead.
 
 **Do not disable `systemd-resolved` to free the port.** It is Dom0's resolver;
 stopping it to serve a guest breaks name resolution for the hypervisor,

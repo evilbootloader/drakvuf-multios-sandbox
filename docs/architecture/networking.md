@@ -480,7 +480,16 @@ open proxy for anyone who can reach it.
 Structurally identical to `tor`: redirect, never forward, so the same three
 consequences above hold unchanged. Only the destination differs — every TCP
 port and every UDP port except 53 goes to FakeNet-NG's proxy listener on
-38926, and UDP/53 goes straight to its DNS listener.
+38926, and UDP/53 goes straight to its DNS listener on 5300.
+
+The clone still addresses 53; only the redirect's target moved, because
+`systemd-resolved` holds 53 on Dom0 and FakeNet's DNS server sets no
+`SO_REUSEADDR`, so it loses the bind — and a listener that cannot start exits
+the whole process. The replacement sits below `ip_local_port_range` so that
+Dom0's own outbound connections cannot be holding it at launch, which would
+make the same failure intermittent. FakeNet's proxy port, inherited from
+upstream at 38926, *is* inside that range; it has not bitten and is written
+down in `config.py` so it is looked at before a config error is assumed.
 
 Everything through one proxy port rather than a rule per protocol is
 deliberate. The proxy identifies the protocol from the **content** and hands

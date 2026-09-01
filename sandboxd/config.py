@@ -301,6 +301,12 @@ TOR_DNS_PORT = 9053
 #: are read only by FakeNet's diverter, which `DivertTraffic: No` means we
 #: never start. Treating them as the cause would be a trap: they can be right
 #: while the behaviour is absent, and they were, before this rule existed.
+#: 38926 is FakeNet's own default, kept so its documentation still reads true.
+#: Note it sits INSIDE `ip_local_port_range` (32768-60999) and its listener
+#: sets no SO_REUSEADDR, so one of Dom0's own outbound connections holding it
+#: at startup would fail the bind and exit FakeNet. Not observed, low
+#: probability, and the symptom is the same `[Errno 98]` documented for the DNS
+#: port -- so look here before assuming a config error.
 FAKENET_PROXY_PORT = 38926
 
 #: DNS is redirected to FakeNet's DNS listener DIRECTLY rather than through the
@@ -309,10 +315,19 @@ FAKENET_PROXY_PORT = 38926
 #: domain does nothing at all, and the report looks like a dud sample rather
 #: than a broken responder.
 #:
-#: 53 only because it is free on this host. FakeNet's DNS listener binds
-#: 0.0.0.0 and sets no SO_REUSEADDR, so systemd-resolved's stub on 127.0.0.53
-#: can take the port from under it -- and a listener that cannot bind exits the
-#: whole of FakeNet. If that happens, change this and `[DNS Server] Port` in
-#: fakenet.ini together; nothing in the guest sees the number, because the
-#: redirect matches on interface and protocol rather than on destination.
-FAKENET_DNS_PORT = 53
+#: NOT 53, and that is settled rather than provisional. FakeNet's DNS listener
+#: binds 0.0.0.0 and its UDP server sets no SO_REUSEADDR, so systemd-resolved's
+#: stub on 127.0.0.53 wins the port -- confirmed on Dom0 2026-09-01,
+#: `[Errno 98] Address already in use`, and a listener that cannot bind exits
+#: the whole of FakeNet.
+#:
+#: **Only the redirect TARGET moves.** The rule still matches the guest's
+#: `--dport 53`; nothing in the guest sees this number, and no preconfig script
+#: changes. `egress._argv_apply_simulated` is the only reader.
+#:
+#: 5300 rather than something near 38926 because `ip_local_port_range` starts
+#: at 32768: a port inside it can be held by one of Dom0's own outbound
+#: connections at the moment FakeNet starts, which would be the same fatal bind
+#: failure arriving intermittently. Anything chosen here should stay below
+#: 32768 for that reason.
+FAKENET_DNS_PORT = 5300

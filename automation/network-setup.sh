@@ -740,9 +740,13 @@ done
 # answering the house LAN, and the DNS listener in particular is an open
 # resolver until these rules land.
 #
-# Only 53 and 38926 are reached by a clone; the rest are reached through the
+# Only 5300 and 38926 are reached by a clone; the rest are reached through the
 # proxy, from localhost. They are dropped anyway because what matters is what
 # is BOUND, not what we route to it.
+#
+# 5300, not 53: a clone still SENDS to 53 and the redirect rewrites it. 53 is
+# absent from this list because nothing binds it -- systemd-resolved holds it,
+# which is why FakeNet's DNS listener moved.
 #
 # **These lists must track automation/fakenet.ini.** Enabling a listener there
 # without adding its port here exposes it, silently and only on the uplink --
@@ -755,7 +759,7 @@ done
 for fakenet_tcp in 21 25 80 110 1337 6667 38926 60000:60010; do
     iptables -A "$INPUT_CHAIN" -i "$UPLINK_BRIDGE" -p tcp --dport "$fakenet_tcp" -j DROP
 done
-for fakenet_udp in 53 69 1337 38926; do
+for fakenet_udp in 69 1337 5300 38926; do
     iptables -A "$INPUT_CHAIN" -i "$UPLINK_BRIDGE" -p udp --dport "$fakenet_udp" -j DROP
 done
 
