@@ -472,9 +472,11 @@ def argv_configure_network(job: Job, subnet: str = "172.16") -> list[str]:
     elif job.target_os == TargetOs.WINDOWS:
         script = (_windows_netcfg(job, subnet))
 
+    mode = "createproc" if job.target_os == TargetOs.WINDOWS else "execproc"
+
     return [
         "injector", "-r", str(job.profile), "-d", str(job.domid),
-        "-i", str(job.injection_pid), "-m", "execproc",
+        "-i", str(job.injection_pid), "-m", mode,
         "-e", shell, "-f", "-c", "-f", script,
     ]
 
@@ -556,9 +558,11 @@ def argv_trace(job: Job, component: str | None = None) -> list[str]:
     Two execution paths, selected from the sample's bytes: an APK is LAUNCHED,
     already installed, via `am start -n`; anything else is `execve`d directly.
     """
+    mode = "createproc" if job.target_os == TargetOs.WINDOWS else "execproc"
+
     argv = [
         "drakvuf", "-r", str(job.profile), "-d", str(job.domid),
-        "-i", str(job.injection_pid), "-m", "execproc",
+        "-i", str(job.injection_pid), "-m", "mode",
     ]
 
     if job.kind is SampleKind.APK:
