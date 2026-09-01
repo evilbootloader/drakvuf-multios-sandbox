@@ -404,6 +404,94 @@ def test_the_two_output_directories_stay_separate(tmp_path):
     assert "--memdumpdir" not in argv
 
 
+# --- the injector mode reaches argv as a mode ------------------------------
+
+#: Every `-m` value this repository has ever passed to `injector` or `drakvuf`.
+#: Not a list of what the tools accept -- CLAUDE.md forbids inventing options --
+#: but of what is evidenced here, in `automation/*.sh` and `docs/runbooks/`.
+#: A value outside it is either a typo or an option nobody has run.
+EVIDENCED_MODES = frozenset({
+    "writefile", "readfile", "execproc", "shellexec", "createproc",
+})
+
+
+def test_every_builder_passes_a_real_mode(tmp_path):
+    """`-m` carried the literal string "mode" instead of the variable.
+
+    Fixed in `6d0f7bf`, and nothing here would have caught it: the suite
+    checked `-m writefile` at one site and a hardcoded `execproc` at another,
+    so the two builders that CHOOSE a mode were unasserted. `injector` exits 1
+    on an unknown mode having done nothing, which surfaces as
+    "Failed at injector network configuration" with the tool's banner and no
+    error text -- and the analysis does not run.
+
+    Parameterised over all three guests because the bug was in the branch, not
+    in the value: Windows takes `shellexec` and the others `execproc`, so a
+    test pinned to one OS proves nothing about the other.
+    """
+    for os_ in (TargetOs.UBUNTU, TargetOs.ANDROID, TargetOs.WINDOWS):
+        kind = {TargetOs.ANDROID: SampleKind.APK,
+                TargetOs.WINDOWS: SampleKind.PE}.get(os_, SampleKind.ELF)
+        j = job(tmp_path, os_=os_, kind=kind)
+
+        builders = [
+            ("argv_deliver", G.argv_deliver(j)),
+            ("argv_configure_network", G.argv_configure_network(j)),
+            ("argv_trace", G.argv_trace(
+                j, component="com.x/.Main" if kind is SampleKind.APK else None)),
+        ]
+        for name, argv in builders:
+            assert "-m" in argv, f"{name} on {os_.value} passes no -m"
+            mode = argv[argv.index("-m") + 1]
+            assert mode in EVIDENCED_MODES, (
+                f"{name} on {os_.value} passes -m {mode!r}, which is not a "
+                f"mode this project has ever run; injector exits 1 having "
+                f"done nothing and the analysis does not run")
+
+
+def test_windows_is_the_only_guest_that_shellexecs(tmp_path):
+    """The branch itself, so a future edit cannot flip it silently.
+
+    `shellexec` is what a Windows guest needs because the command is a
+    PowerShell line rather than an executable plus argv; the Linux-family
+    guests exec directly.
+    """
+    for os_ in (TargetOs.UBUNTU, TargetOs.ANDROID):
+        kind = SampleKind.APK if os_ is TargetOs.ANDROID else SampleKind.ELF
+        argv = G.argv_configure_network(job(tmp_path, os_=os_, kind=kind))
+        assert argv[argv.index("-m") + 1] == "execproc"
+
+    argv = G.argv_configure_network(
+        job(tmp_path, os_=TargetOs.WINDOWS, kind=SampleKind.PE))
+    assert argv[argv.index("-m") + 1] == "shellexec"
+
+
+def test_no_builder_hardcodes_an_unevidenced_mode():
+    """A source sweep, so a NEW `-m` site is covered the day it is written.
+
+    The runtime test above can only see the builders it calls. This one reads
+    every string literal following a `"-m"` in guests.py, which is what makes
+    adding a seventh call site safe rather than silently unasserted.
+    """
+    import ast
+    import inspect
+
+    tree = ast.parse(inspect.getsource(G))
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.List):
+            continue
+        items = node.elts
+        for i, elt in enumerate(items[:-1]):
+            if not (isinstance(elt, ast.Constant) and elt.value == "-m"):
+                continue
+            following = items[i + 1]
+            if not isinstance(following, ast.Constant):
+                continue  # a variable; the runtime test above covers those
+            assert following.value in EVIDENCED_MODES, (
+                f"guests.py line {following.lineno} passes -m "
+                f"{following.value!r}, which is not an evidenced mode")
+
+
 def test_windows_returns_a_candidate_package_not_the_linux_one(tmp_path):
     """Windows gained defaults on 2026-09-01, when a guest existed to try them
     on. They are a starting hypothesis, not a measurement.
