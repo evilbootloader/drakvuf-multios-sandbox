@@ -1,0 +1,156 @@
+Make FakeNet-NG v3.5 survive `DivertTraffic: No`.  DRAFT-057 Phase 3.
+
+Pinned to upstream tag v3.5, read 2026-09-01.  Reference copy: nothing in this
+repository deploys it, because the development container is not Dom0.  The
+runbook that applies it is `docs/runbooks/13-verify-egress-modes.md`, step 6.
+
+WHY THIS EXISTS
+===============
+
+`automation/fakenet.ini` sets `DivertTraffic: No`, and it has to -- FakeNet's
+own diverter installs a BLANKET `PREROUTING` REDIRECT that would answer every
+analysis VLAN at once, including the clones submitted as `offline`.  Per-job
+egress selection is the whole of DRAFT-057 and it cannot survive a process that
+redirects everything.  The ini's header carries the long version.
+
+Upstream does not appear to run that path.  With diversion disabled,
+`Fakenet.start()` leaves `self.diverter` at `None` (fakenet.py:49, assigned
+only inside the `diverttraffic == 'yes'` branch) and three call sites
+dereference it with no guard:
+
+  1. fakenet.py, `start()`             -- `fn_addr` is bound at line 158,
+     inside that same branch, and read at line 217 outside it.  FakeNet dies
+     with `UnboundLocalError` before any listener binds.
+     Reported upstream: https://github.com/mandiant/flare-fakenet-ng/issues/167
+
+  2. ProxyListener.py, `get_top_listener()` -- calls
+     `diverter.getOriginalDestPort()` before the taste loop, in a handler with
+     no enclosing `try`.  Every proxied connection is accepted and then closed
+     with no data, and a traceback goes to stderr.
+
+  3. diverterbase.py, `DiverterListenerCallbacks` -- constructed with `None` at
+     fakenet.py:211 and forwarding straight through.  All eight listeners
+     (HTTP, DNS, FTP, Raw, SMTP, POP, IRC, TFTP) call `logNbi()` on every
+     transaction, and `DNSListener.parse()` calls `isProcessBlackListed()` as
+     its first statement, before the query is decoded.
+
+(2) and (3) are what make this more than a startup bug: without them the
+responder starts, binds its ports, logs nothing wrong, and answers nothing --
+which reads in a report as a sample whose infrastructure was down.  That is the
+confident false negative DRAFT-057 exists to prevent, so it is not acceptable
+to run `simulated` without this patch.
+
+Hunk (3) is the load-bearing one.  Guarding the callbacks object rather than
+its six call sites is deliberate: it fixes DNS and all eight listeners' NBI
+logging at once, and it keeps the two `mapProxySportToOrigSport()` calls in
+ProxyListener untouched, so the diff against upstream stays at three hunks.
+
+WHAT IT COSTS
+=============
+
+`dport` becomes `None` inside `taste()`.  Every listener treats it as a bonus
+(`confidence = 1 if dport == 53 else 0`, and so on) and adds +2 on a content
+match, so protocol detection still works -- it is content-only.  Two
+consequences the ini's listener ordering accounts for:
+
+  * FTPListener scores +1 on a content match, the same flat 1 RawListener
+    returns for anything.  `get_top_listener` breaks ties by first-listed, so
+    the protocol listeners must precede the Raw pair in the ini.
+  * The original destination port is genuinely unrecoverable here.  For TCP it
+    is still in the kernel (`SO_ORIGINAL_DST`), but reading it is upstream
+    feature work, not a guard, and it is deliberately not attempted below.
+
+APPLYING IT
+===========
+
+Inside the venv FakeNet was installed into, from the repository root:
+
+    patch -p1 --forward -d "$(python -c 'import fakenet, os; \
+        print(os.path.dirname(os.path.dirname(fakenet.__file__)))')" \
+        < automation/fakenet-divert-no.patch
+
+`--forward` makes a re-run say "previously applied" instead of asking.  Re-run
+it after any `pip install --upgrade`, and re-check it against upstream before
+moving off v3.5: hunk (3) is in a class upstream added recently and is the most
+likely of the three to be fixed or restructured there.
+
+diff -u -r a/fakenet/diverters/diverterbase.py b/fakenet/diverters/diverterbase.py
+--- a/fakenet/diverters/diverterbase.py
++++ b/fakenet/diverters/diverterbase.py
+@@ -2055,7 +2055,15 @@
+ 
+         This method forwards the provided NBI information to the logNbi() method
+         in the underlying diverter object. Called by all listeners to log NBIs.
++
++        A no-op under `DivertTraffic: No`, where there is no diverter to
++        delegate to. Every listener calls this on every transaction, so without
++        the guard the first fake DNS answer or HTTP response is replaced by an
++        AttributeError -- caught and logged by some listeners, fatal to the
++        request in all of them.
+         """
++        if self.__diverter is None:
++            return
+         self.__diverter.logNbi(sport, nbi, proto, application_layer_proto,
+                                is_ssl_encrypted)
+ 
+@@ -2068,11 +2076,25 @@
+         mapProxySportToOrigSport() method in the underlying diverter object.
+         Called by ProxyListener to report the mapping between proxy initiated
+         source port and original source port.
++
++        A no-op under `DivertTraffic: No`: the mapping exists so the diverter
++        can attribute a proxied connection back to the process that made it,
++        and with no diverter there is nothing holding the table.
+         """
++        if self.__diverter is None:
++            return
+         self.__diverter.mapProxySportToOrigSport(proto, orig_sport, proxy_sport,
+                                                  is_ssl_encrypted)
+ 
+     def isProcessBlackListed(self, proto, sport):
+         """Check if the process is blacklisted.
++
++        `(False, None, None)` under `DivertTraffic: No` -- nothing is
++        blacklisted, and the process behind a connection is unknowable without
++        the diverter's conntrack bookkeeping. DNSListener.parse() calls this
++        before it decodes the query, so an unguarded None here means the
++        responder answers nothing at all.
+         """
++        if self.__diverter is None:
++            return False, None, None
+         return self.__diverter.isProcessBlackListed(proto, sport=sport)
+diff -u -r a/fakenet/fakenet.py b/fakenet/fakenet.py
+--- a/fakenet/fakenet.py
++++ b/fakenet/fakenet.py
+@@ -137,6 +137,14 @@
+ 
+     def start(self):
+ 
++        # Bound here rather than only inside the branch below, because the
++        # listener loop reads it unconditionally while the branch runs only
++        # under `DivertTraffic: Yes`. Without this, starting with diversion
++        # disabled dies with `UnboundLocalError: local variable 'fn_addr'
++        # referenced before assignment` before a single listener binds.
++        # https://github.com/mandiant/flare-fakenet-ng/issues/167
++        fn_addr = '0.0.0.0'
++
+         if self.fakenet_config.get('diverttraffic') and self.fakenet_config['diverttraffic'].lower() == 'yes':
+ 
+             if (('networkmode' not in self.diverter_config) or
+diff -u -r a/fakenet/listeners/ProxyListener.py b/fakenet/listeners/ProxyListener.py
+--- a/fakenet/listeners/ProxyListener.py
++++ b/fakenet/listeners/ProxyListener.py
+@@ -167,7 +167,12 @@
+ 
+     top_listener = None
+     top_confidence = 0
+-    dport = diverter.getOriginalDestPort(orig_src_ip, orig_src_port, proto)
++    # `None` when diversion is disabled: there is no diverter holding the
++    # pre-redirect destination, so protocol detection falls back to the
++    # content alone. Every taste() treats dport purely as a bonus, so this
++    # weakens detection rather than breaking it.
++    dport = (diverter.getOriginalDestPort(orig_src_ip, orig_src_port, proto)
++             if diverter is not None else None)
+ 
+     for listener in listeners:
+   

@@ -505,6 +505,30 @@ def test_fakenet_leaves_dom0s_own_resolver_alone():
         assert option in ini, option
 
 
+def _fakenet_ini():
+    """Parsed exactly as `Fakenet.parse_config()` parses it.
+
+    Which is the point: that function reads ONLY the file it is given. There is
+    no merge with FakeNet's `default.ini` -- that is the fallback for when no
+    `-c` is passed. Asserting on the parse rather than on the text is what
+    makes the next test able to say "nothing would bind".
+    """
+    from configparser import ConfigParser
+
+    cfg = ConfigParser()
+    cfg.read(Path(__file__).resolve().parents[2] / "automation" / "fakenet.ini")
+    return cfg
+
+
+def _fakenet_listeners():
+    """The listener sections that would actually start, in start order."""
+    cfg = _fakenet_ini()
+    return [(name, dict(cfg.items(name)))
+            for name in cfg.sections()
+            if name not in ("FakeNet", "Diverter")
+            and cfg.getboolean(name, "enabled")]
+
+
 def test_the_fakenet_ports_agree_with_the_ini():
     """The proxy port is the catch-all our one redirect rule points at."""
     ini = (Path(__file__).resolve().parents[2]
@@ -516,6 +540,148 @@ def test_the_fakenet_ports_agree_with_the_ini():
     # fakenet/configs/default.ini on 2026-08-31. Not restated in our ini, so
     # this pins the constant to the upstream default we relied on.
     assert config.FAKENET_PROXY_PORT == 38926
+
+    # The three keys above are DIVERTER settings, and `DivertTraffic: No` means
+    # the diverter never runs -- so they describe the intent and cause none of
+    # it. These sections are what actually binds the port our rules target, and
+    # for a while the file had the keys and not the sections.
+    listeners = dict(_fakenet_listeners())
+    for section, proto in (("ProxyTCPListener", "tcp"),
+                           ("ProxyUDPListener", "udp")):
+        assert section in listeners, f"{section} is missing or disabled"
+        assert listeners[section]["protocol"].lower() == proto
+        assert int(listeners[section]["port"]) == config.FAKENET_PROXY_PORT
+
+    assert "DNS Server" in listeners, "nothing would answer a redirected query"
+    assert int(listeners["DNS Server"]["port"]) == config.FAKENET_DNS_PORT
+
+
+def test_fakenet_ini_starts_at_least_one_listener():
+    """The failure this file exists to make impossible.
+
+    A config carrying only [FakeNet] and [Diverter] parses, logs "Loaded
+    configuration file", binds nothing, and idles -- and every check that looks
+    for FakeNet's process finds it running. The symptom appears three steps
+    later as a `simulated` clone that talks to nobody, which reads as a dull
+    sample. Executing runbook 13 step 6 is what found it.
+    """
+    assert _fakenet_listeners(), (
+        "fakenet.ini defines no enabled listener sections; FakeNet would "
+        "start, bind nothing, and look healthy")
+
+
+def test_fakenet_protocol_listeners_precede_the_raw_fallback():
+    """Section order is behaviour, and nothing else in this file is.
+
+    The proxy picks a listener by highest `taste()` confidence, breaking ties
+    by whichever started first -- the ini's order. With diversion off the
+    original destination port is unrecoverable, so every taste() scores on
+    content alone: FTPListener returns 1 on a match and RawListener returns 1
+    on anything. Move Raw above FTP and FTP silently stops being reachable.
+    """
+    names = [name for name, _ in _fakenet_listeners()]
+    raw = [i for i, n in enumerate(names) if n.startswith("Raw")]
+    assert raw, "no RawListener: unrecognised traffic would get silence"
+
+    protocol_listeners = [i for i, n in enumerate(names)
+                          if n.startswith(("FTPListener", "HTTPListener",
+                                           "SMTP", "POP", "IRC", "TFTP",
+                                           "DNS"))]
+    assert max(protocol_listeners) < min(raw), (
+        "a protocol listener is ordered after the Raw fallback; Raw's flat "
+        "confidence of 1 will win the tie and that protocol is unreachable")
+
+
+def test_fakenet_writable_roots_are_outside_the_package():
+    """FTP and TFTP let the SAMPLE write, and upstream aims them at itself.
+
+    FTPListener accepts any credentials and grants `elradfmwM` -- store,
+    delete, rename, mkdir -- on FTProot. Upstream's default is `defaultFiles/`,
+    which resolves to the installed package directory, so a sample under
+    analysis could write into Dom0's site-packages. TFTPRoot takes uploads the
+    same way.
+    """
+    for name, cfg in _fakenet_listeners():
+        for key in ("ftproot", "tftproot"):
+            if key not in cfg:
+                continue
+            root = cfg[key]
+            assert root.startswith("/"), (
+                f"[{name}] {key} is relative, so it resolves against the "
+                f"installed package: {root}")
+
+
+def test_fakenet_uplink_drops_cover_every_bound_port():
+    """Every listener binds 0.0.0.0, so every port needs the uplink DROP.
+
+    FakeNet overwrites each listener's address with one process-wide value and,
+    with diversion off, never reads the setting that would restrict it to an
+    interface. So enabling a listener in the ini exposes it to the house LAN --
+    an open DNS resolver, in the worst case -- and the exposure is invisible to
+    every test run from inside the lab.
+    """
+    import re
+
+    setup = (Path(__file__).resolve().parents[2]
+             / "automation" / "network-setup.sh").read_text()
+
+    dropped = {"tcp": set(), "udp": set()}
+    for proto in dropped:
+        match = re.search(rf"^for fakenet_{proto} in ([^;]+); do$",
+                          setup, re.MULTILINE)
+        assert match, f"network-setup.sh has no fakenet_{proto} DROP loop"
+        for token in match.group(1).split():
+            if ":" in token:
+                low, high = (int(p) for p in token.split(":"))
+                dropped[proto].update(range(low, high + 1))
+            else:
+                dropped[proto].add(int(token))
+
+    for name, cfg in _fakenet_listeners():
+        proto = cfg["protocol"].lower()
+        for token in cfg["port"].split(","):
+            token = token.strip()
+            if "-" in token:
+                low, high = (int(p) for p in token.split("-"))
+                ports = range(low, high + 1)
+            else:
+                ports = [int(token)]
+            for port in ports:
+                assert port in dropped[proto], (
+                    f"[{name}] binds {proto}/{port} on 0.0.0.0 and "
+                    f"network-setup.sh does not DROP it on the uplink")
+
+        # pyftpdlib binds these on demand during a transfer, so they are absent
+        # from `ss` at launch and are the ones a manual check misses.
+        for token in cfg.get("pasvports", "").split(","):
+            token = token.strip()
+            if not token:
+                continue
+            low, high = (int(p) for p in token.split("-"))
+            for port in range(low, high + 1):
+                assert port in dropped["tcp"], (
+                    f"[{name}] passive-data port tcp/{port} is not dropped "
+                    f"on the uplink")
+
+
+def test_fakenet_patch_is_shipped_and_pinned():
+    """`DivertTraffic: No` is a path upstream does not run.
+
+    Without the patch FakeNet binds every port, logs nothing alarming and
+    answers nothing -- the confident false negative this whole issue exists to
+    prevent. The version is pinned because hunk 3 is in a class upstream added
+    recently and is the likeliest of the three to move.
+    """
+    patch = (Path(__file__).resolve().parents[2]
+             / "automation" / "fakenet-divert-no.patch")
+    assert patch.exists(), "fakenet.ini requires a patch that is not shipped"
+
+    text = patch.read_text()
+    assert "v3.5" in text, "the patch does not say which version it applies to"
+    for target in ("fakenet/fakenet.py",
+                   "fakenet/listeners/ProxyListener.py",
+                   "fakenet/diverters/diverterbase.py"):
+        assert f"+++ b/{target}" in text, f"patch no longer touches {target}"
 
 
 def test_the_tor_ports_agree_with_the_torrc():

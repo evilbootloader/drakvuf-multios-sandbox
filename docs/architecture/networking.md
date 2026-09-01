@@ -403,7 +403,7 @@ the list below, which describes what was proposed and is kept for the rest.
 |---|---|
 | `offline` | **Built, and it is the absence of a rule** rather than a rule |
 | `direct` | **Built**, host-gated behind `SANDBOXD_ALLOW_DIRECT=1`, never offered in the UI |
-| `simulated` | Enum, UI and API only. Needs a responder — Phase 3 |
+| `simulated` | **Rules built.** Needs FakeNet-NG installed, patched and running; withheld automatically if not — see Phase 3 below |
 | `tor` | **Built.** Needs `automation/torrc` installed and tor running; withheld automatically if not |
 | `routed` | Enum, UI and API only. Needs a peer and a kill-switch capture — Phase 4 |
 
@@ -474,6 +474,54 @@ address of the interface the packet arrived on and that differs per VLAN.
 `network-setup.sh` therefore **drops both ports arriving on the uplink**, as
 the first rules in `DRAKVUF_INPUT`. Without those two rules this host is an
 open proxy for anyone who can reach it.
+
+#### `simulated` — DRAFT-057 Phase 3
+
+Structurally identical to `tor`: redirect, never forward, so the same three
+consequences above hold unchanged. Only the destination differs — every TCP
+port and every UDP port except 53 goes to FakeNet-NG's proxy listener on
+38926, and UDP/53 goes straight to its DNS listener.
+
+Everything through one proxy port rather than a rule per protocol is
+deliberate. The proxy identifies the protocol from the **content** and hands
+off internally, so one rule covers whatever port a sample picks, including the
+unusual ones. Enumerating 80, 443, 25, 21, 110, 6667 in our chains would be a
+second copy of a list that lives in `automation/fakenet.ini`, free to drift,
+with "the sample's traffic went unanswered" as the only symptom.
+
+Three things about the integration are not obvious from FakeNet's own
+documentation, and each was found by executing runbook 13 step 6:
+
+- **`DivertTraffic: No` is mandatory and unsupported.** Its diverter installs a
+  blanket `PREROUTING` REDIRECT that would capture every analysis VLAN — a
+  clone submitted as `offline` would be answered by the responder, silently,
+  and the report would look like a working analysis. Turning it off is
+  therefore not optional, and upstream v3.5 does not run that path: three
+  unguarded `None` dereferences leave the responder listening and mute.
+  `automation/fakenet-divert-no.patch` fixes them and explains why each
+  matters.
+- **The config file must be complete.** FakeNet merges nothing; `default.ini`
+  is a fallback for when no `-c` is passed, not a base. A config with no
+  listener sections starts a process that binds nothing and looks healthy.
+- **Section order is behaviour.** With diversion off, the original destination
+  port is unrecoverable, so the proxy's protocol detection scores on content
+  alone — and `RawListener` returns a flat confidence of 1 for any bytes at
+  all. It must come last, or it wins the tie against FTP and that protocol is
+  quietly unreachable.
+
+Its listeners bind `0.0.0.0` for the same reason tor's do, and cannot be told
+otherwise: FakeNet overwrites every listener's address with one process-wide
+value, and the setting that would restrict it to an interface is read only by
+the diverter. `network-setup.sh` drops all of them on the uplink — eleven
+ports and a range, against tor's two. The DNS listener is the one that matters
+most: unguarded it is an open resolver on the house LAN.
+
+**The responder is probed at launch, not assumed.** `sandboxd` withholds the
+mode when nothing accepts on 38926, and a job that asked for `simulated` runs
+`offline` and says so in the report. A redirect to a closed port would give a
+clone whose every connection is refused instantly, which reads as a sample
+that tried to talk and got nowhere — worse than no network, which is at least
+honest about itself.
 
 ---
 

@@ -732,6 +732,33 @@ for tor_port in 9040 9053; do
     iptables -A "$INPUT_CHAIN" -i "$UPLINK_BRIDGE" -p udp --dport "$tor_port" -j DROP
 done
 
+# FakeNet-NG's listeners, for exactly the reason above and with more ports to
+# get wrong. It binds 0.0.0.0 and cannot be told not to: FakeNet overwrites
+# every listener's address with one process-wide value, and under
+# `DivertTraffic: No` the setting that would restrict it to an interface is
+# never read. So a `simulated` responder that exists to answer clones is also
+# answering the house LAN, and the DNS listener in particular is an open
+# resolver until these rules land.
+#
+# Only 53 and 38926 are reached by a clone; the rest are reached through the
+# proxy, from localhost. They are dropped anyway because what matters is what
+# is BOUND, not what we route to it.
+#
+# **These lists must track automation/fakenet.ini.** Enabling a listener there
+# without adding its port here exposes it, silently and only on the uplink --
+# every in-lab test would still pass. sandboxd/tests/test_egress.py parses both
+# files and fails when they disagree.
+#
+# 60000:60010 is pyftpdlib's passive-data range: bound on demand during an FTP
+# transfer rather than at startup, so it never appears in `ss` at launch and is
+# the one an operator checking by hand would miss.
+for fakenet_tcp in 21 25 80 110 1337 6667 38926 60000:60010; do
+    iptables -A "$INPUT_CHAIN" -i "$UPLINK_BRIDGE" -p tcp --dport "$fakenet_tcp" -j DROP
+done
+for fakenet_udp in 53 69 1337 38926; do
+    iptables -A "$INPUT_CHAIN" -i "$UPLINK_BRIDGE" -p udp --dport "$fakenet_udp" -j DROP
+done
+
 # Replies to traffic Dom0 itself started. Without this, an operator
 # pinging or curling a clone from Dom0 gets nothing back -- the reply
 # arrives on INPUT and is dropped. Clone-initiated connections remain

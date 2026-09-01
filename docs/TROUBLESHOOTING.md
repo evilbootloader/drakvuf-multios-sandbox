@@ -1547,6 +1547,107 @@ at daemon start. Note that a reboot also clears it — there is no
 jumps with it and cuts the network of every clone currently under analysis,
 mid-trace. Delete the one spec.
 
+### FakeNet-NG started, logged its configuration, and bound nothing
+
+**Symptom.** `fakenet -c /etc/fakenet.ini` prints its banner and
+`Loaded configuration file: /etc/fakenet.ini`, then nothing. The process stays
+up. `ss -ltnp | grep 38926` is empty, `ss -lunp` shows only `systemd-resolved`
+on 53. No error, no traceback, exit code still 0 — every check that looks for
+the process finds it running.
+
+**Cause.** **The config file had no listener sections.** `Fakenet.parse_config()`
+reads only the file passed to `-c`; `fakenet/configs/default.ini` is what it
+falls back to when `-c` is *absent*, never something it merges in. Every
+section other than `[FakeNet]` and `[Diverter]` is a listener, so a file
+carrying only those two produces an empty listener table, and `start()`
+iterates it zero times and returns.
+
+Our `automation/fakenet.ini` was written from upstream's `default.ini` on the
+belief that unset listeners stay at their defaults, and its header said so.
+There is no such thing once `-c` is passed.
+
+**Fix.** The listener sections are in `automation/fakenet.ini` and are not
+optional; `sandboxd/tests/test_egress.py::test_fakenet_ini_starts_at_least_one_listener`
+fails if they go missing again. Confirm at runtime rather than by reading the
+file — `ss -ltnp | grep -E '38926|:80'` and `ss -lunp | grep -E '38926|:53'`
+must both return listeners before a `simulated` job is submitted. sandboxd's
+own launch probe checks 38926 only, so a missing DNS section would still pass
+it.
+
+### The simulated responder is listening, and answers nothing
+
+**Symptom.** FakeNet is up and `ss` shows every port bound, but a clone in
+`simulated` gets no reply to anything. `getent hosts` fails, `curl` connects
+and closes with an empty response. FakeNet's own log shows either
+`Error: 'NoneType' object has no attribute 'isProcessBlackListed'` or a bare
+traceback ending in `getOriginalDestPort`, depending on which listener was
+hit. Nothing in the report says the responder was broken — it reads as a
+sample whose infrastructure was down.
+
+**Cause.** **`DivertTraffic: No` is a path FakeNet-NG v3.5 does not run.** With
+it set, `Fakenet.start()` leaves `self.diverter` at `None` and three call sites
+dereference it unguarded: `get_top_listener()` asks the diverter for the
+original destination port before the taste loop; `DiverterListenerCallbacks` is
+constructed with `None` and forwards straight through, and all eight listeners
+call `logNbi()` on every transaction; and `DNSListener.parse()` calls
+`isProcessBlackListed()` as its first statement, before it decodes the query.
+The DNS one is swallowed by a broad `except Exception`, which is why it fails
+quietly.
+
+We need `DivertTraffic: No` — its diverter installs a blanket `PREROUTING`
+REDIRECT that would answer every analysis VLAN, including clones submitted as
+`offline`. So the setting is not negotiable and the patch is not optional.
+
+**Fix.** Apply `automation/fakenet-divert-no.patch` inside the venv FakeNet was
+installed into, and re-apply it after any `pip install --upgrade`. Its header
+has the command and the reasoning. Verify by asking the responder for something
+that cannot exist:
+
+```sh
+dig +short @127.0.0.1 totally-not-real-c2.invalid    # expect: 192.0.2.123
+```
+
+An answer means the DNS path is whole. Silence with FakeNet running and the
+port bound means the patch is not applied.
+
+### `UnboundLocalError: local variable 'fn_addr' referenced before assignment`
+
+**Symptom.** FakeNet exits at startup, before binding anything.
+
+**Cause.** The same untested `DivertTraffic: No` path as above, at its very
+first step: `fn_addr` is assigned inside the `diverttraffic == 'yes'` branch
+and read outside it, by the loop that hands each listener its bind address.
+Upstream issue
+[#167](https://github.com/mandiant/flare-fakenet-ng/issues/167).
+
+**Fix.** The first hunk of `automation/fakenet-divert-no.patch`. It binds
+`0.0.0.0`, which is also the only correct value here: a `REDIRECT` rewrites the
+destination to the **incoming** interface's address — a different gateway for
+every VLAN — so a loopback bind would receive nothing from a clone. That
+exposure is why `network-setup.sh` DROPs FakeNet's ports on the uplink.
+
+### FakeNet exited with `Error starting DNSListener on port 53`
+
+**Symptom.** FakeNet starts, reports one listener failing to bind, and exits 1,
+taking every other listener with it.
+
+**Cause.** **`systemd-resolved` already holds port 53 on this host** — its stub
+on `127.0.0.53` and `127.0.0.54`, which `ss -lunp` shows. FakeNet's DNS
+listener binds `0.0.0.0` and its UDP server sets no `SO_REUSEADDR`, so the
+wildcard bind collides with the specific one. Any listener that raises during
+start is fatal to the process (`sys.exit(1)`), so one port conflict looks like
+FakeNet being broken.
+
+**Fix.** Move the port, not the resolver. Change `config.FAKENET_DNS_PORT` and
+`[DNS Server] Port` in `automation/fakenet.ini` together, and add the new port
+to the `fakenet_udp` DROP list in `network-setup.sh`. Nothing in the guest sees
+the number — the redirect matches on interface and protocol, never on
+destination.
+
+**Do not disable `systemd-resolved` to free the port.** It is Dom0's resolver;
+stopping it to serve a guest breaks name resolution for the hypervisor,
+`sandboxd`, and every `git pull` and `apt-get` used to maintain the lab.
+
 ### `bash: !xenbr0: event not found`
 
 **Symptom.** An `iptables` rule using a negated interface fails in an

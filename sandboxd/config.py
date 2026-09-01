@@ -288,14 +288,19 @@ TOR_DNS_PORT = 9053
 #: FakeNet-NG's proxy listeners, as `automation/fakenet.ini` configures them.
 #: Both TCP and UDP use 38926, which is FakeNet's own default.
 #:
-#: This is the CATCH-ALL, and using it is what stops our rules carrying a copy
-#: of FakeNet's port table. `DefaultTCPListener: ProxyTCPListener` means the
-#: proxy identifies the protocol from the content and hands off to the right
-#: listener, so one redirect rule covers every port a sample might pick --
-#: including the unusual ones malware actually uses. Enumerating 80, 443, 25,
-#: 21, 110, 6667 in our chains instead would be a second copy of a list that
-#: lives in FakeNet's config, free to drift, with "the sample's traffic was
-#: silently unanswered" as the symptom.
+#: This is the CATCH-ALL, and pointing everything at it is what stops our rules
+#: carrying a copy of FakeNet's port table. The proxy identifies the protocol
+#: from the content and hands off to the right listener, so one redirect rule
+#: covers every port a sample might pick -- including the unusual ones malware
+#: actually uses. Enumerating 80, 443, 25, 21, 110, 6667 in our chains instead
+#: would be a second copy of a list that lives in FakeNet's config, free to
+#: drift, with "the sample's traffic was silently unanswered" as the symptom.
+#:
+#: The mechanism is OUR redirect rule and nothing else. `RedirectAllTraffic`
+#: and `DefaultTCPListener` in fakenet.ini describe the same intent, but they
+#: are read only by FakeNet's diverter, which `DivertTraffic: No` means we
+#: never start. Treating them as the cause would be a trap: they can be right
+#: while the behaviour is absent, and they were, before this rule existed.
 FAKENET_PROXY_PORT = 38926
 
 #: DNS is redirected to FakeNet's DNS listener DIRECTLY rather than through the
@@ -303,4 +308,11 @@ FAKENET_PROXY_PORT = 38926
 #: load-bearing protocol in a sandbox: a sample that cannot resolve its C2
 #: domain does nothing at all, and the report looks like a dud sample rather
 #: than a broken responder.
+#:
+#: 53 only because it is free on this host. FakeNet's DNS listener binds
+#: 0.0.0.0 and sets no SO_REUSEADDR, so systemd-resolved's stub on 127.0.0.53
+#: can take the port from under it -- and a listener that cannot bind exits the
+#: whole of FakeNet. If that happens, change this and `[DNS Server] Port` in
+#: fakenet.ini together; nothing in the guest sees the number, because the
+#: redirect matches on interface and protocol rather than on destination.
 FAKENET_DNS_PORT = 53
