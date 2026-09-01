@@ -255,7 +255,7 @@ def default_trace_options(os_: TargetOs, kind: SampleKind) -> TraceOptions:
 
     if os_ is TargetOs.WINDOWS:
         return TraceOptions(
-            plugins=_WINDOWS_PLUGINS, timeout=120
+            plugins=_WINDOWS_PLUGINS, timeout=120,
             fast_singlestep=True,
             disable_sysret=True,
         )
@@ -468,7 +468,7 @@ def argv_configure_network(job: Job, subnet: str = "172.16") -> list[str]:
         script = (_ubuntu_netcfg(job, subnet))
     elif job.target_os == TargetOs.WINDOWS:
         script = (_windows_netcfg(job, subnet))
-        
+
     return [
         "injector", "-r", str(job.profile), "-d", str(job.domid),
         "-i", str(job.injection_pid), "-m", "execproc",
