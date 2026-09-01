@@ -246,7 +246,7 @@ class Config:
     profiles: dict = field(default_factory=lambda: {
         TargetOs.UBUNTU: "profiles/linux.json",
         TargetOs.ANDROID: "profiles/android.json",
-        TargetOs.WINDOWS: ""})
+        TargetOs.WINDOWS: "profiles/windows.json"})
 
     # --- egress (DRAFT-057) -------------------------------------------------
     #
