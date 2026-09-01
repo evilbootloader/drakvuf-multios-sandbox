@@ -13,8 +13,10 @@ analysis VLAN at once, including the clones submitted as `offline`.  Per-job
 egress selection is the whole of DRAFT-057 and it cannot survive a process that
 redirects everything.  The ini's header carries the long version.
 
-Changes 1-3 are that unrun path.  Change 4 is unrelated to it and is about
-noise, not correctness; it is here because it lands in the same file.
+Five changes, across six hunks.  Changes 1-3 are that unrun path.  Changes 4
+and 5 are independent of it and of each other, and are here because they land
+in the same file: 4 is about log noise rather than correctness, and 5 is a
+plain upstream bug that makes HTTPS through the proxy impossible.
 
 Upstream does not appear to run the `DivertTraffic: No` path.  With diversion
 disabled, `Fakenet.start()` leaves `self.diverter` at `None` (fakenet.py:49,
@@ -65,6 +67,31 @@ ProxyListener untouched, so the diff against upstream stays small.
      case, so unpatched the log fills with what reads as a crash every time a
      sample beacons.
 
+  5. ProxyListener.py, `ThreadedTCPRequestHandler.handle()` again -- after a
+     SUCCESSFUL handshake, `remote_sock.setblocking(0)` raises
+     `OSError: [Errno 9] Bad file descriptor` and the connection dies one line
+     after its listener has been chosen.  Observed on Dom0 2026-09-01.
+
+     `wrap_socket()` DETACHES the socket it is handed: CPython builds the
+     SSLSocket with `fileno=sock.fileno()` and then calls `sock.detach()`, so
+     the original object is left at fd -1.  Upstream goes on using
+     `remote_sock` for `setblocking()` and for the `select()` in the relay
+     loop; the `recv`/`send` calls inside that loop already branch correctly,
+     which is why only these two are wrong.
+
+     **Change (4) hides this one.**  A client that rejects the certificate
+     never reaches this code, so until handshakes started succeeding the only
+     visible symptom was the alert.  HTTPS through the proxy has never worked
+     in v3.5, with or without a trusted CA.
+
+     Carried in the same hunk: `select()` polls the RAW descriptor and says
+     nothing about bytes already decrypted into the SSL object's buffer, while
+     the first `recv()` takes at most BUF_SZ.  A TLS request larger than that
+     would strand its remainder and reach the listener truncated, silently.
+     That half is reasoned from the source rather than observed -- unlike the
+     detach -- but it is deterministic, so `pending()` is checked alongside
+     `readable`.
+
 WHAT IT COSTS
 =============
 
@@ -91,7 +118,7 @@ Inside the venv FakeNet was installed into, from the repository root:
 
 `--forward` makes a re-run say "previously applied" instead of asking.  Re-run
 it after any `pip install --upgrade`, and re-check it against upstream before
-moving off v3.5: change (3) is in a class upstream added recently and is the most
+moving off v3.5: hunk (3) is in a class upstream added recently and is the most
 likely of the three to be fixed or restructured there.
 
 diff -u -r a/fakenet/diverters/diverterbase.py b/fakenet/diverters/diverterbase.py
@@ -207,3 +234,49 @@ diff -u -r a/fakenet/listeners/ProxyListener.py b/fakenet/listeners/ProxyListene
  
              else:
                  ssl_remote_sock = None
+@@ -242,18 +269,40 @@
+ 
+                 listener_sock.daemon = True
+                 listener_sock.start()
+-                remote_sock.setblocking(0)
++
++                # **`wrap_socket()` DETACHES the socket it was handed.**
++                # CPython builds the SSLSocket with `fileno=sock.fileno()` and
++                # then calls `sock.detach()`, so the original object is left at
++                # fd -1 and every later call on it raises `OSError: [Errno 9]
++                # Bad file descriptor`. Upstream goes on using `remote_sock`
++                # here and in the select() below, so an HTTPS connection dies
++                # one line after its listener has been chosen -- observed on
++                # Dom0 2026-09-01.
++                #
++                # It stays hidden until handshakes start succeeding: a client
++                # that rejects the certificate never reaches this code, so the
++                # `tls-untrusted-cert` case masks it.
++                conn = ssl_remote_sock if ssl_remote_sock else remote_sock
++                conn.setblocking(0)
+ 
+                 # ssl has no 'peek' option, so we need to process the first
+                 # packet that is already consumed from the socket
+                 if ssl_remote_sock:
+-                    ssl_remote_sock.setblocking(0)
+                     remote_q.put(data)
+                 
+                 while True:
+                     readable, writable, exceptional = select.select(
+-                            [remote_sock], [], [], .001)
+-                    if readable:
++                            [conn], [], [], .001)
++                    # select() polls the RAW descriptor, which says nothing
++                    # about bytes already decrypted into the SSL object's own
++                    # buffer. The recv() above takes at most BUF_SZ, so a TLS
++                    # request larger than that would strand its remainder and
++                    # reach the listener truncated.
++                    #
++                    # Reasoned from the source rather than observed -- unlike
++                    # the detach above -- but deterministic for any TLS request
++                    # over BUF_SZ bytes, and silent when it happens.
++                    if readable or (ssl_remote_sock and ssl_remote_sock.pending()):
+                         try:
+                             if ssl_remote_sock:
+                                 data = ssl_remote_sock.recv(BUF_SZ)
+Only in b/fakenet/listeners: __pycache__

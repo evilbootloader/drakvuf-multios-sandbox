@@ -1626,6 +1626,49 @@ destination to the **incoming** interface's address — a different gateway for
 every VLAN — so a loopback bind would receive nothing from a clone. That
 exposure is why `network-setup.sh` DROPs FakeNet's ports on the uplink.
 
+### `OSError: [Errno 9] Bad file descriptor` from FakeNet's proxy, on HTTPS only
+
+**Symptom.** A clone in `simulated` completes a TLS handshake — the guest
+reports something like *"Connected but unable to verify the issuer's
+authority"*, so it got that far — and FakeNet then prints:
+
+```
+  File ".../fakenet/listeners/ProxyListener.py", line 250, in handle
+    remote_sock.setblocking(0)
+OSError: [Errno 9] Bad file descriptor
+```
+
+Plaintext HTTP is fine. Appears only once handshakes start succeeding, so it
+shows up *after* the certificate-rejection problem below is understood, never
+before.
+
+**Cause.** **`wrap_socket()` detaches the socket it is handed.** CPython builds
+the `SSLSocket` with `fileno=sock.fileno()` and then calls `sock.detach()`, so
+the original object is left at fd -1 and every later call on it fails.
+Reproduced on a loopback handshake 2026-09-01:
+
+```
+before wrap: remote_sock.fileno() = 4
+after  wrap: remote_sock.fileno() = -1
+             ssl_remote_sock.fileno() = 4
+```
+
+Upstream goes on using `remote_sock` for `setblocking()` and for the `select()`
+in the relay loop. The `recv`/`send` calls inside that loop already branch on
+`ssl_remote_sock`, which is why only those two are wrong — and why the bug is
+invisible for plaintext, where nothing was ever detached.
+
+**HTTPS through the proxy has therefore never worked in v3.5**, with or without
+a trusted CA. It was masked by the certificate rejection below: a client that
+refuses the certificate never reaches this line.
+
+**Fix.** Change 5 of `automation/fakenet-divert-no.patch`, which uses the
+wrapped socket from that point on. The same hunk also checks
+`ssl_remote_sock.pending()` beside `select()`'s readability, because `select()`
+polls the raw descriptor and cannot see bytes already decrypted into the SSL
+object's buffer — a TLS request larger than `BUF_SZ` would otherwise reach the
+listener truncated and silent.
+
 ### `ssl.SSLError: SSLV3_ALERT_BAD_CERTIFICATE` from FakeNet, once per connection
 
 **Symptom.** A Python traceback in FakeNet's output every time a clone in

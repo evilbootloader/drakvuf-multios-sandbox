@@ -120,22 +120,23 @@ It maps **headings, not content**: a fact stated in the middle of a section is n
     - `docs/TROUBLESHOOTING.md:1550` — [FakeNet-NG started, logged its configuration, and bound nothing](TROUBLESHOOTING.md#fakenet-ng-started-logged-its-configuration-and-bound-nothing)
     - `docs/TROUBLESHOOTING.md:1577` — [The simulated responder is listening, and answers nothing](TROUBLESHOOTING.md#the-simulated-responder-is-listening-and-answers-nothing)
     - `docs/TROUBLESHOOTING.md:1613` — [`UnboundLocalError: local variable 'fn_addr' referenced before assignment`](TROUBLESHOOTING.md#unboundlocalerror-local-variable-fn_addr-referenced-before-assignment)
-    - `docs/TROUBLESHOOTING.md:1629` — [`ssl.SSLError: SSLV3_ALERT_BAD_CERTIFICATE` from FakeNet, once per connection](TROUBLESHOOTING.md#sslsslerror-sslv3_alert_bad_certificate-from-fakenet-once-per-connection)
-    - `docs/TROUBLESHOOTING.md:1671` — [A firewall rule tested from the host it protects, and the test passed either way](TROUBLESHOOTING.md#a-firewall-rule-tested-from-the-host-it-protects-and-the-test-passed-either-way)
-    - `docs/TROUBLESHOOTING.md:1707` — [`module 'OpenSSL.crypto' has no attribute 'X509Extension'`](TROUBLESHOOTING.md#module-opensslcrypto-has-no-attribute-x509extension)
-    - `docs/TROUBLESHOOTING.md:1745` — [FakeNet exited with `Error starting DNSListener on port 53`](TROUBLESHOOTING.md#fakenet-exited-with-error-starting-dnslistener-on-port-53)
-    - `docs/TROUBLESHOOTING.md:1777` — [`bash: !xenbr0: event not found`](TROUBLESHOOTING.md#bash-xenbr0-event-not-found)
-    - `docs/TROUBLESHOOTING.md:1790` — [`iptables -S` says a chain is "incompatible", and the chain is simply absent](TROUBLESHOOTING.md#iptables--s-says-a-chain-is-incompatible-and-the-chain-is-simply-absent)
-    - `docs/TROUBLESHOOTING.md:1806` — [An analysis left evidence of itself inside the guest](TROUBLESHOOTING.md#an-analysis-left-evidence-of-itself-inside-the-guest)
-- `docs/TROUBLESHOOTING.md:1822` — [Reading the project record itself](TROUBLESHOOTING.md#reading-the-project-record-itself)
-    - `docs/TROUBLESHOOTING.md:1824` — [A fact from a runbook turned out to be superseded](TROUBLESHOOTING.md#a-fact-from-a-runbook-turned-out-to-be-superseded)
-    - `docs/TROUBLESHOOTING.md:1839` — [A performance measurement did not reproduce](TROUBLESHOOTING.md#a-performance-measurement-did-not-reproduce)
-    - `docs/TROUBLESHOOTING.md:1854` — [An upstream DRAKVUF build passed a casual check and was the wrong binary](TROUBLESHOOTING.md#an-upstream-drakvuf-build-passed-a-casual-check-and-was-the-wrong-binary)
-    - `docs/TROUBLESHOOTING.md:1878` — [`libzstd found: NO` and the build succeeded anyway](TROUBLESHOOTING.md#libzstd-found-no-and-the-build-succeeded-anyway)
-    - `docs/TROUBLESHOOTING.md:1889` — [A regenerated `profiles/linux.json` silently does not work](TROUBLESHOOTING.md#a-regenerated-profileslinuxjson-silently-does-not-work)
-    - `docs/TROUBLESHOOTING.md:1901` — [Reasoning from upstream capability tables gave the wrong answer](TROUBLESHOOTING.md#reasoning-from-upstream-capability-tables-gave-the-wrong-answer)
-    - `docs/TROUBLESHOOTING.md:1915` — [A containment claim was written up without being tested](TROUBLESHOOTING.md#a-containment-claim-was-written-up-without-being-tested)
-    - `docs/TROUBLESHOOTING.md:1937` — [A measured constant was used directly as a resource guard](TROUBLESHOOTING.md#a-measured-constant-was-used-directly-as-a-resource-guard)
+    - `docs/TROUBLESHOOTING.md:1629` — [`OSError: [Errno 9] Bad file descriptor` from FakeNet's proxy, on HTTPS only](TROUBLESHOOTING.md#oserror-errno-9-bad-file-descriptor-from-fakenets-proxy-on-https-only)
+    - `docs/TROUBLESHOOTING.md:1672` — [`ssl.SSLError: SSLV3_ALERT_BAD_CERTIFICATE` from FakeNet, once per connection](TROUBLESHOOTING.md#sslsslerror-sslv3_alert_bad_certificate-from-fakenet-once-per-connection)
+    - `docs/TROUBLESHOOTING.md:1714` — [A firewall rule tested from the host it protects, and the test passed either way](TROUBLESHOOTING.md#a-firewall-rule-tested-from-the-host-it-protects-and-the-test-passed-either-way)
+    - `docs/TROUBLESHOOTING.md:1750` — [`module 'OpenSSL.crypto' has no attribute 'X509Extension'`](TROUBLESHOOTING.md#module-opensslcrypto-has-no-attribute-x509extension)
+    - `docs/TROUBLESHOOTING.md:1788` — [FakeNet exited with `Error starting DNSListener on port 53`](TROUBLESHOOTING.md#fakenet-exited-with-error-starting-dnslistener-on-port-53)
+    - `docs/TROUBLESHOOTING.md:1820` — [`bash: !xenbr0: event not found`](TROUBLESHOOTING.md#bash-xenbr0-event-not-found)
+    - `docs/TROUBLESHOOTING.md:1833` — [`iptables -S` says a chain is "incompatible", and the chain is simply absent](TROUBLESHOOTING.md#iptables--s-says-a-chain-is-incompatible-and-the-chain-is-simply-absent)
+    - `docs/TROUBLESHOOTING.md:1849` — [An analysis left evidence of itself inside the guest](TROUBLESHOOTING.md#an-analysis-left-evidence-of-itself-inside-the-guest)
+- `docs/TROUBLESHOOTING.md:1865` — [Reading the project record itself](TROUBLESHOOTING.md#reading-the-project-record-itself)
+    - `docs/TROUBLESHOOTING.md:1867` — [A fact from a runbook turned out to be superseded](TROUBLESHOOTING.md#a-fact-from-a-runbook-turned-out-to-be-superseded)
+    - `docs/TROUBLESHOOTING.md:1882` — [A performance measurement did not reproduce](TROUBLESHOOTING.md#a-performance-measurement-did-not-reproduce)
+    - `docs/TROUBLESHOOTING.md:1897` — [An upstream DRAKVUF build passed a casual check and was the wrong binary](TROUBLESHOOTING.md#an-upstream-drakvuf-build-passed-a-casual-check-and-was-the-wrong-binary)
+    - `docs/TROUBLESHOOTING.md:1921` — [`libzstd found: NO` and the build succeeded anyway](TROUBLESHOOTING.md#libzstd-found-no-and-the-build-succeeded-anyway)
+    - `docs/TROUBLESHOOTING.md:1932` — [A regenerated `profiles/linux.json` silently does not work](TROUBLESHOOTING.md#a-regenerated-profileslinuxjson-silently-does-not-work)
+    - `docs/TROUBLESHOOTING.md:1944` — [Reasoning from upstream capability tables gave the wrong answer](TROUBLESHOOTING.md#reasoning-from-upstream-capability-tables-gave-the-wrong-answer)
+    - `docs/TROUBLESHOOTING.md:1958` — [A containment claim was written up without being tested](TROUBLESHOOTING.md#a-containment-claim-was-written-up-without-being-tested)
+    - `docs/TROUBLESHOOTING.md:1980` — [A measured constant was used directly as a resource guard](TROUBLESHOOTING.md#a-measured-constant-was-used-directly-as-a-resource-guard)
 
 ## `docs/android_setup.md`
 
@@ -1168,4 +1169,4 @@ It maps **headings, not content**: a fact stated in the middle of a section is n
 
 ---
 
-*1062 headings across 32 documents.*
+*1063 headings across 32 documents.*
