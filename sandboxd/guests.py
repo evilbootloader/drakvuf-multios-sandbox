@@ -362,7 +362,7 @@ class Job:
         `/home/<USER>/Desktop/test` while preconfig staged to
         `/home/carlos/Desktop/test`.
         """
-        return f"{PATHS[self.target_os].staging_dir}/{self.submitted_filename}"
+        return  f"{PATHS[self.target_os].staging_dir}\\{self.submitted_filename}" if self.target_os == TargetOs.WINDOWS else f"{PATHS[self.target_os].staging_dir}/{self.submitted_filename}"
 
 
 # --- staging -----------------------------------------------------------------
