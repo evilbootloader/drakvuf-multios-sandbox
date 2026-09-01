@@ -127,6 +127,9 @@ class TraceOptions:
 # Windows-only plugin into a Linux list.
 _LINUX_PLUGINS = ("syscalls", "filetracer", "fileextractor", "memdump")
 
+_WINDOWS_PLUGINS = ("syscalls", "filetracer", "fileextractor", "memdump")
+
+
 # A plugin name as `-a` will accept it. Restrictive on purpose: this value
 # arrives from the environment and goes straight into argv, and while the
 # runner never uses a shell, a name with a space in it would silently become
