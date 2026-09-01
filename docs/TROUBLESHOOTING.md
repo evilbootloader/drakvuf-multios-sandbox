@@ -1626,6 +1626,84 @@ destination to the **incoming** interface's address — a different gateway for
 every VLAN — so a loopback bind would receive nothing from a clone. That
 exposure is why `network-setup.sh` DROPs FakeNet's ports on the uplink.
 
+### `ssl.SSLError: SSLV3_ALERT_BAD_CERTIFICATE` from FakeNet, once per connection
+
+**Symptom.** A Python traceback in FakeNet's output every time a clone in
+`simulated` opens an HTTPS connection, ending in:
+
+```
+  File ".../fakenet/listeners/ProxyListener.py", line 222, in handle
+    ssl_remote_sock = self.server.sslwrapper.wrap_socket(remote_sock)
+ssl.SSLError: [SSL: SSLV3_ALERT_BAD_CERTIFICATE] sslv3 alert bad certificate
+```
+
+Plaintext HTTP through the same proxy works, so it looks like FakeNet's TLS
+support is broken.
+
+**Cause.** **It is not FakeNet failing — it is the guest refusing.** That alert
+is sent by the *client*; FakeNet's server raised it while receiving the clone's
+answer to its certificate. `automation/fakenet.ini` sets `Static_CA: No`, so
+FakeNet mints a self-signed certificate from an ephemeral CA the guest's trust
+store has never seen, and any client that validates rejects it.
+
+The traceback rather than a message is separate: `wrap_socket()` raises into a
+`socketserver` worker thread with no handler, so the default error handler
+prints the stack. TLS is the common path for real samples, so unpatched this
+fills the log with what reads as a crash.
+
+**Fix.** Two halves, and the first is the one that matters.
+
+*Disclose it.* `simulated` exits must declare `tls-untrusted-cert` alongside
+`no-real-internet`. The report then says HTTPS was refused rather than showing
+a sample that did nothing — which is the confident false negative DRAFT-057
+exists to prevent. Runbook 13 step 7a proves both halves: validation fails,
+`--no-check-certificate` succeeds, so the TLS path is sound and only the trust
+decision failed.
+
+*Quieten it.* The fourth change in `automation/fakenet-divert-no.patch` catches
+the error and logs one line naming the client address.
+
+**Do not install FakeNet's CA in the guest.** It would make HTTPS work, and it
+would put a permanently enumerable entry in the trust store — a well-known
+sandbox-detection check — as a persistent modification to a golden image.
+Trading a disclosed limitation for a detection signal is the wrong direction.
+
+### A firewall rule tested from the host it protects, and the test passed either way
+
+**Symptom.** An uplink DROP is verified by probing the host's own LAN address
+from that host. `nc -z -w3 192.168.1.6 38926` reports
+`Connection ... succeeded!`, which reads as the rule being absent or broken.
+
+**Cause.** **A host's own address routes over loopback.** `ip route get
+192.168.1.6` on that host answers `local ... dev lo`, so the packet arrives on
+`lo` and a rule written `-i xenbr0` cannot match it. The probe measured the
+loopback path and said nothing about the LAN.
+
+The same probe misleads in the other direction just as easily. `dig +short
+@192.168.1.6 example.com` returned `connection refused` on Dom0 on 2026-09-01,
+which looks like the guard working — but nothing binds UDP/53 on that host at
+all, so `refused` is also exactly what an unfirewalled host returns. Neither
+result carried information.
+
+**Fix.** Two checks, and the cheap one first.
+
+On the host, confirm the rule names the interface that actually receives the
+traffic — `ip -4 -o addr show` against `iptables -vnL DRAKVUF_INPUT`. A guard
+aimed at an interface that never sees LAN traffic is a guard that has never
+worked, silently, for every rule sharing that shape.
+
+Then probe from a **different machine** and read the DROP rule's packet
+counters afterwards. Rising counters are positive evidence; a timeout alone is
+equally consistent with a wrong address or an unplugged cable.
+
+**Do not "fix" it by dropping the port on `lo`.** For FakeNet specifically that
+breaks the fake Internet: its proxy hands every tasted connection to
+`localhost:80`, so the loopback path is load-bearing.
+
+Related: *An empty `FORWARD` chain read as proof a rule was rejected*, and *A
+containment claim was written up without being tested*. Same family — a check
+whose passing condition is also its failing condition.
+
 ### `module 'OpenSSL.crypto' has no attribute 'X509Extension'`
 
 **Symptom.** FakeNet logs one line and exits before binding anything:

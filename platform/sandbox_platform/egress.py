@@ -95,6 +95,11 @@ CAVEATS: dict[str, str] = {
     "smb-blocked-upstream": "ports 137-139/445 blocked upstream — no SMB",
     "no-real-internet": "nothing reaches the real Internet",
     "egresses-via-host-uplink": "traffic carries this lab's own address",
+    "tls-untrusted-cert": (
+        "HTTPS is refused by the sample, not answered — the responder's "
+        "certificate is not one the guest trusts, so encrypted traffic will "
+        "be absent from the report"
+    ),
 }
 
 

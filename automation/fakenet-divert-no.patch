@@ -13,9 +13,12 @@ analysis VLAN at once, including the clones submitted as `offline`.  Per-job
 egress selection is the whole of DRAFT-057 and it cannot survive a process that
 redirects everything.  The ini's header carries the long version.
 
-Upstream does not appear to run that path.  With diversion disabled,
-`Fakenet.start()` leaves `self.diverter` at `None` (fakenet.py:49, assigned
-only inside the `diverttraffic == 'yes'` branch) and three call sites
+Changes 1-3 are that unrun path.  Change 4 is unrelated to it and is about
+noise, not correctness; it is here because it lands in the same file.
+
+Upstream does not appear to run the `DivertTraffic: No` path.  With diversion
+disabled, `Fakenet.start()` leaves `self.diverter` at `None` (fakenet.py:49,
+assigned only inside the `diverttraffic == 'yes'` branch) and three call sites
 dereference it with no guard:
 
   1. fakenet.py, `start()`             -- `fn_addr` is bound at line 158,
@@ -40,10 +43,27 @@ which reads in a report as a sample whose infrastructure was down.  That is the
 confident false negative DRAFT-057 exists to prevent, so it is not acceptable
 to run `simulated` without this patch.
 
-Hunk (3) is the load-bearing one.  Guarding the callbacks object rather than
+Change (3) is the load-bearing one.  Guarding the callbacks object rather than
 its six call sites is deliberate: it fixes DNS and all eight listeners' NBI
 logging at once, and it keeps the two `mapProxySportToOrigSport()` calls in
-ProxyListener untouched, so the diff against upstream stays at three hunks.
+ProxyListener untouched, so the diff against upstream stays small.
+
+  4. ProxyListener.py, `ThreadedTCPRequestHandler.handle()` -- a guest that
+     validates our certificate answers the handshake with
+     SSLV3_ALERT_BAD_CERTIFICATE, and `wrap_socket()` raises it into a
+     socketserver worker with no handler, printing a full traceback per
+     connection.
+
+     Not a correctness fix: the handshake genuinely fails either way, because
+     the certificate is minted from an ephemeral CA the guest has never seen.
+     That limitation is DISCLOSED, as the `tls-untrusted-cert` caveat on the
+     exit, rather than removed by installing our CA in the guest -- a CA in the
+     trust store is a permanently enumerable sandbox artefact, and trading a
+     disclosed limit for a detection signal is the wrong way round.
+
+     It is patched because TLS is the common path for real samples, not an edge
+     case, so unpatched the log fills with what reads as a crash every time a
+     sample beacons.
 
 WHAT IT COSTS
 =============
@@ -71,7 +91,7 @@ Inside the venv FakeNet was installed into, from the repository root:
 
 `--forward` makes a re-run say "previously applied" instead of asking.  Re-run
 it after any `pip install --upgrade`, and re-check it against upstream before
-moving off v3.5: hunk (3) is in a class upstream added recently and is the most
+moving off v3.5: change (3) is in a class upstream added recently and is the most
 likely of the three to be fixed or restructured there.
 
 diff -u -r a/fakenet/diverters/diverterbase.py b/fakenet/diverters/diverterbase.py
@@ -154,3 +174,36 @@ diff -u -r a/fakenet/listeners/ProxyListener.py b/fakenet/listeners/ProxyListene
  
      for listener in listeners:
    
+@@ -214,8 +219,30 @@
+             if ssl_detector.looks_like_ssl(data):
+                 is_ssl_encrypted = 'Yes'
+                 self.server.logger.debug('SSL detected')
+-                ssl_remote_sock = self.server.sslwrapper.wrap_socket(remote_sock)
+-                data = ssl_remote_sock.recv(BUF_SZ)
++                try:
++                    ssl_remote_sock = self.server.sslwrapper.wrap_socket(remote_sock)
++                    data = ssl_remote_sock.recv(BUF_SZ)
++                except ssl.SSLError as e:
++                    # The certificate is minted from an ephemeral CA the guest
++                    # has never trusted, so a client that validates -- which is
++                    # most of them -- answers the handshake with
++                    # SSLV3_ALERT_BAD_CERTIFICATE instead of a request. That is
++                    # expected, and is disclosed to the submitter as the
++                    # `tls-untrusted-cert` caveat rather than papered over by
++                    # installing our CA in the guest: a CA in the trust store
++                    # is a permanently enumerable sandbox artefact, and trading
++                    # a disclosed limit for a detection signal is the wrong way
++                    # round.
++                    #
++                    # Caught because TLS is the common path here, not an edge
++                    # case. Unhandled, socketserver prints a full traceback per
++                    # connection, so one sample beaconing over HTTPS fills the
++                    # log with what reads as a crash.
++                    self.server.logger.warning(
++                            'TLS handshake refused by %s:%d (%s) -- the client '
++                            'did not accept our certificate',
++                            self.client_address[0], self.client_address[1], e)
++                    return
+ 
+             else:
+                 ssl_remote_sock = None

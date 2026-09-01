@@ -525,6 +525,19 @@ the diverter. `network-setup.sh` drops all of them on the uplink — eleven
 ports and a range, against tor's two. The DNS listener is the one that matters
 most: unguarded it is an open resolver on the house LAN.
 
+**HTTPS is refused by the sample, and that is disclosed rather than fixed.**
+The proxy terminates TLS with a certificate minted from an ephemeral CA, so a
+client that validates — most samples — answers with
+`SSLV3_ALERT_BAD_CERTIFICATE` and its encrypted traffic never reaches a
+listener. The exit therefore carries `tls-untrusted-cert`, and the report says
+the encryption was refused instead of showing a sample that did nothing.
+
+Installing the CA into the golden images would make HTTPS work and is
+deliberately not done: a CA in the trust store is a permanently enumerable
+sandbox artefact, and trading a disclosed limitation for a detection signal is
+the wrong direction — particularly for the mode chosen by submitters who did
+not want to touch the real Internet at all.
+
 **The responder is probed at launch, not assumed.** `sandboxd` withholds the
 mode when nothing accepts on 38926, and a job that asked for `simulated` runs
 `offline` and says so in the report. A redirect to a closed port would give a

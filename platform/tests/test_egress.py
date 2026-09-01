@@ -7,6 +7,8 @@ here is one way of trying to break that.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from sandbox_platform import egress
@@ -298,3 +300,39 @@ def test_offers_sort_safest_first():
 def test_an_unknown_caveat_is_shown_rather_than_dropped():
     """Dropping it would hide a limitation the host explicitly reported."""
     assert egress.describe_caveat("some-new-block") == "some-new-block"
+
+
+def test_every_caveat_sandboxd_can_send_has_prose_here():
+    """A slug with no prose renders as the slug, which is ugly but honest.
+
+    This test is about the ugliness. Both sides declare the same vocabulary in
+    two files that nothing else makes agree, so a caveat added on the host
+    reaches the page as `tls-untrusted-cert` rather than as a sentence a
+    submitter can act on.
+    """
+    import re
+
+    source = (Path(__file__).resolve().parents[2]
+              / "sandboxd" / "egress.py").read_text()
+    slugs = set(re.findall(r'^CAVEAT_\w+ = "([^"]+)"', source, re.MULTILINE))
+    assert slugs, "no caveat constants found; did sandboxd/egress.py move?"
+
+    missing = sorted(slugs - set(egress.CAVEATS))
+    assert not missing, (
+        f"sandboxd can send {missing} and this deployment has no prose for "
+        f"them; they would reach the report as raw slugs")
+
+
+def test_simulated_discloses_that_https_is_refused():
+    """The caveat that stops an empty report reading as a quiet sample.
+
+    FakeNet's certificate comes from an ephemeral CA the guest never trusted,
+    so a sample that validates answers the handshake with
+    SSLV3_ALERT_BAD_CERTIFICATE and its HTTPS never reaches a listener --
+    observed on Dom0 2026-09-01. Installing the CA in the guest would fix the
+    handshake and add an enumerable sandbox artefact, so the limitation is
+    disclosed instead, and disclosure only works if the string is here.
+    """
+    prose = egress.describe_caveat("tls-untrusted-cert")
+    assert prose != "tls-untrusted-cert", "no prose for the TLS caveat"
+    assert "HTTPS" in prose

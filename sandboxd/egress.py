@@ -65,6 +65,20 @@ CAVEAT_SMB_BLOCKED = "smb-blocked-upstream"
 CAVEAT_NO_INTERNET = "no-real-internet"
 CAVEAT_HOST_UPLINK = "egresses-via-host-uplink"
 
+#: `simulated` only. The responder mints its certificate from an ephemeral CA
+#: the guest has never trusted, so a sample that validates -- most of them --
+#: refuses the handshake and its HTTPS traffic never reaches a listener.
+#:
+#: **Not fixable by installing the CA in the guest**, which is why this is a
+#: caveat and not a defect. A CA in the trust store is a permanently
+#: enumerable sandbox artefact, and swapping a disclosed limitation for a
+#: detection signal is the wrong way round -- especially for a mode whose
+#: submitters chose it to avoid touching the real Internet at all.
+#:
+#: Observed on Dom0 2026-09-01: `SSLV3_ALERT_BAD_CERTIFICATE`, sent BY the
+#: clone. Without this string the report attributes that silence to the sample.
+CAVEAT_TLS_UNTRUSTED = "tls-untrusted-cert"
+
 
 @dataclass(frozen=True)
 class Exit:
