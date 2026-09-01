@@ -562,7 +562,7 @@ def argv_trace(job: Job, component: str | None = None) -> list[str]:
 
     argv = [
         "drakvuf", "-r", str(job.profile), "-d", str(job.domid),
-        "-i", str(job.injection_pid), "-m", "mode",
+        "-i", str(job.injection_pid), "-m", mode,
     ]
 
     if job.kind is SampleKind.APK:
