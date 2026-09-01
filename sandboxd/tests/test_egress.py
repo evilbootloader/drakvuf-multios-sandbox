@@ -664,6 +664,33 @@ def test_fakenet_uplink_drops_cover_every_bound_port():
                     f"on the uplink")
 
 
+def test_fakenet_requirements_hold_pyopenssl_below_the_removal():
+    """pyOpenSSL 26.2.0 removed the API FakeNet mints its certificates with.
+
+    `OpenSSL.crypto.X509Extension` and `X509.add_extension`/`get_extensions`
+    went in 26.2.0, deprecated since 23.3.0. `ProxyListener.start()` builds the
+    SSL wrapper for TCP unconditionally, so this is not a degraded-TLS failure:
+    FakeNet logs `module 'OpenSSL.crypto' has no attribute 'X509Extension'` and
+    exits before binding a single port. Upstream leaves the dependency
+    unpinned, so a fresh install picks a version that cannot work.
+    """
+    reqs = (Path(__file__).resolve().parents[2]
+            / "automation" / "fakenet-requirements.txt")
+    assert reqs.exists(), "the FakeNet dependency pin is not shipped"
+
+    lines = [line.split("#")[0].strip() for line in reqs.read_text().splitlines()]
+    pins = [line for line in lines if line]
+
+    assert "pyopenssl<26.2" in pins, (
+        "pyopenssl is not pinned below 26.2; FakeNet will exit at startup with "
+        "no attribute 'X509Extension'")
+
+    # Declared by upstream on Linux, imported only by the diverter this
+    # configuration never starts, and the likeliest of the set to fail to
+    # build. Installing FakeNet with --no-deps is what keeps it out.
+    assert not any(p.startswith("netfilterqueue") for p in pins)
+
+
 def test_fakenet_patch_is_shipped_and_pinned():
     """`DivertTraffic: No` is a path upstream does not run.
 

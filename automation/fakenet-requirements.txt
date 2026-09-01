@@ -1,0 +1,71 @@
+# FakeNet-NG v3.5 on Dom0 -- the dependency set this lab actually runs.
+# DRAFT-057 Phase 3. See automation/fakenet.ini and fakenet-divert-no.patch.
+#
+# Install this FIRST and then FakeNet itself with --no-deps, so that upstream's
+# own list never gets a vote:
+#
+#     /opt/fakenet-ng/bin/pip install -r automation/fakenet-requirements.txt
+#     /opt/fakenet-ng/bin/pip install --no-deps \
+#         'git+https://github.com/mandiant/flare-fakenet-ng@v3.5'
+#
+# Upstream's `requirements` in setup.py is unpinned and wrong for this host in
+# both directions -- it demands something we never load and floats something
+# that has already broken.
+
+# ==========================================================================
+# pyOpenSSL 26.2.0 REMOVED the API FakeNet builds its certificates with.
+# ==========================================================================
+#
+# `OpenSSL.crypto.X509Extension` and `X509.add_extension`/`get_extensions`
+# went in 26.2.0 (2026-05-04), deprecated since 23.3.0. FakeNet's
+# `listeners/ssl_utils` uses all of them to mint the MITM certificate the
+# proxy presents, and builds that wrapper in `ProxyListener.start()` for TCP
+# unconditionally -- whether or not any sample ever speaks TLS. So this is not
+# a degraded-TLS failure. It is:
+#
+#     module 'OpenSSL.crypto' has no attribute 'X509Extension'
+#
+# logged once, followed by `sys.exit(1)`, before the first port is bound.
+#
+# **This pin is a countdown, not a fix.** 26.x also deprecated `PKey.generate_key`,
+# `dump_privatekey`, `X509.sign`, `X509Name` and every mutable method on X509 --
+# which is essentially all of what ssl_utils does. The real repair is upstream
+# moving to `cryptography.x509.CertificateBuilder`; rewriting certificate
+# generation ourselves would be a large patch in a security-relevant path to
+# save a version pin, which is the wrong trade for a lab responder minting
+# throwaway certs. Re-check this before moving off v3.5.
+pyopenssl<26.2
+
+# pyopenssl's own dependency, named here so the resolver has both to work with
+# rather than resolving one against a floating other.
+cryptography
+
+# DNSListener parses and builds every query and response with this.
+dnslib
+
+# Reached through diverterbase -> fnpacket, which fakenet.py imports at startup
+# regardless of DivertTraffic.
+dpkt
+
+# fakenet.py enumerates interfaces with it at module scope.
+netifaces
+
+# FTPListener is built on it, including the passive-data range.
+pyftpdlib
+
+# diverterbase renders configs/html_report_template.html with it.
+jinja2
+
+# DELIBERATELY ABSENT:
+#
+#   netfilterqueue  upstream declares it on Linux and only diverters/linux.py
+#                   imports it, lazily, inside the DivertTraffic branch we
+#                   never enter. It is also the dependency most likely to fail
+#                   to build, and installing FakeNet with --no-deps is what
+#                   stops that failure blocking an install that does not need
+#                   it.
+#
+#   pydivert        Windows only.
+#
+#   requests        imported inside a function in HTTPListener's own __main__
+#                   self-test, never on the serving path.

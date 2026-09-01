@@ -1626,6 +1626,44 @@ destination to the **incoming** interface's address — a different gateway for
 every VLAN — so a loopback bind would receive nothing from a clone. That
 exposure is why `network-setup.sh` DROPs FakeNet's ports on the uplink.
 
+### `module 'OpenSSL.crypto' has no attribute 'X509Extension'`
+
+**Symptom.** FakeNet logs one line and exits before binding anything:
+
+```
+09/01/26 08:26:46 AM [           FakeNet]  module 'OpenSSL.crypto' has no attribute 'X509Extension'
+```
+
+Preceded by `Error starting ProxyListener listener on port 38926:`, and nothing
+in it names pip, a package or a version.
+
+**Cause.** **pyOpenSSL 26.2.0 (2026-05-04) removed
+`OpenSSL.crypto.X509Extension`**, along with `X509.add_extension` and
+`get_extensions`. They had been deprecated since 23.3.0. FakeNet's
+`listeners/ssl_utils` builds the MITM certificate its proxy presents out of
+exactly those calls.
+
+It is fatal rather than a degraded-TLS problem because `ProxyListener.start()`
+constructs the SSL wrapper for TCP unconditionally, whether or not any sample
+ever speaks TLS — and the proxy is the first listener, so nothing else gets as
+far as binding.
+
+Upstream's `setup.py` leaves `pyopenssl` unpinned, so a fresh install today
+picks up a version that cannot work. 26.x has also deprecated `PKey.generate_key`,
+`dump_privatekey`, `X509.sign`, `X509Name` and every mutable method on `X509` —
+which is most of the rest of what `ssl_utils` does.
+
+**Fix.** Install from `automation/fakenet-requirements.txt`, which pins
+`pyopenssl<26.2`, and install FakeNet itself with `--no-deps` so its own
+unpinned list cannot override it. Check with
+`/opt/fakenet-ng/bin/pip show pyopenssl` rather than by reading the file.
+
+**The pin is a countdown, not a repair.** The real fix is upstream moving to
+`cryptography.x509.CertificateBuilder`. Rewriting certificate generation here
+would be a large patch in a security-relevant path to avoid a version
+constraint, which is the wrong trade for a lab responder minting throwaway
+certificates — but re-check it before moving off v3.5.
+
 ### FakeNet exited with `Error starting DNSListener on port 53`
 
 **Symptom.** FakeNet starts, reports one listener failing to bind, and exits 1,
