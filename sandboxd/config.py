@@ -338,7 +338,14 @@ EXITS = {
         "caveats": ["tcp-only", "smtp-blocked-upstream",
                     "smb-blocked-upstream"],
     },
+    # `tls-untrusted-cert` is not optional on a `simulated` exit. The responder
+    # mints its certificate from an ephemeral CA the guest has never trusted,
+    # so a sample that validates refuses the handshake and its HTTPS never
+    # reaches a listener -- observed on Dom0 2026-09-01. Without the string the
+    # report shows a sample that did nothing rather than one whose encryption
+    # was refused. `sandboxd/tests/test_egress.py` fails if it is omitted.
     "sim-local": {
-        "mode": "simulated", "caveats": ["no-real-internet"]
+        "mode": "simulated",
+        "caveats": ["no-real-internet", "tls-untrusted-cert"],
     },
 }

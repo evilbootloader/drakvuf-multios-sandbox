@@ -15,6 +15,7 @@ import pytest
 
 from sandboxd import config
 from sandboxd.egress import (
+    CAVEAT_TLS_UNTRUSTED,
     PARENT_FILTER,
     PARENT_NAT,
     EgressMode,
@@ -662,6 +663,29 @@ def test_fakenet_uplink_drops_cover_every_bound_port():
                 assert port in dropped["tcp"], (
                     f"[{name}] passive-data port tcp/{port} is not dropped "
                     f"on the uplink")
+
+
+def test_a_simulated_exit_must_disclose_the_tls_limit():
+    """Offering the mode without the caveat is worse than not offering it.
+
+    FakeNet's certificate comes from an ephemeral CA the guest never trusted,
+    so a sample that validates answers with SSLV3_ALERT_BAD_CERTIFICATE and its
+    HTTPS never reaches a listener -- observed on Dom0 2026-09-01. The report
+    then shows a sample that did nothing, which is indistinguishable from a
+    dull sample and is the confident false negative this issue exists to
+    prevent.
+
+    A property of our `simulated` implementation rather than of one host's
+    configuration, so it is asserted for every simulated exit rather than for
+    `sim-local` by name.
+    """
+    for name, spec in config.EXITS.items():
+        if spec["mode"] != EgressMode.SIMULATED.value:
+            continue
+        assert CAVEAT_TLS_UNTRUSTED in spec.get("caveats", ()), (
+            f"exit {name!r} offers `simulated` without declaring "
+            f"{CAVEAT_TLS_UNTRUSTED!r}; its reports would attribute a refused "
+            f"TLS handshake to the sample")
 
 
 def test_fakenet_requirements_hold_pyopenssl_below_the_removal():
