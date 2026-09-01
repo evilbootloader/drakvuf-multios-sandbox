@@ -252,10 +252,43 @@ def default_trace_options(os_: TargetOs, kind: SampleKind) -> TraceOptions:
             disable_sysret=True,
         )
 
-    # No drakvuf-windows.sh exists and nothing has ever run on a Windows
-    # guest. Returning the Linux defaults would be inventing evidence, which
-    # catalogue.py refuses to do for the same reason -- so this is explicit.
-
+    # **CANDIDATE. Every value below is a starting hypothesis, not a
+    # measurement.** Until 2026-09-01 this branch did not exist and Windows
+    # raised instead, on the grounds that defaulting to the Linux set would be
+    # inventing evidence. What changed is that a guest now exists to try them
+    # on -- not that anything has been measured on it.
+    #
+    # So the refusal moved rather than disappeared: `catalogue.py` still
+    # declines to claim a Windows analysis works, and the checklist entry stays
+    # Candidate until a run fills it in. Read these as the values to test
+    # first, and treat a Windows trace that produces nothing as a question
+    # about this tuple before anything else.
+    #
+    # Three of them are load-bearing guesses, in decreasing order of how likely
+    # they are to be wrong:
+    #
+    #   `syscalls`        needs the kernel symbol table from `profiles/
+    #                     windows.json`. On Linux the same plugin resolves
+    #                     against a kernel built from source; here it depends
+    #                     on whatever the symbol JSON actually covers, and a
+    #                     partial table degrades to silence, not to an error.
+    #
+    #   `disable_sysret`  adopted on Ubuntu for a measured 2.06x, on the
+    #                     condition that nothing in this repository parses
+    #                     return values. That condition still holds, but the
+    #                     COST was measured on Linux syscall shapes. Windows
+    #                     may pay differently.
+    #
+    #   `timeout=120`     copied from Ubuntu with no Windows run behind it.
+    #                     A Windows guest boots and settles slower than the
+    #                     Ubuntu clone, so this is the value most likely to
+    #                     cut a trace short.
+    #
+    # `_WINDOWS_PLUGINS` is deliberately its own name even though it currently
+    # equals `_LINUX_PLUGINS`. The equality is a starting point that should be
+    # free to change; sharing the tuple would make an edit to the Linux set
+    # silently become an edit to this one. `test_guests.py` pins that this
+    # branch reads its own name.
     if os_ is TargetOs.WINDOWS:
         return TraceOptions(
             plugins=_WINDOWS_PLUGINS, timeout=120,
@@ -263,10 +296,11 @@ def default_trace_options(os_: TargetOs, kind: SampleKind) -> TraceOptions:
             disable_sysret=True,
         )
 
+    # Not dead code: it is what a fourth `TargetOs` member gets on the day one
+    # is added, instead of silently inheriting whichever branch fell through.
     raise NotImplementedError(
-        "no Windows analysis package: DRAFT-034 owns the guest and DRAFT-020 "
-        "what is installed in it. Nothing has executed on a Windows guest, so "
-        "there is no measured plugin set or timeout to default to."
+        f"no analysis package for {os_}: there is no measured plugin set or "
+        f"timeout to default to, and guessing one would be inventing evidence."
     )
 
 

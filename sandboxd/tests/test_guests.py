@@ -404,12 +404,60 @@ def test_the_two_output_directories_stay_separate(tmp_path):
     assert "--memdumpdir" not in argv
 
 
-def test_windows_has_no_package_and_says_so(tmp_path):
-    """Nothing has ever executed on a Windows guest. Defaulting to the Linux
-    set would be inventing evidence, which catalogue.py refuses for the same
-    reason."""
-    with pytest.raises(NotImplementedError, match="Windows"):
-        G.default_trace_options(TargetOs.WINDOWS, SampleKind.PE)
+def test_windows_returns_a_candidate_package_not_the_linux_one(tmp_path):
+    """Windows gained defaults on 2026-09-01, when a guest existed to try them
+    on. They are a starting hypothesis, not a measurement.
+
+    This replaces `test_windows_has_no_package_and_says_so`, which asserted the
+    earlier stance that Windows must raise. That refusal existed to stop the
+    Linux defaults being adopted by accident; the values are now deliberate, so
+    what is worth pinning is that they stay deliberate.
+    """
+    import ast
+    import inspect
+
+    opts = G.default_trace_options(TargetOs.WINDOWS, SampleKind.PE)
+    assert opts.timeout > 0
+    assert opts.plugins == G._WINDOWS_PLUGINS
+
+    # Asserted against the SOURCE, because the runtime cannot tell the two
+    # apart: the tuples are equal today, so `opts.plugins == _WINDOWS_PLUGINS`
+    # passes just as happily when the branch reads `_LINUX_PLUGINS`. Confirmed
+    # by mutation -- swapping the name left the value assertions green.
+    #
+    # Identity is no better: CPython folds equal constant tuples to one object,
+    # so `is not` would assert an interpreter detail and would flip the day
+    # either tuple changed.
+    #
+    # What is worth pinning is that an edit to the Linux set cannot silently
+    # become an edit to the Windows one, and that is a property of which name
+    # the branch mentions.
+    fn = ast.parse(inspect.getsource(G.default_trace_options)).body[0]
+    windows_branch = next(
+        node for node in ast.walk(fn)
+        if isinstance(node, ast.If) and "WINDOWS" in ast.dump(node.test))
+    referenced = {n.id for n in ast.walk(windows_branch)
+                  if isinstance(n, ast.Name)}
+
+    assert "_WINDOWS_PLUGINS" in referenced
+    assert "_LINUX_PLUGINS" not in referenced, (
+        "the Windows branch reads the Linux plugin set; the two are equal "
+        "today, so nothing else in this suite would notice")
+
+
+def test_an_unknown_guest_os_still_refuses_to_guess(tmp_path):
+    """The refusal moved to the fallthrough; it did not disappear.
+
+    A fourth TargetOs member must not silently inherit whichever branch fell
+    through, which is the failure the original Windows guard existed to
+    prevent.
+    """
+    class _FakeOs:
+        def __str__(self):
+            return "plan9"
+
+    with pytest.raises(NotImplementedError, match="plan9"):
+        G.default_trace_options(_FakeOs(), SampleKind.PE)
 
 
 # --- the inputs that do not exist yet ---------------------------------------
