@@ -331,3 +331,14 @@ FAKENET_PROXY_PORT = 38926
 #: failure arriving intermittently. Anything chosen here should stay below
 #: 32768 for that reason.
 FAKENET_DNS_PORT = 5300
+
+EXITS = {
+    "tor-default": {
+        "mode": "tor",
+        "caveats": ["tcp-only", "smtp-blocked-upstream",
+                    "smb-blocked-upstream"],
+    },
+    "sim-local": {
+        "mode": "simulated", "caveats": ["no-real-internet"]
+    },
+}

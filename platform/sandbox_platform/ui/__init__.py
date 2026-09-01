@@ -116,8 +116,8 @@ def _egress_offers() -> list[egress.Offer]:
     options at all, on a deployment with no analysis host registered, would
     leave a submitter unable even to ask for the safest thing.
     """
-    offers = [egress.Offer(name="offline", mode=EgressMode.OFFLINE,
-                           caveats=("no-real-internet",))]
+    offers = []
+    
     with connection() as conn:
         for row in dal.offered_exits(conn):
             offers.append(egress.Offer(
