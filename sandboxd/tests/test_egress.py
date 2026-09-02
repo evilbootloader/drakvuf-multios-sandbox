@@ -920,16 +920,93 @@ def test_the_probe_asks_about_the_transport_port():
     assert asked == [config.TOR_TRANS_PORT]
 
 
-def test_a_forwarding_exit_is_not_probed():
-    """`direct` and `routed` have no local listener to check.
-
-    Probing them would make an unrelated failure withhold a working mode.
-    """
+def test_direct_is_not_probed():
+    """`direct` leaves by the host's own uplink, which is up whenever the host
+    is. Probing it would make an unrelated failure withhold a working mode."""
     asked = []
     available_exits(allow_direct=True,
-                    exits={"es": {"mode": "routed", "interface": "wg0"}},
-                    probe=lambda port: asked.append(port) or True)
+                    exits={"uplink": {"mode": "direct", "interface": "xenbr0"}},
+                    probe=lambda port: asked.append(port) or True,
+                    tunnel=lambda iface: asked.append(iface) or True)
     assert asked == []
+
+
+def test_routed_is_checked_against_the_tunnel_not_a_port():
+    """It used to be checked against nothing at all.
+
+    The old test asserted `direct` and `routed` together on the grounds that
+    neither "has a local listener to check". True of both, and the wrong
+    conclusion for `routed`: its interface is a tunnel to somebody else's
+    machine over a link nobody controls, so unprobed it would be offered while
+    dead, and every job would report `routed` having reached nothing -- the
+    failure the FakeNet work spent five patches removing for `simulated`.
+    """
+    ports, tunnels = [], []
+    available_exits(
+        exits={"es": {"mode": "routed", "interface": "wg0"}},
+        probe=lambda port: ports.append(port) or True,
+        tunnel=lambda iface: tunnels.append(iface) or True)
+
+    assert ports == [], "routed has no local port to probe"
+    assert tunnels == ["wg0"], "routed's own interface must be the thing asked about"
+
+
+def test_a_routed_exit_with_a_dead_tunnel_is_withheld():
+    exits = {"es": {"mode": "routed", "interface": "wg0"}}
+    names = [e.name for e in available_exits(exits=exits,
+                                             tunnel=lambda iface: False)]
+    assert names == ["offline"]
+
+
+def test_only_the_redirect_modes_downgrade_on_a_dead_dependency():
+    """The 2026-09-02 decision, as data rather than as a branch.
+
+    Downgrading is justified for `tor` and `simulated` because it only ever
+    moves towards LESS egress. `routed` already fails closed structurally, so
+    nothing escapes either way -- a downgrade buys no safety there and only
+    decides whether the run is spent. An `offline` run spends a sample that may
+    check in exactly once.
+    """
+    from sandboxd.egress import DOWNGRADE_ON_FAILURE
+
+    assert EgressMode.ROUTED not in DOWNGRADE_ON_FAILURE, (
+        "a dead tunnel would downgrade a routed job to offline, spending the "
+        "sample on a run that cannot answer the question it was submitted to "
+        "answer; see docs/architecture/routed-egress.md")
+    assert DOWNGRADE_ON_FAILURE == {EgressMode.TOR, EgressMode.SIMULATED}
+
+
+def test_dependency_reason_is_silent_for_modes_that_depend_on_nothing():
+    """`offline` installs no rules and `direct` uses the host's own uplink.
+
+    A reason here would withhold or fail a mode that cannot be broken.
+    """
+    from sandboxd.egress import dependency_reason
+
+    never = lambda *_a, **_k: False   # noqa: E731 -- every probe says "down"
+    for exit_ in (OFFLINE, DIRECT):
+        assert dependency_reason(exit_, probe=never, tunnel=never) is None
+
+
+def test_dependency_reason_names_the_thing_that_is_down():
+    """The string is carried onto the report, so it has to be readable there.
+
+    Both callers render it: the daemon logs it when withholding an exit, and
+    `_apply_egress` puts it on the job row when a run is downgraded.
+    """
+    from sandboxd.egress import dependency_reason
+
+    tor = dependency_reason(Exit(name="t", mode=EgressMode.TOR),
+                            probe=lambda port: False)
+    assert str(config.TOR_TRANS_PORT) in tor and "tor" in tor
+
+    routed = dependency_reason(ROUTED, tunnel=lambda iface: False)
+    assert "wg0" in routed
+
+    # A routed exit declaring no interface is refused before it is offered,
+    # rather than at apply time where argv_apply would raise.
+    naked = dependency_reason(Exit(name="x", mode=EgressMode.ROUTED))
+    assert "no interface" in naked
 
 
 def test_the_torrc_refuses_to_relay():
@@ -989,10 +1066,16 @@ def test_a_configured_direct_exit_is_still_gated():
 
 
 def test_declared_exits_carry_their_caveats():
-    """Caveats are a property of the way out, and the report renders them."""
+    """Caveats are a property of the way out, and the report renders them.
+
+    `tunnel=` is stubbed because `routed` is now dependency-checked like every
+    other mode, and the real check shells out to `wg`, which is not in this
+    container. Without the stub this asserts that the container has WireGuard.
+    """
     exits = {"es-vps-1": {"mode": "routed", "interface": "wg0",
                           "country": "es", "caveats": ["smtp-blocked-upstream"]}}
-    got = [e for e in available_exits(exits=exits) if e.name == "es-vps-1"][0]
+    got = [e for e in available_exits(exits=exits, tunnel=lambda iface: True)
+           if e.name == "es-vps-1"][0]
     assert got.country == "es"
     assert got.caveats == ("smtp-blocked-upstream",)
 

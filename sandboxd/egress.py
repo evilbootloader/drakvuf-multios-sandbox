@@ -221,10 +221,26 @@ _REDIRECT_MODES = frozenset({EgressMode.TOR, EgressMode.SIMULATED})
 
 #: The port whose liveness decides whether a redirect mode may be offered at
 #: all, and re-checked before it is applied to a clone.
+#:
+#: Kept as data because two things must agree with it and neither can see the
+#: other: `automation/torrc` and `automation/fakenet.ini` bind these, and the
+#: rule builders redirect to them. `dependency_reason` is what reads it.
 LISTENER_PORT = {
     EgressMode.TOR: config.TOR_TRANS_PORT,
     EgressMode.SIMULATED: config.FAKENET_PROXY_PORT,
 }
+
+#: Modes whose launch-time dependency failure DOWNGRADES a job to `offline`
+#: instead of failing it.
+#:
+#: `routed` is deliberately absent, and that is a decision rather than an
+#: oversight (2026-09-02, `docs/architecture/routed-egress.md`). Downgrading is
+#: justified for the redirect modes because it "only ever moves towards LESS
+#: egress" -- but `routed`'s rules already fail closed structurally, so nothing
+#: escapes whether or not the job is downgraded. Downgrading buys no safety
+#: there; it only decides whether the run is spent, and an offline run spends a
+#: sample that may only ever check in once. Failing leaves it unexecuted.
+DOWNGRADE_ON_FAILURE = frozenset({EgressMode.TOR, EgressMode.SIMULATED})
 
 
 #: The one exit every host always has. Not read from configuration, because a
@@ -269,12 +285,153 @@ def listener_ready(port: int, *, host: str = "127.0.0.1",
         return False
 
 
+#: How stale a WireGuard handshake may be before the tunnel counts as down.
+#:
+#: WireGuard rekeys roughly every 120s **while there is traffic**, and is
+#: entirely silent when idle. So this threshold only means anything if the peer
+#: is configured with `PersistentKeepalive` -- without it an idle but perfectly
+#: healthy tunnel has an ancient handshake and would read as dead here. That
+#: requirement belongs in the peer config, not in this constant, and
+#: `docs/architecture/routed-egress.md` records it.
+TUNNEL_HANDSHAKE_MAX_AGE = 180.0
+
+
+def argv_tunnel_handshakes(interface: str) -> list[str]:
+    """`wg show` rather than `ip link`, and that is the whole point.
+
+    An interface can be UP with no peer reachable behind it -- exactly the
+    state that would send a clone's traffic into a hole while the report said
+    `routed`. Same reasoning as `listener_ready` being a TCP connect rather
+    than `systemctl is-active`.
+    """
+    return ["wg", "show", interface, "latest-handshakes"]
+
+
+def tunnel_ready(interface: str, *,
+                 max_age: float = TUNNEL_HANDSHAKE_MAX_AGE,
+                 run=None) -> bool:
+    """Has this WireGuard interface handshaked recently? **Candidate.**
+
+    Never run on this project's Dom0 -- no tunnel exists yet. Do not treat a
+    passing test here as evidence the check works against a real peer.
+
+    **Parses `Completed.stdout`, which `proc._text` says is for diagnostics
+    rather than parsing.** That warning is about guest-adjacent bytes decoded
+    with `errors="replace"`; this is the output of a local root-owned tool in
+    an ASCII format of base64 keys and integers, with no path from a guest.
+    And the failure mode is safe either way: a replacement character makes
+    `float()` raise, the line is skipped, and an unparseable result returns
+    False -- which withholds the mode. Decoding damage fails closed here.
+    """
+    import time
+
+    from sandboxd import proc
+
+    runner = run or (lambda argv: proc.run(argv, timeout=5.0,
+                                           what="wireguard handshake"))
+
+    try:
+        done = runner(argv_tunnel_handshakes(interface))
+    except OSError:
+        # `wg` missing, or the interface gone. Both mean the same here.
+        return False
+
+    if not done.ok:
+        return False
+
+    now = time.time()
+    for line in done.stdout.splitlines():
+        parts = line.split()
+        if len(parts) < 2:
+            continue
+        try:
+            stamp = float(parts[-1])
+        except ValueError:
+            continue
+        # 0 means "never handshaked". Any peer inside the window is enough:
+        # one live peer is a usable tunnel.
+        if stamp and (now - stamp) <= max_age:
+            return True
+
+    return False
+
+
+# What each mode needs to be running before a job may use it. A registry
+# rather than a branch, because the things being asked about have nothing in
+# common: `tor` and `simulated` need a local port to be accepting, `routed`
+# needs a tunnel to somebody else's machine to have handshaked recently.
+#
+# Each entry returns None when the dependency is satisfied, and one sentence
+# saying why not when it is not. Returning the sentence rather than a bool is
+# what lets both callers say the same thing -- the daemon logs it when
+# withholding an exit, and the job report carries it when a run is downgraded.
+def _responder_dependency(exit_, *, probe, tunnel):
+    port = LISTENER_PORT[exit_.mode]
+    if probe(port):
+        return None
+    return (f"{exit_.mode.value} responder not listening on "
+            f"127.0.0.1:{port}")
+
+
+def _tunnel_dependency(exit_, *, probe, tunnel):
+    if not exit_.interface:
+        # argv_apply refuses this too, but refusing here means the exit is
+        # never offered rather than failing at launch.
+        return f"exit {exit_.name!r} is routed but declares no interface"
+    if tunnel(exit_.interface):
+        return None
+    return (f"tunnel {exit_.interface} has no WireGuard handshake in the last "
+            f"{int(TUNNEL_HANDSHAKE_MAX_AGE)}s")
+
+
+#: Where an operator fixes each dependency, named in the withholding log line
+#: so "tor is not offered" arrives with the file that decides whether it is.
+_CONFIG_HINT = {
+    EgressMode.TOR: "automation/torrc",
+    EgressMode.SIMULATED: "automation/fakenet.ini",
+    EgressMode.ROUTED: "docs/architecture/routed-egress.md",
+}
+
+#: Modes absent from this map depend on nothing that can be down: `offline`
+#: installs no rules at all, and `direct` leaves by the host's own uplink,
+#: which is up whenever the host is.
+_DEPENDENCY = {
+    EgressMode.TOR: _responder_dependency,
+    EgressMode.SIMULATED: _responder_dependency,
+    EgressMode.ROUTED: _tunnel_dependency,
+}
+
+
+def dependency_reason(exit_: Exit, *, probe=None, tunnel=None) -> str | None:
+    """Why this exit cannot serve a job right now, or None if it can.
+
+    Asked twice per exit and deliberately so: once at registration, so a
+    submitter is never offered a mode this host cannot serve, and again at
+    launch, because a responder that was up when the host registered can be
+    down by the time a job actually runs.
+
+    **Defaults resolved here rather than in the signature**, so that
+    `monkeypatch.setattr(egress, "listener_ready", ...)` reaches this. A
+    default bound at definition time captures the original function object and
+    silently ignores the patch -- which made two stage tests pass for the wrong
+    reason: nothing listens on 9040 in the test container either, so "the probe
+    said down" and "the patch did nothing" were indistinguishable.
+    """
+    check = _DEPENDENCY.get(exit_.mode)
+    if check is None:
+        return None
+    return check(exit_,
+                 probe=probe if probe is not None else listener_ready,
+                 tunnel=tunnel if tunnel is not None else tunnel_ready)
+
+
 def available_exits(
     *,
     allow_direct: bool = config.ALLOW_DIRECT,
     exits: dict | None = None,
     uplink: str = config.UPLINK_BRIDGE,
-    probe=listener_ready,
+    probe=None,
+    tunnel=None,
 ) -> list[Exit]:
     """What this host declares it can offer. The platform offers only this.
 
@@ -292,29 +449,34 @@ def available_exits(
         if mode is EgressMode.DIRECT and not allow_direct:
             continue
 
-        # A redirect mode is only offerable if its listener is actually up.
-        # Withheld rather than offered-and-broken: the platform then never
-        # shows it, so a submitter cannot pick a mode that would silently
-        # produce an empty report. The daemon logs the withholding, because
-        # "tor is not offered" needs to be findable when someone expects it.
-        if mode in _REDIRECT_MODES and not probe(LISTENER_PORT[mode]):
-            log.warning(
-                "exit %r (%s) is configured but nothing is listening on "
-                "127.0.0.1:%d -- NOT offering it. Until the responder is "
-                "running this mode would redirect clone traffic to a closed "
-                "port, and every analysis would report a sample that could "
-                "not connect. See automation/%s.",
-                name, mode.value, LISTENER_PORT[mode],
-                "torrc" if mode is EgressMode.TOR else "fakenet.ini")
-            continue
-
-        out.append(Exit(
+        candidate = Exit(
             name=name,
             mode=mode,
             interface=spec.get("interface"),
             country=spec.get("country"),
             caveats=tuple(spec.get("caveats", ())),
-        ))
+        )
+
+        # A mode is only offerable if whatever it depends on is actually up.
+        # Withheld rather than offered-and-broken: the platform then never
+        # shows it, so a submitter cannot pick a mode that would silently
+        # produce an empty report. The daemon logs the withholding, because
+        # "tor is not offered" needs to be findable when someone expects it.
+        #
+        # Built before the check because what an exit depends on is a property
+        # of the exit, not of its mode alone -- `routed` needs the interface
+        # this spec names.
+        unhealthy = dependency_reason(candidate, probe=probe, tunnel=tunnel)
+        if unhealthy:
+            log.warning(
+                "exit %r (%s) is configured but %s -- NOT offering it. Until "
+                "that is fixed, every analysis choosing this mode would "
+                "report a sample that could not connect. See %s.",
+                name, mode.value, unhealthy, _CONFIG_HINT.get(mode, "the "
+                "egress design in docs/architecture/networking.md"))
+            continue
+
+        out.append(candidate)
 
     if allow_direct and not any(e.mode is EgressMode.DIRECT for e in out):
         # The implicit one. A host that set SANDBOXD_ALLOW_DIRECT=1 means the

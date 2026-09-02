@@ -788,3 +788,75 @@ def test_no_override_leaves_the_measured_default_set(tmp_path):
     plugins = [argv[i + 1] for i, a in enumerate(argv) if a == "-a"]
 
     assert plugins == ["syscalls", "filetracer", "fileextractor", "memdump"]
+
+
+# --- a dead dependency: downgrade, or refuse? -------------------------------
+#
+# Both branches of the 2026-09-02 decision, at the level that implements it.
+# `test_egress.py` pins DOWNGRADE_ON_FAILURE as data; these pin that
+# `_apply_egress` reads it. Inverting the branch there passed the whole suite
+# before these existed.
+
+def _analysis_with(tmp_path, *exits):
+    cfg = config(tmp_path)
+    cfg.exits = (S.egress.OFFLINE_EXIT, *exits)
+    cfg.config_dir.mkdir(parents=True, exist_ok=True)
+    return S.Analysis(FakeApi(), runner_ready(), cfg)
+
+
+def _lease_wanting(name: str):
+    lease = FakeLease()
+    lease.egress_exit = name
+    return lease
+
+
+def test_a_dead_responder_downgrades_the_job_and_records_why(tmp_path,
+                                                             monkeypatch):
+    """`tor` and `simulated` move towards LESS egress, and say so.
+
+    The job still completes: the sample runs with no network, and the report
+    carries `reason` beside the mode so the empty capture is attributable.
+    """
+    monkeypatch.setattr(S.egress, "listener_ready", lambda *a, **k: False)
+
+    tor = S.Exit(name="tor-default", mode=S.egress.EgressMode.TOR)
+    applied = _analysis_with(tmp_path, tor)._apply_egress(
+        _lease_wanting("tor-default"), 3)
+
+    assert applied["mode"] == "offline"
+    assert applied["exit"] == "offline"
+    assert "reason" in applied and "tor" in applied["reason"]
+
+
+def test_a_dead_tunnel_refuses_the_job_rather_than_downgrading(tmp_path,
+                                                               monkeypatch):
+    """`routed` is the exception, and deliberately.
+
+    Its rules already fail closed structurally, so a downgrade buys no safety
+    and only decides whether the run is spent -- and an `offline` run spends a
+    sample that may check in exactly once. Failing leaves it unexecuted.
+    """
+    monkeypatch.setattr(S.egress, "tunnel_ready", lambda *a, **k: False)
+
+    routed = S.Exit(name="es-vps-1", mode=S.egress.EgressMode.ROUTED,
+                    interface="wg0")
+    analysis = _analysis_with(tmp_path, routed)
+
+    with pytest.raises(S.EgressUnavailable) as excinfo:
+        analysis._apply_egress(_lease_wanting("es-vps-1"), 3)
+
+    assert "wg0" in str(excinfo.value)
+
+
+def test_a_healthy_dependency_applies_the_mode_that_was_asked_for(tmp_path,
+                                                                  monkeypatch):
+    """The absence of `reason` is a positive statement, so it must be absent
+    when nothing was downgraded."""
+    monkeypatch.setattr(S.egress, "listener_ready", lambda *a, **k: True)
+
+    tor = S.Exit(name="tor-default", mode=S.egress.EgressMode.TOR)
+    applied = _analysis_with(tmp_path, tor)._apply_egress(
+        _lease_wanting("tor-default"), 3)
+
+    assert applied["mode"] == "tor"
+    assert "reason" not in applied

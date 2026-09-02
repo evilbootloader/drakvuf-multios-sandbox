@@ -439,15 +439,32 @@ class Analysis:
         # Falling back to `offline` is the maintainer's decision (2026-08-31)
         # and it only ever moves towards LESS egress. It is recorded rather
         # than silent: the report shows what was requested beside what ran.
-        if exit_.mode in egress.LISTENER_PORT:
-            port = egress.LISTENER_PORT[exit_.mode]
-            if not egress.listener_ready(port):
+        unhealthy = egress.dependency_reason(exit_)
+        if unhealthy:
+            if exit_.mode in egress.DOWNGRADE_ON_FAILURE:
                 fallback_reason = (
-                    f"{exit_.mode.value} responder not listening on "
-                    f"127.0.0.1:{port} at launch; ran with no network instead"
-                )
+                    f"{unhealthy} at launch; ran with no network instead")
                 log.warning("job %s: %s", lease.job_id, fallback_reason)
                 exit_ = egress.OFFLINE_EXIT
+            else:
+                # **Fails rather than downgrading, and the difference is
+                # deliberate** (2026-09-02, docs/architecture/routed-egress.md).
+                #
+                # Downgrading is justified for the redirect modes because it
+                # only ever moves towards LESS egress. `routed` already fails
+                # closed structurally -- nothing in its rules names the uplink
+                # -- so nothing escapes either way and a downgrade buys no
+                # safety at all. What it would cost is the run: `offline`
+                # spends a sample that may only ever check in once, and the
+                # report would correctly say it did nothing. Failing leaves the
+                # sample unexecuted and re-submittable.
+                raise EgressUnavailable(
+                    f"job asked for exit {exit_.name!r} ({exit_.mode.value}) "
+                    f"and {unhealthy}. Refused rather than downgraded: the "
+                    f"submitter asked to reach the Internet from somewhere "
+                    f"specific, and running with no network instead answers a "
+                    f"different question while spending the sample."
+                )
 
         for argv in egress.argv_apply(vlan, exit_, bridge=self._cfg.bridge,
                                       subnet=self._cfg.subnet):
