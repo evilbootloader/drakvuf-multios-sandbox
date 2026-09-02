@@ -1683,6 +1683,46 @@ this is not exploited by anything observed, and widening the patch on
 suspicion is what `CLAUDE.md` warns against. It is written down so it is a
 decision rather than an oversight.
 
+### The FakeNet patch was re-applied and the new changes are still missing
+
+**Symptom.** `automation/fakenet-divert-no.patch` gains a change, Dom0 pulls,
+the patch is re-run, and the old symptom persists exactly. The re-run looks
+like a no-op that was already done:
+
+```
+patching file fakenet/listeners/ProxyListener.py
+Reversed (or previously applied) patch detected!  Skipping patch.
+3 out of 3 hunks ignored -- saving rejects to file ProxyListener.py.rej
+```
+
+**Cause.** **`patch --forward` skips the whole FILE, not the applied hunk.**
+Having recognised the first hunk as already applied, it abandons that file and
+every later hunk in it — including the ones that are new. It exits 1 and leaves
+`.rej` files, but the message reads as reassurance rather than as failure.
+
+A partly-patched tree therefore survives re-patching unchanged. Confirmed
+2026-09-02 by reconstructing a venv carrying changes 1–3 and applying the
+five-change patch to it: nothing moved.
+
+The line number in a traceback is the quickest way to tell which changes a venv
+has, because each one shifts the ones below it. `remote_sock.setblocking(0)` is
+at line 245 in pristine v3.5, at 250 with changes 1–3, and does not exist at
+all once change 5 lands.
+
+**Fix.** Reinstall, then patch. Never patch on top of a patch:
+
+```sh
+SP="$(/opt/fakenet-ng/bin/python -c 'import fakenet, os; \
+    print(os.path.dirname(os.path.dirname(fakenet.__file__)))')"
+/opt/fakenet-ng/bin/pip install --no-deps --force-reinstall \
+    'git+https://github.com/mandiant/flare-fakenet-ng@v3.5'
+patch -p1 --forward -d "$SP" < automation/fakenet-divert-no.patch
+```
+
+Then verify by content rather than by the patch's own output, since that output
+is what misled in the first place — the three `grep -c` checks are in the patch
+header and in runbook 13 step 6b.
+
 ### `OSError: [Errno 9] Bad file descriptor` from FakeNet's proxy, on HTTPS only
 
 **Symptom.** A clone in `simulated` completes a TLS handshake — the guest

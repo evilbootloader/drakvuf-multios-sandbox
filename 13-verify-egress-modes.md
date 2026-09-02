@@ -409,22 +409,41 @@ time, and should be between unrelated runs.
 
 ### 6b — patch it, because `DivertTraffic: No` is untested upstream
 
+**Reinstall first, every time. Never patch on top of an older patch.**
+`patch --forward` does not merge: it recognises the first hunk of a file as
+already applied and skips **that whole file**, new changes included. It exits
+1, writes `.rej` files, and changes nothing — so a partly-patched venv survives
+a re-run looking updated. That is what happened on 2026-09-02, when a Dom0
+carrying changes 1–3 was re-patched and came out with neither 4 nor 5.
+
 ```sh
-patch -p1 --forward -d "$(/opt/fakenet-ng/bin/python -c 'import fakenet, os; \
-    print(os.path.dirname(os.path.dirname(fakenet.__file__)))')" \
-    < automation/fakenet-divert-no.patch
+SP="$(/opt/fakenet-ng/bin/python -c 'import fakenet, os; \
+    print(os.path.dirname(os.path.dirname(fakenet.__file__)))')"
+
+/opt/fakenet-ng/bin/pip install --no-deps --force-reinstall \
+    'git+https://github.com/mandiant/flare-fakenet-ng@v3.5'
+
+patch -p1 --forward -d "$SP" < automation/fakenet-divert-no.patch
 ```
 
-Expect three files patched and no rejects. Re-run it after any `pip install
---upgrade`; `--forward` makes a second run say "previously applied" rather than
-prompt.
+Expect three files patched and no rejects. **Then verify, because the failure
+above is silent:**
+
+```sh
+grep -c "conn.setblocking(0)"     "$SP/fakenet/listeners/ProxyListener.py"    # 1
+grep -c "fn_addr = '0.0.0.0'"     "$SP/fakenet/fakenet.py"                    # 2
+grep -c "self.__diverter is None" "$SP/fakenet/diverters/diverterbase.py"     # 3
+```
+
+Any zero means that change is missing. Do this after every `pip install`,
+upgrade or reinstall, not only the first time.
 
 **Do not skip this and see whether it works.** Unpatched, FakeNet either dies
 at startup with `UnboundLocalError: fn_addr`, or — once that one line is fixed
 — starts, binds every port, logs nothing alarming and answers nothing. A
 `simulated` run against it produces a report indistinguishable from a sample
 whose infrastructure was down, which is the exact failure this issue exists to
-prevent. The patch header explains all three dereferences.
+prevent. The patch header explains all five changes.
 
 ```text
 root@dom0:~/drakvuf-multios-sandbox# patch -p1 --forward -d "$(/opt/fakenet-ng/bin/python -c 'import fakenet, os; \

@@ -110,16 +110,34 @@ consequences the ini's listener ordering accounts for:
 APPLYING IT
 ===========
 
-Inside the venv FakeNet was installed into, from the repository root:
+**ALWAYS REINSTALL FIRST.  Never apply this on top of an older copy of
+itself.**  `patch --forward` does not merge: it recognises the first hunk of a
+file as already applied and then SKIPS THAT WHOLE FILE, new hunks included.  It
+exits 1, writes `.rej` files, and changes nothing -- so a partly-patched tree
+survives a re-run looking like it was updated.  Confirmed 2026-09-02, after a
+Dom0 carrying changes 1-3 was re-patched and still had neither 4 nor 5.
 
-    patch -p1 --forward -d "$(python -c 'import fakenet, os; \
-        print(os.path.dirname(os.path.dirname(fakenet.__file__)))')" \
-        < automation/fakenet-divert-no.patch
+From the repository root, against the venv FakeNet is installed into:
 
-`--forward` makes a re-run say "previously applied" instead of asking.  Re-run
-it after any `pip install --upgrade`, and re-check it against upstream before
-moving off v3.5: hunk (3) is in a class upstream added recently and is the most
-likely of the three to be fixed or restructured there.
+    SP="$(/opt/fakenet-ng/bin/python -c 'import fakenet, os; \
+        print(os.path.dirname(os.path.dirname(fakenet.__file__)))')"
+
+    /opt/fakenet-ng/bin/pip install --no-deps --force-reinstall \
+        'git+https://github.com/mandiant/flare-fakenet-ng@v3.5'
+
+    patch -p1 --forward -d "$SP" < automation/fakenet-divert-no.patch
+
+Expect three files patched and no rejects.  Then VERIFY, because the failure
+mode above is silent:
+
+    grep -c "conn.setblocking(0)"   "$SP/fakenet/listeners/ProxyListener.py"   # 1
+    grep -c "fn_addr = '0.0.0.0'"   "$SP/fakenet/fakenet.py"                   # 2
+    grep -c "self.__diverter is None" "$SP/fakenet/diverters/diverterbase.py"  # 3
+
+Any zero means that change is missing.  Do the same after any `pip install`,
+upgrade or reinstall, and re-check this patch against upstream before moving
+off v3.5 -- change (3) is in a class upstream added recently and is the most
+likely of the five to be fixed or restructured there.
 
 diff -u -r a/fakenet/diverters/diverterbase.py b/fakenet/diverters/diverterbase.py
 --- a/fakenet/diverters/diverterbase.py
