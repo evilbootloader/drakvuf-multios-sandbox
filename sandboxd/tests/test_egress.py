@@ -593,6 +593,31 @@ def test_fakenet_protocol_listeners_precede_the_raw_fallback():
         "confidence of 1 will win the tie and that protocol is unreachable")
 
 
+def test_the_proxy_cert_dir_is_absolute():
+    """A relative one makes TLS depend on where FakeNet was launched from.
+
+    `ProxyListener` defaults `cert_dir` to the relative `configs/temp_certs`,
+    and `ssl_utils.abs_config_path()` resolves it with `os.path.abspath()`,
+    which on CPython 3.12 calls `os.getcwd()` for a relative path only. So the
+    process carries a permanent dependency on its launch directory, and when
+    that directory goes away the SNI callback dies with `[Errno 2]` and every
+    handshake aborts with `CALLBACK_FAILED` -- observed on Dom0 2026-09-01.
+
+    Plaintext keeps working throughout, which is what makes it read as a TLS
+    bug rather than a path one.
+    """
+    listeners = dict(_fakenet_listeners())
+    cert_dir = listeners["ProxyTCPListener"].get("cert_dir")
+
+    assert cert_dir, (
+        "[ProxyTCPListener] sets no Cert_Dir, so FakeNet falls back to the "
+        "relative configs/temp_certs and TLS breaks if its launch directory "
+        "is ever removed")
+    assert cert_dir.startswith("/"), (
+        f"Cert_Dir is relative ({cert_dir!r}); it is resolved against the "
+        f"launch directory, not against this file")
+
+
 def test_fakenet_writable_roots_are_outside_the_package():
     """FTP and TFTP let the SAMPLE write, and upstream aims them at itself.
 

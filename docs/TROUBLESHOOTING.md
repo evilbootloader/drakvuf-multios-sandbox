@@ -1626,6 +1626,63 @@ destination to the **incoming** interface's address — a different gateway for
 every VLAN — so a loopback bind would receive nothing from a clone. That
 exposure is why `network-setup.sh` DROPs FakeNet's ports on the uplink.
 
+### `SSLError: [SSL: CALLBACK_FAILED]`, with a `getcwd()` FileNotFoundError above it
+
+**Symptom.** Two tracebacks per HTTPS connection. The first is reported as
+*ignored*, which makes it easy to skip:
+
+```
+Exception ignored in: <bound method SSLWrapper.sni_callback ...>
+  File ".../ssl_utils/__init__.py", line 207, in abs_config_path
+    abspath = os.path.abspath(path)
+  File "<frozen posixpath>", line 420, in abspath
+FileNotFoundError: [Errno 2] No such file or directory
+```
+
+The second is the consequence — the SNI callback raised, so the handshake is
+abandoned:
+
+```
+ssl.SSLError: [SSL: CALLBACK_FAILED] callback failed
+```
+
+Neither message names a directory, a path, or a configuration key.
+
+**Cause.** **FakeNet's working directory no longer exists, and `cert_dir` was
+relative, so it needed one.** Line 420 of CPython 3.12's `posixpath.abspath` is
+`cwd = os.getcwd()`, and it sits inside `if not isabs(path):` — so it is
+reached only for a relative path, and it fails only when the process's cwd has
+been deleted.
+
+Unset, `ProxyListener` falls back to `configs/temp_certs`
+(`ProxyListener.py:57`). `SSLWrapper.__init__` resolves that once at startup
+and `os.makedirs()` it under whatever directory FakeNet was launched from, so
+the process carries a permanent dependency on that path. Every later
+`create_cert()` re-resolves it, and the first one after the directory goes away
+takes HTTPS down with it. The listener stays up and plaintext keeps working,
+which is why this reads as a TLS bug rather than a path bug.
+
+**Fix.** `automation/fakenet.ini` sets `Cert_Dir` to an absolute path in
+`[ProxyTCPListener]`. An absolute path takes the `isabs()` branch, `getcwd()`
+is never called, and where FakeNet was started stops mattering. FakeNet creates
+the directory itself and `shutil.rmtree()`s it on a clean exit, so there is
+nothing to provision and nothing in it to preserve.
+
+`sandboxd/tests/test_egress.py` fails if the key goes missing or turns
+relative, because nothing else would notice until a sample used TLS.
+
+**KNOWN GAP (DRAFT-057): the filenames in that directory are
+sample-controlled.** `create_cert()` builds
+`os.path.join(cert_dir, "%s.crt" % cn)` where `cn` is the SNI servername from
+the clone's own handshake. A `/` survives Python's server-side SNI decoding —
+verified 2026-09-01 — so a sample choosing its own SNI chooses part of a path
+on the hypervisor. Writes into a directory that does not exist fail rather than
+traverse, and an absolute `Cert_Dir` fixes where the attempt begins, but
+neither is sanitisation. Not patched: the crash above is what blocks analysis,
+this is not exploited by anything observed, and widening the patch on
+suspicion is what `CLAUDE.md` warns against. It is written down so it is a
+decision rather than an oversight.
+
 ### `OSError: [Errno 9] Bad file descriptor` from FakeNet's proxy, on HTTPS only
 
 **Symptom.** A clone in `simulated` completes a TLS handshake — the guest
