@@ -1,0 +1,50 @@
+# One handle for every responder an egress mode depends on. DRAFT-057.
+#
+# Reference copy. Install on Dom0:
+#
+#     install -m 0644 automation/drakvuf-egress.target /etc/systemd/system/
+#     install -m 0644 automation/fakenet.service        /etc/systemd/system/
+#     systemctl daemon-reload
+#     systemctl start drakvuf-egress.target
+#
+# ==========================================================================
+# WHAT THIS IS FOR, AND WHAT IT IS DELIBERATELY NOT
+# ==========================================================================
+#
+# It starts the responders. It does NOT start `sandboxd`, and must not: that
+# would invert the relationship the egress design depends on. sandboxd probes
+# these for liveness and withholds a mode when one is down, which only works
+# while their health is a fact it observes rather than a consequence of its own
+# startup order.
+#
+# Nothing here is required for the lab to run. `offline` needs no responder at
+# all -- it is the absence of a rule -- so a host where this target failed
+# entirely still analyses samples safely, with `tor` and `simulated` simply
+# absent from the exit list. That is the intended failure direction and it is
+# why this target has no `Requires=` anywhere.
+#
+# ==========================================================================
+# Wants=, never Requires=
+# ==========================================================================
+#
+# `Wants=` starts them and tolerates one failing. `Requires=` would tear the
+# target down when any single responder failed, taking a working mode offline
+# because an unrelated one broke -- tor dying would remove `simulated`, which
+# nothing about tor should be able to do.
+#
+# The modes are independent by design; the target must not couple them.
+
+[Unit]
+Description=DRAKVUF analysis egress responders (tor, FakeNet-NG)
+Documentation=file:/root/drakvuf-multios-sandbox/docs/architecture/networking.md
+
+Wants=tor.service fakenet.service
+After=tor.service fakenet.service
+
+# `routed` joins here as wg-quick@wg0.service once it exists -- see
+# docs/architecture/routed-egress.md. Deliberately not listed yet: a Wants= for
+# a unit that is not installed is tolerated but logs a failure on every start,
+# and a target that always looks half-broken is one nobody reads.
+
+[Install]
+WantedBy=multi-user.target

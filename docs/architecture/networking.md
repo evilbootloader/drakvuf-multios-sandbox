@@ -405,7 +405,7 @@ the list below, which describes what was proposed and is kept for the rest.
 | `direct` | **Built**, host-gated behind `SANDBOXD_ALLOW_DIRECT=1`, never offered in the UI |
 | `simulated` | **Rules built.** Needs FakeNet-NG installed, patched and running; withheld automatically if not — see Phase 3 below |
 | `tor` | **Built.** Needs `automation/torrc` installed and tor running; withheld automatically if not |
-| `routed` | Enum, UI and API only. Needs a peer and a kill-switch capture — Phase 4 |
+| `routed` | **Rules built, routing not.** Fails closed today because nothing routes a VLAN into a tunnel. Design: [`routed-egress.md`](routed-egress.md) — Phase 4 |
 
 What changed in `network-setup.sh`: the unconditional `MASQUERADE` in
 `DRAKVUF_NAT` is gone, and `DRAKVUF_ISOLATION`'s wildcard

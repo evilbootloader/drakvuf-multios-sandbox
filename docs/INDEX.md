@@ -356,6 +356,22 @@ It maps **headings, not content**: a fact stated in the middle of a section is n
     - `docs/architecture/result-schema.md:147` — [4.2 The manifest](architecture/result-schema.md#42-the-manifest)
     - `docs/architecture/result-schema.md:182` — [4.3 The capability envelope](architecture/result-schema.md#43-the-capability-envelope)
 
+## `docs/architecture/routed-egress.md`
+
+- `docs/architecture/routed-egress.md:1` — [`routed` — egress through a tunnel to a rented exit](architecture/routed-egress.md#routed--egress-through-a-tunnel-to-a-rented-exit)
+  - `docs/architecture/routed-egress.md:10` — [Why this is being designed now, with no provider](architecture/routed-egress.md#why-this-is-being-designed-now-with-no-provider)
+  - `docs/architecture/routed-egress.md:37` — [What already exists](architecture/routed-egress.md#what-already-exists)
+  - `docs/architecture/routed-egress.md:66` — [What is missing, in the order it bites](architecture/routed-egress.md#what-is-missing-in-the-order-it-bites)
+    - `docs/architecture/routed-egress.md:68` — [1. Policy routing — and today its absence is why nothing works](architecture/routed-egress.md#1-policy-routing--and-today-its-absence-is-why-nothing-works)
+    - `docs/architecture/routed-egress.md:104` — [2. A liveness probe, which `routed` currently does not have](architecture/routed-egress.md#2-a-liveness-probe-which-routed-currently-does-not-have)
+    - `docs/architecture/routed-egress.md:147` — [DECISION (2026-09-02): a dead tunnel FAILS a routed job](architecture/routed-egress.md#decision-2026-09-02-a-dead-tunnel-fails-a-routed-job)
+    - `docs/architecture/routed-egress.md:188` — [3. DNS, which needs nothing and should be tested anyway](architecture/routed-egress.md#3-dns-which-needs-nothing-and-should-be-tested-anyway)
+    - `docs/architecture/routed-egress.md:199` — [4. MTU and MSS](architecture/routed-egress.md#4-mtu-and-mss)
+    - `docs/architecture/routed-egress.md:213` — [5. Caveats](architecture/routed-egress.md#5-caveats)
+    - `docs/architecture/routed-egress.md:223` — [6. Keys](architecture/routed-egress.md#6-keys)
+  - `docs/architecture/routed-egress.md:231` — [Proving it — runbook 14, against a local peer](architecture/routed-egress.md#proving-it--runbook-14-against-a-local-peer)
+  - `docs/architecture/routed-egress.md:258` — [What this does not address](architecture/routed-egress.md#what-this-does-not-address)
+
 ## `docs/architecture/upstream-drakvuf.md`
 
 - `docs/architecture/upstream-drakvuf.md:1` — [Upstream DRAKVUF — comparison, provenance, and repository strategy](architecture/upstream-drakvuf.md#upstream-drakvuf--comparison-provenance-and-repository-strategy)
@@ -1153,16 +1169,16 @@ It maps **headings, not content**: a fact stated in the middle of a section is n
     - `docs/runbooks/13-verify-egress-modes.md:385` — [6a — install](runbooks/13-verify-egress-modes.md#6a--install)
     - `docs/runbooks/13-verify-egress-modes.md:424` — [6b — patch it, because `DivertTraffic: No` is untested upstream](runbooks/13-verify-egress-modes.md#6b--patch-it-because-diverttraffic-no-is-untested-upstream)
     - `docs/runbooks/13-verify-egress-modes.md:471` — [6c — start it and confirm it bound what it claims](runbooks/13-verify-egress-modes.md#6c--start-it-and-confirm-it-bound-what-it-claims)
-    - `docs/runbooks/13-verify-egress-modes.md:623` — [6d — offer the mode](runbooks/13-verify-egress-modes.md#6d--offer-the-mode)
-  - `docs/runbooks/13-verify-egress-modes.md:657` — [Step 7 — a sample gets a fake Internet, and nothing leaves](runbooks/13-verify-egress-modes.md#step-7--a-sample-gets-a-fake-internet-and-nothing-leaves)
-    - `docs/runbooks/13-verify-egress-modes.md:677` — [7a — HTTPS is refused, and the report must say so](runbooks/13-verify-egress-modes.md#7a--https-is-refused-and-the-report-must-say-so)
-    - `docs/runbooks/13-verify-egress-modes.md:738` — [7b — nothing left](runbooks/13-verify-egress-modes.md#7b--nothing-left)
-  - `docs/runbooks/13-verify-egress-modes.md:761` — [Step 8 — the Ubuntu regression. This gates the merge.](runbooks/13-verify-egress-modes.md#step-8--the-ubuntu-regression-this-gates-the-merge)
-  - `docs/runbooks/13-verify-egress-modes.md:792` — [Step 8a — the `direct` grant does not outlive step 8](runbooks/13-verify-egress-modes.md#step-8a--the-direct-grant-does-not-outlive-step-8)
-  - `docs/runbooks/13-verify-egress-modes.md:842` — [Step 9 — modes do not leak between runs](runbooks/13-verify-egress-modes.md#step-9--modes-do-not-leak-between-runs)
-  - `docs/runbooks/13-verify-egress-modes.md:910` — [Step 10 — the fallback is honest](runbooks/13-verify-egress-modes.md#step-10--the-fallback-is-honest)
-  - `docs/runbooks/13-verify-egress-modes.md:936` — [What this discharged, and what it did not](runbooks/13-verify-egress-modes.md#what-this-discharged-and-what-it-did-not)
-    - `docs/runbooks/13-verify-egress-modes.md:947` — [Findings worth carrying forward](runbooks/13-verify-egress-modes.md#findings-worth-carrying-forward)
+    - `docs/runbooks/13-verify-egress-modes.md:643` — [6d — offer the mode](runbooks/13-verify-egress-modes.md#6d--offer-the-mode)
+  - `docs/runbooks/13-verify-egress-modes.md:677` — [Step 7 — a sample gets a fake Internet, and nothing leaves](runbooks/13-verify-egress-modes.md#step-7--a-sample-gets-a-fake-internet-and-nothing-leaves)
+    - `docs/runbooks/13-verify-egress-modes.md:697` — [7a — HTTPS is refused, and the report must say so](runbooks/13-verify-egress-modes.md#7a--https-is-refused-and-the-report-must-say-so)
+    - `docs/runbooks/13-verify-egress-modes.md:758` — [7b — nothing left](runbooks/13-verify-egress-modes.md#7b--nothing-left)
+  - `docs/runbooks/13-verify-egress-modes.md:781` — [Step 8 — the Ubuntu regression. This gates the merge.](runbooks/13-verify-egress-modes.md#step-8--the-ubuntu-regression-this-gates-the-merge)
+  - `docs/runbooks/13-verify-egress-modes.md:812` — [Step 8a — the `direct` grant does not outlive step 8](runbooks/13-verify-egress-modes.md#step-8a--the-direct-grant-does-not-outlive-step-8)
+  - `docs/runbooks/13-verify-egress-modes.md:862` — [Step 9 — modes do not leak between runs](runbooks/13-verify-egress-modes.md#step-9--modes-do-not-leak-between-runs)
+  - `docs/runbooks/13-verify-egress-modes.md:930` — [Step 10 — the fallback is honest](runbooks/13-verify-egress-modes.md#step-10--the-fallback-is-honest)
+  - `docs/runbooks/13-verify-egress-modes.md:970` — [What this discharged, and what it did not](runbooks/13-verify-egress-modes.md#what-this-discharged-and-what-it-did-not)
+    - `docs/runbooks/13-verify-egress-modes.md:981` — [Findings worth carrying forward](runbooks/13-verify-egress-modes.md#findings-worth-carrying-forward)
 
 ## `docs/workflow-ci.md`
 
@@ -1196,4 +1212,4 @@ It maps **headings, not content**: a fact stated in the middle of a section is n
 
 ---
 
-*1087 headings across 33 documents.*
+*1100 headings across 34 documents.*

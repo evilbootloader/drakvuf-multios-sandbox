@@ -1,0 +1,106 @@
+# FakeNet-NG as a service — the `simulated` egress responder. DRAFT-057.
+#
+# Reference copy. Install on Dom0; nothing in this repository deploys it, the
+# development container is not Dom0. Runbook: docs/runbooks/13-verify-egress-modes.md
+# step 6c.
+#
+#     install -m 0644 automation/fakenet.service /etc/systemd/system/
+#     systemctl daemon-reload && systemctl start fakenet
+#
+# ==========================================================================
+# WHY A UNIT, AND NOT `sandboxd` STARTING IT
+# ==========================================================================
+#
+# sandboxd must OBSERVE the responder's health, never own it. Its whole egress
+# design rests on that: `available_exits` withholds `simulated` when nothing
+# answers on 38926, and `stages._apply_egress` re-checks at launch. If sandboxd
+# started FakeNet, "the responder is down" would collapse into "sandboxd failed
+# to start it" and the fallback logic would be reasoning about itself.
+#
+# The concrete cost is worse than the theoretical one: sandboxd runs in the
+# FOREGROUND with no unit of its own (CURRENT-STATE §1.2), so restarting it
+# would take FakeNet down with it -- out from under any clone then running in
+# `simulated`, mid-trace.
+#
+# tor is already a service. This makes the two consistent, and `routed` joins
+# them later as wg-quick@.
+#
+# ==========================================================================
+# THREE DIRECTIVES HERE ARE LOAD-BEARING. Each maps to a real failure.
+# ==========================================================================
+
+[Unit]
+Description=FakeNet-NG simulated-internet responder for DRAKVUF analysis clones
+Documentation=file:/root/drakvuf-multios-sandbox/docs/architecture/networking.md
+After=network-online.target
+Wants=network-online.target
+
+# Bounded restarts. A listener that cannot bind is fatal to the whole process
+# (`sys.exit(1)`), and some causes are permanent -- systemd-resolved holding a
+# port does not resolve itself. Five attempts, then STOP and stay failed.
+#
+# Staying failed is the wanted end state, not a giveup: sandboxd's probe then
+# withholds `simulated`, so the mode disappears from the UI instead of being
+# offered by a host that cannot serve it. A restart loop would instead keep the
+# port briefly open and make the mode flicker in and out of the exit list.
+StartLimitIntervalSec=120
+StartLimitBurst=5
+
+[Service]
+Type=simple
+ExecStart=/opt/fakenet-ng/bin/fakenet -c /etc/fakenet.ini
+
+# ------------------------------------------------------------ WorkingDirectory
+#
+# **This is not tidiness.** FakeNet resolves relative config paths with
+# `os.path.abspath()`, which calls `os.getcwd()` -- so it inherits a permanent
+# dependency on the directory it was launched from. Started by hand from a
+# checkout that was later removed, its SNI callback died with
+# `FileNotFoundError: [Errno 2]` and every TLS handshake failed with
+# `CALLBACK_FAILED`, while plaintext kept working. Cost most of 2026-09-01.
+#
+# `automation/fakenet.ini` now pins Cert_Dir absolute, so that specific path is
+# already closed. This shuts the class: a stable working directory means no
+# relative path FakeNet resolves can depend on an operator's shell.
+WorkingDirectory=/var/lib/fakenet
+StateDirectory=fakenet
+
+# FTPListener and TFTPListener refuse to start if their root is missing, and
+# `abs_config_path` returning None takes the process with it. Created here so
+# the unit is self-sufficient rather than depending on a runbook step having
+# been run in the right order.
+ExecStartPre=/usr/bin/install -d -m 0755 /var/lib/fakenet/root
+
+Restart=on-failure
+RestartSec=5s
+
+# ------------------------------------------------------------------ KillSignal
+#
+# SIGINT, not systemd's default SIGTERM. FakeNet's `main()` implements exactly
+# one clean shutdown path -- an `except KeyboardInterrupt` that calls
+# `fakenet.stop()` -- and SIGTERM does not reach it, so the listeners never get
+# their `stop()` and the generated certificate directory is never removed.
+#
+# Harmless today because `LinuxFlushIptables: No` means there are no firewall
+# rules waiting to be restored on exit. It would NOT be harmless the day
+# someone sets that to Yes, which is exactly the day nobody reads this file.
+KillSignal=SIGINT
+TimeoutStopSec=20
+
+# Journal, so output survives the shell that started it. Every FakeNet
+# traceback in this project's history arrived as a screenshot because the
+# process was backgrounded with `&`.
+StandardOutput=journal
+StandardError=journal
+
+# KNOWN GAP (DRAFT-057): runs as root, because the listener set binds 21, 25,
+# 69, 80 and 110 -- all privileged -- and writes the FTP and TFTP roots.
+#
+# It is the process that terminates malware traffic and writes files whose
+# names the sample partly chooses (see fakenet.ini's Cert_Dir note), so a
+# dedicated user with AmbientCapabilities=CAP_NET_BIND_SERVICE would be the
+# better posture. Not done because it is unverified and this configuration is
+# evidenced as-is; changing both at once would leave neither trustworthy.
+
+[Install]
+WantedBy=drakvuf-egress.target

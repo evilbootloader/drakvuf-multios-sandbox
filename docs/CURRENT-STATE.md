@@ -359,7 +359,7 @@ accurate as dated evidence.
 
 | Component | Command | Service |
 |---|---|---|
-| `sandboxd` | **source the env file first**, then `python -m sandboxd.daemon` in the foreground — see §1.2 for the exact Dom0 invocation. Exits immediately without `SANDBOXD_API`, `WORKER_TOKEN`, `SANDBOXD_TOTAL_MIB`. | **no systemd unit anywhere in the repo** |
+| `sandboxd` | **source the env file first**, then `python -m sandboxd.daemon` in the foreground — see §1.2 for the exact Dom0 invocation. Exits immediately without `SANDBOXD_API`, `WORKER_TOKEN`, `SANDBOXD_TOTAL_MIB`. | unit: fakenet.service |
 | legacy pipeline | `run_analysis-android.sh`, `run_analysis-ubuntu.sh` | bash, invoked by an operator |
 
 ### Environment read by `sandboxd.daemon`
@@ -372,6 +372,6 @@ accurate as dated evidence.
 |---|---|
 | sandboxd modules | 16 |
 | test files | 16 sandboxd, 15 platform |
-| documents under `docs/` | 34 |
+| documents under `docs/` | 35 |
 
 <!-- END GENERATED -->

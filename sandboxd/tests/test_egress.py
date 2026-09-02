@@ -593,6 +593,90 @@ def test_fakenet_protocol_listeners_precede_the_raw_fallback():
         "confidence of 1 will win the tie and that protocol is unreachable")
 
 
+def _unit(name: str) -> dict[str, str]:
+    """A systemd unit's directives, last-wins, comments stripped.
+
+    Not configparser: unit files allow repeated keys and bare `[Install]`
+    sections that its stricter parsing rejects. Only enough to assert on.
+    """
+    text = (Path(__file__).resolve().parents[2] / "automation" / name).read_text()
+    out = {}
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line.startswith(("#", ";", "[")):
+            continue
+        key, _, value = line.partition("=")
+        out[key.strip()] = value.strip()
+    return out
+
+
+def test_the_fakenet_unit_pins_a_working_directory():
+    """The directive that makes the `getcwd()` crash unreachable.
+
+    FakeNet resolves relative config paths with `os.path.abspath()`, so it
+    inherits a permanent dependency on wherever it was launched from. Started
+    by hand from a checkout that was later removed, its SNI callback died with
+    `[Errno 2]` and every TLS handshake failed with `CALLBACK_FAILED` while
+    plaintext kept working -- 2026-09-01.
+    """
+    unit = _unit("fakenet.service")
+    wd = unit.get("WorkingDirectory")
+
+    assert wd, "fakenet.service sets no WorkingDirectory"
+    assert wd.startswith("/"), f"WorkingDirectory is relative: {wd!r}"
+    assert "drakvuf-multios-sandbox" not in wd, (
+        "WorkingDirectory points into the repository checkout, which is "
+        "exactly the directory whose removal caused the failure this "
+        "directive exists to prevent")
+
+
+def test_the_fakenet_unit_stops_cleanly_and_bounds_its_restarts():
+    """SIGINT because it is FakeNet's only clean shutdown path, and a restart
+    limit because some bind failures never resolve themselves.
+
+    Staying failed is the wanted end state: sandboxd's probe then withholds
+    `simulated`, so a host that cannot serve the mode stops offering it. A
+    restart loop would make the exit flicker in and out of the list instead.
+    """
+    unit = _unit("fakenet.service")
+
+    assert unit.get("KillSignal") == "SIGINT", (
+        "systemd's default SIGTERM does not reach FakeNet's "
+        "`except KeyboardInterrupt`, so its listeners never get stop()")
+    assert unit.get("Restart") == "on-failure"
+    assert unit.get("StartLimitBurst"), "restarts are unbounded"
+
+
+def test_the_egress_target_never_couples_the_modes():
+    """`Wants=`, never `Requires=`.
+
+    `Requires=` would tear the target down when any one responder failed,
+    taking a working mode offline because an unrelated one broke -- tor dying
+    would remove `simulated`, which nothing about tor should be able to do.
+    """
+    target = (Path(__file__).resolve().parents[2]
+              / "automation" / "drakvuf-egress.target").read_text()
+
+    assert "Wants=" in target
+    for line in target.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("#"):
+            continue
+        assert not stripped.startswith("Requires="), (
+            "the egress target uses Requires=, which couples independent "
+            "modes: one responder failing would take the others down")
+
+    # sandboxd must observe responder health, never own it. A target that
+    # started sandboxd would make "the responder is down" and "sandboxd has
+    # not started it" the same condition, and the withhold logic circular.
+    for line in target.splitlines():
+        stripped = line.strip()
+        if stripped.startswith(("Wants=", "Requires=", "After=")):
+            assert "sandboxd" not in stripped, (
+                "the egress target orders itself against sandboxd; sandboxd "
+                "probes these for liveness and must not own their lifecycle")
+
+
 def test_the_proxy_cert_dir_is_absolute():
     """A relative one makes TLS depend on where FakeNet was launched from.
 

@@ -488,12 +488,32 @@ over loopback, with no rules in the path.
 On Dom0:
 
 ```sh
-. /opt/fakenet-ng/bin/activate
-/opt/fakenet-ng/bin/fakenet -c /etc/fakenet.ini &
-sleep 3
+install -m 0644 automation/fakenet.service        /etc/systemd/system/
+install -m 0644 automation/drakvuf-egress.target  /etc/systemd/system/
+systemctl daemon-reload
+systemctl start drakvuf-egress.target
+
+systemctl is-active fakenet tor                          # expect: active, active
 ss -ltnp | grep -E ':(38926|80|25|21|110|6667|1337)\b'   # expect: 7 TCP listeners
 ss -lunp | grep -E ':(38926|5300|69|1337)\b'             # expect: 4 UDP listeners
 ```
+
+**A unit, not `fakenet ... &`.** Three of its directives each close a failure
+this runbook already hit: `WorkingDirectory=` makes the `getcwd()` crash
+unreachable, `Restart=on-failure` stops a bind failure leaving the lab silently
+without a responder, and journal logging means the next traceback is
+`journalctl -u fakenet` rather than a screenshot of a shell that has since
+closed.
+
+The target starts tor as well. It uses `Wants=`, never `Requires=`, so one
+responder failing cannot take the other's mode offline — and a host where the
+whole target failed still analyses samples, because `offline` needs no
+responder at all.
+
+If `systemctl is-active` says `failed`, read `journalctl -u fakenet -n 30`
+before anything else: after five failed starts in two minutes the unit stops
+retrying and stays failed on purpose, which is what makes sandboxd withhold
+`simulated` instead of offering a mode that flickers.
 
 **Count them.** A process that is running is not evidence that a listener is;
 the config is read in full before anything binds, so "Loaded configuration
@@ -912,7 +932,21 @@ Finally, restart `sandboxd` with rules deliberately left behind (kill it with
 Stop FakeNet while a `simulated` job is queued, then let it run:
 
 ```sh
-pkill -f fakenet
+systemctl stop fakenet
+```
+
+**`systemctl stop`, not `pkill`.** Since step 6c runs FakeNet as a unit,
+`pkill` is a SIGTERM systemd reads as a failure, so `Restart=on-failure` brings
+the responder back about five seconds later and the fallback never gets
+exercised. A clean stop stays stopped. (The evidence below was captured with
+`pkill` before the unit existed; what it shows — the run downgrading and saying
+so — does not depend on how the responder was stopped.)
+
+Start it again afterwards, or every later `simulated` job silently runs
+`offline`:
+
+```sh
+systemctl start fakenet
 ```
 
 The run must complete with **no network** rather than with a black hole, and
