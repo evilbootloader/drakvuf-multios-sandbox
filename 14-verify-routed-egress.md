@@ -50,6 +50,156 @@ Have ready:
 - A second terminal on Dom0 for `tcpdump`.
 - The knowledge that **step 6 deliberately breaks a running analysis.**
 
+```
+root@dom0:~/drakvuf-multios-sandbox# sudo lvcreate -V 20G  --thin -n router      vg-root/thinpool
+root@dom0:~/drakvuf-multios-sandbox# sudo mkfs.ext4 -L platform-root /dev/vg-root/router 
+root@dom0:~/drakvuf-multios-sandbox# sudo mkdir -p /mnt/router
+root@dom0:~/drakvuf-multios-sandbox# sudo mount /dev/vg-root/router /mnt/router/
+root@dom0:~/drakvuf-multios-sandbox# sudo debootstrap --arch=amd64 trixie /mnt/router/ https://ftp.caliu.cat/debian/
+
+for d in dev dev/pts proc sys; do sudo mount --bind /$d /mnt/router/$d; done
+sudo chroot /mnt/router /bin/bash
+
+```bash
+echo router > /etc/hostname
+passwd root
+
+apt update
+apt install -y linux-image-amd64 systemd-sysv ifupdown2 openssh-server \
+               ca-certificates locales sudo wireguard
+
+root@dom0:/# sudo e2label /dev/mapper/vg--root-router router-root
+root@dom0:/# sudo blkid /dev/mapper/vg--root-router
+/dev/mapper/vg--root-router: LABEL="router-root" UUID="7a6e767d-ddf9-4948-b2e9-7e7f61696b0c" BLOCK_SIZE="4096" TYPE="ext4"
+root@dom0:/# cat > /etc/fstab <<'EOF'
+LABEL=router-root  /            ext4  errors=remount-ro  0 1
+EOF
+
+root@dom0:/# cat > /etc/network/interfaces <<'EOF'
+auto lo
+iface lo inet loopback
+
+auto eth0
+iface eth0 inet static
+    address 192.168.1.11/24
+    gateway 192.168.1.1
+EOF
+root@dom0:/# cat > /etc/resolv.conf <<'EOF'
+nameserver 1.1.1.1
+nameserver 8.8.8.8
+EOF
+
+exit
+
+sudo mkdir -p /var/lib/xen/router
+root@dom0:~/drakvuf-multios-sandbox# sudo cp /mnt/router/boot/vmlinuz-* /var/lib/xen/router/vmlinuz
+sudo cp /mnt/router/boot/initrd.img-* /var/lib/xen/router/initrd.img
+
+root@dom0:~/drakvuf-multios-sandbox# for d in sys proc dev/pts dev; do sudo umount /mnt/router/$d; done
+sudo umount /mnt/router/
+```
+
+```
+root@dom0:~# cat /root/router.cfg 
+# The platform domain -- Postgres, MinIO and the FastAPI service.
+#
+# **It never executes a sample.** That asymmetry is the whole reason
+# 08-deploy-platform-lxc.md judged an unprivileged container proportionate
+# rather than a VM, and it still governs what may run here: nothing downloaded
+# from an analysis is opened on this domain, not to "check" a pcap, not to test
+# an extracted file. The moment something does, the isolation argument is void.
+#
+# Replaces CT 102, which was an unprivileged LXC on Proxmox until the
+# bare-metal migration erased it. See docs/runbooks/13-platform-domu.md.
+
+# PVH: hardware CPU and memory (VT-x + EPT) with paravirtual devices and NO
+# QEMU device model. Every HVM guest costs a qemu-system process inside Dom0's
+# 8192 MiB, which is memory the analysis clones are competing for; this domain
+# costs none.
+#
+# The analysis guests are deliberately the opposite -- misc/*_sandbox.cfg are
+# HVM because DRAKVUF's altp2m is an HVM/EPT facility, because Windows cannot
+# run PVH, and because a PVH guest has no BIOS or emulated chipset and is
+# conspicuously a VM to any sample that looks. PVH here precisely because this
+# domain does not need to look like a real machine.
+type = "pvh"
+
+arch   = 'x86_64'
+name   = "router"
+memory = 2048
+maxmem = 2048
+
+# Raised 2048 -> 4096 on 2026-08-31, deliberately and at a stated price.
+#
+# **A DomU reservation is not a cgroup cap.** CT 102's 4096 was an LXC
+# `--memory` ceiling with unused memory still available beneath it; this is
+# taken from the clone pool permanently. The cost is one concurrent analysis:
+#
+#     32605 total - 8192 Dom0 - 2048 = 22365 / 4246 per clone = 5 clones
+#     32605 total - 8192 Dom0 - 4096 = 20317 / 4246 per clone = 4 clones
+#
+# 4246 is `memory = 4096` plus DOMAIN_OVERHEAD_MIB, both templates since
+# 2026-08-29. An earlier version of this comment said 2198, which was the
+# figure before that raise -- at 2198 the change would have cost nothing.
+#
+# Runbook 08 recorded that 2048 works; this is headroom, not a fix for an
+# observed fault. Drop back to 2048 if a fifth concurrent clone matters more.
+
+vcpus = 1
+
+# E-cores, 4 of them. Postgres, MinIO and uvicorn are throughput work rather
+# than latency-bound, which is what makes the slow half of the machine the
+# right half for this domain.
+#
+# **Generated from PLATFORM_PCPUS in automation/platform.env** by
+# scripts/gen-xen-configs.py -- edit it there, not here. Disjoint from the
+# clone range (16-27) on purpose: overlapping would put analysis load on the
+# domain that records the analysis.
+cpus = "28-31"
+
+# PVH has no in-guest bootloader, so Xen loads the kernel directly and these
+# files live on DOM0 -- not in the guest's /boot.
+#
+# **They MUST be re-copied after any kernel upgrade inside the guest.** apt
+# updates the guest's /boot and its modules; Xen keeps booting this copy. The
+# domain then comes up on the old kernel against new modules, with no error.
+# The procedure is in runbook 13 F2.
+kernel  = "/var/lib/xen/router/vmlinuz"
+ramdisk = "/var/lib/xen/router/initrd.img"
+
+# net.ifnames=0 forces eth0. Without it systemd's predictable naming renames the
+# Xen netfront device (typically to enX0), /etc/network/interfaces matches
+# nothing, and the domain boots with no address and no error -- visible only
+# from `xl console`. The name cannot be checked in advance: a chroot shares
+# Dom0's network namespace and so has no guest interface to inspect.
+extra = "root=LABEL=router-root ro console=hvc0 net.ifnames=0"
+
+# xvda is the root filesystem; xvdb is /srv/minio, mounted by LABEL from the
+# guest's fstab. Both are thin volumes in vg-root -- the same pool as the golden
+# images and every clone snapshot, so MinIO retention is a capacity question for
+# the whole lab and not only a GDPR one.
+disk = [
+    'phy:/dev/vg-root/router,xvda,w'
+]
+
+# xenbr0, the UPLINK bridge -- NOT xenbr1. This is not an analysis guest and
+# must never sit on the analysis network. 192.168.1.10 is configured inside the
+# guest and is load-bearing: SANDBOXD_API, SANDBOXD_CONSOLE_API and the mTLS
+# certificates all name it.
+vif = [ 'bridge=xenbr0' ]
+
+on_poweroff = "destroy"
+on_reboot   = "restart"
+on_crash    = "destroy"
+
+
+sudo xl create -c /root/router.cfg 
+
+sudo xl console router
+```
+
+
+
 ---
 
 ## Step 1 — the peer
@@ -111,8 +261,26 @@ wg show wg0 latest-handshakes    # expect: a peer, and a recent timestamp
 ```
 
 ```text
-E1 EVIDENCE — paste `wg show wg0` from both ends
+# router domu
+root@router:~# wg-quick up wg0
+[#] ip link add wg0 type wireguard
+[  224.541475] wireguard: WireGuard 1.0.0 loaded. See www.wireguard.com for information.
+[  224.541494] wireguard: Copyright (C) 2015-2019 Jason A. Donenfeld <Jason@zx2c4.com>. All Rights Reserved.
+[#] wg setconf wg0 /dev/fd/63
+[#] ip -4 address add 10.99.0.2/24 dev wg0
+[#] ip link set mtu 1420 up dev wg0
+[#] ip -4 route add 172.16.0.0/12 dev wg0
+root@router:~# wg show wg0 latest-handshakes    # expect: a peer, and a recent timestamp
+p0FQslc027phRlZ3ZMflMeKuBxPArLYI+Z3iMpmJVUk=	0
 
+# DOM0
+root@dom0:~# wg-quick up wg0
+[#] ip link add wg0 type wireguard
+[#] wg setconf wg0 /dev/fd/63
+[#] ip -4 address add 10.99.0.1/24 dev wg0
+[#] ip link set mtu 1420 up dev wg0
+root@dom0:~# wg show wg0 latest-handshakes    # expect: a peer, and a recent timestamp
+HnJbu7v8Gx09h/69mkuYWqGeO9DwYU3UjT9E0dagCDQ=	0
 
 ```
 

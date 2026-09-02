@@ -13,6 +13,21 @@
 # It also cannot prove the automation scripts still *execute* correctly —
 # only that they parse. The Dom0 benign-analysis run remains the execution
 # evidence, and no CI tier substitutes for it.
+#
+# ---------------------------------------------------------------------------
+# ACTION VERSIONS AND THE RUNNER FLOOR
+#
+# checkout@v7, setup-python@v7 and cache@v6 all run on Node 24, and every one
+# of those majors declares the same single breaking change: a **minimum Actions
+# Runner of v2.327.1**. Nothing about their inputs changed for the way this
+# file uses them.
+#
+# That floor is free on GitHub-hosted runners and is NOT free on the
+# self-hosted Dom0 runner Level 2 is planned against: an older runner there
+# fails these actions outright rather than warning. Check `./run.sh --version`
+# on that host before wiring Level 2 up, and treat this comment as the reason
+# a Level 2 job might fail on a workflow that is green here.
+# ---------------------------------------------------------------------------
 
 name: static checks
 
@@ -33,7 +48,7 @@ jobs:
       # re-reading that baseline, not just bumping a number.
       SHELLCHECK_VERSION: "0.11.0"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install the toolchain
         # Installed explicitly rather than relying on what the runner image
@@ -184,7 +199,7 @@ jobs:
   secrets:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           # Full history, not the default depth-1 clone: a shallow checkout
           # would scan one commit and report clean, which is the failure mode
@@ -216,9 +231,9 @@ jobs:
   sandboxd:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           # Dom0's own interpreter, which is where this code runs. Ubuntu
           # noble ships 3.12.
@@ -286,9 +301,9 @@ jobs:
         ports:
           - 5432:5432
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           # The platform runs in its own DomU, not on Dom0, so it is not tied
           # to Dom0's interpreter the way sandboxd is.
@@ -344,7 +359,7 @@ jobs:
           PY
 
       - name: Cache the Playwright browser
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.cache/ms-playwright
           # Keyed on the pinned playwright version, so an upgrade fetches a new
