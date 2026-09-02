@@ -133,8 +133,20 @@ def _waited(rules: list[list[str]]) -> list[list[str]]:
     every one of these needs it; the short version is that an unwaited revoke
     losing a lock race left a clone's egress installed, silently, and looked
     exactly like the ordinary "there was nothing to remove" failure.
+
+    **iptables only, and asserted.** `-w` is an xtables flag; `ip -w 5 route
+    add ...` is not a command. The routing builders pass their `ip` commands
+    around this function rather than through it, and this guard is what stops a
+    later edit quietly putting one back inside and shipping an argv that cannot
+    run.
     """
     wait = str(config.IPTABLES_WAIT_SECONDS)
+    for argv in rules:
+        if argv[0] != "iptables":
+            raise ValueError(
+                f"_waited() adds an xtables lock flag and only iptables takes "
+                f"one; got {argv[0]!r}. Emit it outside _waited()."
+            )
     return [[argv[0], "-w", wait, *argv[1:]] for argv in rules]
 
 
@@ -181,6 +193,41 @@ def in_chain(vlan: int) -> str:
     return f"DRAKVUF_EGRESS_IN_V{vlan}"
 
 
+#: Offset for a VLAN's own routing table and for the `ip rule` preference that
+#: selects it.
+#:
+#: **1000 and not 100.** VLANs run 1..254, so `100 + vlan` puts vlan 153, 154
+#: and 155 on tables 253, 254 and 255 -- `default`, `main` and `local`. Writing
+#: a clone's default route into `main` would change Dom0's own routing, and it
+#: would happen only on a host running enough clones to reach vlan 153, which
+#: is the worst possible day to find out.
+_ROUTE_TABLE_BASE = 1000
+
+
+def route_table(vlan: int) -> str:
+    """The routing table holding this VLAN's default route, as `ip` wants it.
+
+    A table per VLAN rather than one shared one: two clones may be routed out
+    of different tunnels at the same time, and a shared table could hold only
+    one default route between them.
+    """
+    _vlan_ok(vlan)
+    return str(_ROUTE_TABLE_BASE + vlan)
+
+
+def route_pref(vlan: int) -> str:
+    """The `ip rule` preference, deterministic so teardown can name it.
+
+    **`ip rule add` is not idempotent and has no `-N` equivalent.** Adding the
+    same selector twice stacks two rules with different automatic preferences,
+    and `ip rule del from <net> table <n>` then removes whichever the kernel
+    matches first -- so a leftover from a dead clone survives teardown and
+    silently keeps routing the next clone on that VLAN into a tunnel nobody
+    chose. Naming the preference makes both the add and the delete exact.
+    """
+    return route_table(vlan)
+
+
 #: Filled by network-setup.sh, jumped to from DRAKVUF_ISOLATION, POSTROUTING,
 #: PREROUTING and DRAKVUF_INPUT respectively.
 PARENT_FILTER = "DRAKVUF_EGRESS"
@@ -212,6 +259,20 @@ def vlan_subnet(vlan: int, subnet: str = config.SUBNET_PREFIX) -> str:
 # from `direct` only in which interface it names, which is why the builder is
 # parameterised on `exit_.interface` rather than switched on the mode.
 _FORWARDING_MODES = frozenset({EgressMode.DIRECT, EgressMode.ROUTED})
+
+#: Forwarding modes that also need a route, not just a permit.
+#:
+#: iptables decides whether a packet MAY leave by an interface; it does not
+#: decide that it WILL. The clone's packets are routed by the main table, whose
+#: default route is the uplink, so without a policy route the kernel picks
+#: `xenbr0`, the `-o wg0` ACCEPT does not match, and the terminal DROP fires.
+#: `routed` failed closed one hundred percent of the time until this existed --
+#: safe, and easy to misread as "routed is broken" rather than "routed is half
+#: built".
+#:
+#: `direct` is deliberately absent: the uplink already IS the default route, so
+#: a table saying so again would be a second copy of a fact that can drift.
+_POLICY_ROUTED_MODES = frozenset({EgressMode.ROUTED})
 
 #: Modes that rewrite the destination to the clone's own gateway instead of
 #: forwarding. They share a shape -- rules in PREROUTING and INPUT, none in
@@ -539,7 +600,28 @@ def argv_apply(
     source = vlan_subnet(vlan, subnet)
     out = exit_.interface
 
-    return _waited([
+    # A permit is not a route. iptables decides whether a packet MAY leave by
+    # `out`; the main table decides where it actually goes, and its default
+    # route is the uplink. So a mode whose exit is not the default route needs
+    # a table of its own and a rule selecting it, or the kernel sends the
+    # packet at `xenbr0`, the `-o <tunnel>` ACCEPT never matches, and the
+    # terminal DROP fires.
+    #
+    # Route first, rule second. Between the two commands the table exists but
+    # nothing selects it, which is inert; the reverse order would briefly point
+    # a rule at an empty table, and while that also falls through safely it
+    # means the window is one where routing depends on a rule below rather than
+    # on nothing at all.
+    routing: list[list[str]] = []
+    if exit_.mode in _POLICY_ROUTED_MODES:
+        table = route_table(vlan)
+        routing = [
+            ["ip", "route", "add", "default", "dev", out, "table", table],
+            ["ip", "rule", "add", "from", source, "table", table,
+             "pref", route_pref(vlan)],
+        ]
+
+    return [*routing, *_waited([
         # Created fresh. `-N` fails if it exists, which is the wanted
         # behaviour: a chain left over from a previous clone on this VLAN
         # means the sweep or the teardown did not run, and quietly reusing it
@@ -577,7 +659,7 @@ def argv_apply(
         ["iptables", "-t", "nat", "-A", PARENT_NAT, "-s", source,
          "-j", nchain],
         ["iptables", "-A", PARENT_FILTER, "-i", iface, "-j", fchain],
-    ])
+    ])]
 
 
 def _argv_apply_tor(vlan: int, bridge: str) -> list[list[str]]:
@@ -738,8 +820,22 @@ def argv_revoke(
     iface = vlan_interface(vlan, bridge)
     source = vlan_subnet(vlan, subnet)
 
-    return _waited([
-        # All four disconnections first, whichever mode actually ran. A
+    return [
+        # The policy route goes first, because deleting the rule is what
+        # actually cuts this clone's network: without it the kernel falls back
+        # to the main table, aims at the uplink, and the `-o <tunnel>` ACCEPT
+        # below stops matching. Everything after this is bookkeeping on a clone
+        # that is already isolated.
+        #
+        # Attempted for every mode, like the iptables deletes below. Only
+        # `routed` installs these, and on any other teardown both commands fail
+        # because there is nothing to remove -- which is why this function is
+        # documented as unchecked.
+        ["ip", "rule", "del", "pref", route_pref(vlan)],
+        ["ip", "route", "flush", "table", route_table(vlan)],
+
+        *_waited([
+        # All four disconnections next, whichever mode actually ran. A
         # forwarding job never had a PRE chain and a tor job never had a NAT
         # one; attempting both is how this stays mode-agnostic, and the two
         # that were never there fail harmlessly.
@@ -756,7 +852,8 @@ def argv_revoke(
         ["iptables", "-t", "nat", "-X", pchain],
         ["iptables", "-F", ichain],
         ["iptables", "-X", ichain],
-    ])
+        ]),
+    ]
 
 
 def argv_probe_chains(

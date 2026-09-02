@@ -151,18 +151,28 @@ def test_revoke_reverses_apply():
     """
     rules = argv_revoke(3)
 
-    # EVERY disconnection comes first -- one per table a mode might have used
+    # The policy route goes before everything, because deleting the `ip rule`
+    # is what actually cuts a routed clone's network: the kernel falls back to
+    # the main table, aims at the uplink, and the `-o <tunnel>` ACCEPT stops
+    # matching. Everything after it is bookkeeping on an isolated clone.
+    assert rules[0][:3] == ["ip", "rule", "del"]
+    assert rules[1][:3] == ["ip", "route", "flush"]
+
+    iptables = [a for a in rules if a[0] == "iptables"]
+
+    # EVERY disconnection comes next -- one per table a mode might have used
     # -- so the clone loses its network at the first commands rather than at
     # the last, whichever mode it was actually running.
-    disconnects = [a for a in rules if _op(a) == "-D"]
+    disconnects = [a for a in iptables if _op(a) == "-D"]
     assert len(disconnects) == 4
-    assert rules[:4] == disconnects
-    assert PARENT_FILTER in rules[0]
-    assert PARENT_NAT in rules[1]
+    assert iptables[:4] == disconnects
+    assert PARENT_FILTER in iptables[0]
+    assert PARENT_NAT in iptables[1]
 
     # Everything after them empties and removes; nothing deletes a chain
     # before it has been unjumped from.
-    assert all(_op(a) in ("-F", "-X") for a in rules[4:])
+    assert all(_op(a) in ("-F", "-X") for a in iptables[4:])
+    rules = iptables
     for chain in (filter_chain(3), nat_chain(3)):
         flush = next(i for i, a in enumerate(rules)
                      if _op(a) == "-F" and chain in a)
@@ -179,10 +189,19 @@ def test_revoke_needs_no_knowledge_of_the_mode():
     knowledge, so cleanup is total by construction rather than by bookkeeping.
     """
     assert argv_revoke(3) == argv_revoke(3)
-    # Same call signature whether the job ran direct, routed or offline.
+
+    # Same call signature whether the job ran direct, routed or offline, and
+    # the same commands come back. The routing teardown is attempted for every
+    # mode even though only `routed` installs it: teardown is unchecked by
+    # necessity, so "there was nothing to remove" is the ordinary case rather
+    # than an error, and attempting it unconditionally is what keeps this
+    # function from needing to know what ran.
     for exit_ in (DIRECT, ROUTED, OFFLINE):
         argv_apply(3, exit_) if exit_ is not OFFLINE else None
-        assert argv_revoke(3)[0][_op_index(argv_revoke(3)[0]) + 1] == PARENT_FILTER
+        rules = argv_revoke(3)
+        assert rules[0][:3] == ["ip", "rule", "del"]
+        first_iptables = next(a for a in rules if a[0] == "iptables")
+        assert first_iptables[_op_index(first_iptables) + 1] == PARENT_FILTER
 
 
 # --- simulated (Phase 3) --------------------------------------------------
@@ -433,9 +452,19 @@ def test_every_rule_waits_for_the_xtables_lock():
     assert every, "no rules to check -- the builders returned nothing"
 
     for argv in every:
-        assert argv[0] == "iptables", argv
+        # `ip` takes no xtables lock and `ip -w 5 route add ...` is not a
+        # command, so the routing builders emit outside `_waited`. Nothing
+        # else may: a third tool appearing here means a builder grew a
+        # dependency this assertion was never told about.
+        assert argv[0] in ("iptables", "ip"), argv
+        if argv[0] != "iptables":
+            continue
         assert argv[1] == "-w", f"unwaited iptables call: {argv}"
         assert argv[2] == str(config.IPTABLES_WAIT_SECONDS), argv
+
+    assert any(a[0] == "ip" for a in every), (
+        "no routing commands at all -- a routed clone would be permitted out "
+        "of the tunnel and still routed at the uplink")
 
 
 def test_the_wait_is_bounded():
@@ -956,6 +985,74 @@ def test_a_routed_exit_with_a_dead_tunnel_is_withheld():
     names = [e.name for e in available_exits(exits=exits,
                                              tunnel=lambda iface: False)]
     assert names == ["offline"]
+
+
+def test_no_vlan_maps_onto_a_reserved_routing_table():
+    """The trap `100 + vlan` walks into, checked across the whole range.
+
+    VLANs run 1..254, so a base of 100 puts vlan 153, 154 and 155 on tables
+    253, 254 and 255 -- `default`, `main` and `local`. Writing a clone's
+    default route into `main` would change Dom0's own routing, and only on a
+    host running enough clones to reach vlan 153.
+    """
+    from sandboxd.egress import route_table
+    from sandboxd.naming import MAX_VLAN, MIN_VLAN
+
+    reserved = {"253", "254", "255", "0"}
+    seen = set()
+    for vlan in range(MIN_VLAN, MAX_VLAN + 1):
+        table = route_table(vlan)
+        assert table not in reserved, (
+            f"vlan {vlan} maps to routing table {table}, which the kernel "
+            f"reserves (local/main/default)")
+        assert table not in seen, f"vlan {vlan} collides with another VLAN"
+        seen.add(table)
+
+
+def test_routed_installs_a_policy_route_and_direct_does_not():
+    """iptables permits; it does not route.
+
+    Without a table and a rule selecting it, the clone's packets are routed by
+    the main table, aimed at the uplink, and dropped by the `-o <tunnel>`
+    ACCEPT failing to match -- fail-closed, and indistinguishable from
+    "routed is broken" unless you know to look.
+
+    `direct` needs none of it: the uplink already IS the default route.
+    """
+    routed = [a for a in argv_apply(3, ROUTED) if a[0] == "ip"]
+    assert routed == [
+        ["ip", "route", "add", "default", "dev", "wg0", "table", "1003"],
+        ["ip", "rule", "add", "from", "172.16.3.0/24", "table", "1003",
+         "pref", "1003"],
+    ]
+
+    assert not [a for a in argv_apply(3, DIRECT) if a[0] == "ip"], (
+        "direct installed a policy route; the uplink is already the default "
+        "route and a second copy of that fact can drift from it")
+
+    for exit_ in (TOR, SIMULATED):
+        assert not [a for a in argv_apply(3, exit_) if a[0] == "ip"], (
+            f"{exit_.mode.value} installed a policy route; redirect modes "
+            f"deliver locally and never forward")
+
+
+def test_the_route_rule_names_its_preference():
+    """`ip rule add` is not idempotent and has no `-N` equivalent.
+
+    Without an explicit preference, two adds stack under different automatic
+    ones and `ip rule del from <net> table <n>` removes whichever matches
+    first -- so a leftover from a dead clone survives teardown and keeps
+    routing the next clone on that VLAN into a tunnel nobody chose.
+    """
+    add = next(a for a in argv_apply(7, ROUTED)
+               if a[:3] == ["ip", "rule", "add"])
+    delete = next(a for a in argv_revoke(7)
+                  if a[:3] == ["ip", "rule", "del"])
+
+    assert "pref" in add, "the rule is added without a preference"
+    pref = add[add.index("pref") + 1]
+    assert delete == ["ip", "rule", "del", "pref", pref], (
+        "teardown does not delete the exact preference it added")
 
 
 def test_only_the_redirect_modes_downgrade_on_a_dead_dependency():
