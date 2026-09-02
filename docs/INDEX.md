@@ -25,9 +25,9 @@ It maps **headings, not content**: a fact stated in the middle of a section is n
   - `docs/CURRENT-STATE.md:312` — [2b. Superseded for other reasons](CURRENT-STATE.md#2b-superseded-for-other-reasons)
 - `docs/CURRENT-STATE.md:332` — [3. Derived from the repository](CURRENT-STATE.md#3-derived-from-the-repository)
     - `docs/CURRENT-STATE.md:338` — [Runbooks, oldest to newest](CURRENT-STATE.md#runbooks-oldest-to-newest)
-    - `docs/CURRENT-STATE.md:357` — [How components are started](CURRENT-STATE.md#how-components-are-started)
-    - `docs/CURRENT-STATE.md:364` — [Environment read by `sandboxd.daemon`](CURRENT-STATE.md#environment-read-by-sandboxddaemon)
-    - `docs/CURRENT-STATE.md:368` — [Repository size](CURRENT-STATE.md#repository-size)
+    - `docs/CURRENT-STATE.md:358` — [How components are started](CURRENT-STATE.md#how-components-are-started)
+    - `docs/CURRENT-STATE.md:365` — [Environment read by `sandboxd.daemon`](CURRENT-STATE.md#environment-read-by-sandboxddaemon)
+    - `docs/CURRENT-STATE.md:369` — [Repository size](CURRENT-STATE.md#repository-size)
 
 ## `docs/TROUBLESHOOTING.md`
 
@@ -1139,6 +1139,31 @@ It maps **headings, not content**: a fact stated in the middle of a section is n
   - `docs/runbooks/12-baremetal-trial.md:2087` — [H6. Two changes this justifies, neither yet made](runbooks/12-baremetal-trial.md#h6-two-changes-this-justifies-neither-yet-made)
 - `docs/runbooks/12-baremetal-trial.md:2107` — [Decision summary](runbooks/12-baremetal-trial.md#decision-summary)
 
+## `docs/runbooks/13-verify-egress-modes.md`
+
+- `docs/runbooks/13-verify-egress-modes.md:1` — [Runbook — per-job egress modes: offline, tor, simulated (DRAFT-057)](runbooks/13-verify-egress-modes.md#runbook--per-job-egress-modes-offline-tor-simulated-draft-057)
+  - `docs/runbooks/13-verify-egress-modes.md:34` — [Before you start](runbooks/13-verify-egress-modes.md#before-you-start)
+  - `docs/runbooks/13-verify-egress-modes.md:53` — [Step 1 — confirm what the host currently has](runbooks/13-verify-egress-modes.md#step-1--confirm-what-the-host-currently-has)
+  - `docs/runbooks/13-verify-egress-modes.md:90` — [Step 2 — deploy the new chains](runbooks/13-verify-egress-modes.md#step-2--deploy-the-new-chains)
+  - `docs/runbooks/13-verify-egress-modes.md:207` — [Step 3 — `offline` really is offline](runbooks/13-verify-egress-modes.md#step-3--offline-really-is-offline)
+  - `docs/runbooks/13-verify-egress-modes.md:272` — [Step 4 — install tor and offer the mode](runbooks/13-verify-egress-modes.md#step-4--install-tor-and-offer-the-mode)
+  - `docs/runbooks/13-verify-egress-modes.md:312` — [Step 5 — a sample really leaves through Tor](runbooks/13-verify-egress-modes.md#step-5--a-sample-really-leaves-through-tor)
+    - `docs/runbooks/13-verify-egress-modes.md:338` — [5a — the limitation, proven rather than asserted](runbooks/13-verify-egress-modes.md#5a--the-limitation-proven-rather-than-asserted)
+  - `docs/runbooks/13-verify-egress-modes.md:380` — [Step 6 — install FakeNet-NG and offer `simulated`](runbooks/13-verify-egress-modes.md#step-6--install-fakenet-ng-and-offer-simulated)
+    - `docs/runbooks/13-verify-egress-modes.md:385` — [6a — install](runbooks/13-verify-egress-modes.md#6a--install)
+    - `docs/runbooks/13-verify-egress-modes.md:424` — [6b — patch it, because `DivertTraffic: No` is untested upstream](runbooks/13-verify-egress-modes.md#6b--patch-it-because-diverttraffic-no-is-untested-upstream)
+    - `docs/runbooks/13-verify-egress-modes.md:471` — [6c — start it and confirm it bound what it claims](runbooks/13-verify-egress-modes.md#6c--start-it-and-confirm-it-bound-what-it-claims)
+    - `docs/runbooks/13-verify-egress-modes.md:623` — [6d — offer the mode](runbooks/13-verify-egress-modes.md#6d--offer-the-mode)
+  - `docs/runbooks/13-verify-egress-modes.md:657` — [Step 7 — a sample gets a fake Internet, and nothing leaves](runbooks/13-verify-egress-modes.md#step-7--a-sample-gets-a-fake-internet-and-nothing-leaves)
+    - `docs/runbooks/13-verify-egress-modes.md:677` — [7a — HTTPS is refused, and the report must say so](runbooks/13-verify-egress-modes.md#7a--https-is-refused-and-the-report-must-say-so)
+    - `docs/runbooks/13-verify-egress-modes.md:738` — [7b — nothing left](runbooks/13-verify-egress-modes.md#7b--nothing-left)
+  - `docs/runbooks/13-verify-egress-modes.md:761` — [Step 8 — the Ubuntu regression. This gates the merge.](runbooks/13-verify-egress-modes.md#step-8--the-ubuntu-regression-this-gates-the-merge)
+  - `docs/runbooks/13-verify-egress-modes.md:792` — [Step 8a — the `direct` grant does not outlive step 8](runbooks/13-verify-egress-modes.md#step-8a--the-direct-grant-does-not-outlive-step-8)
+  - `docs/runbooks/13-verify-egress-modes.md:842` — [Step 9 — modes do not leak between runs](runbooks/13-verify-egress-modes.md#step-9--modes-do-not-leak-between-runs)
+  - `docs/runbooks/13-verify-egress-modes.md:910` — [Step 10 — the fallback is honest](runbooks/13-verify-egress-modes.md#step-10--the-fallback-is-honest)
+  - `docs/runbooks/13-verify-egress-modes.md:936` — [What this discharged, and what it did not](runbooks/13-verify-egress-modes.md#what-this-discharged-and-what-it-did-not)
+    - `docs/runbooks/13-verify-egress-modes.md:947` — [Findings worth carrying forward](runbooks/13-verify-egress-modes.md#findings-worth-carrying-forward)
+
 ## `docs/workflow-ci.md`
 
 - `docs/workflow-ci.md:1` — [CI / self-hosted runner design](workflow-ci.md#ci--self-hosted-runner-design)
@@ -1171,4 +1196,4 @@ It maps **headings, not content**: a fact stated in the middle of a section is n
 
 ---
 
-*1065 headings across 32 documents.*
+*1087 headings across 33 documents.*

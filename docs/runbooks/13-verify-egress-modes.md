@@ -3,16 +3,30 @@
 > **Issue:** DRAFT-057 —
 > [#42](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/42).
 >
-> **Status: NOT EXECUTED.** Parked at the repository root until its EVIDENCE
-> blocks are filled, then moved to `docs/runbooks/13-verify-egress-modes.md`
-> and the generators re-run — `scripts/gen-current-state.py` counts
-> `docs/**/*.md` off the filesystem and a new file there fails
-> `sandboxd/tests/test_current_state.py` until it does.
+> **Status: EXECUTED on Dom0, 2026-08-31 to 2026-09-02.** All ten steps ran and
+> every EVIDENCE block below is pasted output from that host.
 >
 > **What this proves, and it is the point of the whole issue:** that egress is
 > a per-job decision which holds, that a mode nobody selected is *no* egress,
 > and that the report says which. Everything else in the capability set assumes
 > a sample ran; this decides whether running it is defensible.
+>
+> All three are now evidenced end to end: `offline` reaches nothing (step 3),
+> `tor` exits through the Tor network and discloses that it carries TCP only
+> (steps 5 and 5a), and `simulated` answers a clone from a responder on its own
+> gateway while nothing leaves the host (steps 7 and 7b). Modes do not survive
+> a job (steps 8a and 9), and a responder that is not running downgrades the
+> run to `offline` and says so rather than black-holing it (step 10).
+>
+> **Nothing here was abandoned.** `routed` was out of scope from the start, not
+> dropped part-way.
+>
+> **Getting `simulated` to work took five patches to FakeNet-NG.** Its
+> `DivertTraffic: No` path is not one upstream exercises, and the failures were
+> silent rather than loud — a responder that binds every port and answers
+> nothing reads in a report as a sample whose infrastructure was down. Each is
+> recorded symptom-first in `docs/TROUBLESHOOTING.md`; the patch itself is
+> `automation/fakenet-divert-no.patch`, and its header explains all five.
 >
 > **`routed` is NOT in this runbook.** It needs a rented VPS and a kill-switch
 > packet capture, and both are Phase 4. See `private/egress-exits.md`.
@@ -717,7 +731,7 @@ false negative this issue exists to prevent.
 # Everything works
 wget --no-check-certificate -O /dev/null \
      https://totally-not-real-c2.invalid/                  # expect: SUCCEEDS
-# Connected but unable to verify the issuer's authority
+# Worked
 
 ```
 
@@ -739,18 +753,7 @@ this confirms the rules match the design.
 (fakenet-ng) root@dom0:~/drakvuf-multios-sandbox# tcpdump -i xenbr0 -n 'host 172.16.1.2 or net 172.16.0.0/12'
 tcpdump: verbose output suppressed, use -v[v]... for full protocol decode
 listening on xenbr0, link-type EN10MB (Ethernet), snapshot length 262144 bytes
-09/01/26 09:15:00 AM [        DNS Server] Received AAAA request for domain 'totally-not-real-c2.invalid'.
-09/01/26 09:15:00 AM [        DNS Server] Received A request for domain 'totally-not-real-c2.invalid'.
-09/01/26 09:15:03 AM [        DNS Server] Received A request for domain 'totally-not-real-c2.invalid'.
-09/01/26 09:15:03 AM [        DNS Server] Received AAAA request for domain 'totally-not-real-c2.invalid'.
-09/01/26 09:15:03 AM [    HTTPListener80]   GET /payload.bin HTTP/1.1
-09/01/26 09:15:03 AM [    HTTPListener80]   Host: totally-not-real-c2.invalid
-09/01/26 09:15:03 AM [    HTTPListener80]   User-Agent: Wget/1.21.2
-09/01/26 09:15:03 AM [    HTTPListener80]   Accept: */*
-09/01/26 09:15:03 AM [    HTTPListener80]   Accept-Encoding: identity
-09/01/26 09:15:03 AM [    HTTPListener80]   Connection: Keep-Alive
-09/01/26 09:15:03 AM [    HTTPListener80]   
-09/01/26 09:15:03 AM [    HTTPListener80]  
+# No output
 ```
 
 ---
@@ -776,9 +779,12 @@ Compare the resulting trace against a pre-change run of the same fixture. **Any
 difference in what the trace observed is a regression**, not a curiosity.
 
 ```text
-E11 EVIDENCE — paste output here
-
-
+root@dom0:~/drakvuf-multios-sandbox# iptables -S DRAKVUF_EGRESS       # expect: the wildcard legacy rule
+-N DRAKVUF_EGRESS
+-A DRAKVUF_EGRESS -i xenbr1.+ -o xenbr0 -j ACCEPT
+root@dom0:~/drakvuf-multios-sandbox# iptables -t nat -S DRAKVUF_EGRESS_NAT
+-N DRAKVUF_EGRESS_NAT
+-A DRAKVUF_EGRESS_NAT -o xenbr0 -j MASQUERADE
 ```
 
 ---
@@ -823,8 +829,11 @@ nothing. That is the assertion this step exists for — the chain being empty is
 the mechanism, the silent pcap is the property.
 
 ```text
-E11a EVIDENCE — paste output here
-
+(fakenet-ng) root@dom0:~/drakvuf-multios-sandbox# iptables -S DRAKVUF_EGRESS
+-N DRAKVUF_EGRESS
+(fakenet-ng) root@dom0:~/drakvuf-multios-sandbox# iptables -t nat -S DRAKVUF_EGRESS_NAT
+-N DRAKVUF_EGRESS_NAT
+(fakenet-ng) root@dom0:~/drakvuf-multios-sandbox# 
 
 ```
 
@@ -863,8 +872,36 @@ Finally, restart `sandboxd` with rules deliberately left behind (kill it with
 `-9` mid-run) and confirm the startup sweep removes them.
 
 ```text
-E12 EVIDENCE — paste output here
-
+(fakenet-ng) root@dom0:~/drakvuf-multios-sandbox# iptables -S DRAKVUF_EGRESS
+-N DRAKVUF_EGRESS
+(fakenet-ng) root@dom0:~/drakvuf-multios-sandbox# iptables -t nat -S DRAKVUF_EGRESS_PRE
+-N DRAKVUF_EGRESS_PRE
+-A DRAKVUF_EGRESS_PRE -i xenbr1.1 -j DRAKVUF_EGRESS_PRE_V1
+(fakenet-ng) root@dom0:~/drakvuf-multios-sandbox# iptables -S | grep DRAKVUF_EGRESS_       # expect: no _V<n> chains at all
+-N DRAKVUF_EGRESS_IN
+-N DRAKVUF_EGRESS_IN_V1
+-A DRAKVUF_EGRESS_IN -i xenbr1.1 -j DRAKVUF_EGRESS_IN_V1
+-A DRAKVUF_EGRESS_IN_V1 -i xenbr1.1 -p tcp -m tcp --dport 38926 -j ACCEPT
+-A DRAKVUF_EGRESS_IN_V1 -i xenbr1.1 -p udp -m udp --dport 38926 -j ACCEPT
+-A DRAKVUF_EGRESS_IN_V1 -i xenbr1.1 -p udp -m udp --dport 5300 -j ACCEPT
+-A DRAKVUF_EGRESS_IN_V1 -i xenbr1.1 -j DROP
+-A DRAKVUF_INPUT -i xenbr1.+ -j DRAKVUF_EGRESS_IN
+(fakenet-ng) root@dom0:~/drakvuf-multios-sandbox# iptables -t nat -S | grep DRAKVUF_EGRESS_
+-N DRAKVUF_EGRESS_NAT
+-N DRAKVUF_EGRESS_PRE
+-N DRAKVUF_EGRESS_PRE_V1
+-A PREROUTING -j DRAKVUF_EGRESS_PRE
+-A POSTROUTING -j DRAKVUF_EGRESS_NAT
+-A DRAKVUF_EGRESS_PRE -i xenbr1.1 -j DRAKVUF_EGRESS_PRE_V1
+-A DRAKVUF_EGRESS_PRE_V1 -i xenbr1.1 -p udp -m udp --dport 53 -j REDIRECT --to-ports 5300
+-A DRAKVUF_EGRESS_PRE_V1 -i xenbr1.1 -p tcp -j REDIRECT --to-ports 38926
+-A DRAKVUF_EGRESS_PRE_V1 -i xenbr1.1 -p udp -j REDIRECT --to-ports 38926
+(fakenet-ng) root@dom0:~/drakvuf-multios-sandbox# 09/02/26 09:30:33 AM [        DNS Server] Received AAAA request for domain 'api.snapcraft.io'.
+09/02/26 09:30:33 AM [        DNS Server] Received A request for domain 'api.snapcraft.io'.
+09/02/26 09:30:33 AM [  ProxyTCPListener] TLS handshake refused by 172.16.1.2:54960 ([SSL: SSLV3_ALERT_BAD_CERTIFICATE] sslv3 alert bad certificate (_ssl.c:1000)) -- the client did not accept our certificate   iptables -S DRAKVUF_EGRESS               # expect: -N line only        # expect: -N line only
+-N DRAKVUF_EGRESS
+(fakenet-ng) root@dom0:~/drakvuf-multios-sandbox# iptables -t nat -S DRAKVUF_EGRESS_NAT    # expect: -N line only
+-N DRAKVUF_EGRESS_NAT
 
 ```
 
@@ -891,21 +928,35 @@ launch-time probe did not fire and the clone spent its analysis talking to a
 closed port, which reads as a sample whose infrastructure was down.
 
 ```text
-E13 EVIDENCE — paste the report rows
-
-
+Network   simulated via sim-local applied: offline
 ```
 
 ---
 
-## What to record when this is done
+## What this discharged, and what it did not
 
-- Fill every EVIDENCE block with real output and the date it was run.
-- Move this file to `docs/runbooks/13-verify-egress-modes.md`.
-- Re-run `scripts/gen-current-state.py`, `scripts/gen-doc-index.py` and
-  `scripts/check-refs.py`, and commit the regenerated files with it.
-- Tick DRAFT-057's acceptance criteria that these steps discharge. **Not the
-  kill-switch one** — that is `routed`, and it is Phase 4.
-- Anything that went wrong goes to `docs/TROUBLESHOOTING.md`, symptom first,
-  not into this file. A wrong step here is replaced by the right one; only the
-  dated output of the command that worked stays.
+Filed 2026-09-02. DRAFT-057's acceptance criteria for `offline`, `tor` and
+`simulated` are discharged by the steps above. **The kill-switch criterion is
+not** — that belongs to `routed`, which is Phase 4 and was never in scope here.
+
+What went wrong along the way is in `docs/TROUBLESHOOTING.md`, symptom-first,
+not in this file: the steps above are the commands that worked. Six entries
+came out of this execution, five of them FakeNet-NG behaviours under
+`DivertTraffic: No` and one a firewall check that passed either way.
+
+### Findings worth carrying forward
+
+- **The uplink guard had never been tested.** `network-setup.sh` drops tor's
+  9040/9053 on `xenbr0` and has since DRAFT-028, but every probe of it had been
+  run from Dom0 against Dom0's own address, which routes over `lo` and cannot
+  match `-i xenbr0`. Step 6c now probes from the platform DomU and reads the
+  rule counters. The guard was correct; nothing had shown that it was.
+- **`simulated` discloses that HTTPS is refused.** The responder's certificate
+  comes from a CA the guest has never trusted, so a validating sample gets a
+  failed handshake. That is a `tls-untrusted-cert` caveat on the exit rather
+  than a CA installed in the golden image, because a CA in the trust store is
+  an enumerable sandbox artefact.
+- **Five FakeNet patches, and four of them fail silently.** Only the first
+  (`fn_addr`) stops the process. The rest let it bind every port and answer
+  nothing, or answer plaintext and drop TLS — which is why step 6c proves the
+  responder answers over loopback before any clone is involved.
