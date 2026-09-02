@@ -619,7 +619,7 @@ It maps **headings, not content**: a fact stated in the middle of a section is n
   - `docs/checklists/ubuntu.md:143` — [Known issues](checklists/ubuntu.md#known-issues)
   - `docs/checklists/ubuntu.md:275` — [Planned M1 work](checklists/ubuntu.md#planned-m1-work)
     - `docs/checklists/ubuntu.md:299` — [Static-check gate — what passing actually covers (DRAFT-031, 2026-08-11)](checklists/ubuntu.md#static-check-gate--what-passing-actually-covers-draft-031-2026-08-11)
-    - `docs/checklists/ubuntu.md:367` — [Evidence and notes](checklists/ubuntu.md#evidence-and-notes)
+    - `docs/checklists/ubuntu.md:379` — [Evidence and notes](checklists/ubuntu.md#evidence-and-notes)
 
 ## `docs/checklists/windows.md`
 

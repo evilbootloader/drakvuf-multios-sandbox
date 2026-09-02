@@ -27,6 +27,11 @@ permissions:
 jobs:
   static:
     runs-on: ubuntu-latest
+    env:
+      # The version `.shellcheckrc` was baselined against, named once so the
+      # install and the assertion below cannot disagree. Changing it means
+      # re-reading that baseline, not just bumping a number.
+      SHELLCHECK_VERSION: "0.11.0"
     steps:
       - uses: actions/checkout@v4
 
@@ -36,21 +41,54 @@ jobs:
         # change without notice, and Level 2 will run on a self-hosted Dom0
         # runner whose image is ours — this step is what makes the two
         # tiers agree on what "the static checks" means.
+        #
+        # **shellcheck is DOWNLOADED AT A PINNED VERSION, not apt-installed,
+        # and that is what this job was missing.** `apt-get install shellcheck`
+        # is precisely the "whatever the image ships" this comment claims not
+        # to do: ubuntu-24.04 carries 0.9.0, while `.shellcheckrc` was
+        # baselined against 0.11.0 and says so.
+        #
+        # The cost was six weeks of a permanently red gate. 0.9.0 raises SC2015
+        # on network-setup.sh's `[ $# -ge 1 ] && [ $# -le 2 ] || fail ...`,
+        # which 0.11.0 does not — the idiom is correct there, because the
+        # middle term is a test rather than a command with side effects, and
+        # the newer release narrowed the heuristic. Nothing was wrong with the
+        # script.
+        #
+        # Worse than one false finding: the step's failure short-circuits
+        # `perl -c`, the shebang convention check and the <USER> guard, so a
+        # lint disagreement silently disabled three unrelated gates.
+        #
+        # Found 2026-09-02. The old comment anticipated a NEWER shellcheck
+        # drifting; the one that actually bit was older.
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends shellcheck dash perl
+          sudo apt-get install -y --no-install-recommends dash perl xz-utils
+          curl -fsSL \
+            "https://github.com/koalaman/shellcheck/releases/download/v${SHELLCHECK_VERSION}/shellcheck-v${SHELLCHECK_VERSION}.linux.x86_64.tar.xz" \
+            | tar -xJ -C /tmp
+          sudo install -m 0755 \
+            "/tmp/shellcheck-v${SHELLCHECK_VERSION}/shellcheck" \
+            /usr/local/bin/shellcheck
 
       - name: Record toolchain versions
-        # Recorded rather than pinned. The .shellcheckrc baseline was
-        # established against shellcheck 0.11.0, and shellcheck's finding
-        # set genuinely differs between releases — a newer one can emit a
-        # code the baseline does not disable and turn this job red on
-        # unmodified code. When that happens, this output is what makes it
-        # diagnosable instead of mysterious: compare the version here
-        # against the one recorded in docs/checklists/ubuntu.md's
-        # "Static-check gate" section.
+        # Recorded AND asserted. Recording alone is what this job did before,
+        # and it did not help: the version was in every log of every red run
+        # and nobody was reading the passing steps of a failing job.
+        #
+        # The assertion turns "mysterious lint findings on unmodified code"
+        # into one line naming the cause. If it fires, the question is whether
+        # to re-baseline `.shellcheckrc` against the new release — not to
+        # unpin this.
         run: |
           shellcheck --version
+          shellcheck --version | grep -qx "version: ${SHELLCHECK_VERSION}" || {
+            echo "FAIL: shellcheck is not ${SHELLCHECK_VERSION}, which is the"
+            echo "      version .shellcheckrc was baselined against. Its"
+            echo "      finding set differs between releases, so this gate"
+            echo "      would be red or green for reasons unrelated to the code."
+            exit 1
+          }
           bash --version | head -1
           perl --version | sed -n 2p
           ls -l /bin/sh

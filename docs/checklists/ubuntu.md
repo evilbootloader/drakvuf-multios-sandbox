@@ -314,11 +314,23 @@ green run: [`31505320234`](https://github.com/evilbootloader/drakvuf-multios-san
 
 Two things that run recorded which local testing could not:
 
-- **The baseline is version-robust.** The runner had `shellcheck` **0.9.0**;
-  the development container has **0.11.0**. Both exit 0 against the same
-  `.shellcheckrc`. That was an open risk when the baseline was written —
-  `disable=` is stable across those releases even though `severity=`
-  behaviour is not.
+- ~~**The baseline is version-robust.**~~ The runner had `shellcheck`
+  **0.9.0**; the development container has **0.11.0**. Both exited 0 against
+  the same `.shellcheckrc` *on 2026-08-11*, and that was read as the baseline
+  being version-robust.
+
+  **It was a property of the code that day, not of the baseline, and it stopped
+  being true.** `network-setup.sh` grew argument validation
+  (`[ $# -ge 1 ] && [ $# -le 2 ] || fail …`) which 0.9.0 flags as SC2015 and
+  0.11.0 does not. The gate was red on every run from then until 2026-09-02,
+  and because a failing step short-circuits the rest, it also silently disabled
+  `perl -c`, the shebang convention check and the `<USER>` guard.
+
+  The workflow now **pins** shellcheck to 0.11.0 rather than taking whatever
+  `apt` ships, and asserts the version so the next divergence says so instead
+  of arriving as findings on unmodified code. `disable=` being stable across
+  releases is still true; it is the *finding set* that is not, which is what
+  this bullet originally got wrong.
 - **`/bin/sh` is `dash` on the runner too**, so `dash -n` is checking the
   same interpreter the Dom0 host uses.
 
