@@ -22,11 +22,16 @@
 # Runner of v2.327.1**. Nothing about their inputs changed for the way this
 # file uses them.
 #
-# That floor is free on GitHub-hosted runners and is NOT free on the
-# self-hosted Dom0 runner Level 2 is planned against: an older runner there
-# fails these actions outright rather than warning. Check `./run.sh --version`
-# on that host before wiring Level 2 up, and treat this comment as the reason
-# a Level 2 job might fail on a workflow that is green here.
+# That floor is free on GitHub-hosted runners. It is a condition, not a
+# problem, for the self-hosted Dom0 runner Level 2 is planned against: an
+# older runner fails these actions outright rather than warning.
+#
+# **No self-hosted runner exists yet** — the repository had zero registered on
+# 2026-09-02, so there is nothing to check today and no `run.sh` on Dom0 to
+# check it with; that file only appears when a runner is installed. The
+# current release is v2.337.0, well past the floor, so installing one now
+# satisfies this by default. It matters only if Level 2 is ever wired to a
+# runner that was installed and then left un-upgraded.
 # ---------------------------------------------------------------------------
 
 name: static checks
