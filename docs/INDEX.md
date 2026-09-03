@@ -125,20 +125,22 @@ It maps **headings, not content**: a fact stated in the middle of a section is n
     - `docs/TROUBLESHOOTING.md:1726` — [`OSError: [Errno 9] Bad file descriptor` from FakeNet's proxy, on HTTPS only](TROUBLESHOOTING.md#oserror-errno-9-bad-file-descriptor-from-fakenets-proxy-on-https-only)
     - `docs/TROUBLESHOOTING.md:1769` — [`ssl.SSLError: SSLV3_ALERT_BAD_CERTIFICATE` from FakeNet, once per connection](TROUBLESHOOTING.md#sslsslerror-sslv3_alert_bad_certificate-from-fakenet-once-per-connection)
     - `docs/TROUBLESHOOTING.md:1811` — [A firewall rule tested from the host it protects, and the test passed either way](TROUBLESHOOTING.md#a-firewall-rule-tested-from-the-host-it-protects-and-the-test-passed-either-way)
-    - `docs/TROUBLESHOOTING.md:1847` — [`module 'OpenSSL.crypto' has no attribute 'X509Extension'`](TROUBLESHOOTING.md#module-opensslcrypto-has-no-attribute-x509extension)
-    - `docs/TROUBLESHOOTING.md:1885` — [FakeNet exited with `Error starting DNSListener on port 53`](TROUBLESHOOTING.md#fakenet-exited-with-error-starting-dnslistener-on-port-53)
-    - `docs/TROUBLESHOOTING.md:1917` — [`bash: !xenbr0: event not found`](TROUBLESHOOTING.md#bash-xenbr0-event-not-found)
-    - `docs/TROUBLESHOOTING.md:1930` — [`iptables -S` says a chain is "incompatible", and the chain is simply absent](TROUBLESHOOTING.md#iptables--s-says-a-chain-is-incompatible-and-the-chain-is-simply-absent)
-    - `docs/TROUBLESHOOTING.md:1946` — [An analysis left evidence of itself inside the guest](TROUBLESHOOTING.md#an-analysis-left-evidence-of-itself-inside-the-guest)
-- `docs/TROUBLESHOOTING.md:1962` — [Reading the project record itself](TROUBLESHOOTING.md#reading-the-project-record-itself)
-    - `docs/TROUBLESHOOTING.md:1964` — [A fact from a runbook turned out to be superseded](TROUBLESHOOTING.md#a-fact-from-a-runbook-turned-out-to-be-superseded)
-    - `docs/TROUBLESHOOTING.md:1979` — [A performance measurement did not reproduce](TROUBLESHOOTING.md#a-performance-measurement-did-not-reproduce)
-    - `docs/TROUBLESHOOTING.md:1994` — [An upstream DRAKVUF build passed a casual check and was the wrong binary](TROUBLESHOOTING.md#an-upstream-drakvuf-build-passed-a-casual-check-and-was-the-wrong-binary)
-    - `docs/TROUBLESHOOTING.md:2018` — [`libzstd found: NO` and the build succeeded anyway](TROUBLESHOOTING.md#libzstd-found-no-and-the-build-succeeded-anyway)
-    - `docs/TROUBLESHOOTING.md:2029` — [A regenerated `profiles/linux.json` silently does not work](TROUBLESHOOTING.md#a-regenerated-profileslinuxjson-silently-does-not-work)
-    - `docs/TROUBLESHOOTING.md:2041` — [Reasoning from upstream capability tables gave the wrong answer](TROUBLESHOOTING.md#reasoning-from-upstream-capability-tables-gave-the-wrong-answer)
-    - `docs/TROUBLESHOOTING.md:2055` — [A containment claim was written up without being tested](TROUBLESHOOTING.md#a-containment-claim-was-written-up-without-being-tested)
-    - `docs/TROUBLESHOOTING.md:2077` — [A measured constant was used directly as a resource guard](TROUBLESHOOTING.md#a-measured-constant-was-used-directly-as-a-resource-guard)
+    - `docs/TROUBLESHOOTING.md:1847` — [A `routed` clone gets ICMP host unreachable and the tunnel carries no data](TROUBLESHOOTING.md#a-routed-clone-gets-icmp-host-unreachable-and-the-tunnel-carries-no-data)
+    - `docs/TROUBLESHOOTING.md:1888` — [Dom0's own ICMP errors appear on the tunnel instead of reaching the clone](TROUBLESHOOTING.md#dom0s-own-icmp-errors-appear-on-the-tunnel-instead-of-reaching-the-clone)
+    - `docs/TROUBLESHOOTING.md:1922` — [`module 'OpenSSL.crypto' has no attribute 'X509Extension'`](TROUBLESHOOTING.md#module-opensslcrypto-has-no-attribute-x509extension)
+    - `docs/TROUBLESHOOTING.md:1960` — [FakeNet exited with `Error starting DNSListener on port 53`](TROUBLESHOOTING.md#fakenet-exited-with-error-starting-dnslistener-on-port-53)
+    - `docs/TROUBLESHOOTING.md:1992` — [`bash: !xenbr0: event not found`](TROUBLESHOOTING.md#bash-xenbr0-event-not-found)
+    - `docs/TROUBLESHOOTING.md:2005` — [`iptables -S` says a chain is "incompatible", and the chain is simply absent](TROUBLESHOOTING.md#iptables--s-says-a-chain-is-incompatible-and-the-chain-is-simply-absent)
+    - `docs/TROUBLESHOOTING.md:2021` — [An analysis left evidence of itself inside the guest](TROUBLESHOOTING.md#an-analysis-left-evidence-of-itself-inside-the-guest)
+- `docs/TROUBLESHOOTING.md:2037` — [Reading the project record itself](TROUBLESHOOTING.md#reading-the-project-record-itself)
+    - `docs/TROUBLESHOOTING.md:2039` — [A fact from a runbook turned out to be superseded](TROUBLESHOOTING.md#a-fact-from-a-runbook-turned-out-to-be-superseded)
+    - `docs/TROUBLESHOOTING.md:2054` — [A performance measurement did not reproduce](TROUBLESHOOTING.md#a-performance-measurement-did-not-reproduce)
+    - `docs/TROUBLESHOOTING.md:2069` — [An upstream DRAKVUF build passed a casual check and was the wrong binary](TROUBLESHOOTING.md#an-upstream-drakvuf-build-passed-a-casual-check-and-was-the-wrong-binary)
+    - `docs/TROUBLESHOOTING.md:2093` — [`libzstd found: NO` and the build succeeded anyway](TROUBLESHOOTING.md#libzstd-found-no-and-the-build-succeeded-anyway)
+    - `docs/TROUBLESHOOTING.md:2104` — [A regenerated `profiles/linux.json` silently does not work](TROUBLESHOOTING.md#a-regenerated-profileslinuxjson-silently-does-not-work)
+    - `docs/TROUBLESHOOTING.md:2116` — [Reasoning from upstream capability tables gave the wrong answer](TROUBLESHOOTING.md#reasoning-from-upstream-capability-tables-gave-the-wrong-answer)
+    - `docs/TROUBLESHOOTING.md:2130` — [A containment claim was written up without being tested](TROUBLESHOOTING.md#a-containment-claim-was-written-up-without-being-tested)
+    - `docs/TROUBLESHOOTING.md:2152` — [A measured constant was used directly as a resource guard](TROUBLESHOOTING.md#a-measured-constant-was-used-directly-as-a-resource-guard)
 
 ## `docs/android_setup.md`
 
@@ -1212,4 +1214,4 @@ It maps **headings, not content**: a fact stated in the middle of a section is n
 
 ---
 
-*1100 headings across 34 documents.*
+*1102 headings across 34 documents.*

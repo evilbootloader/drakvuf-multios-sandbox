@@ -1022,8 +1022,8 @@ def test_routed_installs_a_policy_route_and_direct_does_not():
     routed = [a for a in argv_apply(3, ROUTED) if a[0] == "ip"]
     assert routed == [
         ["ip", "route", "add", "default", "dev", "wg0", "table", "1003"],
-        ["ip", "rule", "add", "from", "172.16.3.0/24", "table", "1003",
-         "pref", "1003"],
+        ["ip", "rule", "add", "from", "172.16.3.0/24", "iif", "xenbr1.3",
+         "table", "1003", "pref", "1003"],
     ]
 
     assert not [a for a in argv_apply(3, DIRECT) if a[0] == "ip"], (
@@ -1034,6 +1034,41 @@ def test_routed_installs_a_policy_route_and_direct_does_not():
         assert not [a for a in argv_apply(3, exit_) if a[0] == "ip"], (
             f"{exit_.mode.value} installed a policy route; redirect modes "
             f"deliver locally and never forward")
+
+
+def test_the_route_rule_cannot_match_dom0s_own_gateway_traffic():
+    """`from <subnet>` alone captures Dom0's own packets, not just the clone's.
+
+    The gateway address Dom0 holds on the VLAN is INSIDE the subnet it serves,
+    so a rule selecting on source network alone also matches everything Dom0
+    originates from it -- and sends it out of the tunnel rather than to the
+    clone one hop away. Observed 2026-09-02: ICMP unreachables destined for a
+    directly-connected clone were captured leaving on `wg0`.
+
+    `iif` is what separates the two. Forwarded traffic has an input device;
+    locally-generated traffic does not, so it can no longer match.
+    """
+    import ipaddress
+
+    from sandboxd.egress import vlan_interface, vlan_subnet
+
+    add = next(a for a in argv_apply(7, ROUTED)
+               if a[:3] == ["ip", "rule", "add"])
+
+    # The premise: the gateway really is inside the selector's own network.
+    # If this ever stops being true the rest of this test is arguing about
+    # nothing, so it is asserted rather than assumed.
+    subnet = ipaddress.ip_network(vlan_subnet(7))
+    gateway = ipaddress.ip_address("172.16.7.1")
+    assert gateway in subnet, (
+        "the VLAN gateway is no longer inside the clone subnet; re-derive "
+        "whether `iif` is still load-bearing before deleting it")
+
+    assert "iif" in add, (
+        "the policy rule selects on source network alone, so Dom0's own "
+        f"traffic from {gateway} matches it and is routed into the tunnel")
+    assert add[add.index("iif") + 1] == vlan_interface(7), (
+        "the rule names an input device that is not the clone's interface")
 
 
 def test_the_route_rule_names_its_preference():

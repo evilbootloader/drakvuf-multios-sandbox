@@ -617,8 +617,20 @@ def argv_apply(
         table = route_table(vlan)
         routing = [
             ["ip", "route", "add", "default", "dev", out, "table", table],
-            ["ip", "rule", "add", "from", source, "table", table,
-             "pref", route_pref(vlan)],
+            # `iif` narrows this to traffic FORWARDED from the clone, and it is
+            # not decoration. The gateway address is inside the subnet it serves
+            # -- 172.16.1.1 is in 172.16.1.0/24 -- so `from` alone also matches
+            # packets Dom0 ORIGINATES from that address, and sends them out of
+            # the tunnel instead of to the clone. Locally-generated packets have
+            # no input device, so `iif <clone iface>` cannot match them.
+            #
+            # Observed 2026-09-02: every ICMP unreachable Dom0 generated for the
+            # clone went into the tunnel and died there, so the clone saw a
+            # black hole where the error should have been and retried on a
+            # 5-second cadence. `ip route get 172.16.1.2 from 172.16.1.1` names
+            # the wrong device when this selector is missing.
+            ["ip", "rule", "add", "from", source, "iif", iface,
+             "table", table, "pref", route_pref(vlan)],
         ]
 
     return [*routing, *_waited([

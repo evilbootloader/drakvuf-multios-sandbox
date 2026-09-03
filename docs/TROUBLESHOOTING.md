@@ -1844,6 +1844,81 @@ Related: *An empty `FORWARD` chain read as proof a rule was rejected*, and *A
 containment claim was written up without being tested*. Same family — a check
 whose passing condition is also its failing condition.
 
+### A `routed` clone gets ICMP host unreachable and the tunnel carries no data
+
+**Symptom.** The tunnel is up and handshaking, `sandboxd` offers the `routed`
+exit, `iptables -S DRAKVUF_EGRESS_V1` and `ip route show table 1001` both look
+right — and the clone reaches nothing. A capture on the tunnel interface shows
+each query followed microseconds later by an ICMP error, on a retry cadence:
+
+```text
+18:14:19.942649 IP 10.99.0.1.38119 > 1.1.1.1.53: 7359+ A? ntp.ubuntu.com. (32)
+18:14:19.942659 IP 172.16.1.1 > 172.16.1.2: ICMP host 1.1.1.1 unreachable, length 68
+18:14:23.988009 IP 10.99.0.1.47447 > 1.1.1.1.53: 23023+ AAAA? api.snapcraft.io. (34)
+18:14:23.988020 IP 172.16.1.1 > 172.16.1.2: ICMP host 1.1.1.1 unreachable, length 70
+```
+
+`wg show` confirms it: `transfer: 92 B received, 276 B sent` is keepalives and
+nothing else.
+
+**Cause.** **`AllowedIPs` is WireGuard's routing table, not a filter.** The
+peer is selected by longest-prefix match on the destination, and a destination
+matching no peer is rejected at the device with `EHOSTUNREACH` before anything
+is encrypted. With `AllowedIPs = 10.99.0.0/24` and `sandboxd`'s `default dev
+wg0`, every Internet-bound packet is handed to `wg0` and bounced there — the
+kernel then generates the ICMP error, which is why it trails the query by ten
+microseconds rather than by a round trip.
+
+The 10-µs gap is the tell. A genuine unreachable from a real router cannot
+arrive faster than the path allows.
+
+**Fix.** Widen the Dom0 side to the destinations the exit is meant to carry —
+for a full tunnel, `AllowedIPs = 0.0.0.0/0`.
+
+**And set `Table = off` in `[Interface]` in the same edit.** wg-quick's default
+`Table = auto` reacts to a `0.0.0.0/0` peer by installing fwmark default-routing
+at preferences 32764 and 32765, which captures **Dom0's** traffic rather than
+the clone's, on a host you are probably logged into. `sandboxd` installs the
+only route this needs, in a per-VLAN table; wg-quick must install none.
+
+Related: *An empty `FORWARD` chain read as proof a rule was rejected*. Both are
+a rule set that inspects correctly while the packet dies somewhere the rules do
+not describe.
+
+### Dom0's own ICMP errors appear on the tunnel instead of reaching the clone
+
+**Symptom.** In the same capture as above, ICMP errors addressed to the clone
+are seen leaving on `wg0` — `172.16.1.1 > 172.16.1.2` — although `172.16.1.2` is
+directly connected on `xenbr1.1` and the tunnel is nowhere on that path. The
+clone never receives them, so it retries on a fixed cadence instead of failing.
+
+**Cause.** The policy rule selected on source network alone:
+
+```text
+1001:	from 172.16.1.0/24 lookup 1001
+```
+
+**The VLAN gateway address is inside the subnet it serves.** `172.16.1.1` is in
+`172.16.1.0/24`, so the rule matches packets Dom0 *originates* from the gateway
+as well as packets it forwards *from* the clone, and table 1001 holds one route:
+`default dev wg0`.
+
+`icmp_send` performs an ordinary output route lookup, and `l3mdev_master_ifindex`
+returns 0 for an interface that is not in a VRF, so nothing pins the error to the
+interface it was provoked on. It goes wherever the rules say — into the tunnel.
+
+**Fix.** Fixed in `sandboxd/egress.py` on 2026-09-03: the rule carries
+`iif <clone interface>`, which forwarded traffic satisfies and locally-generated
+traffic cannot. Confirm on any host in one command:
+
+```sh
+ip route get 172.16.1.2 from 172.16.1.1    # expect: dev xenbr1.1, NOT wg0
+```
+
+**Do not fix it by renumbering the gateway out of the subnet.** The clone needs
+a gateway inside its own /24 to have a default route at all; the containment
+comes from the selector, not from the address plan.
+
 ### `module 'OpenSSL.crypto' has no attribute 'X509Extension'`
 
 **Symptom.** FakeNet logs one line and exits before binding anything:

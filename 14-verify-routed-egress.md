@@ -46,7 +46,8 @@ harder to reason about, and this runbook tears the peer down.
 Have ready:
 
 - A temporary PVH DomU on `xenbr0` with `wireguard-tools` installed. Any
-  address on the house LAN; `192.168.1.50` is assumed below.
+  address on the house LAN; `192.168.1.11` is assumed below, matching the
+  `router.cfg` and the `/etc/network/interfaces` in this section.
 - A second terminal on Dom0 for `tcpdump`.
 - The knowledge that **step 6 deliberately breaks a running analysis.**
 
@@ -228,13 +229,15 @@ PrivateKey = <peer.key>
 
 [Peer]
 PublicKey = <dom0.pub>
-AllowedIPs = 10.99.0.1/32, 172.16.0.0/12
+AllowedIPs = 10.99.0.1/32
 ```
 
-`AllowedIPs` includes `172.16.0.0/12` because the clone's *source* address
-arrives unmasqueraded at this end; without it WireGuard drops the packet as
-not belonging to that peer, and the symptom is a tunnel that is up and carries
-nothing.
+**A single `/32` is the whole of what arrives here.** `argv_apply` masquerades
+`routed` along with `direct` (`sandboxd/egress.py`, the `MASQUERADE` rule), so
+the clone's own address is rewritten to Dom0's tunnel address before the packet
+reaches `wg0`. An earlier version of this runbook listed `172.16.0.0/12` here on
+the assumption that clone addresses survive the tunnel. They do not, and they
+should not: a rented exit would drop RFC1918 sources on sight.
 
 Dom0 side (`/etc/wireguard/wg0.conf`):
 
@@ -242,13 +245,29 @@ Dom0 side (`/etc/wireguard/wg0.conf`):
 [Interface]
 Address = 10.99.0.1/24
 PrivateKey = <dom0.key>
+Table = off
 
 [Peer]
 PublicKey = <peer.pub>
-Endpoint = 192.168.1.50:51820
-AllowedIPs = 10.99.0.0/24
+Endpoint = 192.168.1.11:51820
+AllowedIPs = 0.0.0.0/0
 PersistentKeepalive = 25
 ```
+
+**`AllowedIPs` is a routing table, not a filter.** WireGuard picks the peer by
+longest-prefix match on the *destination*, and a destination matching no peer is
+rejected at the device with `EHOSTUNREACH`. `argv_apply` points a default route
+at `wg0`, so a narrow list here means every Internet-bound clone packet dies on
+transmit and Dom0 answers the clone with ICMP host unreachable — a tunnel that
+is up, handshaking, and carrying nothing.
+See [TROUBLESHOOTING](docs/TROUBLESHOOTING.md#a-routed-clone-gets-icmp-host-unreachable-and-the-tunnel-carries-no-data).
+
+**`Table = off` is not optional, and is the reason `0.0.0.0/0` is safe above.**
+wg-quick's default `Table = auto` reacts to a `0.0.0.0/0` peer by installing its
+own fwmark default-routing at preferences 32764 and 32765 — which captures
+**Dom0's** traffic, not the clone's, on a host you are almost certainly logged
+into. sandboxd installs the only route this needs, in a per-VLAN table of its
+own; wg-quick must install none.
 
 **`PersistentKeepalive` is not optional here.** WireGuard is silent when idle
 and only rekeys under traffic, so without it an idle-but-healthy tunnel has an
@@ -261,27 +280,13 @@ wg show wg0 latest-handshakes    # expect: a peer, and a recent timestamp
 ```
 
 ```text
-# router domu
-root@router:~# wg-quick up wg0
-[#] ip link add wg0 type wireguard
-[  224.541475] wireguard: WireGuard 1.0.0 loaded. See www.wireguard.com for information.
-[  224.541494] wireguard: Copyright (C) 2015-2019 Jason A. Donenfeld <Jason@zx2c4.com>. All Rights Reserved.
-[#] wg setconf wg0 /dev/fd/63
-[#] ip -4 address add 10.99.0.2/24 dev wg0
-[#] ip link set mtu 1420 up dev wg0
-[#] ip -4 route add 172.16.0.0/12 dev wg0
-root@router:~# wg show wg0 latest-handshakes    # expect: a peer, and a recent timestamp
-p0FQslc027phRlZ3ZMflMeKuBxPArLYI+Z3iMpmJVUk=	0
-
 # DOM0
-root@dom0:~# wg-quick up wg0
-[#] ip link add wg0 type wireguard
-[#] wg setconf wg0 /dev/fd/63
-[#] ip -4 address add 10.99.0.1/24 dev wg0
-[#] ip link set mtu 1420 up dev wg0
-root@dom0:~# wg show wg0 latest-handshakes    # expect: a peer, and a recent timestamp
-HnJbu7v8Gx09h/69mkuYWqGeO9DwYU3UjT9E0dagCDQ=	0
+root@dom0:~/drakvuf-multios-sandbox# wg show wg0 latest-handshakes    # expect: a peer, and a recent timestamp
+HnJbu7v8Gx09h/69mkuYWqGeO9DwYU3UjT9E0dagCDQ=	1788372594
 
+# router domu
+root@router:~# wg show wg0 latest-handshakes
+p0FQslc027phRlZ3ZMflMeKuBxPArLYI+Z3iMpmJVUk=	1788372593
 ```
 
 ---
@@ -301,10 +306,30 @@ handshake is older than `TUNNEL_HANDSHAKE_MAX_AGE` — check
 `PersistentKeepalive` before anything else.
 
 ```text
-E2 EVIDENCE — paste both
+root@dom0:~/drakvuf-multios-sandbox# .venv-sandboxd/bin/python -c   "from sandboxd import egress; print(egress.tunnel_ready('wg0'))"
+True
 
+root@dom0:~/drakvuf-multios-sandbox# wg show
+interface: wg0
+  public key: p0FQslc027phRlZ3ZMflMeKuBxPArLYI+Z3iMpmJVUk=
+  private key: (hidden)
+  listening port: 41692
+
+peer: HnJbu7v8Gx09h/69mkuYWqGeO9DwYU3UjT9E0dagCDQ=
+  endpoint: 192.168.1.11:51820
+  allowed ips: 10.99.0.0/24
+  latest handshake: 1 minute, 30 seconds ago
+  transfer: 92 B received, 276 B sent
+  persistent keepalive: every 25 seconds
 
 ```
+
+**FINDING (2026-09-02).** The `allowed ips: 10.99.0.0/24` above is the
+pre-correction value; step 1 now says `0.0.0.0/0`. The result still stands —
+`tunnel_ready` reads handshake age and nothing else, so widening `AllowedIPs`
+cannot change it — but `transfer: 92 B received, 276 B sent` is keepalives
+alone, and is worth reading as what it is: at this point nothing has crossed
+the tunnel yet.
 
 ---
 
@@ -333,9 +358,7 @@ egress exits offered: offline (offline), ..., local-peer (routed)
 the guard working, and step 2 will say why.
 
 ```text
-E3 EVIDENCE — paste the log line
-
-
+2026-09-02 18:12:30,242 INFO    sandboxd: egress exits offered: offline (offline), tor-default (tor), local-peer (routed)
 ```
 
 ---
@@ -359,16 +382,36 @@ Table and preference are `1000 + vlan`, so a clone on vlan 1 uses 1001. Not
 `100 + vlan`: that would put vlan 154 on table 254, which is `main`.
 
 ```text
-E4 EVIDENCE — paste all three
-
-
+root@dom0:~# iptables -S DRAKVUF_EGRESS_V1          # expect: -o wg0 ACCEPT, and no xenbr0
+-N DRAKVUF_EGRESS_V1
+-A DRAKVUF_EGRESS_V1 -i xenbr1.1 -o wg0 -j ACCEPT
+-A DRAKVUF_EGRESS_V1 -i wg0 -o xenbr1.1 -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
+-A DRAKVUF_EGRESS_V1 -j DROP
+root@dom0:~# ip rule show pref 1001                 # expect: from 172.16.1.0/24 lookup 1001
+1001:	from 172.16.1.0/24 lookup 1001
+root@dom0:~# ip route show table 1001               # expect: default dev wg0
+default dev wg0 scope link 
 ```
 
 ---
 
 ## Step 5 — traffic actually goes through the tunnel
 
-In the guest:
+First, one check on Dom0 that costs nothing and catches a defect the capture
+below would otherwise hide:
+
+```sh
+ip route get 172.16.1.2 from 172.16.1.1    # expect: dev xenbr1.1, NOT wg0
+```
+
+The VLAN gateway address is inside the subnet the policy rule selects on, so a
+rule matching source network alone also captures packets **Dom0** originates —
+and posts them into the tunnel instead of handing them to the clone one hop
+away. The rule carries `iif` since 2026-09-03 for exactly this reason. If this
+prints `wg0`, stop: the sandboxd on this host predates the fix.
+See [TROUBLESHOOTING](docs/TROUBLESHOOTING.md#dom0s-own-icmp-errors-appear-on-the-tunnel-instead-of-reaching-the-clone).
+
+Then, in the guest:
 
 ```sh
 ping -c 3 10.99.0.2
@@ -380,16 +423,33 @@ On the **peer**, at the same time:
 tcpdump -i wg0 -n
 ```
 
-Expect the clone's own address, `172.16.1.2`, arriving on the peer's `wg0`.
-That is the proof the packet crossed the tunnel rather than the LAN: it is
-unmasqueraded at this end, so a `172.16.x.x` source on `wg0` cannot have come
-any other way.
+Expect `10.99.0.1 > 10.99.0.2` echo requests arriving on the peer's `wg0`, and
+replies going back.
+
+**The source is Dom0's tunnel address, not the clone's**, because `routed`
+masquerades — see step 1. That still proves what this step is for: `10.99.0.1`
+is configured on exactly one interface in the world, so its appearance on the
+peer's `wg0` cannot have come over the LAN. What identifies the traffic as the
+*clone's* is the flow, not the source address, which is why the ping is
+directed at an address only the clone was told to reach.
+
+**A silent peer-side capture is the failure**, and the reason is almost always
+one of the two above: `AllowedIPs` too narrow on the Dom0 side, so the packet is
+rejected on transmit before it is ever encrypted, or the policy rule missing
+`iif`. `wg show`'s `transfer:` counters distinguish them from a routing problem
+in one line — keepalive-sized totals mean nothing crossed.
 
 ```text
-E5 EVIDENCE — paste the guest command and the peer capture
+E5 EVIDENCE — paste the peer-side capture showing the echo requests arriving,
+and the `ip route get` above
 
 
 ```
+
+**FINDING (2026-09-02).** The first attempt at this step failed, and both of
+the defects it exposed are fixed above. The capture is in
+`docs/TROUBLESHOOTING.md` rather than here, because its value is as a symptom
+someone else will one day match against.
 
 ---
 
@@ -399,12 +459,29 @@ E5 EVIDENCE — paste the guest command and the peer capture
 nothing was ever sent.** So the capture must be running before anything
 changes, and step 5 must already have shown traffic flowing.
 
-With a routed clone running and generating traffic, on Dom0, in a second
-terminal:
+This peer forwards nowhere, so the clone's ordinary background traffic reaches
+no service and stops being a reliable source of packets. Give the step
+something it controls. In the guest, and leave it running:
+
+```sh
+ping 10.99.0.2          # continuous, NOT -c 3
+```
+
+`10.99.0.2` is reachable only through the tunnel, which is what makes it the
+right target: when `wg0` goes away the route goes with it, the packet falls back
+to the main table, and the main table aims at the uplink. That is precisely the
+leak this step is looking for, offered deliberately once a second.
+
+With that running, on Dom0, in a second terminal:
 
 ```sh
 tcpdump -i xenbr0 -n 'net 172.16.0.0/12'
 ```
+
+**The filter catches a leak even though `routed` masquerades**, because the
+MASQUERADE rule names `-o wg0` too. A packet that escapes to the uplink escapes
+by not matching that rule either, so it arrives on `xenbr0` still carrying
+`172.16.1.2`. The two rules fail closed together or not at all.
 
 **Expect zero packets, for the whole capture, before and after the drop.** The
 clone's traffic is inside the tunnel, so it is never on the uplink in
@@ -428,7 +505,9 @@ Then assert, in this order:
 #    (read the tcpdump packet count in the second terminal)
 
 # 2. the guest sees timeouts, not resets
-#    in the guest:  ping -c 2 10.99.0.2   -> no reply
+#    the ping already running in the guest stops reporting replies and stays
+#    silent -- no "Destination unreachable", which would mean something
+#    answered on the clone's behalf
 
 # 3. the rules are unchanged -- the kill-switch is structural, not reactive
 iptables -S DRAKVUF_EGRESS_V1
