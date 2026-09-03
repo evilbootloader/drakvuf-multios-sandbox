@@ -398,7 +398,9 @@ default dev wg0 scope link
 ## Step 5 — traffic actually goes through the tunnel
 
 First, one check on Dom0 that costs nothing and catches a defect the capture
-below would otherwise hide:
+below would otherwise hide. **With the clone from step 4 still running** — the
+rule only exists while a routed job holds the VLAN, and with no clone up this
+prints the right answer for the wrong reason:
 
 ```sh
 ip route get 172.16.1.2 from 172.16.1.1    # expect: dev xenbr1.1, NOT wg0
