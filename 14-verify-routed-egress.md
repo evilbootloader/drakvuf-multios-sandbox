@@ -416,8 +416,16 @@ See [TROUBLESHOOTING](docs/TROUBLESHOOTING.md#dom0s-own-icmp-errors-appear-on-th
 Then, in the guest:
 
 ```sh
-ping -c 3 10.99.0.2
+ping -c 3 192.0.2.1
 ```
+
+**Not the peer's own `10.99.0.2`.** `network-setup.sh` drops `10.0.0.0/8` from
+every analysis VLAN, and that rule sits ABOVE the jump to `DRAKVUF_EGRESS` on
+purpose — so a clone pinging the tunnel address is refused by the isolation
+chain and never reaches the per-VLAN rules at all. The failure looks identical
+to a broken tunnel. `192.0.2.0/24` is TEST-NET-1: outside every range the
+isolation chain drops, unmistakable in a capture, and incapable of reaching
+anything real if it ever escapes.
 
 On the **peer**, at the same time:
 
@@ -425,15 +433,16 @@ On the **peer**, at the same time:
 tcpdump -i wg0 -n
 ```
 
-Expect `10.99.0.1 > 10.99.0.2` echo requests arriving on the peer's `wg0`, and
-replies going back.
+Expect `10.99.0.1 > 192.0.2.1` echo requests arriving on the peer's `wg0`.
+There are no replies — this peer forwards nowhere, which is what
+`no-real-internet` means. Arrival is the whole of the result.
 
 **The source is Dom0's tunnel address, not the clone's**, because `routed`
 masquerades — see step 1. That still proves what this step is for: `10.99.0.1`
 is configured on exactly one interface in the world, so its appearance on the
 peer's `wg0` cannot have come over the LAN. What identifies the traffic as the
-*clone's* is the flow, not the source address, which is why the ping is
-directed at an address only the clone was told to reach.
+*clone's* is the flow, not the source address — nothing on Dom0 pings
+TEST-NET-1 by itself.
 
 **A silent peer-side capture is the failure**, and the reason is almost always
 one of the two above: `AllowedIPs` too narrow on the Dom0 side, so the packet is
@@ -453,6 +462,25 @@ the defects it exposed are fixed above. The capture is in
 `docs/TROUBLESHOOTING.md` rather than here, because its value is as a symptom
 someone else will one day match against.
 
+**FINDING (2026-09-03) — `routed` discloses the clone's internal address to the
+exit's resolver.** The second capture contained:
+
+```text
+11:18:50.027708 IP 10.99.0.1.50738 > 1.1.1.1.53: 34304+ PTR? 2.1.16.172.in-addr.arpa. (41)
+```
+
+That is a reverse lookup for `172.16.1.2` — the clone's own address — leaving
+through the tunnel in cleartext. Masquerading rewrites the IP header and cannot
+touch a payload that names the same address, so the lab's internal addressing
+reaches whatever resolver the exit uses.
+
+Not a containment failure: nothing is reachable at `172.16.1.2` from outside,
+and the range is one of the most common on Earth. It is a **fingerprinting**
+observation, and it belongs on the report's caveats rather than in a fix —
+suppressing it would mean interfering with guest DNS, which is a larger and more
+detectable change than the leak it would close. Recorded here so the next person
+to see it in a capture does not re-derive it.
+
 ---
 
 ## Step 6 — THE KILL-SWITCH. This is the acceptance criterion.
@@ -466,13 +494,20 @@ no service and stops being a reliable source of packets. Give the step
 something it controls. In the guest, and leave it running:
 
 ```sh
-ping 10.99.0.2          # continuous, NOT -c 3
+ping 192.0.2.1          # continuous, NOT -c 3
 ```
 
-`10.99.0.2` is reachable only through the tunnel, which is what makes it the
-right target: when `wg0` goes away the route goes with it, the packet falls back
+When `wg0` goes away the route in table 1001 goes with it, the packet falls back
 to the main table, and the main table aims at the uplink. That is precisely the
-leak this step is looking for, offered deliberately once a second.
+leak this step looks for, offered deliberately once a second.
+
+**The target must be outside RFC1918, and this is not a detail.** Ping the
+peer's own `10.99.0.2` instead and the isolation chain's `10.0.0.0/8` drop
+catches the packet BEFORE the jump to `DRAKVUF_EGRESS` — so the capture stays
+silent, the step appears to pass, and what was actually proven is that a rule
+written in 2026-08 still works. The kill-switch would never have been exercised.
+A test whose pass condition can be met by the wrong mechanism is the failure
+this step opens by warning about.
 
 With that running, on Dom0, in a second terminal:
 
