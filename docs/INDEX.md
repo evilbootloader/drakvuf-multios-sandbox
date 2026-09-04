@@ -1176,11 +1176,11 @@ It maps **headings, not content**: a fact stated in the middle of a section is n
     - `docs/runbooks/13-verify-egress-modes.md:697` — [7a — HTTPS is refused, and the report must say so](runbooks/13-verify-egress-modes.md#7a--https-is-refused-and-the-report-must-say-so)
     - `docs/runbooks/13-verify-egress-modes.md:758` — [7b — nothing left](runbooks/13-verify-egress-modes.md#7b--nothing-left)
   - `docs/runbooks/13-verify-egress-modes.md:781` — [Step 8 — the Ubuntu regression. This gates the merge.](runbooks/13-verify-egress-modes.md#step-8--the-ubuntu-regression-this-gates-the-merge)
-  - `docs/runbooks/13-verify-egress-modes.md:812` — [Step 8a — the `direct` grant does not outlive step 8](runbooks/13-verify-egress-modes.md#step-8a--the-direct-grant-does-not-outlive-step-8)
-  - `docs/runbooks/13-verify-egress-modes.md:862` — [Step 9 — modes do not leak between runs](runbooks/13-verify-egress-modes.md#step-9--modes-do-not-leak-between-runs)
-  - `docs/runbooks/13-verify-egress-modes.md:930` — [Step 10 — the fallback is honest](runbooks/13-verify-egress-modes.md#step-10--the-fallback-is-honest)
-  - `docs/runbooks/13-verify-egress-modes.md:970` — [What this discharged, and what it did not](runbooks/13-verify-egress-modes.md#what-this-discharged-and-what-it-did-not)
-    - `docs/runbooks/13-verify-egress-modes.md:981` — [Findings worth carrying forward](runbooks/13-verify-egress-modes.md#findings-worth-carrying-forward)
+  - `docs/runbooks/13-verify-egress-modes.md:815` — [Step 8a — the `direct` grant does not outlive step 8](runbooks/13-verify-egress-modes.md#step-8a--the-direct-grant-does-not-outlive-step-8)
+  - `docs/runbooks/13-verify-egress-modes.md:865` — [Step 9 — modes do not leak between runs](runbooks/13-verify-egress-modes.md#step-9--modes-do-not-leak-between-runs)
+  - `docs/runbooks/13-verify-egress-modes.md:933` — [Step 10 — the fallback is honest](runbooks/13-verify-egress-modes.md#step-10--the-fallback-is-honest)
+  - `docs/runbooks/13-verify-egress-modes.md:973` — [What this discharged, and what it did not](runbooks/13-verify-egress-modes.md#what-this-discharged-and-what-it-did-not)
+    - `docs/runbooks/13-verify-egress-modes.md:984` — [Findings worth carrying forward](runbooks/13-verify-egress-modes.md#findings-worth-carrying-forward)
 
 ## `docs/workflow-ci.md`
 

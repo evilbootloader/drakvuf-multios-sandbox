@@ -784,8 +784,11 @@ The evidenced pipeline must be unchanged. With `ALLOW_DIRECT=1`, the legacy
 launcher reproduces the pre-DRAFT-057 behaviour exactly.
 
 ```sh
-ALLOW_DIRECT=1 ./automation/run_analysis-ubuntu.sh <args as before>
+ALLOW_DIRECT=1 ./automation/run_analysis-ubuntu.sh
 ```
+
+The script takes no arguments; everything comes from
+`automation/pipeline-ubuntu.env`, and `ALLOW_DIRECT` is the only knob here.
 
 Expect the loud `direct` warning, then a normal Ubuntu analysis: sample
 delivered, network configured, trace collected, artifacts uploaded.

@@ -3,13 +3,19 @@
 > **Issue:** DRAFT-057 —
 > [#42](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/42).
 >
-> **Status: NOT EXECUTED.** Parked at the repository root until its EVIDENCE
-> blocks are filled, then moved to `docs/runbooks/14-verify-routed-egress.md`
-> and the generators re-run.
+> **Status: EXECUTED 2026-09-02 to 2026-09-04.** Every step has run on this
+> host, against a local WireGuard peer on a throwaway `router` DomU.
 >
-> **Every command here is Candidate.** No tunnel has ever existed on this host,
-> so nothing below has run. Do not treat a step as working because it is
-> written down.
+> Step 6, the acceptance criterion, passed on the **third** attempt. The first
+> two produced `0 packets captured` without testing anything — once with the
+> capture stopped before the tunnel dropped, once with no clone running — so the
+> step now states its preconditions as lettered asserts with output to paste.
+> A silent capture is also what an empty machine produces.
+>
+> Two limits are stated where they arise rather than papered over: step 5's
+> transfer counters are Dom0-side and do not prove the peer processed the data,
+> and 9a can no longer be diffed against a pre-change baseline because none was
+> ever recorded.
 >
 > **What this proves:** that a clone's traffic leaves through a tunnel and not
 > through the house line, and that **losing the tunnel mid-run does not change
@@ -28,12 +34,12 @@ That blocks the *deployment*, not the *design*, and almost all of DRAFT-057's
 WireGuard tunnel does not have to be rented to be a different network with its
 own routing table and its own source address.
 
-| Criterion | Provable here |
-|---|---|
-| Kill-switch, by capture rather than rule inspection | **yes** — the point of this runbook |
-| Modes do not leak between runs | yes |
-| Port-blocking surfaced as a caveat rather than absence | yes, as a mechanism |
-| `routed` egresses from the **chosen country** | **no** — needs a rented host |
+| Criterion | Provable here | Outcome |
+|---|---|---|
+| Kill-switch, by capture rather than rule inspection | **yes** — the point of this runbook | **proven**, step 6 |
+| Modes do not leak between runs | yes | **proven**, step 10 — by rule inspection, not capture |
+| Port-blocking surfaced as a caveat rather than absence | yes, as a mechanism | mechanism only; this peer blocks everything |
+| `routed` egresses from the **chosen country** | **no** — needs a rented host | not addressed |
 
 Say so when filing this. A green run here is not evidence about a provider.
 
@@ -205,7 +211,7 @@ sudo xl console router
 
 ## Step 1 — the peer
 
-**Candidate.** On the temporary DomU:
+On the temporary DomU:
 
 ```sh
 umask 077
@@ -368,9 +374,9 @@ the guard working, and step 2 will say why.
 Submit a job selecting **local-peer**. While the clone is up, on Dom0:
 
 ```sh
-iptables -S DRAKVUF_EGRESS_V1          # expect: -o wg0 ACCEPT, and no xenbr0
-ip rule show pref 1001                 # expect: from 172.16.1.0/24 lookup 1001
-ip route show table 1001               # expect: default dev wg0
+iptables -S DRAKVUF_EGRESS_V1   # expect: -o wg0 ACCEPT, and no xenbr0
+ip rule show pref 1001          # expect: from 172.16.1.0/24 iif xenbr1.1 lookup 1001
+ip route show table 1001        # expect: default dev wg0
 ```
 
 **Both halves matter and neither is sufficient.** The iptables rule permits
@@ -393,27 +399,53 @@ root@dom0:~# ip route show table 1001               # expect: default dev wg0
 default dev wg0 scope link 
 ```
 
+**FINDING (2026-09-03) — the rule above predates the `iif` fix.** It reads
+`from 172.16.1.0/24 lookup 1001` with no `iif`, which is the form corrected on
+2026-09-03. Whether this capture is simply older than the fix, or the fix is not
+running on this host, **cannot be told from the output**, and step 6 passing
+does not settle it — the kill-switch does not depend on `iif`. Step 4b exists to
+settle it.
+
 ---
 
-## Step 5 — traffic actually goes through the tunnel
+## Step 4b — the policy rule cannot catch Dom0's own traffic
 
-First, one check on Dom0 that costs nothing and catches a defect the capture
-below would otherwise hide. **With the clone from step 4 still running** — the
-rule only exists while a routed job holds the VLAN, and with no clone up this
-prints the right answer for the wrong reason:
+With a routed clone up, on Dom0:
 
 ```sh
-ip route get 172.16.1.2 from 172.16.1.1    # expect: dev xenbr1.1, NOT wg0
+ip rule show pref 1001                      # expect: ... iif xenbr1.1 ...
+ip route get 172.16.1.2 from 172.16.1.1     # expect: dev xenbr1.1, NOT wg0
 ```
 
 The VLAN gateway address is inside the subnet the policy rule selects on, so a
 rule matching source network alone also captures packets **Dom0** originates —
 and posts them into the tunnel instead of handing them to the clone one hop
-away. The rule carries `iif` since 2026-09-03 for exactly this reason. If this
-prints `wg0`, stop: the sandboxd on this host predates the fix.
+away. The rule carries `iif` since 2026-09-03 for exactly this reason.
+
+**Both commands, not one.** The first reads what is installed; the second reads
+what the kernel will actually do with it, which is the claim that matters. If
+the second prints `wg0`, the sandboxd on this host predates the fix — pull and
+restart it before continuing.
+
+**Needs a live clone.** With no routed job holding the VLAN there is no rule at
+pref 1001, so `ip route get` prints `dev xenbr1.1` whether or not the fix is
+present: the right answer for the wrong reason, on exactly the hosts this exists
+to catch.
 See [TROUBLESHOOTING](docs/TROUBLESHOOTING.md#dom0s-own-icmp-errors-appear-on-the-tunnel-instead-of-reaching-the-clone).
 
-Then, in the guest:
+```text
+root@dom0:~/drakvuf-multios-sandbox# ip rule show pref 1001                      # expect: ... iif xenbr1.1 ...
+1001:	from 172.16.1.0/24 iif xenbr1.1 lookup 1001
+root@dom0:~/drakvuf-multios-sandbox# ip route get 172.16.1.2 from 172.16.1.1     # expect: dev xenbr1.1, NOT wg0
+172.16.1.2 from 172.16.1.1 dev xenbr1.1 uid 0 
+    cache 
+```
+
+---
+
+## Step 5 — traffic actually goes through the tunnel
+
+In the guest:
 
 ```sh
 ping -c 3 192.0.2.1
@@ -451,11 +483,52 @@ rejected on transmit before it is ever encrypted, or the policy rule missing
 in one line — keepalive-sized totals mean nothing crossed.
 
 ```text
-E5 EVIDENCE — paste the peer-side capture showing the echo requests arriving,
-and the `ip route get` above
-
-
+# 2026-09-03
+11:39:11.839833 IP 10.99.0.1 > 192.0.2.1: ICMP echo request, id 1, seq 1, length 64
+11:39:12.877518 IP 10.99.0.1 > 192.0.2.1: ICMP echo request, id 1, seq 2, length 64
+11:39:13.901527 IP 10.99.0.1 > 192.0.2.1: ICMP echo request, id 1, seq 3, length 64
 ```
+
+```text
+# Dom0, 2026-09-04
+root@dom0:~/drakvuf-multios-sandbox# wg show
+interface: wg0
+  public key: p0FQslc027phRlZ3ZMflMeKuBxPArLYI+Z3iMpmJVUk=
+  private key: (hidden)
+  listening port: 45909
+
+peer: HnJbu7v8Gx09h/69mkuYWqGeO9DwYU3UjT9E0dagCDQ=
+  endpoint: 192.168.1.11:51820
+  allowed ips: 0.0.0.0/0
+  latest handshake: 1 minute, 19 seconds ago
+  transfer: 1.27 KiB received, 12.68 KiB sent
+  persistent keepalive: every 25 seconds
+```
+
+**PASS, with its limit stated.** Two things move against step 2's reading of the
+same command:
+
+| | step 2 | here |
+|---|---|---|
+| `sent` | 276 B | **12.68 KiB** |
+| `allowed ips` | `10.99.0.0/24` | **`0.0.0.0/0`** |
+
+**The `sent` counter increments after encryption**, which is precisely what the
+2026-09-02 failure prevented: packets rejected by cryptokey routing never reach
+the cipher, so that counter stayed at keepalive size while the clone retried.
+12.68 KiB is proof the clone's traffic was encrypted and put on the wire. The
+`allowed ips` line is the first direct evidence that step 1's correction is live
+on the host rather than only committed.
+
+**The limit:** this is Dom0's `wg show` — the interface key is Dom0's, per step
+1 — so it does not prove the peer processed the data. `received: 1.27 KiB` is
+consistent with keepalives alone. A peer-side capture would settle it.
+
+**Deliberately not chased further.** Encryption and transmission to a peer whose
+handshake is 79 seconds old is the whole of what this mode owes; the far end is
+a property of the peer, not of the containment. Nothing downstream depends on
+it — step 6, the acceptance criterion, is about what does **not** reach the
+uplink.
 
 **FINDING (2026-09-02).** The first attempt at this step failed, and both of
 the defects it exposed are fixed above. The capture is in
@@ -509,60 +582,128 @@ written in 2026-08 still works. The kill-switch would never have been exercised.
 A test whose pass condition can be met by the wrong mechanism is the failure
 this step opens by warning about.
 
-With that running, on Dom0, in a second terminal:
-
-```sh
-tcpdump -i xenbr0 -n 'net 172.16.0.0/12'
-```
-
 **The filter catches a leak even though `routed` masquerades**, because the
 MASQUERADE rule names `-o wg0` too. A packet that escapes to the uplink escapes
 by not matching that rule either, so it arrives on `xenbr0` still carrying
 `172.16.1.2`. The two rules fail closed together or not at all.
-
-**Expect zero packets, for the whole capture, before and after the drop.** The
-clone's traffic is inside the tunnel, so it is never on the uplink in
-cleartext to begin with.
 
 **You WILL see WireGuard UDP on `xenbr0` if you drop the filter**, because the
 tunnel itself runs over the house LAN to reach the peer. That is expected and
 correct — it is encapsulated. The filter above is what separates "the tunnel is
 working" from "the clone leaked".
 
-Now, with the sample still running:
+### Run it in this order, and record every step
+
+**This step was run twice and was vacuous twice**, in two different ways: once
+with the capture stopped before the tunnel was dropped, once with no clone
+running at all. Both produced `0 packets captured`, which is also what a pass
+looks like. So the preconditions below are asserts with output to paste, not
+prose to satisfy — a reader must be able to tell a live test from an empty
+machine without having been there.
+
+The tunnel goes UP first. A `routed` job submitted while it is down is refused,
+which is step 8, not this step.
 
 ```sh
-wg-quick down wg0
-```
-
-Then assert, in this order:
-
-```sh
-# 1. still nothing from the clone on the uplink
-#    (read the tcpdump packet count in the second terminal)
-
-# 2. the guest sees timeouts, not resets
-#    the ping already running in the guest stops reporting replies and stays
-#    silent -- no "Destination unreachable", which would mean something
-#    answered on the clone's behalf
-
-# 3. the rules are unchanged -- the kill-switch is structural, not reactive
+# A. the job is live and the rules under test exist. THREE rules, not "no chain".
 iptables -S DRAKVUF_EGRESS_V1
+
+# B. the clone is offering traffic -- in the guest, left running
+ping 192.0.2.1
+
+# C. the capture is listening, second Dom0 terminal, left running
+tcpdump -i xenbr0 -n 'net 172.16.0.0/12'
+
+# D. break it
+wg-quick down wg0
+
+# E. the rules are unchanged -- the kill-switch is structural, not reactive
+iptables -S DRAKVUF_EGRESS_V1
+
+# F. the guest stays silent: no replies, and no "Destination Net Unreachable"
+
+# G. ^C the capture and read its count. Zero, for the whole run.
 ```
 
-**Point 3 is the one that makes this a property rather than a coincidence.**
-Nothing removed a rule when the tunnel dropped and nothing needed to: the
-ACCEPT names `-o wg0` and no rule anywhere names the uplink, so a vanished
-interface simply stops matching and the packet falls to `DRAKVUF_ISOLATION`'s
-terminal DROP. Fail-closed is a property of what the rules say, not of a
-watchdog noticing in time.
+E, F and G must all land inside the analysis window, before the job ends and
+teardown removes the chain.
+
+**E is what makes this a property rather than a coincidence.** Nothing removed a
+rule when the tunnel dropped and nothing needed to: the ACCEPT names `-o wg0`
+and no rule anywhere names the uplink, so a vanished interface simply stops
+matching and the packet falls to the chain's terminal DROP. Fail-closed is a
+property of what the rules say, not of a watchdog noticing in time.
+
+**F is silence, and silence is the pass.** `-j DROP` sends nothing back — that
+is the whole difference between DROP and REJECT, and it is deliberate: an ICMP
+error would tell a sample that something on the path is filtering it. But read
+the silence precisely, because one specific message would have meant the test
+proved nothing:
+
+| Guest shows | Meaning |
+|---|---|
+| **silence** | routed at the uplink, killed by the terminal DROP — the result this step wants |
+| `Destination Net Unreachable` from `172.16.1.1` | no route at all; the packet never reached the chain |
+| replies | a leak, or a peer that forwards |
+| resets, port unreachable | something answered for the clone — a REJECT where there should be a DROP |
+
+**There are no replies before the drop either**, and that is not a fault.
+`192.0.2.1` is TEST-NET-1: no host exists there, so nothing answers through a
+working tunnel any more than through a broken one. The ping is a *source of
+packets*, not a connectivity test. The consequence is that the guest's view is
+identical either side of the drop — **all the discriminating evidence is on
+Dom0**, in G's packet count and E's unchanged chain.
 
 ```text
-E6 EVIDENCE — paste the packet count from the whole capture, the guest's
-timeout, and the unchanged chain
+# B -- in the guest, left running for the whole of what follows
+carlos@desktop:~/Desktop$ date
+jue 03 sep 2026 13:58:58 CEST
+carlos@desktop:~/Desktop$ ping 192.0.2.1
+PING 192.0.2.1 (192.0.2.1) 56(84) bytes of data.
 
+# C -- Dom0 terminal 2, left listening
+root@dom0:/home/user# tcpdump -i xenbr0 -n 'net 172.16.0.0/12'
+tcpdump: verbose output suppressed, use -v[v]... for full protocol decode
+listening on xenbr0, link-type EN10MB (Ethernet), snapshot length 262144 bytes
 
+# A, D, E -- Dom0 terminal 1
+root@dom0:~/drakvuf-multios-sandbox# iptables -S DRAKVUF_EGRESS_V1
+-N DRAKVUF_EGRESS_V1
+-A DRAKVUF_EGRESS_V1 -i xenbr1.1 -o wg0 -j ACCEPT
+-A DRAKVUF_EGRESS_V1 -i wg0 -o xenbr1.1 -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
+-A DRAKVUF_EGRESS_V1 -j DROP
+root@dom0:~/drakvuf-multios-sandbox# wg-quick down wg0
+[#] ip link delete dev wg0
+root@dom0:~/drakvuf-multios-sandbox# iptables -S DRAKVUF_EGRESS_V1
+-N DRAKVUF_EGRESS_V1
+-A DRAKVUF_EGRESS_V1 -i xenbr1.1 -o wg0 -j ACCEPT
+-A DRAKVUF_EGRESS_V1 -i wg0 -o xenbr1.1 -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
+-A DRAKVUF_EGRESS_V1 -j DROP
+
+# G -- back in terminal 2, after the drop
+^C
+0 packets captured
+0 packets received by filter
+0 packets dropped by kernel
 ```
+
+**PASS.** The chain is byte-identical either side of `ip link delete dev wg0`,
+and nothing from the clone reached the uplink while it was pinging once a second
+at a route that had just been aimed there.
+
+**FINDING (2026-09-03).** The guest never printed `Destination Net Unreachable`,
+and that is the load-bearing negative. Deleting `wg0` empties table 1001 but
+leaves the `ip rule` at pref 1001 standing — a rule references a table, not a
+device — so the clone's packets matched it, found nothing, fell through to
+`main`, and were routed at `xenbr0`. Had they instead failed to route, Dom0
+would have generated that ICMP error once a second and the zero-packet count
+would have proven only that unroutable packets do not travel. The packets
+reached the rule under test, and the rule stopped them.
+
+**Not evidenced here, deliberately:** that the pings were crossing the tunnel
+*before* the drop. `wg show` cannot say so afterwards — the device is gone. Step
+5 establishes it on the same guest, the same target and the same path, and
+re-running it here would prove nothing new.
 
 ---
 
@@ -582,13 +723,74 @@ no `-N` equivalent, so a stale rule would silently route the *next* clone on
 that VLAN into a tunnel nobody selected for it. The rule carries an explicit
 preference precisely so teardown can name it exactly.
 
-Then kill `sandboxd` with `-9` mid-run and restart it: the startup sweep calls
-the same `argv_revoke`, so it clears routing as well as chains.
+That is the job's own teardown. The crash path is step 7b.
 
 ```text
-E7 EVIDENCE — paste both, before and after the sweep
+root@dom0:~/drakvuf-multios-sandbox# ip rule show pref 1001            # expect: nothing
+root@dom0:~/drakvuf-multios-sandbox# ip route show table 1001          # expect: nothing
+root@dom0:~/drakvuf-multios-sandbox# iptables -S | grep DRAKVUF_EGRESS_   # expect: no _V<n> chains
+-N DRAKVUF_EGRESS_IN
+-A DRAKVUF_INPUT -i xenbr1.+ -j DRAKVUF_EGRESS_IN
+```
 
+**PASS** for the ordinary teardown: no `pref 1001`, no table 1001, and the only
+`DRAKVUF_EGRESS_` names left are the parent `_IN` chain and its jump — no
+`_V<n>` survived.
 
+---
+
+## Step 7b — the crash path, which is a different code path
+
+Step 7 tested the teardown a job runs when it finishes normally.
+This tests the one that runs when it does not, and **that is the case where a
+stale `ip rule` actually costs something**: nothing tore down, so the rule
+survives, and the next clone on that VLAN is routed into a tunnel nobody
+selected for it. `ip rule add` is not idempotent and has no `-N` equivalent, so
+nothing downstream would notice.
+
+With a routed clone up:
+
+```sh
+ip rule show pref 1001              # confirm it is THERE first
+kill -9 <the sandboxd pid>          # it runs in the FOREGROUND -- no unit
+
+# restart it exactly as CURRENT-STATE.md §1.2 says; the startup sweep runs
+# argv_revoke for every VLAN it finds dirty
+cd /root/drakvuf-multios-sandbox
+set -a; . /etc/sandboxd/sandboxd.env; set +a
+.venv-sandboxd/bin/python -m sandboxd.daemon
+
+ip rule show pref 1001              # expect: nothing
+ip route show table 1001            # expect: nothing
+iptables -S | grep DRAKVUF_EGRESS_  # expect: no _V<n> chains
+```
+
+**There is no `systemctl restart sandboxd`, and no `journalctl -u sandboxd`.**
+It is a foreground process logging to stderr; treating it as a unit is a
+documented past mistake (`docs/CURRENT-STATE.md`). Sourcing the env file first
+is not optional — `Settings.from_env` raises `SystemExit` without it, and the
+bare invocation then exits at once looking like a broken install.
+
+**The first command is the precondition, not decoration.** A sweep that finds
+nothing to clean cannot be distinguished from a sweep that did not run.
+
+```text
+root@dom0:~/drakvuf-multios-sandbox# ip rule show pref 1001              # confirm it is THERE first
+1001:	from 172.16.1.0/24 iif xenbr1.1 lookup 1001
+root@dom0:~/drakvuf-multios-sandbox# ps aux | grep sandboxd
+root       65954  0.9  0.4 259712 33324 pts/4    Sl+  09:37   0:00 .venv-sandboxd/bin/python -m sandboxd.daemon
+tcpdump    66314  0.0  0.1  19108  8828 ?        Ss   09:37   0:00 tcpdump -i xenbr1.1 -n -U -w /var/lib/sandboxd/results/6177ae39-3ccd-41f5-a54b-74e959fe2ba3/capture.pcap
+root       66322 51.8 10.2 836052 829264 ?       Ss   09:37   0:00 drakvuf -r /root/drakvuf-multios-sandbox/profiles/linux.json -d 93 -i 1 -m execproc -e /home/carlos/Desktop/slow.sh -F --disable-sysret -o json -t 120 -a syscalls -a fileextractor -a memdump -a filetracer -D /var/lib/sandboxd/results/6177ae39-3ccd-41f5-a54b-74e959fe2ba3/dump --memdump-dir /var/lib/sandboxd/results/6177ae39-3ccd-41f5-a54b-74e959fe2ba3/memdump
+root       66324  0.0  0.0   4088  2100 pts/3    S+   09:37   0:00 grep --color=auto sandboxd
+root@dom0:~/drakvuf-multios-sandbox# kill -9 65954         # it runs in the FOREGROUND -- no unit
+
+# SANDBOXD RESTARTED
+
+root@dom0:~/drakvuf-multios-sandbox# ip rule show pref 1001              # expect: nothing
+root@dom0:~/drakvuf-multios-sandbox# ip route show table 1001            # expect: nothing
+root@dom0:~/drakvuf-multios-sandbox# iptables -S | grep DRAKVUF_EGRESS_  # expect: no _V<n> chains
+-N DRAKVUF_EGRESS_IN
+-A DRAKVUF_INPUT -i xenbr1.+ -j DRAKVUF_EGRESS_IN
 ```
 
 ---
@@ -615,35 +817,218 @@ may check in exactly once.
 even though nothing escaped.
 
 ```text
-E8 EVIDENCE — paste the job state and the failure reason
-
-
+Failed at sandboxd — EgressUnavailable: job asked for exit 'local-peer' (routed) and tunnel wg0 has no WireGuard handshake in the last 180s. Refused rather than downgraded: the submitter asked to reach the Internet from somewhere specific, and running with no network instead answers a different question while spending the sample.
 ```
 
 ---
 
 ## Step 9 — the Ubuntu regression. This gates the merge.
 
-`argv_apply` is shared, and `direct` goes through the same builder. It must be
-untouched by the routing work.
+**Two different things need protecting here, and one command cannot do both.**
+
+An earlier version of this step said "`argv_apply` is shared, and `direct` goes
+through the same builder", then gave the `run_analysis-ubuntu.sh` command. That
+is false for that command: `ALLOW_DIRECT=1` sets `EGRESS_MODE=direct`, which
+takes `network-setup.sh`'s **legacy wildcard** branch and never calls
+`argv_apply` at all. The rule it installs is deliberately shaped so you can see
+that from the output — a wildcard `xenbr1.+`, where a per-job rule names one
+VLAN.
+
+### 9a — the evidenced Ubuntu pipeline still runs
 
 ```sh
-ALLOW_DIRECT=1 ./automation/run_analysis-ubuntu.sh <args as before>
-iptables -S DRAKVUF_EGRESS
-ip rule show                     # expect: NO 1000-range rule for this VLAN
+ALLOW_DIRECT=1 ./automation/run_analysis-ubuntu.sh
+iptables -S DRAKVUF_EGRESS       # expect: the wildcard, NOT a _V<n> jump
+ip rule show                     # expect: NO 1000-range rule at all
 ```
 
-**`direct` must install no policy route at all.** The uplink is already the
-default route; a second copy of that fact is a thing that can drift from it.
+**No arguments.** The script reads none — everything comes from
+`automation/pipeline-ubuntu.env`, and the only knob for this step is the
+`ALLOW_DIRECT` environment variable in front of it.
 
-Compare the resulting trace against a pre-change run of the same fixture. Any
-difference in what the trace observed is a regression.
+**The `ip rule` check is the one that matters for this change**, and it is a
+real result: the routing work must be invisible to the path that does not use
+it. `direct` installs no policy route by design — the uplink is already the
+default route, and a second copy of that fact is a thing that can drift from it.
+
+Then confirm the analysis completes and produces its usual artifacts — trace,
+pcap, extracted files, memdump.
+
+**Earlier drafts asked for a diff against a pre-change run of the same fixture,
+and that cannot be done.** The reasoning was sound: a regression here would not
+necessarily raise an error, it would show as DRAKVUF observing *less* than
+before, because the sample gave up early on something that used to work. But
+nothing in this repository records per-run trace statistics, so there is no
+stored baseline to diff against — it would have had to be captured before the
+change, and it was not. Asking for it leaves an item nobody can ever close.
+
+The residual risk is small and can be stated: `run_analysis-ubuntu.sh` never
+calls `argv_apply`, the `iif` change lives only in the routed path, and the
+check above already shows the legacy wildcard installing with no policy route
+appearing beside it. **Capture a baseline before the next change to shared
+code**, so the next runbook can ask this properly.
+
+### 9b — `argv_apply`'s own `direct` branch
+
+Not reachable from 9a. It needs a job submitted through sandboxd with the host
+opted in:
+
+```sh
+SANDBOXD_ALLOW_DIRECT=1        # on the sandboxd unit, then submit a direct job
+iptables -S DRAKVUF_EGRESS_V<n>  # expect: -o xenbr0 ACCEPT, and no ip rule
+```
+
+`test_routed_installs_a_policy_route_and_direct_does_not` covers the argv for
+this in the unit suite, so 9b is confirmation on the host rather than the only
+line of defence. 9a is not optional either way: it is the evidenced path.
 
 ```text
-E9 EVIDENCE — paste output here
+# 9a, 2026-09-03
+root@dom0:~/drakvuf-multios-sandbox# ALLOW_DIRECT=1 ./automation/run_analysis-ubuntu.sh
+network-setup.sh: WARNING -- egress mode 'direct': every clone NATs
+  out xenbr0 with no per-job control. On a residential line
+  this is the posture DRAFT-057 exists to replace.
+network-setup.sh: provisioned 2 VLAN sub-interface(s) on xenbr1
+DRAKVUF dirwatch v1.1-git20260806065707+da982ab-1 Copyright (C) 2014-2024 Tamas K Lengyel
 
+
+root@dom0:~/drakvuf-multios-sandbox# iptables -S DRAKVUF_EGRESS
+-N DRAKVUF_EGRESS
+-A DRAKVUF_EGRESS -i xenbr1.+ -o xenbr0 -j ACCEPT
+root@dom0:~/drakvuf-multios-sandbox# ip rule show                     # expect: NO 1000-range rule for this VLAN
+0:	from all lookup local
+32766:	from all lookup main
+32767:	from all lookup default
+
+
+# 9b, 2026-09-04
+SANDBOXD_ALLOW_DIRECT=1    .venv-sandboxd/bin/python -m sandboxd.daemon
+# After submitting a job
+root@dom0:~/drakvuf-multios-sandbox# iptables -S DRAKVUF_EGRESS_V1
+-N DRAKVUF_EGRESS_V1
+-A DRAKVUF_EGRESS_V1 -i xenbr1.1 -o xenbr0 -j ACCEPT
+-A DRAKVUF_EGRESS_V1 -i xenbr0 -o xenbr1.1 -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
+-A DRAKVUF_EGRESS_V1 -j DROP
+root@dom0:~/drakvuf-multios-sandbox# ip rule show
+0:	from all lookup local
+32766:	from all lookup main
+32767:	from all lookup default
+```
+
+**PASS.** `direct` gets the per-VLAN chain and **no policy route** — the same
+three-rule shape as `routed` with the uplink substituted for the tunnel. That is
+the parameterisation working: one builder, one variable, no mode branch.
+
+---
+
+## Step 10 — modes do not leak between runs. Run this AFTER 9a.
+
+Step 9a deliberately installs the blanket legacy rule:
 
 ```
+-A DRAKVUF_EGRESS -i xenbr1.+ -o xenbr0 -j ACCEPT
+```
+
+That is **every clone, every VLAN, out the residential line, with no per-job
+control** — the posture DRAFT-057 exists to replace. It is removed by the next
+`network-setup.sh` invocation that does not ask for `direct`, which is what
+sandboxd does on every launch. But nothing removes it on a host where 9a was the
+last thing that ran, and `argv_revoke` cannot: it deletes per-VLAN specs naming
+one VLAN, which cannot match a wildcard.
+
+**This is not hypothetical.** One `ALLOW_DIRECT=1` run once left both rules
+standing for the rest of a host's uptime, and every later job — including jobs
+submitted, recorded and reported as `offline` — NATted out through them.
+`offline` installs no rules at all, so there was nothing to notice the
+leftovers with.
+
+**Do not re-run 9a to set this up.** What this step needs is the wildcard
+present, and `run_analysis-ubuntu.sh` reaches that only by also starting
+dirwatch — a window in which a sample dropped in the watch directory runs with
+blanket NAT egress out the residential line. `./automation/network-setup.sh 2
+direct` takes the identical branch and starts no watcher.
+
+Better still, run command 1 first and stage nothing: if 9a's wildcard is still
+standing, that is the real leftover state, and testing removal against it is
+worth more than testing against one just installed for the purpose.
+
+```sh
+# 1. what did 9a leave behind? If this shows the wildcard, stage nothing.
+iptables -S DRAKVUF_EGRESS
+iptables -t nat -S DRAKVUF_EGRESS_NAT
+
+# 2. re-provision the way sandboxd does, with no mode argument.
+#    The second argument defaults to `offline`, which is the branch that
+#    removes the wildcard. Use the same clone count 9a printed.
+./automation/network-setup.sh 2
+
+# 3. gone?
+iptables -S DRAKVUF_EGRESS           # expect: -N only, no wildcard
+iptables -t nat -S DRAKVUF_EGRESS_NAT
+
+# 4. now submit an OFFLINE job and, while the clone is up:
+iptables -S DRAKVUF_EGRESS           # expect: still no wildcard, no _V<n> jump
+```
+
+**Step 4 is the one that closes the criterion**, because it asks the question
+the way a submitter would: a job that was promised no network must have none,
+on a host where a previous job had all of it. Steps 1–3 only show the rule being
+removed.
+
+**Do not use a ping from the guest as the check here**, though an earlier
+version of this step said to. Silence is what the guest gets either way: had the
+wildcard survived, the ping would have left by `xenbr0`, been NATted, and died
+upstream because nothing routes TEST-NET-1. The guest cannot see the difference,
+so the chain listing is the evidence.
+
+Upgrading this from rule inspection to observation, if you ever want it stated
+the way the kill-switch criterion is, means a
+`tcpdump -i xenbr0 -n 'net 172.16.0.0/12'` across the offline job — the same
+technique as step 6. Not done here, and not needed for the claim: steps 1–3
+already prove removal independently of what any one job sees.
+
+`network-setup.sh` announces the posture it reads from the chain rather than the
+one it intended — an unconditional "clones have NO route out" was once printed
+on a host where every clone had full NAT egress. Read that line as evidence too.
+
+```text
+root@dom0:~/drakvuf-multios-sandbox# ./automation/network-setup.sh 2 direct
+network-setup.sh: WARNING -- egress mode 'direct': every clone NATs
+  out xenbr0 with no per-job control. On a residential line
+  this is the posture DRAFT-057 exists to replace.
+network-setup.sh: provisioned 2 VLAN sub-interface(s) on xenbr1
+root@dom0:~/drakvuf-multios-sandbox# iptables -S DRAKVUF_EGRESS           # expect: -N only, no wildcard
+-N DRAKVUF_EGRESS
+-A DRAKVUF_EGRESS -i xenbr1.+ -o xenbr0 -j ACCEPT
+root@dom0:~/drakvuf-multios-sandbox# iptables -t nat -S DRAKVUF_EGRESS_NAT
+-N DRAKVUF_EGRESS_NAT
+-A DRAKVUF_EGRESS_NAT -o xenbr0 -j MASQUERADE
+root@dom0:~/drakvuf-multios-sandbox# ./automation/network-setup.sh 2
+network-setup.sh: provisioned 2 VLAN sub-interface(s) on xenbr1
+network-setup.sh: no per-VLAN egress installed -- clones have NO route
+  out until an egress mode is applied. Expected under sandboxd, which
+  installs one per job. If you are running dirwatch directly, pass
+  'direct' as the second argument or clones will observe nothing.
+root@dom0:~/drakvuf-multios-sandbox# iptables -S DRAKVUF_EGRESS           
+-N DRAKVUF_EGRESS
+root@dom0:~/drakvuf-multios-sandbox# iptables -t nat -S DRAKVUF_EGRESS_NAT
+-N DRAKVUF_EGRESS_NAT
+
+# 4 -- an OFFLINE job submitted afterwards, read while its clone was up
+root@dom0:~/drakvuf-multios-sandbox# iptables -S DRAKVUF_EGRESS           
+-N DRAKVUF_EGRESS
+```
+
+**PASS.** The wildcard and its MASQUERADE are removed together, from both
+tables, by a `network-setup.sh` run that does not ask for `direct` — and an
+`offline` job submitted afterwards, on the same host, gets a chain declaration
+and nothing else. No jump, no rule, no inherited egress from the run before it.
+
+`network-setup.sh`'s own announcement is evidence too, and deliberately so: it
+reads the chain rather than restating its intent, so `clones have NO route out`
+printed only once the chain was genuinely clean. An unconditional version of
+that line once printed the same words on a host where every clone had full NAT
+egress.
 
 ---
 
@@ -657,13 +1042,15 @@ in the design record and is deliberately not installed until observed.
 
 ## What to record when this is done
 
-- Fill every EVIDENCE block, and move this file to
-  `docs/runbooks/14-verify-routed-egress.md`.
+- Move this file to `docs/runbooks/14-verify-routed-egress.md`. Every EVIDENCE
+  block is filled; the banner is corrected.
 - Re-run `scripts/gen-current-state.py`, `scripts/gen-doc-index.py` and
-  `scripts/check-refs.py`, and commit the regenerated files with it.
-- Correct the status banner. It says NOT EXECUTED and will be wrong.
-- Tick DRAFT-057's kill-switch criterion. **Not the country one** — that needs
-  a provider, and this runbook cannot speak to it.
+  `scripts/check-refs.py`, and commit the regenerated files with it. Confirm the
+  new row reads `yes` in `CURRENT-STATE.md` §3.
+- Tick DRAFT-057's kill-switch criterion, and the mode-leak one. **Not the
+  country one** — that needs a provider, and this runbook cannot speak to it.
+- Capture a trace baseline for the Ubuntu fixture, so 9a's regression check
+  becomes answerable for the next change to shared code.
 - Destroy the temporary DomU, and remove `local-peer` from `EXITS`. An exit
   left declared against a peer that no longer exists is offered whenever the
   interface happens to be up.

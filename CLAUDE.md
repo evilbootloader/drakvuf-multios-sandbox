@@ -136,6 +136,11 @@ requested.** It is the evidenced path.
 
 - Small, reviewable changes.
 - Do not create branches, commit, or push unless asked.
+- **Before PUSHING code, ask the operator to security-review it in a new
+  session, and wait for them to say it is ready.** Scope is
+  `<last-reviewed-sha>..HEAD` plus any dirty tree — not just uncommitted work,
+  which this repo commits too fast for. Docs-only pushes are exempt; a push
+  containing both is not. `CONTRIBUTING.md`, "Security review gate", has why.
 - Inspect the corresponding Ubuntu implementation before editing a script.
 - A new per-OS script means satisfying the conformance checklist (C1–C10) in
   `docs/architecture/analysis-pipeline.md` — **not** copying the Ubuntu file,

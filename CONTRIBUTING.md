@@ -99,6 +99,55 @@ After CREATE and TEST:
 Commits are made by the project owner, not automatically. Never run
 `git commit` or `git push` unless this policy is explicitly changed.
 
+## Security review gate — before PUSH
+
+**If any unpushed commit touches code, ask the operator to run a security
+review in a NEW session, and stop until they say it is ready.**
+
+### Why before push and not before commit
+
+**Push is the boundary that matters**, because Dom0 pulls this repository and
+runs it. A commit that never leaves the development container has reached
+nothing; a pushed one is a deployment waiting for `git pull`.
+
+Keying the gate on *uncommitted* work does not survive contact with how this
+repository is actually written. On 2026-09-03 three commits landed in one
+session and the only substantive code change in it — the `iif` selector in
+`sandboxd/egress.py` — went from written to committed within minutes. A
+pre-commit gate scoped to the working tree would have fired once, on a
+documentation change, and let the code through unreviewed.
+
+### Scope: what has not been reviewed yet
+
+```sh
+git diff <last-reviewed-sha>..HEAD      # plus the working tree, if dirty
+```
+
+The reviewer reports the SHA they reviewed to, and the next review starts
+there. Nothing is skipped and nothing is read twice.
+
+`git diff master...HEAD` is the blunt substitute when tracking a SHA is more
+bookkeeping than it is worth. It is correct, and it re-reads more of the branch
+every time.
+
+### Why a new session
+
+The session that wrote the code has already decided the code is correct. It
+chose every trade-off in it, and it will read its own reasoning back as
+justification rather than as a claim to test. A reviewer starting from the diff
+and nothing else has no such stake.
+
+### What counts as code
+
+Anything executable or that decides behaviour: `automation/`, `sandboxd/`,
+`platform/`, `scripts/`, `misc/*.cfg`, systemd units, CI workflows. A
+documentation-only push — runbooks, checklists, `docs/` — does not need the
+gate. A push containing both does, on the strength of its code half.
+
+The operator says when it is ready. Do not infer readiness from a review that
+returned no findings, and do not run the review in this session to save a round
+trip.
+
 ## DEPLOY
 
 Deployment is separate from implementation. For changes affecting Xen, LVM,
