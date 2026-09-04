@@ -1671,17 +1671,56 @@ nothing to provision and nothing in it to preserve.
 `sandboxd/tests/test_egress.py` fails if the key goes missing or turns
 relative, because nothing else would notice until a sample used TLS.
 
-**KNOWN GAP (DRAFT-057): the filenames in that directory are
-sample-controlled.** `create_cert()` builds
-`os.path.join(cert_dir, "%s.crt" % cn)` where `cn` is the SNI servername from
-the clone's own handshake. A `/` survives Python's server-side SNI decoding —
-verified 2026-09-01 — so a sample choosing its own SNI chooses part of a path
-on the hypervisor. Writes into a directory that does not exist fail rather than
-traverse, and an absolute `Cert_Dir` fixes where the attempt begins, but
-neither is sanitisation. Not patched: the crash above is what blocks analysis,
-this is not exploited by anything observed, and widening the patch on
-suspicion is what `CLAUDE.md` warns against. It is written down so it is a
-decision rather than an oversight.
+**The filenames in that directory were sample-controlled until 2026-09-04.**
+`create_cert()` builds `os.path.join(cert_dir, "%s.crt" % cn)` where `cn` is
+the SNI servername from the clone's own handshake. A `/` survives Python's
+server-side SNI decoding — verified 2026-09-01 — so a sample choosing its own
+SNI chose part of a path on the hypervisor, in a process running as root there.
+
+Closed by change 6 of `automation/fakenet-divert-no.patch` and by
+`automation/fakenet.service`'s `ProtectSystem=strict` / `ReadWritePaths=`.
+**Closed in the repository, which is not closed on Dom0** — both halves are
+files an operator installs, and a host that has not re-applied the patch and
+reinstalled the unit still has the gap and looks no different while it does.
+Runbook 13 step 6b's fourth grep answers which state a host is in.
+
+**This entry used to say the gap was bounded because "writes into a directory
+that does not exist fail rather than traverse". That reasoning was wrong, and
+wrong in the reassuring direction.** It holds only for a parent that does not
+exist. `/etc`, `/etc/ssl/certs`, `/root` and `/var/spool` all exist, so a
+servername of `../../../../etc/ssl/certs/ca-certificates` traversed into one
+of them and rewrote the host trust bundle. Two further things read as limits
+and are not: the write happens inside the SNI callback, *before* the handshake
+fails on the untrusted certificate, so the `tls-untrusted-cert` caveat never
+stood between a sample and the disk; and the 64-character subject CN bound is
+longer than that path needs.
+
+It was also left unpatched on the grounds that nothing observed had exploited
+it. That is the reasoning to distrust here — the earlier decision was
+deliberate and written down, which is what made it reviewable, but "not
+exploited by anything observed" is a statement about the samples that have run,
+not about the guest-to-hypervisor boundary this lab exists to hold. Found by
+the pre-push security review, 2026-09-04.
+
+### `Inadmissible SNI '…'` in FakeNet's journal, once per TLS connection
+
+**Symptom.** `journalctl -u fakenet` carries a warning naming a servername that
+looks like a path, a certificate subject, or binary, and the certificate the
+clone was served has CN `fakenet.flare` rather than the name it asked for.
+
+**Cause.** Change 6 of `automation/fakenet-divert-no.patch` working. The
+servername is chosen by the sample, and this is what a sample trying to name a
+file on Dom0 looks like from the outside.
+
+**Fix.** None — this is evidence, and belongs in the report. The connection is
+not dropped: an inadmissible name is treated as an absent one, so the handshake
+proceeds with the default certificate exactly as it would for a client that
+sent no SNI at all.
+
+**Do not "fix" it by relaxing the check.** The one legitimate value it turns
+away is an internationalised domain name, which reaches the callback already
+decoded out of punycode; the cost there is a certificate CN, on a certificate
+no guest trusts anyway.
 
 ### The FakeNet patch was re-applied and the new changes are still missing
 

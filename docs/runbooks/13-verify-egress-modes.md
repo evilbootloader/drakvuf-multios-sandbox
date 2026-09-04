@@ -440,13 +440,14 @@ SP="$(/opt/fakenet-ng/bin/python -c 'import fakenet, os; \
 patch -p1 --forward -d "$SP" < automation/fakenet-divert-no.patch
 ```
 
-Expect three files patched and no rejects. **Then verify, because the failure
-above is silent:**
+Expect **four** files patched and no rejects. **Then verify, because the
+failure above is silent:**
 
 ```sh
 grep -c "conn.setblocking(0)"     "$SP/fakenet/listeners/ProxyListener.py"    # 1
 grep -c "fn_addr = '0.0.0.0'"     "$SP/fakenet/fakenet.py"                    # 2
 grep -c "self.__diverter is None" "$SP/fakenet/diverters/diverterbase.py"     # 3
+grep -c "Inadmissible SNI"        "$SP/fakenet/listeners/ssl_utils/__init__.py"   # 1
 ```
 
 Any zero means that change is missing. Do this after every `pip install`,
@@ -457,7 +458,11 @@ at startup with `UnboundLocalError: fn_addr`, or — once that one line is fixed
 — starts, binds every port, logs nothing alarming and answers nothing. A
 `simulated` run against it produces a report indistinguishable from a sample
 whose infrastructure was down, which is the exact failure this issue exists to
-prevent. The patch header explains all five changes.
+prevent. The patch header explains all six changes.
+
+**The fourth grep is the one whose absence you will not notice.** Changes 1–3
+and 5 fail loudly; change 6 fails in the sample's favour, and a venv missing it
+serves TLS perfectly while letting a servername become a path on this host.
 
 ```text
 root@dom0:~/drakvuf-multios-sandbox# patch -p1 --forward -d "$(/opt/fakenet-ng/bin/python -c 'import fakenet, os; \
@@ -467,6 +472,13 @@ patching file fakenet/diverters/diverterbase.py
 patching file fakenet/fakenet.py
 patching file fakenet/listeners/ProxyListener.py
 ```
+
+> **This output is from 2026-09-02 and predates change 6**, which is why it
+> lists three files rather than four. It is kept as the dated evidence that the
+> apply step works; a run today prints a fourth `patching file` line for
+> `fakenet/listeners/ssl_utils/__init__.py`. **A run today that still prints
+> three has not picked up the security fix** — reinstall and re-apply, per the
+> warning above about `patch --forward` skipping a whole file.
 
 ### 6c — start it and confirm it bound what it claims
 
@@ -504,6 +516,22 @@ unreachable, `Restart=on-failure` stops a bind failure leaving the lab silently
 without a responder, and journal logging means the next traceback is
 `journalctl -u fakenet` rather than a screenshot of a shell that has since
 closed.
+
+**Candidate, 2026-09-04: the confinement block is new and has not started on
+Dom0.** `ProtectSystem=strict` with `ReadWritePaths=-/var/lib/fakenet` is the
+process-wide half of the SNI fix — it makes a sample-named write outside the
+state directory fail with `EROFS`. It was reasoned against v3.5 and the shipped
+ini rather than observed, so a re-install of the unit needs this checked once:
+
+```sh
+systemctl show fakenet -p ProtectSystem -p ReadWritePaths   # strict, /var/lib/fakenet
+ls -l /var/lib/fakenet/certs/fakenet.flare.crt              # the CA still mints
+```
+
+A responder that starts, binds its listeners and writes that certificate has
+proved the block is not in its way. If it *cannot* start, `journalctl -u
+fakenet` names the path it was refused, and the fix is to add that path to
+`ReadWritePaths=` — not to drop `ProtectSystem=`.
 
 The target starts tor as well. It uses `Wants=`, never `Requires=`, so one
 responder failing cannot take the other's mode offline — and a host where the

@@ -676,6 +676,35 @@ def test_the_fakenet_unit_stops_cleanly_and_bounds_its_restarts():
     assert unit.get("StartLimitBurst"), "restarts are unbounded"
 
 
+def test_the_fakenet_unit_confines_what_it_can_write():
+    """FakeNet writes filenames a SAMPLE chooses, as root, on the hypervisor.
+
+    The SNI callback names a certificate after the servername from the clone's
+    own ClientHello, and TFTPListener names an upload after the requested
+    filename. Change 6 of the patch fixes the first at source and upstream
+    quotes the second, but this is the guard that does not depend on having
+    enumerated them: outside /var/lib/fakenet the mount is read-only, so a
+    sample-named path fails with EROFS instead of rewriting
+    `/etc/ssl/certs/ca-certificates.crt`.
+
+    `strict` and not `full`, because `full` leaves everything outside /usr,
+    /boot and /etc writable -- including /root and /var/spool, both of which a
+    traversal reached.
+    """
+    unit = _unit("fakenet.service")
+
+    assert unit.get("ProtectSystem") == "strict", (
+        "fakenet.service does not set ProtectSystem=strict; it runs as root "
+        "and writes paths a sample names, so the filesystem is the boundary")
+
+    rw = unit.get("ReadWritePaths", "")
+    assert rw.lstrip("-") == "/var/lib/fakenet", (
+        f"the writable set is {rw!r}; it must be the state directory and "
+        "nothing else, or the confinement is decoration")
+
+    assert unit.get("NoNewPrivileges") == "yes"
+
+
 def test_the_egress_target_never_couples_the_modes():
     """`Wants=`, never `Requires=`.
 
@@ -869,8 +898,37 @@ def test_fakenet_patch_is_shipped_and_pinned():
     assert "v3.5" in text, "the patch does not say which version it applies to"
     for target in ("fakenet/fakenet.py",
                    "fakenet/listeners/ProxyListener.py",
-                   "fakenet/diverters/diverterbase.py"):
+                   "fakenet/diverters/diverterbase.py",
+                   "fakenet/listeners/ssl_utils/__init__.py"):
         assert f"+++ b/{target}" in text, f"patch no longer touches {target}"
+
+
+def test_the_patch_still_carries_the_sni_guard():
+    """Change 6, which is the only one that fails in the sample's favour.
+
+    Lose changes 1-3 and FakeNet dies at startup or answers nothing; lose 5 and
+    HTTPS breaks. Lose this one and everything works, while a servername from
+    the clone's own handshake becomes a path on Dom0 again -- `create_cert()`
+    joins it straight into `os.path.join(cert_dir, "%s.crt" % cn)` and writes
+    it as root, inside the callback, before the handshake fails on our
+    untrusted certificate.
+
+    Asserted on the log string because that is also what the runbook greps for
+    in the installed venv, so the two cannot drift apart.
+    """
+    patch = (Path(__file__).resolve().parents[2]
+             / "automation" / "fakenet-divert-no.patch").read_text()
+
+    assert "Inadmissible SNI" in patch, (
+        "the patch no longer carries the SNI guard; a sample can name a file "
+        "on the hypervisor through the TLS servername")
+
+    runbook = (Path(__file__).resolve().parents[2] / "docs" / "runbooks"
+               / "13-verify-egress-modes.md").read_text()
+    assert 'grep -c "Inadmissible SNI"' in runbook, (
+        "the runbook stopped verifying the SNI guard reached the venv; "
+        "`patch --forward` skips a whole file it thinks is applied, so an "
+        "unverified re-patch is how this change goes missing silently")
 
 
 def test_the_tor_ports_agree_with_the_torrc():

@@ -1,8 +1,10 @@
-Make FakeNet-NG v3.5 survive `DivertTraffic: No`.  DRAFT-057 Phase 3.
+Make FakeNet-NG v3.5 survive `DivertTraffic: No`, and stop a sample choosing a
+filename on Dom0.  DRAFT-057 Phase 3.
 
-Pinned to upstream tag v3.5, read 2026-09-01.  Reference copy: nothing in this
-repository deploys it, because the development container is not Dom0.  The
-runbook that applies it is `docs/runbooks/13-verify-egress-modes.md`, step 6.
+Pinned to upstream tag v3.5, read 2026-09-01; change 6 read 2026-09-04.
+Reference copy: nothing in this repository deploys it, because the development
+container is not Dom0.  The runbook that applies it is
+`docs/runbooks/13-verify-egress-modes.md`, step 6.
 
 WHY THIS EXISTS
 ===============
@@ -13,10 +15,13 @@ analysis VLAN at once, including the clones submitted as `offline`.  Per-job
 egress selection is the whole of DRAFT-057 and it cannot survive a process that
 redirects everything.  The ini's header carries the long version.
 
-Five changes, across six hunks.  Changes 1-3 are that unrun path.  Changes 4
+Six changes, across seven hunks.  Changes 1-3 are that unrun path.  Changes 4
 and 5 are independent of it and of each other, and are here because they land
 in the same file: 4 is about log noise rather than correctness, and 5 is a
-plain upstream bug that makes HTTPS through the proxy impossible.
+plain upstream bug that makes HTTPS through the proxy impossible.  Change 6 is
+independent of all of them and is the only one that is a SECURITY fix: without
+it a sample names a file on the hypervisor.  It is described last, under its
+own heading.
 
 Upstream does not appear to run the `DivertTraffic: No` path.  With diversion
 disabled, `Fakenet.start()` leaves `self.diverter` at `None` (fakenet.py:49,
@@ -92,6 +97,63 @@ ProxyListener untouched, so the diff against upstream stays small.
      detach -- but it is deterministic, so `pending()` is checked alongside
      `readable`.
 
+CHANGE 6: A SAMPLE CHOOSES A FILENAME ON THE HYPERVISOR
+======================================================
+
+`ssl_utils/__init__.py`, `SSLWrapper.sni_callback()`.  Unlike the five above,
+this one is not about `DivertTraffic: No` and would be needed on any FakeNet
+deployment that terminates hostile TLS.  It is here because this is the file
+that patches FakeNet.
+
+The servername in a ClientHello is chosen by the peer, and under DRAKVUF the
+peer is the SAMPLE.  `sni_callback()` passes it straight to `create_cert()`,
+which builds `os.path.join(cert_dir, "%s.crt" % cn)` and the matching `.key`,
+then truncates and writes both.  Nothing between the wire and `open()` treats
+the value as untrusted.
+
+A `/` survives Python's server-side SNI decoding -- verified 2026-09-01, and
+recorded in `docs/TROUBLESHOOTING.md` -- so a servername of
+`../../../../etc/ssl/certs/ca-certificates` resolves outside `Cert_Dir` and
+FakeNet, running as root on Dom0, rewrites the host trust bundle.  That is a
+guest-to-hypervisor write, in the one process whose whole job is to terminate
+malware traffic.  Three things that read like limits are not:
+
+  * **The 64-character subject CN bound does not stop it.**  It is longer than
+    the example above needs.
+  * **The failing handshake does not stop it.**  The files are written inside
+    the callback, while the ClientHello is still being processed -- before the
+    certificate is sent, and long before the guest rejects it.  The
+    `tls-untrusted-cert` caveat is a disclosure about the handshake, not a
+    containment property.
+  * **"Writes outside an existing directory fail" is not containment.**  That
+    was this repository's own note until 2026-09-04 and it is wrong by
+    omission: traversal into a directory that DOES exist -- `/etc`,
+    `/etc/ssl/certs`, `/root`, `/var/spool` -- succeeds.
+
+`,` is a second hole in the same value.  The leaf branch builds subjectAltName
+as `b'DNS:' + cn.encode()`, and OpenSSL parses that string as a
+comma-separated GeneralName list, so a sample can append entries to the
+certificate it is about to be served.
+
+The fix admits a hostname and rejects everything else -- ASCII alphanumerics,
+dot, hyphen and underscore, no leading dot, within the DNS length limit -- and
+treats an inadmissible name as an ABSENT one, which is upstream's own existing
+fallback to `self.CN` two lines further down.
+
+Answering with the default certificate rather than refusing is the deliberate
+half.  A refused handshake reads in a report as infrastructure that was down,
+and manufacturing that false negative is what this configuration exists to
+prevent; the handshake was going to fail on the untrusted certificate anyway.
+The one legitimate value it turns away is an internationalised domain, which
+reaches the callback already decoded out of punycode -- and the cost there is
+a certificate CN that nothing trusts in the first place.
+
+`automation/fakenet.service` carries the second half of this fix, and neither
+half depends on the other: `ProtectSystem=strict` with the state directory as
+the only writable path makes any sample-named write outside `/var/lib/fakenet`
+fail with `EROFS` -- in this callback, and in TFTPListener's upload path
+equally.
+
 WHAT IT COSTS
 =============
 
@@ -127,17 +189,28 @@ From the repository root, against the venv FakeNet is installed into:
 
     patch -p1 --forward -d "$SP" < automation/fakenet-divert-no.patch
 
-Expect three files patched and no rejects.  Then VERIFY, because the failure
+Expect FOUR files patched and no rejects.  Then VERIFY, because the failure
 mode above is silent:
 
     grep -c "conn.setblocking(0)"   "$SP/fakenet/listeners/ProxyListener.py"   # 1
     grep -c "fn_addr = '0.0.0.0'"   "$SP/fakenet/fakenet.py"                   # 2
     grep -c "self.__diverter is None" "$SP/fakenet/diverters/diverterbase.py"  # 3
+    grep -c "Inadmissible SNI" \
+        "$SP/fakenet/listeners/ssl_utils/__init__.py"                          # 1
 
 Any zero means that change is missing.  Do the same after any `pip install`,
 upgrade or reinstall, and re-check this patch against upstream before moving
 off v3.5 -- change (3) is in a class upstream added recently and is the most
-likely of the five to be fixed or restructured there.
+likely of the six to be fixed or restructured there.
+
+**The fourth grep is the one not to skip.**  The other three fail loudly: an
+unpatched FakeNet dies at startup, or answers nothing, or drops HTTPS.  Change
+6 fails silently and in the sample's favour -- everything works, and a
+servername is a path again.
+
+**`ssl_utils/__init__.py` is CRLF upstream**, alone among the four, so change
+6's hunk carries CRLF and this file has mixed line endings on purpose.  Do not
+"normalise" it: strip the CRs and the hunk stops matching its own context.
 
 diff -u -r a/fakenet/diverters/diverterbase.py b/fakenet/diverters/diverterbase.py
 --- a/fakenet/diverters/diverterbase.py
@@ -297,4 +370,53 @@ diff -u -r a/fakenet/listeners/ProxyListener.py b/fakenet/listeners/ProxyListene
                          try:
                              if ssl_remote_sock:
                                  data = ssl_remote_sock.recv(BUF_SZ)
+diff -u -r a/fakenet/listeners/ssl_utils/__init__.py b/fakenet/listeners/ssl_utils/__init__.py
+--- a/fakenet/listeners/ssl_utils/__init__.py
++++ b/fakenet/listeners/ssl_utils/__init__.py
+@@ -137,6 +137,45 @@
+         return cert_file, key_file
+ 
+     def sni_callback(self, sslsock, servername, sslctx):
++        # The servername is chosen by the PEER, which here is the sample under
++        # analysis, and nothing downstream treats it as untrusted:
++        # create_cert() joins it into a path under cert_dir, assigns it to the
++        # certificate's subject CN, and builds subjectAltName as
++        # `b'DNS:' + cn.encode()`.
++        #
++        # A `/` survives Python's server-side SNI decoding -- verified
++        # 2026-09-01 -- so an unchecked servername of
++        # `../../../../etc/ssl/certs/ca-certificates` makes FakeNet, running as
++        # root on the HYPERVISOR, truncate and rewrite that file. The write
++        # happens inside this callback, BEFORE the handshake fails on our
++        # untrusted certificate, so the `tls-untrusted-cert` caveat does not
++        # stand between a sample and the filesystem. `,` is a second hole in
++        # the same value: OpenSSL parses the subjectAltName string as a
++        # comma-separated GeneralName list, so a sample can append entries to
++        # the certificate it is served.
++        #
++        # A hostname is what this field is for, so admit a hostname and
++        # nothing else: ASCII letters, digits, dot, hyphen and underscore, no
++        # leading dot, within the DNS length limit. That admits every name a
++        # real sample resolves. An IDN arrives here already decoded from
++        # punycode and is the one legitimate value this turns away, at the
++        # cost of a certificate CN nothing trusts anyway.
++        #
++        # An inadmissible name is then treated exactly as an ABSENT one, by
++        # upstream's own two lines below. That is deliberate: refusing the
++        # handshake instead would read in a report as infrastructure that was
++        # down, which is the confident false negative this configuration
++        # exists to prevent.
++        if servername is not None and not (
++                0 < len(servername) <= 253
++                and not servername.startswith('.')
++                and all(c.isascii() and (c.isalnum() or c in '._-')
++                        for c in servername)):
++            self.logger.warning(
++                    'Inadmissible SNI %r -- serving the default certificate. '
++                    'This field is a hostname; a value that is not one was '
++                    'about to become a filename on this host.', servername)
++            servername = None
+         if servername is None:
+             servername = self.CN
+         newctx = ssl.SSLContext(ssl.PROTOCOL_TLS)
 Only in b/fakenet/listeners: __pycache__
