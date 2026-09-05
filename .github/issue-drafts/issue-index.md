@@ -195,7 +195,7 @@ copy of `drakvuf-ubuntu.sh` had always been correctly substituted with
 `CMD="/home/carlos/Desktop/test"`, and Ubuntu analysis runs have been
 executing their samples all along (`ExecProc Status:Success`, ~359k trace
 records, clean `exit_group` — see run
-`cd22b2c623c0cf35ec4fea588fe61bf6`). It was *this repository's* copy that
+`REDACTED-RUN-MD5`). It was *this repository's* copy that
 carried the unsubstituted placeholder.
 
 What the verification actually uncovered is more useful than what it set out

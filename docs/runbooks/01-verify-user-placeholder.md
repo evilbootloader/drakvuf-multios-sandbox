@@ -10,6 +10,16 @@
 > the R3 section was never executed and its commands remain **Candidate** per
 > `CLAUDE.md`.
 >
+> **REDACTED 2026-09-04, and the value was not a secret.** The analysis run's
+> directory name — an MD5 of the benign test sample — reads
+> `REDACTED-RUN-MD5` throughout, here and in `docs/checklists/ubuntu.md`,
+> `DRAFT-007.md` and `issue-index.md`, which cite the same run. It tripped
+> TruffleHog's `Box` detector, which matches any 32-character alphanumeric
+> string, and the pre-push hook refuses on an unverified finding regardless of
+> what the value actually is. The placeholder is consistent across all four
+> documents, so every cross-reference still resolves to the same run; what is
+> lost is only the ability to name that run by its digest.
+>
 > **Outcome in one line:** the `<USER>` placeholder is a *repository* defect, not
 > a production one — the deployed Dom0 copy is correctly substituted and samples
 > do execute. The real problem it uncovered is repo↔host drift.
@@ -282,13 +292,13 @@ grep -n "Desktop/test\|wget\|carlos" /malware_finished/*/preconfig.log | head -2
 /malware_finished/1f47ecc10bc008ad26e504897b940f22/preconfig.log
 /malware_finished/391c21544cf9a35749b78e485e93f121/preconfig.log
 /malware_finished/7485ccb28751684e96ce8b5ef2158559/preconfig.log
-/malware_finished/cd22b2c623c0cf35ec4fea588fe61bf6/preconfig.log
+/malware_finished/REDACTED-RUN-MD5/preconfig.log
 /malware_finished/fa6af27883745503e9182fffd5010b50/preconfig.log
 /malware_finished/0e0328dc8084e6203c09a3e5ea1539f8/preconfig.log:3:[INJECT] TIME:1786091110.842379 METHOD:ExecProc STATUS:SUCCESS PID:1415 FILE:"/usr/bin/sh" ARGUMENTS:"-c sudo ip addr flush dev eth0 && sudo ip addr add 172.16.1.2/24 dev eth0 && sudo ip route replace default via 172.16.1.1 dev eth0 && echo 'nameserver 172.16.1.1' | sudo tee /etc/resolv.conf && wget 'http://172.16.1.1/d1cac82f44b54b0fd244a9e4122811e9ae108a197c7a65a20fd2e7552683e68e' -O '/home/carlos/Desktop/test' && chmod +x '/home/carlos/Desktop/test'" INJECTED_PID:1634 INJECTED_TID:1634
 /malware_finished/1f47ecc10bc008ad26e504897b940f22/preconfig.log:3:[INJECT] TIME:1786091501.709169 METHOD:ExecProc STATUS:SUCCESS PID:1415 FILE:"/usr/bin/sh" ARGUMENTS:"-c sudo ip addr flush dev eth0 && sudo ip addr add 172.16.2.2/24 dev eth0 && sudo ip route replace default via 172.16.2.1 dev eth0 && echo 'nameserver 172.16.2.1' | sudo tee /etc/resolv.conf && wget 'http://172.16.2.1/f0aa83bbbd2c75e2f71ec16029ee5fcfad59f3a8efa30a500b815f0f6c18d987' -O '/home/carlos/Desktop/test' && chmod +x '/home/carlos/Desktop/test'" INJECTED_PID:1634 INJECTED_TID:1634
 /malware_finished/391c21544cf9a35749b78e485e93f121/preconfig.log:3:[INJECT] TIME:1786091365.650859 METHOD:ExecProc STATUS:SUCCESS PID:1415 FILE:"/usr/bin/sh" ARGUMENTS:"-c sudo ip addr flush dev eth0 && sudo ip addr add 172.16.2.2/24 dev eth0 && sudo ip route replace default via 172.16.2.1 dev eth0 && echo 'nameserver 172.16.2.1' | sudo tee /etc/resolv.conf && wget 'http://172.16.2.1/f0fac0f22f107252ea48d5293e51b6760e091988bc5921974b3691f0eb81274f' -O '/home/carlos/Desktop/test' && chmod +x '/home/carlos/Desktop/test'" INJECTED_PID:1634 INJECTED_TID:1634
 /malware_finished/7485ccb28751684e96ce8b5ef2158559/preconfig.log:3:[INJECT] TIME:1786091497.889101 METHOD:ExecProc STATUS:SUCCESS PID:1415 FILE:"/usr/bin/sh" ARGUMENTS:"-c sudo ip addr flush dev eth0 && sudo ip addr add 172.16.1.2/24 dev eth0 && sudo ip route replace default via 172.16.1.1 dev eth0 && echo 'nameserver 172.16.1.1' | sudo tee /etc/resolv.conf && wget 'http://172.16.1.1/9a000c64f48cb4fd592ef449f86cf2ac6c67e53e61b439cd6a8e47cf91992878' -O '/home/carlos/Desktop/test' && chmod +x '/home/carlos/Desktop/test'" INJECTED_PID:1634 INJECTED_TID:1634
-/malware_finished/cd22b2c623c0cf35ec4fea588fe61bf6/preconfig.log:3:[INJECT] TIME:1786091635.198324 METHOD:ExecProc STATUS:SUCCESS PID:1415 FILE:"/usr/bin/sh" ARGUMENTS:"-c sudo ip addr flush dev eth0 && sudo ip addr add 172.16.1.2/24 dev eth0 && sudo ip route replace default via 172.16.1.1 dev eth0 && echo 'nameserver 172.16.1.1' | sudo tee /etc/resolv.conf && wget 'http://172.16.1.1/91876d9a8ed450057993efe35f8ee8465a09c0b4ba82f0327b82b91ab072aebd' -O '/home/carlos/Desktop/test' && chmod +x '/home/carlos/Desktop/test'" INJECTED_PID:1634 INJECTED_TID:1634
+/malware_finished/REDACTED-RUN-MD5/preconfig.log:3:[INJECT] TIME:1786091635.198324 METHOD:ExecProc STATUS:SUCCESS PID:1415 FILE:"/usr/bin/sh" ARGUMENTS:"-c sudo ip addr flush dev eth0 && sudo ip addr add 172.16.1.2/24 dev eth0 && sudo ip route replace default via 172.16.1.1 dev eth0 && echo 'nameserver 172.16.1.1' | sudo tee /etc/resolv.conf && wget 'http://172.16.1.1/91876d9a8ed450057993efe35f8ee8465a09c0b4ba82f0327b82b91ab072aebd' -O '/home/carlos/Desktop/test' && chmod +x '/home/carlos/Desktop/test'" INJECTED_PID:1634 INJECTED_TID:1634
 /malware_finished/fa6af27883745503e9182fffd5010b50/preconfig.log:3:[INJECT] TIME:1786091361.095102 METHOD:ExecProc STATUS:SUCCESS PID:1415 FILE:"/usr/bin/sh" ARGUMENTS:"-c sudo ip addr flush dev eth0 && sudo ip addr add 172.16.1.2/24 dev eth0 && sudo ip route replace default via 172.16.1.1 dev eth0 && echo 'nameserver 172.16.1.1' | sudo tee /etc/resolv.conf && wget 'http://172.16.1.1/1edcc1a739d5cd743df86cf1cc0594df74e86549c5c14556d93fbf2921e7d5cd' -O '/home/carlos/Desktop/test' && chmod +x '/home/carlos/Desktop/test'" INJECTED_PID:1634 INJECTED_TID:1634
 
 
@@ -317,7 +327,7 @@ wc -l /malware_finished/*/drakvuf.log | sort -n | tail -20
 
 # Inspect one recent trace directly. Candidate greps — adjust once the actual
 # JSON shape is known; do not assume these keys exist.
-RUN=/malware_finished/cd22b2c623c0cf35ec4fea588fe61bf6   # pick one from the listing above
+RUN=/malware_finished/REDACTED-RUN-MD5   # pick one from the listing above
 head -50 "$RUN/drakvuf.log"
 grep -c . "$RUN/drakvuf.log"
 grep -n "execve\|ENOENT\|No such file\|Desktop/test" "$RUN/drakvuf.log" | head -30
@@ -334,7 +344,7 @@ R2 EVIDENCE — paste output here
 
 root@drakvuf:~/drakvuf-multios-sandbox# ls -lt /malware_finished/ | head -20
 total 24
-drwxr-xr-x 2 root root 4096 ago  7 10:35 cd22b2c623c0cf35ec4fea588fe61bf6
+drwxr-xr-x 2 root root 4096 ago  7 10:35 REDACTED-RUN-MD5
 drwxr-xr-x 2 root root 4096 ago  7 10:33 7485ccb28751684e96ce8b5ef2158559
 drwxr-xr-x 2 root root 4096 ago  7 10:32 1f47ecc10bc008ad26e504897b940f22
 drwxr-xr-x 2 root root 4096 ago  7 10:31 391c21544cf9a35749b78e485e93f121
@@ -347,9 +357,9 @@ root@drakvuf:~/drakvuf-multios-sandbox# wc -l /malware_finished/*/drakvuf.log | 
    112459 /malware_finished/391c21544cf9a35749b78e485e93f121/drakvuf.log
    171705 /malware_finished/7485ccb28751684e96ce8b5ef2158559/drakvuf.log
    335857 /malware_finished/1f47ecc10bc008ad26e504897b940f22/drakvuf.log
-   359517 /malware_finished/cd22b2c623c0cf35ec4fea588fe61bf6/drakvuf.log
+   359517 /malware_finished/REDACTED-RUN-MD5/drakvuf.log
   1066930 total
-root@drakvuf:~/drakvuf-multios-sandbox# RUN=/malware_finished/cd22b2c623c0cf35ec4fea588fe61bf6   # pick one from the listing above
+root@drakvuf:~/drakvuf-multios-sandbox# RUN=/malware_finished/REDACTED-RUN-MD5   # pick one from the listing above
 root@drakvuf:~/drakvuf-multios-sandbox# head -50 "$RUN/drakvuf.log"
 1786091640.977137 DRAKVUF v1.1-git20260511151619+52df0bc8-1 Copyright (C) 2014-2024 Tamas K Lengyel
 [FILETRACER] Hooked do_syscall_64
@@ -361,7 +371,7 @@ root@drakvuf:~/drakvuf-multios-sandbox# head -50 "$RUN/drakvuf.log"
 {"Plugin":"filetracer","TimeStamp":"1786091642.374504","PID":1688,"PPID":1415,"TID":1688,"UserId":0,"ProcessName":"/home/carlos/Desktop/test","Method":"do_syscall_64","EventUID":"0x263","Syscall":"openat","ThreadName":"test","dirfd":"-100","flags":"0"}
 {"Plugin":"filetracer","TimeStamp":"1786091642.375018","PID":1688,"PPID":1415,"TID":1688,"UserId":0,"ProcessName":"/home/carlos/Desktop/test","Method":"do_syscall_64","EventUID":"0x264","Syscall":"read","ThreadName":"test","FileName":"/kernel/mm/transparent_hugepage/hpage_pmd_size","FileHandle":3,"count":"20"}
 {"Plugin":"filetracer","TimeStamp":"1786091642.375204","PID":1688,"PPID":1415,"TID":1688,"UserId":0,"ProcessName":"/home/carlos/Desktop/test","Method":"do_syscall_64","EventUID":"0x265","Syscall":"close","ThreadName":"test","FileName":"/kernel/mm/transparent_hugepage/hpage_pmd_size","FileHandle":3}
-{"Plugin":"fileextractor","TimeStamp":"1786091642.398066","PID":439,"PPID":1,"TID":439,"UserId":115,"ProcessName":"/usr/sbin/avahi-daemon","Method":"do_syscall_64","EventUID":"0x2e8","Reason":"WriteFile","FileName":"unknown_fd_7","Size":1,"DumpFile":"/malware_finished/cd22b2c623c0cf35ec4fea588fe61bf6/00000000_unknown_fd_7","ProcessName":"avahi-daemon"}
+{"Plugin":"fileextractor","TimeStamp":"1786091642.398066","PID":439,"PPID":1,"TID":439,"UserId":115,"ProcessName":"/usr/sbin/avahi-daemon","Method":"do_syscall_64","EventUID":"0x2e8","Reason":"WriteFile","FileName":"unknown_fd_7","Size":1,"DumpFile":"/malware_finished/REDACTED-RUN-MD5/00000000_unknown_fd_7","ProcessName":"avahi-daemon"}
 {"Plugin":"filetracer","TimeStamp":"1786091642.398066","PID":439,"PPID":1,"TID":439,"UserId":115,"ProcessName":"/usr/sbin/avahi-daemon","Method":"do_syscall_64","EventUID":"0x2e8","Syscall":"write","ThreadName":"avahi-daemon","FileHandle":7,"count":"1"}
 {"Plugin":"filetracer","TimeStamp":"1786091642.399168","PID":439,"PPID":1,"TID":439,"UserId":115,"ProcessName":"/usr/sbin/avahi-daemon","Method":"do_syscall_64","EventUID":"0x2ea","Syscall":"write","ThreadName":"avahi-daemon","FileHandle":7,"count":"1"}
 {"Plugin":"filetracer","TimeStamp":"1786091642.399335","PID":439,"PPID":1,"TID":439,"UserId":115,"ProcessName":"/usr/sbin/avahi-daemon","Method":"do_syscall_64","EventUID":"0x2eb","Syscall":"write","ThreadName":"avahi-daemon","FileHandle":7,"count":"1"}
@@ -477,7 +487,7 @@ drwxr-xr-x 8 root    root        4096 ago  2 10:35 ..
 -rw-r--r-- 1 tcpdump tcpdump    11034 ago  7 10:35 tcpdump.pcap
 
 
-Runs inspected (md5s): cd22b2c623c0cf35ec4fea588fe61bf6
+Runs inspected (md5s): REDACTED-RUN-MD5
 Any trace showing the staged sample executing (yes | no | inconclusive): yes
 Excerpt:
 ```
@@ -655,7 +665,7 @@ H1/H2:  H1 CONFIRMED, H2 REFUTED.
         Production was never broken by the <USER> placeholder.
 
 Execution: CONFIRMED — samples do execute.
-        Run cd22b2c623c0cf35ec4fea588fe61bf6 (2026-08-07) shows
+        Run REDACTED-RUN-MD5 (2026-08-07) shows
         {"Plugin":"inject","Method":"ExecProc","Status":"Success",
          "ProcessName":"/home/carlos/Desktop/test","InjectedPid":1688}
         followed by ~359k trace lines attributed to PID 1688, ending in

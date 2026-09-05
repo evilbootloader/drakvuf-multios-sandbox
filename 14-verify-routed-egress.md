@@ -3,6 +3,19 @@
 > **Issue:** DRAFT-057 —
 > [#42](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/42).
 >
+> **REDACTED 2026-09-04. These were PUBLIC keys.** `wg show <iface>
+> latest-handshakes` and `wg show <iface>` print each peer's **public** key —
+> the identifier, never the private key, which does not appear in either
+> output. The peer was a throwaway `router` DomU that this runbook tears down
+> in step 11. They read `REDACTED-WG-PUBKEY-DOM0` and
+> `REDACTED-WG-PUBKEY-ROUTER`; that the two differ is the only property any
+> step here depends on, and it is preserved.
+>
+> Redacted because TruffleHog's `Box` detector matches any 32-character
+> alphanumeric run and the pre-push hook refuses on an unverified finding
+> regardless of what the value is. Recorded rather than silently rewritten, so
+> nobody reads this as evidence that a private key was once committed.
+>
 > **Status: EXECUTED 2026-09-02 to 2026-09-04.** Every step has run on this
 > host, against a local WireGuard peer on a throwaway `router` DomU.
 >
@@ -288,11 +301,11 @@ wg show wg0 latest-handshakes    # expect: a peer, and a recent timestamp
 ```text
 # DOM0
 root@dom0:~/drakvuf-multios-sandbox# wg show wg0 latest-handshakes    # expect: a peer, and a recent timestamp
-HnJbu7v8Gx09h/69mkuYWqGeO9DwYU3UjT9E0dagCDQ=	1788372594
+REDACTED-WG-PUBKEY-DOM0	1788372594
 
 # router domu
 root@router:~# wg show wg0 latest-handshakes
-p0FQslc027phRlZ3ZMflMeKuBxPArLYI+Z3iMpmJVUk=	1788372593
+REDACTED-WG-PUBKEY-ROUTER	1788372593
 ```
 
 ---
@@ -317,11 +330,11 @@ True
 
 root@dom0:~/drakvuf-multios-sandbox# wg show
 interface: wg0
-  public key: p0FQslc027phRlZ3ZMflMeKuBxPArLYI+Z3iMpmJVUk=
+  public key: REDACTED-WG-PUBKEY-ROUTER
   private key: (hidden)
   listening port: 41692
 
-peer: HnJbu7v8Gx09h/69mkuYWqGeO9DwYU3UjT9E0dagCDQ=
+peer: REDACTED-WG-PUBKEY-DOM0
   endpoint: 192.168.1.11:51820
   allowed ips: 10.99.0.0/24
   latest handshake: 1 minute, 30 seconds ago
@@ -493,11 +506,11 @@ in one line — keepalive-sized totals mean nothing crossed.
 # Dom0, 2026-09-04
 root@dom0:~/drakvuf-multios-sandbox# wg show
 interface: wg0
-  public key: p0FQslc027phRlZ3ZMflMeKuBxPArLYI+Z3iMpmJVUk=
+  public key: REDACTED-WG-PUBKEY-ROUTER
   private key: (hidden)
   listening port: 45909
 
-peer: HnJbu7v8Gx09h/69mkuYWqGeO9DwYU3UjT9E0dagCDQ=
+peer: REDACTED-WG-PUBKEY-DOM0
   endpoint: 192.168.1.11:51820
   allowed ips: 0.0.0.0/0
   latest handshake: 1 minute, 19 seconds ago

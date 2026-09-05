@@ -122,7 +122,7 @@ All three acceptance criteria met:
   substituted; this repo's (`sha256 d0a17e4e…`) was the stale one.
 - **Does a run actually execute the sample?** Yes — and no new run was
   needed, since historical logs already answered it. Run
-  `cd22b2c623c0cf35ec4fea588fe61bf6` shows
+  `REDACTED-RUN-MD5` shows
   `{"Plugin":"inject","Method":"ExecProc","Status":"Success","ProcessName":"/home/carlos/Desktop/test","InjectedPid":1688}`
   plus ~359k trace records under PID 1688 and a clean `exit_group`
   `ExitStatus 0`. All six recorded runs staged successfully via `wget`.

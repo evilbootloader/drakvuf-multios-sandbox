@@ -175,7 +175,7 @@ Three things the same run surfaced that are **not** fixed:
   ```
 
   followed by ~359k trace records attributed to PID 1688 in run
-  `/malware_finished/cd22b2c623c0cf35ec4fea588fe61bf6/drakvuf.log`, ending in
+  `/malware_finished/REDACTED-RUN-MD5/drakvuf.log`, ending in
   `exit_group ExitStatus 0`. **Production was never broken by this.** The
   defect was that *this repository's* copy was the stale, never-substituted
   one — the repo↔host drift this uncovered, now resolved (see the item
@@ -389,7 +389,7 @@ R1 (deployed-vs-repo diff), R1b (guest user), R2 (historical run logs) — is
 in `docs/runbooks/01-verify-user-placeholder.md`. R3 was not needed.
 
 Key execution evidence, from
-`/malware_finished/cd22b2c623c0cf35ec4fea588fe61bf6/drakvuf.log` (2026-08-07):
+`/malware_finished/REDACTED-RUN-MD5/drakvuf.log` (2026-08-07):
 
 ```text
 {"Plugin": "inject", "TimeStamp": "1786091642.367500", "Method": "ExecProc",
