@@ -5,12 +5,28 @@
 > and Android — not a deferred planning exercise.
 >
 > **Operator-reported 2026-08-21, not yet backed by command output:**
-> Windows 11 is installed as a Xen HVM on the golden `windows` domain,
-> Microsoft Defender is disabled, and the LV has been cloned to
-> `windows_sandbox`. The boxes below stay unchecked until that is evidenced
-> the way `android.md` evidences its own — a transcript, not a report. What
-> is *not* done: `misc/windows_sandbox.cfg` does not exist, and the LibVMI
-> profile has not been generated (no PDB fetched yet).
+> the golden `windows` domain is installed as a Xen HVM, Microsoft Defender is
+> disabled, and the LV has been cloned to `windows_sandbox`. The boxes below
+> stay unchecked until that is evidenced the way `android.md` evidences its own
+> — a transcript, not a report.
+>
+> **Corrected 2026-09-04.** This block previously said `misc/windows_sandbox.cfg`
+> did not exist and no PDB had been fetched. Both were overtaken by work on
+> 2026-09-01 that landed without a checklist sweep:
+>
+> - `misc/windows_sandbox.cfg` **exists** (`f0b44a3`), and carries
+>   `cpus = "16-27"` — see the note under Project status, because that file is
+>   not covered by `scripts/gen-xen-configs.py`.
+> - The **kernel GUID has been read**: `windows_symbols.md` at the repository
+>   root records a real `vmi-win-guid domid 52` run, PDB GUID
+>   `72c69e726c648bc18257af38fa78a2f21`, plus the exact `pdbconv.py` line that
+>   would produce `profiles/windows.json`. Whether that conversion was ever
+>   run is **not** evidenced — `profiles/` is untracked.
+> - That output also reads **64-bit Windows 10**, not the Windows 11 the
+>   baseline row below plans for.
+> - The guest software build is largely done and is recorded in
+>   `.github/issue-drafts/DRAFT-020.md`, not here, because none of it is
+>   backed by a transcript either.
 >
 > No Windows *automation* has been built, so the pipeline checklist is still
 > empty; the difference from "skeleton only" is that the track is open and
@@ -38,10 +54,10 @@
 | Volume group | TBD |
 | Analysis bridge | TBD |
 | Saved state | TBD |
-| Windows baseline (version/build) | **Windows 11 first, Windows 10 as fallback** (direction set 2026-08-19). Exact build not yet recorded — §0.1's profile step keys on one kernel GUID |
+| Windows baseline (version/build) | **Direction was Windows 11 first, Windows 10 as fallback** (2026-08-19). What is actually installed reads **64-bit Windows 10** (`windows_symbols.md`, 2026-09-01), so the fallback is what exists. Kernel PDB GUID `72c69e726c648bc18257af38fa78a2f21` |
 | VM lifecycle model | clone-per-run (current Ubuntu/Android model) — decided by elimination: snapshot-restore (DRAKVUF Sandbox's model) does not work in the nested Xen-inside-Proxmox setup this project used until 2026-08-28, since `xl save`/`xl restore` leaves the base and cloned disk images read-only. **Not re-tested on bare metal**; the decision stands on its own merits regardless — see roadmap "Architecture decisions needing experiments" |
-| Current phase | Phase 0 — golden VM installed 2026-08-21 (operator-reported); `windows_sandbox.cfg` and the LibVMI profile outstanding |
-| Current blocker | No `misc/windows_sandbox.cfg`; no kernel PDB fetched, so no `profiles/windows.json` |
+| Current phase | Phase 0 — golden VM installed 2026-08-21, `windows_sandbox.cfg` written 2026-09-01, kernel GUID read 2026-09-01, guest software largely installed (DRAFT-020). **No automation exists and no analysis has run** |
+| Current blocker | Whether `profiles/windows.json` was generated is unevidenced — the GUID and the `pdbconv.py` line exist, the output is untracked. Then the pipeline itself: no `preconfig-`, `drakvuf-` or `run_analysis-windows` script, and no `pipeline-windows.env` |
 
 ### Concurrency constraint — read before running a Windows analysis
 
@@ -55,8 +71,12 @@ watcher.** Two constraints stack, and the second is the dangerous one:
 2. Even without the collision, admission is greedy, and greedy admission
    starves the largest clone. A Windows clone costs **6294 MiB** (`memory =
    6144` plus the per-host domain overhead) against Ubuntu's and Android's
-   2198 MiB. Measured on Dom0 2026-08-20: 170 consecutive admission holds,
-   zero clones for the large job, seven smaller jobs completing meanwhile.
+   **4246 MiB** (2198 when this was measured; the templates went to
+   `memory = 4096` on 2026-08-29 — `CURRENT-STATE.md` §2b). Measured on Dom0
+   2026-08-20: 170 consecutive admission holds, zero clones for the large job,
+   seven smaller jobs completing meanwhile. **The gap narrowed and the
+   starvation did not go away** — a 6294 MiB job still waits behind two 4246s
+   on a 20317 MiB pool.
 
 **The failure mode is not an error.** It is one admission-hold line per
 second, forever, with no clone and nothing in the logs to explain it. Every

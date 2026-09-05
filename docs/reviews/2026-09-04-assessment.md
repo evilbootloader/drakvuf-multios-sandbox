@@ -107,7 +107,7 @@ silently rewrite this line on any `update-grub`.
 `CLAUDE.md` documents runs and passes here:
 
 ```
-417 passed in 13.65s          sandboxd suite
+419 passed in 12.85s          sandboxd suite
 shellcheck automation/*.sh    exit 0
 bash -n / dash -n             clean on all 8 shell scripts
 perl -c automation/clone.pl   syntax OK

@@ -9,7 +9,7 @@
 **Depends on:** DRAFT-029, landed. Nothing open.
 **Origin:** Finding F4 in `docs/runbooks/05-deploy-terminal-chains.md`, step 7,
 2026-08-12. Recorded in the source as `KNOWN GAP` at
-`automation/network-setup.sh:249`.
+`automation/network-setup.sh:325` (`:249` when this was written).
 
 # Objective
 
@@ -118,7 +118,7 @@ Cleanup must therefore distinguish **created by this run** from
 1. A `created_ifaces` accumulator, appended in the create branch.
 2. `on_exit` deletes them in reverse order, guarded, after the chain
    recovery.
-3. Update the `KNOWN GAP (DRAFT-029 follow-up)` comment at `:249` — it
+3. Update the `KNOWN GAP (DRAFT-029 follow-up)` comment at `:325` — it
    describes the gap this issue closes, so leaving it is a defect in the
    change (`CONTRIBUTING.md`, "Comments and historical context", rule 2).
 4. Update the header comment block's description of what an aborted run
@@ -176,7 +176,7 @@ fails a provisioning run and the trap will install deny rules.
 - [ ] Firewall recovery still happens first, and still happens if interface
       deletion fails.
 - [ ] A successful run removes nothing.
-- [ ] The `KNOWN GAP` comment at `:249` and the header block both describe
+- [ ] The `KNOWN GAP` comment at `:325` and the header block both describe
       the behaviour that now holds.
 - [ ] No cross-process ownership assumption is introduced — DRAFT-036 is not
       pre-empted.

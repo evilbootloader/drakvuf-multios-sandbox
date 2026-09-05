@@ -100,6 +100,38 @@ exists there.
 
 # CREATE
 
+> ## Largely DONE on the golden VM, 2026-09-01 — operator-reported, 2026-09-04
+>
+> Most of the Windows coverage list below is already installed. Recorded here
+> because it was reported verbally and written down nowhere: not in
+> `docs/checklists/windows.md`, which still lists blockers this work cleared,
+> and not in `docs/CURRENT-STATE.md` §1.4, whose Windows column is mostly `—`.
+>
+> | Item | State |
+> |---|---|
+> | Microsoft Office | installed, **macros set to run automatically in Word and Excel** |
+> | Chrome | installed |
+> | 7-Zip | installed — this is DRAFT-059's hard dependency, so that draft is unblocked |
+> | .NET Framework 3.5 and 4.8 | binaries downloaded |
+> | .NET runtime 8.0, x64 and x86 | installed |
+> | Python 3 | installed |
+> | Microsoft Defender | disabled |
+> | Injection anchor | created and saved into the `.bak`; PID **4696**, in `sandboxd/stages.py` |
+>
+> **Still outstanding from the list below:** a PDF reader (Adobe Reader), the
+> Visual C++ redistributables, Java, and the whole of "Windows — realism",
+> none of which is evidenced.
+>
+> **The macro setting is the highest-value item here and deserves naming.**
+> Without it a maldoc sits behind a security prompt no unattended run can
+> answer, so the largest sample class this draft exists to unlock would have
+> been inert while appearing to run.
+>
+> **One thing to do before building on this**, and it is roadmap risk #12:
+> nothing links `state/windows_sandbox.bak` to the golden image it came from,
+> and no checksum is recorded. Android hit exactly this twice in August. One
+> `sha256sum` beside PID 4696 is the whole mitigation, and it is cheapest now.
+
 ## Windows — coverage
 
 | Software | Why |

@@ -231,13 +231,44 @@ its kill-switch capture exists.
 
 # Acceptance criteria
 
-- [ ] Three modes implemented in the existing chains; `offline` default.
-- [ ] Per-job selection, recorded on the job and shown on the report.
-- [ ] Kill-switch proven by packet capture, not by rule inspection.
-- [ ] Exit set is server-side; no submitter-supplied endpoints.
-- [ ] Upstream port blocking surfaced rather than silently reported as absence
-      of traffic.
-- [ ] The `ideas.md` provider table corrected with the Specter finding.
+- [x] Three modes implemented in the existing chains; `offline` default.
+      **Five, in the end** — `offline`, `direct`, `tor`, `simulated`, `routed`.
+- [x] Per-job selection, recorded on the job and shown on the report.
+- [x] Kill-switch proven by packet capture, not by rule inspection.
+      Runbook 14, against a local peer. See the note below on what that does
+      and does not discharge.
+- [x] Exit set is server-side; no submitter-supplied endpoints.
+      `config.EXITS`; a name not declared there is refused, not approximated.
+- [x] Upstream port blocking surfaced rather than silently reported as absence
+      of traffic. `caveats` on each exit, rendered beside the network section.
+- [x] The `ideas.md` provider table corrected with the Specter finding.
+
+## Status 2026-09-04 — built, and blocked on a provider rather than on code
+
+Phases 0–4 are done. `tor` and `simulated` are evidenced in
+`docs/runbooks/13-verify-egress-modes.md`; `routed` is built and its
+kill-switch is proven by capture in runbook 14, executed 2026-09-02 to
+2026-09-04.
+
+**Criterion 4 is the one left, and it is not an engineering task.**
+*"`routed` egresses from the chosen country, proven by observed source
+address"* needs a rented host, and hosting outreach was refused
+(`private/outreach/`, 2026-09). The kill-switch was therefore proven against a
+**local WireGuard peer on a throwaway DomU**, which establishes that a clone's
+traffic cannot reach the house uplink and **establishes nothing about a
+provider's egress policy**. Runbook 14 says so in its own header rather than
+letting a green run read as more than it is.
+
+Worth carrying forward: the capture passed on the **third** attempt. The first
+two produced `0 packets captured` — once with the capture stopped before the
+tunnel dropped, once with no clone running. A silent capture is also what an
+empty machine produces, so the step now states its preconditions as lettered
+asserts.
+
+`config.EXITS` declares only `tor-default` and `sim-local`, so `routed` stays
+unreachable until somebody has a provider. That is the mechanism keeping this
+honest — a host that declares no routed exit cannot offer one, and there is no
+flag to forget.
 
 # Evidence required
 

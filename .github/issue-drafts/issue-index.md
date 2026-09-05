@@ -928,8 +928,25 @@ owned by nobody:
 
 | Draft | Issue |
 |---|---|
-| DRAFT-060 | [#41](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/41) **open** |
-| DRAFT-057 | [#42](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/42) **open** |
+| DRAFT-060 | [#41](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/41) **CLOSED 2026-09-04** — `sandboxd` delivered and evidenced |
+| DRAFT-057 | [#42](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/42) **open** — built through Phase 4; blocked on a provider, not on code. See DRAFT-057.md |
+
+> **Issue sweep, 2026-09-04.** Five issues were closed together after checking
+> each against the repository rather than against its own text, which is the
+> rule this file already states: **#34** (architecture — decided by DRAFT-041),
+> **#35** (job schema), **#38** (web UI), **#39** (transport security) and
+> **#41** (`sandboxd`). All five were marked `[x] Completed and evidenced` in
+> `docs/checklists/platform.md` and had simply never been closed on GitHub —
+> the repository record was being kept and the issue list was not.
+>
+> **Four remain open**, and all four were verified as still live rather than
+> assumed: **#40** per-user isolation (not started), **#42** egress (above),
+> **#11** firewall posture (nothing pins a netfilter backend) and **#12** VLAN
+> cleanup (the `KNOWN GAP (DRAFT-029 follow-up)` is still in
+> `network-setup.sh:325`).
+>
+> M7 is now fully closed on GitHub except the `[preset.x]` item, so **M8 is the
+> only open platform milestone.**
 
 The remaining twelve stay unpublished deliberately: ten *older* index rows
 still have no file, and adding twelve more issues on top would widen that gap
