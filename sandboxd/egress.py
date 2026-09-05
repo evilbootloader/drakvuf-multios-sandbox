@@ -641,6 +641,20 @@ def argv_apply(
         # contamination, in the network instead of on disk.
         ["iptables", "-N", fchain],
 
+        ["iptables", "-A", fchain, "-i", iface, "-m", "conntrack", "--ctstate", "NEW",
+        "-m", "hashlimit", "--hashlimit-above", config.MAX_NEW_CONNS_PER_SEC, "--hashlimit-burst", 
+        config.MAX_NEW_CONNS_BURST, "--hashlimit-mode", "srcip", "--hashlimit-name", 
+        f"dv_v{vlan}_new", "-j", "DROP"],
+
+        # Bandwidth — byte mode. No `--ctstate`: a byte cap must see every packet,
+        # not just the first of each connection. mb/s is MEGABYTES, so 6mb/s ~ 50 Mbit/s.
+        ["iptables", "-A", fchain, "-i", iface, "-m", "hashlimit", "--hashlimit-above", config.MAX_EGRESS_RATE,
+        "--hashlimit-burst", config.MAX_EGRESS_RATE_BURST, "--hashlimit-mode", "srcip", "--hashlimit-name", 
+        f"dv_v{vlan}_bw", "-j", "DROP"],
+
+        ["iptables", "-A", fchain, "-i", iface, "-m", "conntrack", "--ctstate", "NEW",
+        "-m", "connlimit", "--connlimit-above", config.MAX_PARALLEL_CONNS, "-j", "DROP"],
+
         # The permit, naming exactly one interface in each direction. Under
         # `routed` this is the kill-switch: nothing here names the uplink, so
         # if the tunnel interface disappears the rule cannot match and the

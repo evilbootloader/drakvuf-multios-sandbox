@@ -207,7 +207,8 @@ watching.
 2. **`offline` is the default** on a fresh deployment.
 3. **`direct` reproduces today's behaviour** exactly.
 4. **`routed` egresses from the chosen country**, proven by observed source
-   address.
+   address. **DESCOPED 2026-09-05** — the mechanism is built and the lab
+   declares no country to prove. See the status section below.
 5. **Kill-switch: drop the tunnel mid-run and no packet reaches the uplink.**
    Asserted by capture on the host's uplink interface, not by inspecting
    rules.
@@ -270,11 +271,62 @@ unreachable until somebody has a provider. That is the mechanism keeping this
 honest — a host that declares no routed exit cannot offer one, and there is no
 flag to forget.
 
+## Status 2026-09-05 — criterion 4 descoped, Phase 5 built and unevidenced
+
+**Supersedes the section above on criterion 4.** The maintainer's decision
+(2026-09-05) is that this lab will not rent an exit, so the country criterion
+is closed as *mechanism built, deliberately unused* rather than left open on a
+purchase that is not going to happen.
+
+**The mechanism was already complete**, which is why descoping costs nothing.
+`country` is plumbed end to end and has been since Phase 4: `Exit.country`
+(`sandboxd/egress.py:99`), read from the spec at `:517`, advertised at
+`sandboxd/api.py:209`, received and length-checked at
+`platform/sandbox_platform/routers/worker.py:91`, stored by
+`platform/migrations/0006_egress.sql:107`, attached to the job at
+`sandboxd/stages.py:527`, and rendered in both the picker
+(`submit.html:58`) and the report (`tabs/_overview.html:33`).
+`sandboxd/tests/test_egress.py:1269` already asserts it round-trips. Country
+selection is a set of peers, exactly as this issue designed it; the set is
+empty.
+
+**What was rejected, and why it matters more than the descope.** Declaring
+`country` on the local `router` DomU would have satisfied the criterion's
+wording — the field exists, the report would print it — while making the
+product worse. Nothing verifies the value, so the report would assert an exit
+country that is not true, which is the same class of confident wrong answer as
+the "no network activity" false negative this issue's `caveats` mechanism
+exists to prevent. A label nobody checked is not an observed source address.
+
+So the honest end state is the current one: no exit declares a country, and
+`routed`'s only peer is local. If a remote exit ever appears, the field is
+already there and the open question becomes verification — comparing the
+declaration against an observed address at apply time — rather than plumbing.
+
+**Phase 5 is now the open item.** The throttles are built in
+`argv_apply`'s forwarding path: a per-clone new-connection rate
+(`--hashlimit-above 20/sec`, packet mode, `--ctstate NEW`), a per-clone
+bandwidth cap (`--hashlimit-above 6mb/s`, byte mode) and a parallel-connection
+cap (`--connlimit-above 50`), all three DROPs installed above the single
+`-o`-constrained ACCEPT so the kill-switch is unchanged. **No Dom0 evidence
+exists**, and the four constants are guesses: nothing has measured what a
+benign run actually does. Runbook 15 is the test.
+
+**`tor` and `simulated` are deliberately unthrottled** (maintainer,
+2026-09-05). `argv_apply` returns at `sandboxd/egress.py:577` and `:580`
+before reaching the throttles, so only `direct` and `routed` carry them. That
+contradicts this issue's own Tor override above, which offers the Phase 5
+throttles as the partial mitigation for the volunteer-exit-operator objection
+— that sentence overstates what is built, and the objection currently stands
+unmitigated rather than partly mitigated.
+
 # Evidence required
 
 - A clone failing to reach the internet under `offline`, and isolation intact.
-- Observed exit address per configured country.
+- ~~Observed exit address per configured country.~~ Descoped 2026-09-05; no
+  exit declares a country, so there is no address to observe.
 - The kill-switch capture.
+- The throttle baseline and the four constants it justifies (Phase 5).
 - A run through an exit that blocks a port, showing how the report says so.
 
 # Security considerations

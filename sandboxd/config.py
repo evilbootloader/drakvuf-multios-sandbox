@@ -349,3 +349,33 @@ EXITS = {
         "caveats": ["no-real-internet", "tls-untrusted-cert"],
     },
 }
+
+
+# Routed and direct maximum values
+
+#: Per-clone egress throttles, applied to `direct` and `routed` only --
+#: `argv_apply` returns before them for tor and simulated. DRAFT-057 Phase 5.
+#:
+#: **UNMEASURED.** These four numbers are guesses; no benign baseline has been
+#: taken. Runbook 15 step 4 is what replaces them with measured values, and the
+#: measured figure belongs in this comment beside the chosen one.
+MAX_NEW_CONNS_PER_SEC = "20/sec"
+
+#: Packet-mode burst. The module default is 5, which is far below any real
+#: traffic pattern -- a page load opens more than five connections at once --
+#: so this must stay explicit.
+MAX_NEW_CONNS_BURST = "40"
+
+#: Byte mode: `mb/s` is MEGABYTES, so this is ~50 Mbit/s, not 6.
+MAX_EGRESS_RATE = "6mb/s"
+
+#: The floor for the rate above, roughly one second at the cap. **These two
+#: move together**: raise the rate without raising this and iptables refuses
+#: the rule at install time ("burst cannot be smaller than 12583664b" for
+#: 12mb/s). That failure lands on Dom0, not in the test suite.
+MAX_EGRESS_RATE_BURST = "6291824b"
+
+#: Parallel connections, not new ones -- `connlimit` counts open conntrack
+#: entries per source. This is the cap that bounds horizontal scanning, which
+#: shows up as hundreds of simultaneous half-open SYNs.
+MAX_PARALLEL_CONNS = "50"

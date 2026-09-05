@@ -929,7 +929,7 @@ owned by nobody:
 | Draft | Issue |
 |---|---|
 | DRAFT-060 | [#41](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/41) **CLOSED 2026-09-04** — `sandboxd` delivered and evidenced |
-| DRAFT-057 | [#42](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/42) **open** — built through Phase 4; blocked on a provider, not on code. See DRAFT-057.md |
+| DRAFT-057 | [#42](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/42) **open** — Phases 0–4 evidenced. Criterion 4 (exit country) **descoped 2026-09-05**: mechanism built, no exit declares a country, and this lab will not rent one. Phase 5 (per-clone throttles) is built and **unevidenced** — runbook 15 is the test. See DRAFT-057.md |
 
 > **Issue sweep, 2026-09-04.** Five issues were closed together after checking
 > each against the repository rather than against its own text, which is the
