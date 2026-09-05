@@ -49,13 +49,27 @@ def test_a_phase_budget_exceeds_the_time_it_spends_sleeping(os_, kind):
 
 
 def test_the_android_apk_preconfig_has_real_headroom():
-    """20s of that budget is a deliberate sleep, so a 60s guard leaves 40s for
-    a 12 MB writefile plus three injections. Asserted rather than assumed,
-    because it is the tightest phase in the pipeline."""
+    """The budget must fit the whole component-poll ceiling AND leave room for
+    the injections around it -- a 12 MB writefile plus three injections, none
+    of them measured. Asserted rather than assumed, because it is the tightest
+    phase in the pipeline.
+
+    The ceiling is a worst case a healthy job never reaches, but `left()` is
+    keyed on the budget: if the budget did not cover it, the phase guard would
+    fire before the poll's own deadline and replace a useful error with a
+    timeout."""
     b = budgets(TargetOs.ANDROID, SampleKind.APK)
 
-    headroom = b.preconfig - T.APK_INSTALL_WAIT
+    headroom = b.preconfig - T.APK_COMPONENT_TIMEOUT
     assert headroom >= 40, f"only {headroom}s for the injections themselves"
+
+
+def test_a_non_apk_preconfig_budget_did_not_move():
+    """The 2026-09-04 poll change is scoped to the Android APK path. Every
+    other job keeps dirwatch's 60s guard, and this is what says so."""
+    for os_, kind in [(TargetOs.UBUNTU, SampleKind.ELF),
+                      (TargetOs.ANDROID, SampleKind.ELF)]:
+        assert budgets(os_, kind).preconfig == 60.0
 
 
 def test_the_trace_budget_covers_drakvufs_own_timeout():
@@ -87,21 +101,37 @@ def test_the_pre_trace_settle_applies_to_the_elf_paths():
     assert T._trace_waits(TargetOs.ANDROID, SampleKind.ELF) == T.PRE_TRACE_SETTLE
 
 
-def test_the_apk_path_skips_the_settle():
-    """preconfig has just spent APK_INSTALL_WAIT seconds installing, so the
-    clone is long since settled -- and every second here comes out of a trace
-    budget the launch is already short of. drakvuf-android.sh:218 makes the
-    same exception."""
-    assert T._trace_waits(TargetOs.ANDROID, SampleKind.APK) == 0.0
+def test_the_apk_path_no_longer_skips_the_settle():
+    """**Reversed 2026-09-04, and the reason is the poll.** The exemption rested
+    on preconfig having just spent a fixed 20s installing, so the clone was
+    "long since settled". The sleep is now a poll that returns as soon as the
+    component appears, so a fast install reaches the trace seconds after the
+    guest wrote the handoff -- the un-settled clone the exemption assumed away.
+
+    `drakvuf-android.sh:218` still makes the old exception; it is on the legacy
+    `dirwatch` path, which is stale (see CURRENT-STATE §2b)."""
+    assert T._trace_waits(TargetOs.ANDROID, SampleKind.APK) == T.PRE_TRACE_SETTLE
 
 
 # --- the measured constants -------------------------------------------------
 
-def test_the_apk_wait_is_above_what_was_measured():
+def test_the_component_ceiling_is_well_above_what_was_measured():
     """3 seconds measured for a 12 MB APK on Dom0 2026-08-17, network
-    configuration included. The rest is margin, per the project's standing
-    preference to set a guard above the measured value."""
-    assert T.APK_INSTALL_WAIT > 3
+    configuration included -- and 20s of margin over it was NOT enough, because
+    the margin was over the wrong thing: `pm list packages` waits on the package
+    service after a restore, and jobs failed with `readfile` ENOENT.
+
+    The ceiling is now generous on purpose. Overshooting costs a slow failure;
+    undershooting costs a failed job on a healthy sample, which is what was
+    observed 2026-09-04."""
+    assert T.APK_COMPONENT_TIMEOUT > 20
+
+
+def test_the_component_poll_interval_is_not_a_busy_loop():
+    """Each attempt is an `injector readfile` against a live domain, so the
+    interval is a real cost, not a formality."""
+    assert T.APK_COMPONENT_POLL >= 1.0
+    assert T.APK_COMPONENT_POLL < T.APK_COMPONENT_TIMEOUT
 
 
 def test_the_kill_grace_matches_cleanups_escalation():

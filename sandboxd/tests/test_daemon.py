@@ -125,7 +125,7 @@ def config(tmp_path) -> Config:
     return Config(staging_dir=tmp_path / "staging",
                   results_dir=tmp_path / "results",
                   config_dir=tmp_path / "cfg", repo_root=repo,
-                  waits=T.Waits(settle=0.0, apk_install=0.0, destroy_settle=0.0),
+                  waits=T.Waits(settle=0.0, apk_component_timeout=0.0, apk_component_poll=0.0, destroy_settle=0.0),
                   heartbeat_interval=60.0)
 
 

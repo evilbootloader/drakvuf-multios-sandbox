@@ -21,10 +21,14 @@ tunes down when a pipeline feels slow -- and two of these are load-bearing.
           trace. Neither script says so -- stated here because "settling time"
           reads as superstition and invites deletion.
 
-   20s    APK install (APK_INSTALL_WAIT)
-          preconfig-android.sh:384. 3 seconds MEASURED for a 12 MB APK on
-          2026-08-17, network configuration included. The margin is the point:
-          a preconfig timeout is a clone-and-retry loop, not an error.
+  <=90s   APK launcher component (APK_COMPONENT_TIMEOUT), a CEILING not a sleep
+          Was a fixed 20s (preconfig-android.sh:384, and still is on the legacy
+          dirwatch path). 3 seconds MEASURED for a 12 MB APK on 2026-08-17,
+          network configuration included -- but the margin was over the install,
+          and what actually overran was `pm list packages` waiting on the
+          package service after a restore. Jobs failed with `readfile` ENOENT.
+          Now polled: preconfig waits for content that parses as a launchable
+          component, so a healthy job is FASTER than the old sleep.
 
     5s    SIGINT -> SIGKILL
           cleanup.sh:146. DRAKVUF flushes and detaches its introspection state
@@ -70,9 +74,36 @@ from .guests import SampleKind, TargetOs
 # before the guest finished applying it.
 PRE_TRACE_SETTLE = 5.0
 
-# 3s measured for a 12 MB APK (Dom0 2026-08-17); the rest is margin, per the
-# project's standing preference to set a guard above the measured value.
-APK_INSTALL_WAIT = 20.0
+# **Was a fixed 20s sleep. Replaced by a poll on 2026-09-04, because the sleep
+# was timing the wrong thing and jobs failed on it.**
+#
+# Both numbers, per the standing preference to keep the measurement next to the
+# guard: 3s was MEASURED for a 12 MB APK (Dom0 2026-08-17, nested host) and 20s
+# was the margin over it. The margin was ample for the install and irrelevant to
+# the failure: `pm list packages` runs BEFORE the install line and talks to the
+# package service over binder, which on a freshly restored clone may not be up
+# yet. The handoff is created by the install line's redirect, so a slow package
+# service means `readfile` hits `-ENOENT` and the job dies. Intermittent,
+# because a warm service returns instantly. See TROUBLESHOOTING, "`injector
+# readfile` fails with `syscall return code: -2`".
+#
+# A ceiling replaces a duration: the poll returns as soon as the component is
+# there, so the common case is FASTER than the old sleep, and the 90s is only
+# ever spent when something is actually wrong. Generous on purpose -- the cost
+# of overshooting is a slow failure, the cost of undershooting is a failed job
+# on a healthy sample, which is what we had.
+APK_COMPONENT_TIMEOUT = 90.0
+
+# How often to ask. Each attempt is an `injector readfile`, so this is not free;
+# 2s keeps the worst case around 45 injections rather than 90.
+APK_COMPONENT_POLL = 2.0
+
+# Headroom over the deliberate waits for the injections themselves, none of
+# which is measured -- notably the 12 MB `writefile`. Was an implicit `* 3`
+# multiplier on the sleep, which stopped meaning anything once the sleep became
+# a ceiling that is usually not reached: tripling a 90s ceiling would have given
+# a 270s guard for a phase that normally finishes in seconds.
+PRECONFIG_INJECTION_HEADROOM = 60.0
 
 # cleanup.sh's escalation. Also proc.DEFAULT_GRACE.
 KILL_GRACE = 5.0
@@ -118,7 +149,11 @@ class Waits:
     """
 
     settle: float = PRE_TRACE_SETTLE
-    apk_install: float = APK_INSTALL_WAIT
+    # A CEILING, not a duration: how long preconfig will wait for the launcher
+    # component before giving up. Lowering it does not make a job faster, it
+    # only makes a slow guest fail sooner.
+    apk_component_timeout: float = APK_COMPONENT_TIMEOUT
+    apk_component_poll: float = APK_COMPONENT_POLL
     kill_grace: float = KILL_GRACE
     # The post-`xl destroy` poll, used by both the clone builder and the
     # startup sweep. Here with the rest because it is the same kind of thing:
@@ -133,24 +168,32 @@ def _preconfig_waits(os_: TargetOs, kind: SampleKind,
                      waits: Waits = DEFAULT_WAITS) -> float:
     """The waits that MUST fit inside the preconfig budget.
 
-    Not an estimate of how long preconfig takes -- it is the part that is
-    unavoidable regardless of how fast the host is, because it is time this
-    code spends deliberately sleeping.
+    **The worst case, not the expected case** -- and that changed on 2026-09-04.
+    This used to be time the code spent unconditionally asleep, so it was both.
+    The APK wait is now a poll that returns as soon as the component appears, so
+    a healthy job spends a fraction of it; the budget still has to accommodate
+    the whole ceiling, or `left()` cuts the poll short before its own deadline
+    and the phase guard fires instead of the useful error.
     """
     total = 0.0
     if os_ is TargetOs.ANDROID and kind is SampleKind.APK:
-        total += waits.apk_install
+        total += waits.apk_component_timeout
     return total
 
 
 def _trace_waits(os_: TargetOs, kind: SampleKind,
                  waits: Waits = DEFAULT_WAITS) -> float:
-    if os_ is TargetOs.ANDROID and kind is SampleKind.APK:
-        # The APK path skips the settle: preconfig has just spent
-        # APK_INSTALL_WAIT seconds installing, so the clone is long since
-        # settled, and every second here comes out of a trace budget the launch
-        # is already short of.
-        return 0.0
+    # **The APK path used to skip the settle, and no longer can (2026-09-04).**
+    # That exemption rested on preconfig having just spent a fixed 20s
+    # installing, so the clone was "long since settled". With the sleep replaced
+    # by a poll that returns as soon as the component appears, a fast install
+    # now reaches the trace seconds after the guest finished writing the
+    # handoff -- exactly the un-settled clone the exemption assumed away.
+    #
+    # It costs the APK launch `settle` seconds of trace budget, which is the
+    # trade the old comment was avoiding. Paying it is the conservative side:
+    # the alternative is attaching the trace to a guest that is still applying
+    # its network configuration.
     return waits.settle
 
 
@@ -174,10 +217,12 @@ def budgets(os_: TargetOs, kind: SampleKind, trace_timeout: int,
 
     return PhaseBudgets(
         clone=CLONE_BUDGET,
-        # 3x the deliberate sleeping, floored at dirwatch's 60. The multiplier
-        # is headroom for the injections themselves, which are not measured --
-        # notably the 12 MB writefile above.
-        preconfig=max(60.0, preconfig_floor * 3),
+        # The worst-case waiting PLUS headroom for the injections, floored at
+        # dirwatch's 60. Additive rather than the former `* 3`: the multiplier
+        # made sense against a sleep the phase always spent, and would give a
+        # 270s guard now that the 90 is a ceiling a healthy job never reaches.
+        # Non-APK jobs are unchanged at 60.
+        preconfig=max(60.0, preconfig_floor + PRECONFIG_INJECTION_HEADROOM),
         # The trace's own -t plus the settle, plus 30s for process startup and
         # DRAKVUF's own teardown. dirwatch used a flat 180 against -t 120,
         # leaving 55s unused on Ubuntu and ~20s on the Android APK path.

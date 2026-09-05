@@ -230,14 +230,28 @@ class Config:
     console_api: str = ""
     worker_token: str = ""
     ssl_context: object = None
-    # Both OS families anchor on their init: systemd on Ubuntu, Android's
-    # `init` on Android. The anchor must be schedulable with no guest input --
-    # `nano`, `gedit` and a SIGTTIN-stopped background job are all not -- and
-    # PID 1 is the only value a template re-save cannot invalidate, which
-    # removes the re-derivation step that has silently broken injection twice.
-    # On Ubuntu this means samples run as root; on Android the anchor was
-    # already required to be root, so it costs nothing. The accepted trades
-    # are in automation/pipeline-{ubuntu,android}.env.
+    # The anchor must be schedulable with no guest input -- `nano`, `gedit` and
+    # a SIGTTIN-stopped background job are all not -- and it must be root.
+    #
+    # **Only Ubuntu anchors on PID 1.** systemd, so samples run as root; that
+    # cost is accepted in automation/pipeline-ubuntu.env.
+    #
+    # Android went to PID 1 on 2026-08-29 and came back on 2026-08-31, because
+    # Android's `init` does not provide a runtime environment for
+    # `app_process64` and the APK path needs one. So the anchor is a
+    # backgrounded `ping` against 127.0.0.1 -- self-scheduling, single-threaded,
+    # and aimed at loopback so anchor traffic stays out of the per-sample pcap.
+    # The full case, including the argument for PID 1 that it reversed, is in
+    # automation/pipeline-android.env.
+    #
+    # **The costs PID 1 removed are therefore live again for Android, and for
+    # Windows, which is the same shape.** These PIDs are valid only for the
+    # .bak they were read from and must be re-derived after every template
+    # re-save; a stale one fails SILENTLY, because `injector` attaches to
+    # whatever PID it is handed. Android has been 3163, 3164, 3174 and now
+    # 3251. Do not auto-discover either by process-name grep: Android runs two
+    # processes named `init`, and the anchor is deliberately unremarkable so
+    # the string `drakvuf` appears nowhere a sample can read (issue #7).
     injection_pids: dict = field(default_factory=lambda: {
         TargetOs.UBUNTU: 1, TargetOs.ANDROID: 3251, TargetOs.WINDOWS: 4696})
     # `lv_sizes` was dropped 2026-08-29 with CLONE_LV_SIZE. Clones are thin
@@ -614,26 +628,8 @@ class Analysis:
                          timeout=left("pm install"), what="pm install",
                          check=True)
 
-        # execproc returns at process START, so this sleep is the only
-        # synchronisation Dom0 has. Returning early would hand a still-running
-        # install to the trace, which is the slowdown the split removes.
-        #
-        # Inside the deadline like everything else -- it is the single largest
-        # item in the phase, and `_preconfig_waits` derives the budget's floor
-        # from it precisely so that it fits.
-        self._sleep(self._cfg.waits.apk_install, beat)
-
         dest = job.result_dir / "launch-component"
-        # `check=True`, because without it a failed injection is indistinguishable
-        # from an APK with no launcher activity. `proc.run` defaults to
-        # check=False, so this step used to fail silently, `dest` never appeared,
-        # and `component` fell back to "" -- reported below as "no usable
-        # launcher component", which names the sample for a fault that may be
-        # entirely on Dom0's side. Observed 2026-08-29 sending an F-Droid APK
-        # whose component resolved correctly, and by hand, in one second.
-        self._runner.run(guests.argv_read_component(job, handoff, dest),
-                         timeout=left("readfile"), what="injector readfile",
-                         check=True)
+        component = self._await_component(job, handoff, dest, left, beat)
         # Removed before the sample runs: a file in its own staging directory
         # naming its own component is what an evasive application looks for.
         #
@@ -646,11 +642,65 @@ class Analysis:
         # starting.
         self._runner.run(guests.argv_remove_handoff(job, handoff),
                          timeout=left("rm"), what="injector rm", check=True)
-
-        component = dest.read_text().strip() if dest.exists() else ""
-        if not guests.component_is_launchable(component):
-            raise CommandError("resolve-activity", _no_component(component))
         return component
+
+    def _await_component(self, job: Job, handoff: str, dest: Path,
+                         left, beat: Heartbeat) -> str:
+        """Read the handoff until it holds a launcher component, or give up.
+
+        **Replaces a fixed sleep that was timing the wrong thing** (2026-09-04).
+        `execproc` returns when the guest shell STARTS, so Dom0 had no
+        completion signal and slept `APK_INSTALL_WAIT` instead. The install fits
+        that easily; `pm list packages`, which runs before it, does not always
+        -- it waits on the package service, which a freshly restored clone may
+        not have up yet. The handoff is created by the install line's redirect,
+        so a slow service means this `readfile` returns `-ENOENT` and a healthy
+        sample fails. Intermittently, because a warm service returns at once.
+
+        **Polling for the FILE would be wrong, and quietly so.** The handoff is
+        written twice: `pm install` redirects its own output there first, on
+        purpose, so a failed install explains itself, and `resolve-activity`
+        overwrites it on success. An existence check therefore passes on the
+        install diagnostic and hands it on as a component -- rejected downstream
+        as "no usable launcher component", blaming the sample for a Dom0-side
+        timing fault. That is the misdiagnosis the 2026-08-29 redirect fix
+        removed, arriving by a different route. So the predicate is the content:
+        `component_is_launchable`, the same one that gates the return value.
+
+        **On expiry the two failures are reported differently, and keeping them
+        apart is most of the value here.** A `readfile` that never succeeded is
+        reported AS a readfile failure, carrying `injector`'s own output --
+        `syscall return code: -2`, `Could not open file in guest`. That message
+        is what made this bug diagnosable at all, and collapsing it into "no
+        usable launcher component" would have thrown it away. Only when the
+        read succeeded and the content is not a component does this report
+        `resolve-activity`, which is the honest answer for an APK that declares
+        no launcher activity.
+        """
+        # `check=False` INSIDE the loop, and this is NOT a relaxation of the
+        # 2026-08-29 fix that made this checked. That fix existed so a failed
+        # injection could not masquerade as an APK with no launcher activity,
+        # and the branch below preserves exactly that: the failure is still
+        # raised, still named `injector readfile`, still carrying the guest's
+        # words. What changed is that ENOENT is now the EXPECTED answer while
+        # the guest shell is still behind us, so it must not end the job on the
+        # first attempt -- the deadline is what turns "not yet" into a failure.
+        argv = guests.argv_read_component(job, handoff, dest)
+        deadline = time.monotonic() + self._cfg.waits.apk_component_timeout
+        last = ""
+        while True:
+            self._check(beat)
+            done = self._runner.run(argv, timeout=left("readfile"),
+                                    what="injector readfile", check=False)
+            if done.ok and dest.exists():
+                last = dest.read_text().strip()
+            if guests.component_is_launchable(last):
+                return last
+            if time.monotonic() >= deadline:
+                if not done.ok:
+                    raise CommandError("injector readfile", done)
+                raise CommandError("resolve-activity", _no_component(last))
+            self._sleep(self._cfg.waits.apk_component_poll, beat)
 
     def _trace(self, job: Job, component: str | None, beat: Heartbeat) -> None:
         """Run DRAKVUF with the capture alongside it."""

@@ -157,7 +157,7 @@ def config(tmp_path) -> S.Config:
     return S.Config(staging_dir=tmp_path / "staging",
                     results_dir=tmp_path / "results",
                     config_dir=tmp_path / "cfg", repo_root=repo,
-                    waits=T.Waits(settle=0.0, apk_install=0.0))
+                    waits=T.Waits(settle=0.0, apk_component_timeout=0.0, apk_component_poll=0.0))
 
 
 def runner_ready(clone="ubuntu_sandbox-3-clone", origin="ubuntu_sandbox"):
@@ -486,8 +486,90 @@ def test_the_component_readfile_and_its_cleanup_are_checked(tmp_path):
     S.Analysis(api, r, cfg).run(lease, 3)
 
     by_stage = {c.what: c for c in r.calls}
-    assert by_stage["injector readfile"].check is True
     assert by_stage["injector rm"].check is True
+
+    # **The readfile is deliberately UNchecked since 2026-09-04, and the
+    # property above is preserved by `_await_component` instead.** It polls,
+    # because ENOENT is the expected answer while the guest shell is still
+    # behind Dom0 -- the fixed sleep it replaced was failing healthy jobs. A
+    # readfile that never succeeds is still raised as `injector readfile`,
+    # carrying injector's own output, which is what stops it masquerading as an
+    # APK with no launcher activity. `test_a_readfile_that_never_succeeds_is_
+    # reported_as_a_readfile_failure` is where that now lives.
+    assert by_stage["injector readfile"].check is False
+
+
+def _readfile_prefix(cfg) -> tuple[str, ...]:
+    """The argv prefix that matches ONLY the component readfile.
+
+    Every Android injection shares elements 0-6, so the prefix has to run all
+    the way to `-m readfile` to avoid also answering the writefile and the
+    execproc."""
+    return ("injector", "-r", str(cfg.profile(S.TargetOs.ANDROID)),
+            "-d", "42", "-i", str(cfg.injection_pids[S.TargetOs.ANDROID]),
+            "-m", "readfile")
+
+
+def test_a_readfile_that_never_succeeds_is_reported_as_a_readfile_failure(tmp_path):
+    """**The message that made this bug diagnosable must survive the poll.**
+
+    `_await_component` tolerates a failing readfile because ENOENT is the
+    expected answer while the guest shell is still behind Dom0. When the
+    deadline expires having never succeeded, it must still fail AS a readfile,
+    carrying injector's own words -- `syscall return code: -2`, `Could not open
+    file in guest`. Collapsing that into "no usable launcher component" would
+    blame the sample for a Dom0-side timing fault, which is the 2026-08-29
+    defect arriving by a new route."""
+    r = runner_ready("android_sandbox-3-clone", "android_sandbox")
+    cfg = config(tmp_path)
+    r.script(_readfile_prefix(cfg), rc=1,
+             stderr="syscall return code: -2\nCould not open file in guest")
+    api = FakeApi(sample_bytes=apk_bytes(tmp_path))
+    cfg.config_dir.mkdir(parents=True, exist_ok=True)
+
+    lease = FakeLease(target_os="android", submitted_filename="app.apk",
+                      sha256=digest(api.sample_bytes))
+    S.Analysis(api, r, cfg).run(lease, 3)
+
+    _, detail = api.states[-1]
+    assert "readfile" in str(detail), detail
+    assert "-2" in str(detail) or "Could not open file" in str(detail), detail
+
+
+def test_a_component_that_appears_late_is_waited_for(tmp_path):
+    """The whole point of the poll: a guest that is slow to write the handoff
+    must not fail a healthy sample. The fixed sleep this replaced did exactly
+    that when `pm list packages` waited on the package service after a
+    restore."""
+    r = runner_ready("android_sandbox-3-clone", "android_sandbox")
+    cfg = config(tmp_path)
+    cfg.waits = T.Waits(settle=0.0, apk_component_timeout=30.0,
+                        apk_component_poll=0.0)
+    dest = cfg.results_dir / FakeLease().job_id / "launch-component"
+
+    # Fails twice, then the guest "writes" the handoff and the read succeeds.
+    r.script(_readfile_prefix(cfg), rc=1, times=2)
+
+    inner = r.run
+
+    def run(argv, **kw):
+        done = inner(argv, **kw)
+        if "readfile" in argv and done.ok:
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_text("com.example/.MainActivity\n")
+        return done
+
+    r.run = run
+    api = FakeApi(sample_bytes=apk_bytes(tmp_path))
+    cfg.config_dir.mkdir(parents=True, exist_ok=True)
+
+    lease = FakeLease(target_os="android", submitted_filename="app.apk",
+                      sha256=digest(api.sample_bytes))
+    S.Analysis(api, r, cfg).run(lease, 3)
+
+    reads = [c for c in r.calls if c.what == "injector readfile"]
+    assert len(reads) == 3, f"gave up after {len(reads)} attempt(s)"
+    assert states_of(api)[-1] == "completed", api.states[-1]
 
 
 # --- inputs that do not exist yet ------------------------------------------
