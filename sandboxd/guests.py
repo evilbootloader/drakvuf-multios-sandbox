@@ -484,7 +484,7 @@ def _android_netcfg(job: Job, subnet: str) -> str:
 def _windows_netcfg(job: Job, subnet: str) -> str:
     paths = PATHS[TargetOs.WINDOWS]
     return (
-        f"/c netsh interface ip set address name=Ethernet static {subnet}.{job.vlan}.2 255.255.255.0 {subnet}.{job.vlan}.1 && netsh interface ip set dns name=Ethernet static {paths.nameserver} validate=no"
+        f"netsh interface ip set address name=Ethernet static {subnet}.{job.vlan}.2 255.255.255.0 {subnet}.{job.vlan}.1 && netsh interface ip set dns name=Ethernet static {paths.nameserver} validate=no"
         )
 
 
@@ -499,24 +499,26 @@ def argv_configure_network(job: Job, subnet: str = "172.16") -> list[str]:
     shell = PATHS[job.target_os].shell
 
     if job.target_os == TargetOs.ANDROID:
-        script = f"-c {_android_netcfg(job, subnet)}"
-        mode = "execproc"
-
+        script = (_android_netcfg(job, subnet))
+        return [
+            "injector", "-r", str(job.profile), "-d", str(job.domid),
+            "-i", str(job.injection_pid), "-m", "execproc",
+            "-e", shell, "-f", "-c", "-f", script,
+        ]
     elif job.target_os == TargetOs.UBUNTU:
-        script = f"-c {_ubuntu_netcfg(job, subnet)}"
-        mode = "execproc"
-
+        script = (_ubuntu_netcfg(job, subnet))
+        return [
+            "injector", "-r", str(job.profile), "-d", str(job.domid),
+            "-i", str(job.injection_pid), "-m", "execproc",
+            "-e", shell, "-f", "-c", "-f", script,
+        ]
     elif job.target_os == TargetOs.WINDOWS:
-        script = f"/c {_windows_netcfg(job, subnet)}"
-        mode = "shellexec"
-
-    mode = "shellexec" if job.target_os == TargetOs.WINDOWS else "execproc"
-
-    return [
-        "injector", "-r", str(job.profile), "-d", str(job.domid),
-        "-i", str(job.injection_pid), "-m", mode,
-        "-e", shell, "-f", script,
-    ]
+        script = f"/c {(_windows_netcfg(job, subnet))}"
+        return [
+            "injector", "-r", str(job.profile), "-d", str(job.domid),
+            "-i", str(job.injection_pid), "-m", "shellexec",
+            "-e", shell, "-f", script,
+        ]
 
 
 def argv_install_apk(job: Job, handoff: str) -> list[str]:
