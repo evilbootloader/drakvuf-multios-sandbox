@@ -484,7 +484,7 @@ def _android_netcfg(job: Job, subnet: str) -> str:
 def _windows_netcfg(job: Job, subnet: str) -> str:
     paths = PATHS[TargetOs.WINDOWS]
     return (
-        f"\"netsh interface ip set address name=\\\"Local Area Connection\\\" static {subnet}.{job.vlan}.2 255.255.255.0 {subnet}.{job.vlan}.1 && netsh interface ip set dns name=\\\"Local Area Connection\\\" static ${ns} validate=no\""
+        f"\"netsh interface ip set address name=\\\"Local Area Connection\\\" static {subnet}.{job.vlan}.2 255.255.255.0 {subnet}.{job.vlan}.1 && netsh interface ip set dns name=\\\"Local Area Connection\\\" static ${paths.nameserver} validate=no\""
         )
 
 
