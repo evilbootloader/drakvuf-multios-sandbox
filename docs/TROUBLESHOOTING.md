@@ -2272,3 +2272,36 @@ are asymmetric: over-reserving costs idle RAM, under-reserving costs an
 OOM-killed `xl restore` partway through an analysis. `DOMAIN_OVERHEAD_MIB` is
 150 against a measured 112 (`sandboxd/resources.py:58`). A Windows clone's
 overhead has never been observed.
+
+### Baseline measured against throttled code
+
+**Symptom.** A throttle baseline that reads impossibly low, or counting rules
+that stay at zero when the traffic plainly happened. Nothing errors.
+
+**Cause.** The checkout was updated to a commit that adds the throttles before
+the unthrottled baseline was taken. `sandboxd` has no systemd unit and holds
+its module in memory, so a `git pull` alone changes nothing — but the next
+restart makes the throttles live, and a baseline measured afterwards is
+calibrating limits against traffic those same limits already shaped.
+
+**Fix.** Check what the clone's chain actually holds while a job is running:
+
+```sh
+iptables -S DRAKVUF_EGRESS_V<vlan>
+```
+
+Three rules — permit, return path, terminal DROP — is pre-throttle code and
+the baseline is sound. Six means the throttles are live; put the two files back
+to the pre-throttle commit (`git checkout <sha> -- sandboxd/egress.py
+sandboxd/config.py`), restart, re-measure, then `git checkout HEAD --` the same
+paths.
+
+**Do not try to salvage a contaminated run by reasoning about it.** The
+counting ladder sits in the parent chain and does see packets before the
+per-VLAN throttles drop them, which sounds like it should be safe and is not:
+TCP adapts to loss, so retransmits inflate some counts while backoff deflates
+others.
+
+`iptables -S | grep -c DRAKVUF_EGRESS_V` is the cheap form of the same check —
+5 lines pre-throttle, 8 after — and it is why that assert exists in runbook 15
+step 3.

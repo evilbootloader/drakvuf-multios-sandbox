@@ -618,7 +618,10 @@ The tunnel goes UP first. A `routed` job submitted while it is down is refused,
 which is step 8, not this step.
 
 ```sh
-# A. the job is live and the rules under test exist. THREE rules, not "no chain".
+# A. the job is live and the rules under test exist -- not "no chain".
+#    THREE rules when this was executed (2026-09-02..04); SIX since the
+#    DRAFT-057 Phase 5 throttles landed 2026-09-05, which add three DROPs
+#    above the permit. See docs/runbooks/15-verify-egress-throttles.md.
 iptables -S DRAKVUF_EGRESS_V1
 
 # B. the clone is offering traffic -- in the guest, left running

@@ -1,6 +1,13 @@
 # DRAFT-057: Egress routing — offline, direct, or through an exit we choose
 
-**Status:** **[#42](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/42) — published 2026-08-25, OPEN.**
+**Status:** **Closed 2026-09-05** —
+[issue #42](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/42),
+published 2026-08-25. All six acceptance criteria met; TEST item 4 (exit
+country) descoped rather than proven, for the reasons in "Status 2026-09-05".
+**Closed with two documented gaps, both recorded rather than resolved**: the
+byte-rate rule has never been observed firing, and `routed` under throttles was
+not run. Neither blocks the criteria this issue set itself; both are stated so
+nobody reads the close as meaning they were done.
 **Area:** platform/security
 **OS:** ALL
 **Milestone:** M2 — this gates live detonation, not enriches it.
@@ -303,14 +310,14 @@ So the honest end state is the current one: no exit declares a country, and
 already there and the open question becomes verification — comparing the
 declaration against an observed address at apply time — rather than plumbing.
 
-**Phase 5 is now the open item.** The throttles are built in
-`argv_apply`'s forwarding path: a per-clone new-connection rate
-(`--hashlimit-above 20/sec`, packet mode, `--ctstate NEW`), a per-clone
-bandwidth cap (`--hashlimit-above 6mb/s`, byte mode) and a parallel-connection
-cap (`--connlimit-above 50`), all three DROPs installed above the single
-`-o`-constrained ACCEPT so the kill-switch is unchanged. **No Dom0 evidence
-exists**, and the four constants are guesses: nothing has measured what a
-benign run actually does. Runbook 15 is the test.
+**Phase 5 is built and mostly evidenced.** The throttles live in `argv_apply`'s
+forwarding path: a per-clone new-connection rate (`--hashlimit-above 20/sec`,
+packet mode, `--ctstate NEW`), a per-clone bandwidth cap
+(`--hashlimit-above 6mb/s`, byte mode) and a parallel-connection cap
+(`--connlimit-above 50`), all three DROPs installed above the single
+`-o`-constrained ACCEPT so the kill-switch is unchanged.
+`docs/runbooks/15-verify-egress-throttles.md`, executed 2026-09-05, is the
+evidence. See the section below for what it did and did not settle.
 
 **`tor` and `simulated` are deliberately unthrottled** (maintainer,
 2026-09-05). `argv_apply` returns at `sandboxd/egress.py:577` and `:580`
@@ -319,6 +326,55 @@ contradicts this issue's own Tor override above, which offers the Phase 5
 throttles as the partial mitigation for the volunteer-exit-operator objection
 — that sentence overstates what is built, and the objection currently stands
 unmitigated rather than partly mitigated.
+
+## Status 2026-09-05 (later the same day) — Phase 5 executed
+
+`docs/runbooks/15-verify-egress-throttles.md`, steps 1–11 and 13 on Dom0.
+
+**Proven.** The connection-rate cap binds (51 → 108 drops). The
+parallel-connection cap binds on its own account (241 drops, downstream of the
+292 the rate rule had already taken). Neither fires on a benign run — every
+throttle counter read zero across Ubuntu, Android and Windows. Teardown is
+clean: the per-VLAN chain and its `dv_v*` hashlimit tables both disappear with
+the job, so no clone inherits a partly-spent bucket. `tor` and `simulated`
+build no forwarding chain at all, confirming they are unthrottled.
+
+**The measurement that mattered most was not a pass or a fail.** A
+DRAKVUF-traced clone sustains **19 MB/s** of egress, so `6mb/s` sits about 3×
+below what a guest can actually produce. Had it come out the other way the cap
+would have been decoration — a number no clone could reach, promised to a host
+with nothing behind it.
+
+**KNOWN GAP: the byte rule has never been observed dropping a packet.** Not for
+lack of trying, and the reason is structural rather than a mistake. An
+unreplied UDP flow never leaves conntrack's `NEW` state, so a one-way flood is
+taken by the connection-rate rule sitting above the byte rule — exactly 200
+packets per ten seconds got through, 20/sec to the packet. Exercising the byte
+rule needs `ESTABLISHED` traffic and therefore a sink, and the `routed` peer
+that would have served was not rebuilt.
+
+The corollary is worth carrying into `private/egress-exits.md` §5: **for
+one-way UDP the effective ceiling is 20 packets per second, about 28 KB/s** —
+far tighter than `6mb/s`, and it is the bound that governs the scanning and
+flooding patterns §4.2 identifies as the clause every host enforces. Telling a
+host "6 MB/s" understates the control by three orders of magnitude.
+
+**Also unobserved:** step 12, `routed` under throttles, abandoned rather than
+left pending. The rules are built by the same code for both modes and
+`sandboxd/tests/` pins the `routed` rule set including the kill-switch
+invariant, so this is unobserved rather than unchecked.
+
+**Constants remain partly justified.** Three of the four are bounds rather than
+measured peaks — no ladder rung fired, including the lowest — so the margins
+are floors. `MAX_PARALLEL_CONNS = 50` against a measured 28 on Windows is the
+tightest at 1.8×, and Windows is the least exercised pipeline.
+
+**One defect found that is not about throttles.** The per-VLAN return-path
+ACCEPT is unreachable: `DRAKVUF_ISOLATION` jumps into `DRAKVUF_EGRESS` only for
+traffic arriving on a clone interface, and accepts established inbound itself
+one rule later. It read zero packets in every observation. The rule is harmless
+redundancy; the comment above it in `sandboxd/egress.py` credits it with a
+guarantee it is not providing, which `CLAUDE.md` does not allow to stand.
 
 # Evidence required
 

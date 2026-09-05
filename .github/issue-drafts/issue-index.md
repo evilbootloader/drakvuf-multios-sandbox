@@ -929,7 +929,7 @@ owned by nobody:
 | Draft | Issue |
 |---|---|
 | DRAFT-060 | [#41](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/41) **CLOSED 2026-09-04** — `sandboxd` delivered and evidenced |
-| DRAFT-057 | [#42](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/42) **open** — Phases 0–4 evidenced. Criterion 4 (exit country) **descoped 2026-09-05**: mechanism built, no exit declares a country, and this lab will not rent one. Phase 5 (per-clone throttles) is built and **unevidenced** — runbook 15 is the test. See DRAFT-057.md |
+| DRAFT-057 | [#42](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/42) **CLOSED 2026-09-05** — Phases 0–5 built and evidenced. Criterion 4 (exit country) **descoped**: mechanism plumbed end to end, no exit declares a country, this lab will not rent one. Phase 5 throttles evidenced by runbook 15 for connection rate, concurrency, benign-run safety and teardown; clone egress ceiling measured at **19 MB/s**, so the 6 MB/s cap is a real ceiling rather than decoration. **Closed with two documented gaps**: the byte rule has never been seen firing — an unreplied UDP flood is taken by the rate rule first, so it needs `ESTABLISHED` traffic and a sink — and `routed` under throttles was not run. See DRAFT-057.md |
 
 > **Issue sweep, 2026-09-04.** Five issues were closed together after checking
 > each against the repository rather than against its own text, which is the

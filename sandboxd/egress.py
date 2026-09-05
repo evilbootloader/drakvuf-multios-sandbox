@@ -662,9 +662,29 @@ def argv_apply(
         # property of what the rule says, not of a watchdog noticing in time.
         ["iptables", "-A", fchain, "-i", iface, "-o", out, "-j", "ACCEPT"],
 
-        # The return path. Every rule above matches on the input interface, and
-        # a reply arrives on the exit interface, so without this egress would
-        # depend on FORWARD's policy again -- which is what DRAFT-029 removed.
+        # The return path -- and it is UNREACHABLE TODAY, kept deliberately.
+        #
+        # The reasoning it was written for is sound: every rule above matches on
+        # the input interface, and a reply arrives on the exit interface, so
+        # something has to admit it. That something is not this rule.
+        # DRAKVUF_ISOLATION jumps into DRAKVUF_EGRESS only for traffic arriving
+        # ON a clone interface, and accepts established inbound itself one rule
+        # later:
+        #
+        #     -A DRAKVUF_ISOLATION -i xenbr1.+ -j DRAKVUF_EGRESS
+        #     -A DRAKVUF_ISOLATION -o xenbr1.+ -m conntrack \
+        #         --ctstate RELATED,ESTABLISHED -j ACCEPT
+        #
+        # A reply arrives on the exit interface and leaves TO xenbr1.<vlan>, so
+        # it never matches the jump and never reaches here. Measured: zero
+        # packets on this rule in every reading in runbook 15, across steps 6 to
+        # 9, while thousands left and the replies plainly arrived.
+        #
+        # Kept rather than deleted because it is the rule that would matter if
+        # that ordering ever changed, and its cost is one unmatched rule per
+        # clone. Stated rather than left implied because a comment claiming a
+        # guarantee the isolation chain is actually providing is how the next
+        # reader concludes this chain is self-contained when it is not.
         ["iptables", "-A", fchain, "-i", out, "-o", iface,
          "-m", "conntrack", "--ctstate", "ESTABLISHED,RELATED", "-j", "ACCEPT"],
 

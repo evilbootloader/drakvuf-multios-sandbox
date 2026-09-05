@@ -25,9 +25,9 @@ It maps **headings, not content**: a fact stated in the middle of a section is n
   - `docs/CURRENT-STATE.md:312` — [2b. Superseded for other reasons](CURRENT-STATE.md#2b-superseded-for-other-reasons)
 - `docs/CURRENT-STATE.md:333` — [3. Derived from the repository](CURRENT-STATE.md#3-derived-from-the-repository)
     - `docs/CURRENT-STATE.md:339` — [Runbooks, oldest to newest](CURRENT-STATE.md#runbooks-oldest-to-newest)
-    - `docs/CURRENT-STATE.md:359` — [How components are started](CURRENT-STATE.md#how-components-are-started)
-    - `docs/CURRENT-STATE.md:366` — [Environment read by `sandboxd.daemon`](CURRENT-STATE.md#environment-read-by-sandboxddaemon)
-    - `docs/CURRENT-STATE.md:370` — [Repository size](CURRENT-STATE.md#repository-size)
+    - `docs/CURRENT-STATE.md:360` — [How components are started](CURRENT-STATE.md#how-components-are-started)
+    - `docs/CURRENT-STATE.md:367` — [Environment read by `sandboxd.daemon`](CURRENT-STATE.md#environment-read-by-sandboxddaemon)
+    - `docs/CURRENT-STATE.md:371` — [Repository size](CURRENT-STATE.md#repository-size)
 
 ## `docs/TROUBLESHOOTING.md`
 
@@ -143,6 +143,7 @@ It maps **headings, not content**: a fact stated in the middle of a section is n
     - `docs/TROUBLESHOOTING.md:2227` — [Reasoning from upstream capability tables gave the wrong answer](TROUBLESHOOTING.md#reasoning-from-upstream-capability-tables-gave-the-wrong-answer)
     - `docs/TROUBLESHOOTING.md:2241` — [A containment claim was written up without being tested](TROUBLESHOOTING.md#a-containment-claim-was-written-up-without-being-tested)
     - `docs/TROUBLESHOOTING.md:2263` — [A measured constant was used directly as a resource guard](TROUBLESHOOTING.md#a-measured-constant-was-used-directly-as-a-resource-guard)
+    - `docs/TROUBLESHOOTING.md:2276` — [Baseline measured against throttled code](TROUBLESHOOTING.md#baseline-measured-against-throttled-code)
 
 ## `docs/android_setup.md`
 
@@ -1212,6 +1213,26 @@ It maps **headings, not content**: a fact stated in the middle of a section is n
   - `docs/runbooks/13-verify-egress-modes.md:1001` — [What this discharged, and what it did not](runbooks/13-verify-egress-modes.md#what-this-discharged-and-what-it-did-not)
     - `docs/runbooks/13-verify-egress-modes.md:1012` — [Findings worth carrying forward](runbooks/13-verify-egress-modes.md#findings-worth-carrying-forward)
 
+## `docs/runbooks/15-verify-egress-throttles.md`
+
+- `docs/runbooks/15-verify-egress-throttles.md:1` — [Runbook — per-clone egress throttles (DRAFT-057 Phase 5)](runbooks/15-verify-egress-throttles.md#runbook--per-clone-egress-throttles-draft-057-phase-5)
+  - `docs/runbooks/15-verify-egress-throttles.md:26` — [What this discharges, and what it cannot](runbooks/15-verify-egress-throttles.md#what-this-discharges-and-what-it-cannot)
+  - `docs/runbooks/15-verify-egress-throttles.md:45` — [Before you start](runbooks/15-verify-egress-throttles.md#before-you-start)
+  - `docs/runbooks/15-verify-egress-throttles.md:78` — [Step 1 — the chain before anything changes](runbooks/15-verify-egress-throttles.md#step-1--the-chain-before-anything-changes)
+  - `docs/runbooks/15-verify-egress-throttles.md:98` — [Step 2 — install the counting ladder, BEFORE the throttles](runbooks/15-verify-egress-throttles.md#step-2--install-the-counting-ladder-before-the-throttles)
+  - `docs/runbooks/15-verify-egress-throttles.md:169` — [Step 3 — a benign run, unthrottled, with the ladder reading](runbooks/15-verify-egress-throttles.md#step-3--a-benign-run-unthrottled-with-the-ladder-reading)
+  - `docs/runbooks/15-verify-egress-throttles.md:365` — [Step 4 — choose the constants, and write down both numbers](runbooks/15-verify-egress-throttles.md#step-4--choose-the-constants-and-write-down-both-numbers)
+  - `docs/runbooks/15-verify-egress-throttles.md:490` — [Step 5 — install the throttles](runbooks/15-verify-egress-throttles.md#step-5--install-the-throttles)
+  - `docs/runbooks/15-verify-egress-throttles.md:531` — [Step 6 — the Ubuntu regression. Do not skip this.](runbooks/15-verify-egress-throttles.md#step-6--the-ubuntu-regression-do-not-skip-this)
+  - `docs/runbooks/15-verify-egress-throttles.md:573` — [Step 7 — the connection-rate cap binds](runbooks/15-verify-egress-throttles.md#step-7--the-connection-rate-cap-binds)
+  - `docs/runbooks/15-verify-egress-throttles.md:618` — [Step 8 — the clone's egress ceiling, and why the byte rule did not fire](runbooks/15-verify-egress-throttles.md#step-8--the-clones-egress-ceiling-and-why-the-byte-rule-did-not-fire)
+  - `docs/runbooks/15-verify-egress-throttles.md:717` — [Step 9 — the parallel-connection cap binds](runbooks/15-verify-egress-throttles.md#step-9--the-parallel-connection-cap-binds)
+  - `docs/runbooks/15-verify-egress-throttles.md:780` — [Step 10 — nothing survives the job](runbooks/15-verify-egress-throttles.md#step-10--nothing-survives-the-job)
+  - `docs/runbooks/15-verify-egress-throttles.md:827` — [Step 11 — `tor` and `simulated` are still unthrottled](runbooks/15-verify-egress-throttles.md#step-11--tor-and-simulated-are-still-unthrottled)
+  - `docs/runbooks/15-verify-egress-throttles.md:866` — [Step 12 — `routed` — NOT RUN, and deliberately so](runbooks/15-verify-egress-throttles.md#step-12--routed--not-run-and-deliberately-so)
+  - `docs/runbooks/15-verify-egress-throttles.md:899` — [Step 13 — remove the counting ladder](runbooks/15-verify-egress-throttles.md#step-13--remove-the-counting-ladder)
+  - `docs/runbooks/15-verify-egress-throttles.md:936` — [What is left after this](runbooks/15-verify-egress-throttles.md#what-is-left-after-this)
+
 ## `docs/workflow-ci.md`
 
 - `docs/workflow-ci.md:1` — [CI / self-hosted runner design](workflow-ci.md#ci--self-hosted-runner-design)
@@ -1244,4 +1265,4 @@ It maps **headings, not content**: a fact stated in the middle of a section is n
 
 ---
 
-*1129 headings across 35 documents.*
+*1147 headings across 36 documents.*
