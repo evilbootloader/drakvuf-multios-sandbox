@@ -61,6 +61,10 @@ class FakeApi:
     cancel_after: int | None = None
     sample_bytes: bytes = _ELF
     beats: int = 0
+    # The console dial reads this: the platform pairs the relay only if it
+    # matches the job's `lease_owner`, so it comes from the client that took
+    # the lease rather than from configuration that could drift.
+    worker_id: str = "test-worker"
     # /claim leaves a job here; the worker reports from `preparing` onward.
     job_state: str = "cloning"
 
@@ -731,16 +735,16 @@ def test_a_failed_run_still_reports_through_state(tmp_path):
 
 # --- F8: the console is dialled, not requested -----------------------------
 
-def test_the_console_is_dialled_at_the_start_of_the_trace(tmp_path):
+def test_the_console_is_dialled_without_anyone_asking(tmp_path):
     """The request-driven version could never work.
 
     `_trace` checked `console_wanted` once, BEFORE starting the trace -- and
-    the console panel only appears when the job reaches `executing`, which is
+    the console panel only appeared when the job reached `executing`, which is
     after that check. So the operator could only ask once it was too late to be
     noticed, and the browser sat at "Waiting for the analysis host..." until
     the pair timeout. Observed on Dom0 2026-08-26.
 
-    Now the dial happens because the trace started, with nobody having asked.
+    Now the dial happens because a clone exists, with nobody having asked.
     """
     r = runner_ready()
     run(tmp_path, runner=r, console_enabled=True)
@@ -749,6 +753,72 @@ def test_the_console_is_dialled_at_the_start_of_the_trace(tmp_path):
     # nothing useful, so the session is abandoned -- but the ATTEMPT is what
     # proves it no longer waits for a request.
     assert r.ran(("xenstore-read",)), "no console dial was attempted"
+
+
+def test_the_console_is_dialled_before_preconfig_not_at_the_trace(tmp_path):
+    """**Widened 2026-09-05: the window is the CLONE's life, not the trace's.**
+
+    The relay ends at a VNC port QEMU serves for this domain, so it can open as
+    soon as `_clone` returns a domid. Dialling at trace start instead left the
+    whole of preconfig invisible -- which is where an injector failure happens,
+    and where a screen is worth most.
+
+    Asserted against the ordered call log, because "before preconfig" is the
+    entire claim.
+    """
+    r = runner_ready()
+    run(tmp_path, runner=r, console_enabled=True)
+
+    names = [c.argv[0] for c in r.calls]
+    assert "xenstore-read" in names, "no console dial was attempted"
+    assert "injector" in names, "this run never reached preconfig"
+    assert names.index("xenstore-read") < names.index("injector"), \
+        "the console was dialled after preconfig had already begun"
+
+
+def test_the_console_is_stopped_before_the_domain_is_destroyed(tmp_path,
+                                                               monkeypatch):
+    """**Ordering is the whole of the protection here.**
+
+    A relay outliving its domain is a socket pointed at a clone being torn
+    down -- the hazard the old `_trace` finally guarded, which moved to `run`
+    when the window moved to the clone's lifetime. Swap those two lines and
+    nothing else in this suite notices.
+
+    `ConsoleSession` is replaced rather than driven: the real one starts a
+    thread that dials the platform, and what is under test is the ORDER of two
+    calls in `run`, not the relay itself.
+    """
+    events = []
+    r = runner_ready()
+    r.script(("xenstore-read",), stdout="5901\n")
+
+    class FakeSession:
+        def __init__(self, *a, **k):
+            pass
+
+        def start(self, port):
+            events.append(("start", port))
+
+        def stop(self, timeout: float = 5.0):
+            # How many commands had been issued by the time it was stopped.
+            events.append(("stop", len(r.calls)))
+
+    monkeypatch.setattr(S.vnc, "ConsoleSession", FakeSession)
+
+    run(tmp_path, runner=r, console_enabled=True)
+
+    assert ("start", 5901) in events, "the console was never started"
+    stopped_after = next((n for kind, n in events if kind == "stop"), None)
+    assert stopped_after is not None, "the console was never stopped"
+
+    destroyed_at = next(i for i, c in enumerate(r.calls)
+                        if c.argv[:2] == ("xl", "destroy"))
+    assert stopped_after <= destroyed_at, (
+        f"the console was stopped after {stopped_after} commands but the "
+        f"domain was destroyed at command {destroyed_at}: the relay outlived "
+        f"its clone"
+    )
 
 
 def test_a_console_failure_never_fails_the_analysis(tmp_path):

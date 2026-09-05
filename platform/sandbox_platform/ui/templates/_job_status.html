@@ -63,14 +63,22 @@
   tab would also lose it on every tab change, which is the opposite of what an
   interactive session needs -- watch the screen WHILE reading the syscalls.
 
-  Rendered only while executing, and absent rather than empty otherwise: a
-  control that looks available and does nothing reads as a fault, which is the
-  same reason the tab bar dims tabs with no data.
+  Rendered whenever the job has a LIVE CLONE -- cloning, preparing, executing,
+  collecting -- and absent rather than empty otherwise: a control that looks
+  available and does nothing reads as a fault, which is the same reason the tab
+  bar dims tabs with no data.
+
+  Widened from `executing` alone on 2026-09-05. The constraint was never the
+  trace, it is the domain: the relay ends at a VNC port QEMU serves for a live
+  clone, so the panel belongs wherever one exists. `console_states` is passed
+  from _job_context rather than written here as a literal, for the same reason
+  `terminal_states` is -- two definitions of the window would be free to drift,
+  and the symptom is a panel offering a session the API then refuses.
 
   It sits inside #job-live, so the SSE refresh already makes it appear when the
-  job starts executing and disappear when it stops, with no extra wiring.
+  clone comes up and disappear when it is torn down, with no extra wiring.
 #}
-{% if console_enabled and job.state.value == 'executing' %}
+{% if console_enabled and job.state.value in console_states %}
 <section class="console" id="console" data-job-id="{{ job.id }}">
   <h3>Live console
     {% if job.interacted %}<span class="state" data-state="failed">interacted</span>{% endif %}

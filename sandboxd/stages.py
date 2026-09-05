@@ -318,6 +318,7 @@ class Analysis:
         _must_stay_inside(job_dir, self._cfg.results_dir, "results")
         _must_stay_inside(sample, self._cfg.staging_dir, "staging")
         clone = None
+        console = None
         outcome = Outcome(state="failed")
 
         with Heartbeat(self._api, lease.job_id,
@@ -341,6 +342,21 @@ class Analysis:
 
                 clone = self._clone(os_, vlan, lease)
                 job = self._job(lease, os_, kind, clone, vlan, job_dir, sample)
+
+                # **Dialled as soon as the domain exists, not at trace start.**
+                #
+                # The console's window is the CLONE's lifetime, not the trace's
+                # (2026-09-05). The relay ends at a VNC port QEMU serves for
+                # this domain, so it can be opened the moment `_clone` returns
+                # a domid -- which lets an operator watch preconfig, where an
+                # injector failure is otherwise only visible as a log line
+                # after the fact.
+                #
+                # Started BEFORE egress is applied deliberately: if a rule fails
+                # to install, the screen showing what the guest is doing is
+                # exactly what is wanted, and `_start_console` never fails the
+                # analysis.
+                console = self._start_console(job, beat)
 
                 # 2. Egress, BEFORE the guest's network is configured and long
                 #    before the sample runs. Ordered this way so that a clone
@@ -380,6 +396,17 @@ class Analysis:
                                   failure_stage="sandboxd",
                                   failure_reason=f"{type(exc).__name__}: {exc}"[:2000])
             finally:
+                # **The console ends before the domain does, on every path.**
+                #
+                # `_teardown` destroys the clone, and a relay still pointed at
+                # its VNC port is a socket into a domain being torn down --
+                # which is what the old `_trace` finally protected against when
+                # the window was the trace. The hazard moved with the window,
+                # so the stop moved with it. Ordering here is the whole of that
+                # protection: these two lines must not be swapped.
+                if console is not None:
+                    console.stop()
+
                 # ALWAYS, and always before the terminal report: the server
                 # refuses every terminal state that does not arrive from
                 # `cleaning`.
@@ -721,21 +748,24 @@ class Analysis:
         capture = job.result_dir / CAPTURE
         tcpdump = self._runner.spawn(
             guests.argv_tcpdump(job, self._cfg.bridge, capture))
-        # Dialled as soon as the trace starts, not when someone asks.
+        # **The console is NOT started here**, and has not been since
+        # 2026-09-05. It is dialled in `run()` as soon as the clone exists and
+        # stopped there before teardown, so its window is the domain's lifetime
+        # rather than the trace's -- see the comment at the `_start_console`
+        # call. Starting it here would open a second relay for the same job.
         #
-        # The request-driven version could NEVER work: the console panel only
-        # appears once the job reaches `executing`, so the operator can only
-        # ask after the trace has begun -- and the check happened before it.
-        # Every request arrived too late and the browser sat at "Waiting for
-        # the analysis host..." until the pair timeout (Dom0 2026-08-26, F8).
+        # It is not request-driven either, and never can be. That version could
+        # NEVER work: the panel only appeared once the job reached `executing`,
+        # so the operator could only ask after the trace had begun -- and the
+        # check happened before it. Every request arrived too late and the
+        # browser sat at "Waiting for the analysis host..." until the pair
+        # timeout (Dom0 2026-08-26, F8).
         #
-        # So the relay socket is opened for the whole trace whenever the
-        # console is enabled on this host, and the platform holds it until a
-        # browser arrives or the trace ends. `console_enabled` therefore means
-        # "this host opens a relay socket per analysis" rather than "consoles
-        # may be requested" -- which is why it is off by default and why
-        # turning it on is a deliberate act (SANDBOXD_CONSOLE_ENABLED).
-        console = self._start_console(job, beat)
+        # So a relay socket is opened for every analysis whenever the console is
+        # enabled on this host. `console_enabled` therefore means "this host
+        # opens a relay socket per analysis" rather than "consoles may be
+        # requested" -- which is why it is off by default and why turning it on
+        # is a deliberate act (SANDBOXD_CONSOLE_ENABLED).
         try:
             # **DRAKVUF does not create these, and says nothing when they are
             # missing.** `drakvuf-ubuntu.sh:170` created both with a single
@@ -793,11 +823,6 @@ class Analysis:
                 )
         finally:
             tcpdump.stop()
-            if console is not None:
-                # Ends with the trace, on every path. DRAFT-056 scopes a
-                # session to a job that is EXECUTING; one left open past the
-                # trace is a socket pointed at a domain being destroyed.
-                console.stop()
 
     def _start_console(self, job: Job, beat: Heartbeat):
         """Dial out, if a console was asked for. Never fails the analysis.

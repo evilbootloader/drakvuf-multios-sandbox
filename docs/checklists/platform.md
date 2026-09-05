@@ -66,8 +66,14 @@ tested in the development container only.
   inward. The CA's signing key lives on the operator's workstation and
   deliberately not on the platform: a platform compromise must not be able to
   mint worker certificates.
-- [ ] **AuthZ / per-user isolation** (#40) — open. The identity Cloudflare
-  Access establishes is verified but not yet used to scope what a user sees.
+- [ ] **AuthZ / per-user isolation** (#40) — open, and partly landed.
+  Read-path scoping is in the repository as of 2026-09-05: one predicate,
+  `auth.visible_to`, in the WHERE clause of every browser read, with
+  `platform/tests/test_tenancy.py` covering the negative cases against a
+  second user. **Not deployed and not verified on the deployment**, so this
+  stays unticked. Still outstanding from DRAFT-047: loopback-only browser
+  routes (decision 3), the publish endpoint that would make `visibility` mean
+  something (5/6), the per-user key prefix (7), and the runtime quota (8).
 - [ ] **Rate limiting, abuse controls** — not started.
 - [ ] **Tenant isolation** — not started; depends on #40.
 - [ ] **Egress routing** (#42) — open. Whether analysis traffic goes offline,

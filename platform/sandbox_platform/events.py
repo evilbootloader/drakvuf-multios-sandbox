@@ -3,13 +3,19 @@
 Issue #36 (DRAFT-043). No Redis: migration 0002's trigger emits on every state
 change, and this fans it out.
 
-**SINGLE-TENANT, and this is a stated limit rather than an oversight.** A
-subscriber may watch any job whose id it knows, because there is no owner
-check anywhere yet -- `owner` and `visibility` are reserved columns that
-nothing populates. Every authenticated caller can see every job, so Cloudflare
-Access must only admit people who may see everything. **DRAFT-047 closes
-this**; when it does, the scope check belongs here as well as in the HTTP
-layer, not instead of it.
+**The subscription is scoped, but not here.** Since #40 (DRAFT-047) the
+`/jobs/{id}/events` route refuses a job the caller may not see, BEFORE calling
+`stream()` -- it has to be before, because once the `StreamingResponse` holds
+this generator the status line is already 200 and a refusal from inside would
+arrive as an empty event stream, which a client cannot tell from a job that is
+simply not changing.
+
+**So `stream()` itself checks nothing, and a second caller must do its own
+check.** This module previously argued the scope belonged here as well as in
+the HTTP layer rather than instead of it. That argument still holds and is not
+yet acted on: there is exactly one caller, and it checks. Adding a second one
+without a scope check would reopen the hole with no test failing, since the
+tests in `test_tenancy.py` drive the route rather than this function.
 """
 
 from __future__ import annotations

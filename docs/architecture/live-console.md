@@ -137,14 +137,41 @@ malware VM, not needed to click a button.
 
 ### 2.1 Lifetime
 
-- **Only while the job is `executing`.** Not before the clone exists, not
-  during preconfig, not after teardown. Outside that window the endpoint 409s.
-- **One viewer.** A second request for the same job is refused, not queued.
-- **Ends when the trace ends.** `sandboxd` closes its side as part of the
-  normal teardown, so there is no orphaned relay to reap.
+> **Revised 2026-09-05.** This section said "only while the job is
+> `executing`", and the relay's lifetime, the reaper and the UI all agreed with
+> it. The real constraint was never the trace: the relay ends at a VNC port
+> QEMU serves for a live **clone**, so the window is the domain's lifetime.
+> Scoping it to the trace hid preconfig — where an injector failure happens and
+> where a screen is worth most — for no protection in return.
+
+- **Whenever the clone exists**: `cloning`, `preparing`, `executing`,
+  `collecting`, which is exactly `enums.RUNNING_STATES`. Not before the domain
+  is built, and not after `_teardown` destroys it — including not during
+  `cleaning`, where the worker still holds the lease but the domain is already
+  gone. Outside that window both endpoints refuse.
+- **One viewer at a time.** A second concurrent request for the same job is
+  refused, not queued. The seat is vacated when a viewer leaves.
+- **A viewer may leave and come back** while the analysis is still running.
+  Leaving closes that viewing, not the relay: `sandboxd` drops its TCP
+  connection to the console on `PEER_GONE` and waits for the next
+  `PEER_ATTACHED`. **Each viewing gets a fresh connection**, because RFB state
+  lives in the connection — a second viewer handed the first one's stream would
+  receive framebuffer updates for a handshake it never performed.
+- **Ends when the clone is torn down.** `sandboxd` stops the relay in `run`'s
+  `finally`, immediately before `_teardown`, on every path — so there is no
+  orphaned relay to reap and never a socket pointed at a domain being
+  destroyed.
 - **A dropped browser connection does not touch the job**, which completes
   normally. The console is an observer of the analysis, never a participant in
   its lifecycle.
+
+> **KNOWN GAP (DRAFT-056): input is not restricted to `executing`.** View-only
+> was deferred (§1), so v1 is interactive-only and widening the window widens
+> what can be *typed* as well as what can be watched. During `collecting` that
+> reaches the guest while artifacts are being pulled, so it can change what is
+> collected after the trace has ended. `interacted` records that a human was
+> involved but not that it happened post-trace. Dropping client→server frames
+> outside `executing` is the fix, and is its own change.
 
 ### 2.2 How a session starts, without Dom0 listening
 
@@ -156,19 +183,30 @@ malware VM, not needed to click a button.
 > request arrived too late to be seen and the browser sat at "Waiting for the
 > analysis host…" until the pair timeout.
 
-1. `sandboxd` resolves the clone's VNC port when the trace starts, opens an
-   outbound WebSocket to the platform carrying the job id and the worker
-   token, and bridges it to `127.0.0.1:<port>`.
-2. The platform holds that socket, unpaired, for the duration of the trace.
+1. `sandboxd` resolves the clone's VNC port **as soon as the clone exists** —
+   the moment `_clone` returns a domid, before egress is applied and before
+   preconfig runs — opens an outbound WebSocket to the platform carrying the
+   job id and the worker token, and waits.
+2. The platform holds that socket, unpaired, for the life of the clone.
 3. When the operator opens the panel, the browser's socket is paired with it
-   by job id, and bytes move immediately.
+   by job id. The **browser** announces itself with `PEER_ATTACHED`, which is
+   what tells `sandboxd` to open the TCP connection to `127.0.0.1:<port>` —
+   not the dial, because RFB has the server speak first (§F10).
+4. When the operator leaves, the browser sends `PEER_GONE`. `sandboxd` closes
+   the TCP connection and returns to step 3. **The relay is not torn down**,
+   so re-opening a running analysis pairs immediately with a fresh RFB
+   connection.
 
 **There is no latency and no request channel.** The cost is that a relay socket
 is open for *every* analysis on a host where the console is enabled, watched or
 not — which is a real change to §4 and is treated there rather than glossed.
+Since 2026-09-05 that socket is open for the clone's whole life rather than the
+trace's, which lengthens the exposure §4.1b weighs; the TCP connection into the
+guest's console is still opened only while someone is actually watching, which
+is the half that mattered.
 
-The two sides therefore wait differently. `sandboxd` holds its end for the
-whole trace and closes it during teardown, on every path. The browser's end
+The two sides therefore wait differently. `sandboxd` holds its end until
+teardown and survives any number of viewers coming and going. The browser's end
 keeps a short timeout, because a human is looking at it and should be told
 promptly when nobody is there.
 
@@ -202,8 +240,8 @@ at `MAX_CLONES=2`, against a Postgres in the same container.
 The tabs are *result* views: Overview, Behaviour, Network, Static, Memory,
 Artifacts. Every one of them describes something the run produced, and every
 one is read after the fact. A live console is neither — it exists only while
-the job is `executing`, and it is the one thing an analyst must not have to go
-looking for. A CAPTCHA does not wait for someone to click the right tab.
+the clone does, and it is the one thing an analyst must not have to go looking
+for. A CAPTCHA does not wait for someone to click the right tab.
 
 Making it a tab would also mean losing it on every tab change, which is the
 opposite of what an interactive session needs: watch the screen *while*
@@ -213,7 +251,7 @@ reading the syscall stream.
   ┌──────────────────────────────────────────┐
   │ sample.exe          state: executing     │
   ├──────────────────────────────────────────┤
-  │            ▓▓ live console ▓▓            │   ← always here while executing
+  │            ▓▓ live console ▓▓            │   ← here whenever a clone exists
   │            (collapses when not)          │
   ├──────────────────────────────────────────┤
   │ Overview │ Behaviour │ Network │ Static  │   ← the result tabs, unchanged
@@ -289,7 +327,8 @@ What bounds it instead:
   from "consoles may be requested" to **"this host opens a relay socket per
   analysis"**. That is a coherent thing to switch on deliberately, and a
   coherent thing to leave off.
-- The job must be `executing`. Outside that window the endpoint refuses.
+- The job must have a live clone — `RUNNING_STATES`, per §2.1. Outside that
+  window both endpoints refuse.
 - The worker token is still required, over mutual TLS on the LAN.
 - **The dialling worker must hold the job's lease**, checked against
   `jobs.lease_owner` from the `X-Worker-Id` header the rest of the worker
@@ -436,10 +475,16 @@ failure removes which protection. Losing Access exposes the console to the
 internet; losing the client certificate exposes it to the LAN. They are not
 the same incident.
 
-> **Pre-#40, any authenticated user can open a session on any job.** There is
-> one operator today, so this is acceptable — and it is written down rather
-> than assumed. When ownership means something, the session must be scoped to a
-> job the requester owns.
+> **Scoped as of #40** (2026-09-05, in the repository — not yet deployed).
+> Both console routes now resolve the job through `auth.visible_to`: the
+> browser socket passes the authenticated user, and someone else's job closes
+> with the same `no such job` reason a missing id gets, so the socket cannot
+> be used to probe which job ids exist.
+>
+> **The worker end passes `None` deliberately.** Dom0 is infrastructure rather
+> than a tenant and must be able to attach to anyone's job; it is scoped by
+> `lease_owner` instead, checked in `worker_console`. Owner-scoping that end
+> would break the console for every job Dom0's certificate does not name.
 
 ### 4.5 Residual risks, accepted
 

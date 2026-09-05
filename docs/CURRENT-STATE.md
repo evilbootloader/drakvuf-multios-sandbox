@@ -372,7 +372,7 @@ accurate as dated evidence.
 | | |
 |---|---|
 | sandboxd modules | 16 |
-| test files | 16 sandboxd, 15 platform |
+| test files | 16 sandboxd, 16 platform |
 | documents under `docs/` | 36 |
 
 <!-- END GENERATED -->

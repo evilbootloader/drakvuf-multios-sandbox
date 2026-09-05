@@ -1,8 +1,33 @@
 # DRAFT-047: Per-user isolation, using the identity Cloudflare Access already establishes
 
-**Status:** Published as [#40](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/40), 2026-08-24.
-JWT verification and `owner` landed early, in #36; the read-path
-scoping and the quota did not.
+**Status:** Published as [#40](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/40), 2026-08-24. **Open.**
+
+Landing in three parts rather than the one this draft assumed, because the
+first part landed before the draft was written:
+
+| Decision | State |
+|---|---|
+| 1, 2 — verify the JWT, set `owner` from it | Landed in **#36**, 2026-08-24 |
+| 4 — scope every browser read | **Landed 2026-09-05**, in the repository. `auth.visible_to`, `platform/tests/test_tenancy.py`. Not deployed |
+| 3 — loopback-only browser routes | Not started |
+| 5, 6 — publishing | Not started. `visibility` is read by the predicate and written by nothing |
+| 7 — per-user key prefix | Not started |
+| 8 — runtime quota | Not started |
+
+**"It lands as one change rather than piecemeal", below, is no longer true**
+and is left as written. It was already false when this draft was published —
+#36 had shipped half of it — and the claim is what made the remaining work
+hard to see. What is true is narrower: the *read paths* had to land together,
+because a partial scope is not a scope, and they did.
+
+**One decision this draft does not contain**, taken 2026-09-05: a job with
+`owner IS NULL` — anything submitted over the mTLS listener, where a
+certificate identifies a machine rather than a person — is readable by any
+authenticated user. Unowned means an infrastructure job, not a private one.
+The literal predicate below would have made every CLI submission, and every
+row already in the table, vanish from the UI on deploy. The consequence is
+that the ownerless set is a shared pool, and is not where a tenant's samples
+should land once there is more than one tenant.
 **Area:** core/platform, security
 **OS:** ALL
 **Milestone:** M1 → replaces part of M8
@@ -209,6 +234,27 @@ a second user is a check nobody has tested.
     distinct reason, and is not silently queued.
 11. **The worker channel still runs a job it does not own** — the regression
     that would break the pipeline for everyone.
+
+## What of the eleven exists, 2026-09-05
+
+`platform/tests/test_tenancy.py`, twenty tests, all passing.
+
+| # | State |
+|---|---|
+| 1–5, 11 | Done |
+| 6 | Done for the *predicate* — the test sets `visibility` directly, since no route writes it |
+| 7 | Blocked: needs the publish endpoint |
+| 8 | Already in `test_access_jwt.py`, which owns verification |
+| 9 | Token half done there too; the non-loopback half needs decision 3 |
+| 10 | Blocked: needs the quota |
+
+**Each negative test was checked against a neutered predicate** — `visible_to`
+made to return `TRUE` unconditionally — and eleven of them fail. Two defects
+were found that way and fixed: the two SSE tests *hung* rather than failed
+(an unscoped stream on a non-terminal job stays open, and a hanging suite gets
+retried where a failing one gets read), and the WebSocket test used a bare
+`pytest.raises(Exception)`, which passed against the unscoped build because it
+caught a refusal for an unrelated reason.
 
 # DEPLOY
 

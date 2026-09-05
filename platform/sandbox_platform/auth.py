@@ -276,3 +276,59 @@ def access_identity(
 
 
 Identity = Annotated[str | None, Depends(access_identity)]
+
+
+# --- browser scope --------------------------------------------------------
+#
+# Issue #40 (DRAFT-047), decision 4: a user reads their own jobs plus published
+# ones, and nothing else.
+#
+# **One predicate, used by every browser read**, so the rule exists once and is
+# greppable. Before this, `owner` was written on every submission and enforced
+# nowhere -- which is the worse of the two states to sit in, because the column
+# looks populated.
+#
+# **This is the browser channel only.** The worker channel is scoped by
+# `lease_owner` (see `leased_job` above) and must never be scoped by `owner`:
+# Dom0 is infrastructure, not a tenant, and it has to be able to run anyone's
+# job. A future change that "unifies" the two breaks the pipeline for every job
+# not owned by whoever Dom0's certificate names.
+
+
+def visible_to(identity: str | None) -> tuple[str, list]:
+    """SQL fragment and bound params restricting a read to what a caller may see.
+
+    Returns a fragment rather than a finished statement so the caller can
+    compose it, and its values separately so they stay bound parameters -- the
+    same shape `routers.jobs._filters` uses, and for the same reason.
+
+    Three arms, and each is load-bearing:
+
+    `owner = %s`
+        The caller's own submissions.
+
+    `owner IS NULL`
+        Submitted over the mTLS listener -- `submit.py` and the other
+        command-line tools, where `access_identity` returns None and there is
+        no person to record. Unowned means an infrastructure job, not a private
+        one, so it stays readable in the browser and the UI. **The consequence
+        worth knowing:** the ownerless set is a shared pool, visible to every
+        authenticated user, so it is not where one tenant's samples should land
+        once there is more than one tenant.
+
+    `visibility = 'public'`
+        **Inert today.** Nothing writes that column -- the publish endpoint is
+        DRAFT-047's decisions 5/6 and has not landed. It is written now so that
+        publishing is a pure addition rather than a change to every read path.
+
+    A None identity is NOT scoped at all. That reads like a hole and is not
+    one: `access_identity` returns None only where `REQUIRE_ACCESS_JWT` is
+    unset, which the deployment sets per listener -- the browser listener
+    requires a token, and the listener that does not is already gated by a
+    client certificate at the TLS layer. So None means "arrived over the
+    certificate-gated listener", never "arrived unauthenticated over the
+    browser one": that path raises 401 above, before any handler runs.
+    """
+    if identity is None:
+        return "TRUE", []
+    return "(owner = %s OR owner IS NULL OR visibility = 'public')", [identity]

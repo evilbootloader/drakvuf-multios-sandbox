@@ -38,6 +38,7 @@ import logging
 from . import console, jobs
 from .config import settings
 from .db import connection
+from .enums import RUNNING_STATES
 
 log = logging.getLogger(__name__)
 
@@ -60,10 +61,17 @@ def sweep() -> tuple[list, list]:
 def stale_sessions(job_ids: list[str]) -> list[str]:
     """Which of these jobs no longer have any business holding a console.
 
-    Phrased as "not still executing" rather than "is terminal", so a job id the
-    registry holds that has no row at all -- deleted, or never existed -- is
-    also reported. DRAFT-056 scopes a session to a job that is EXECUTING, and
-    anything else is a socket pointed at a domain being torn down.
+    Phrased as "no longer has a live clone" rather than "is terminal", so a job
+    id the registry holds that has no row at all -- deleted, or never existed
+    -- is also reported. A session outside that window is a socket pointed at a
+    domain being torn down.
+
+    **Widened from `state = 'executing'` on 2026-09-05**, in step with the two
+    console routes. Left as it was, this loop would have reaped a session the
+    moment the job moved on to `collecting` -- and refused to let one exist
+    during `cloning` or `preparing` at all -- which is precisely the window the
+    widening exists to open. A reaper narrower than the thing it reaps is how a
+    feature ends up working only in tests.
 
     Separated from the loop so a test can call it directly, like `sweep`.
     """
@@ -72,11 +80,11 @@ def stale_sessions(job_ids: list[str]) -> list[str]:
     with connection() as conn, conn.cursor() as cur:
         cur.execute(
             "SELECT id::text FROM jobs "
-            "WHERE id = ANY(%s::uuid[]) AND state = 'executing'",
-            (job_ids,),
+            "WHERE id = ANY(%s::uuid[]) AND state = ANY(%s)",
+            (job_ids, [s.value for s in RUNNING_STATES]),
         )
-        executing = {row[0] for row in cur.fetchall()}
-    return [job_id for job_id in job_ids if job_id not in executing]
+        live = {row[0] for row in cur.fetchall()}
+    return [job_id for job_id in job_ids if job_id not in live]
 
 
 async def _loop() -> None:

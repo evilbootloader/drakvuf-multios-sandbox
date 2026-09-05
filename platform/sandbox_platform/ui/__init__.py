@@ -46,7 +46,7 @@ from .. import auth, catalogue, egress
 from .. import jobs as dal
 from ..config import settings
 from ..db import connection
-from ..enums import TERMINAL_STATES, EgressMode, JobState, TargetOs
+from ..enums import RUNNING_STATES, TERMINAL_STATES, EgressMode, JobState, TargetOs
 from ..routers.jobs import _detail, count_jobs, query_jobs
 
 _HERE = Path(__file__).resolve().parent
@@ -200,18 +200,20 @@ BlankableOs = Annotated[TargetOs | None, BeforeValidator(_blank_is_absent)]
 PAGE = 30
 
 
-def _jobs_context(q: str, state, target_os, page: int) -> dict:
+def _jobs_context(q: str, state, target_os, page: int, identity) -> dict:
     """Everything the history view and its table fragment both need.
 
     One builder so the polled fragment cannot drift from the full page -- a
     filter honoured on first load and dropped on refresh would quietly show a
-    different result set every five seconds.
+    different result set every five seconds. The tenancy scope rides along for
+    the same reason: the poll must not be able to show a different set from the
+    page it is refreshing.
     """
     term = q.strip().lower()
     bad = bool(term) and not _HEX.match(term)
 
     filters = {"state": state, "target_os": target_os,
-               "sha256_prefix": term or None}
+               "sha256_prefix": term or None, "identity": identity}
     total = 0 if bad else count_jobs(**filters)
     pages = max(1, -(-total // PAGE))
     page = min(page, pages)
@@ -262,7 +264,8 @@ def jobs_table(request: Request,
                q: str = Query("", max_length=64),
                state: BlankableState = None,
                target_os: BlankableOs = None,
-               page: int = Query(1, ge=1)) -> HTMLResponse:
+               page: int = Query(1, ge=1),
+               identity: auth.Identity = None) -> HTMLResponse:
     """Just the table, for the poll on the history page (F9).
 
     Takes the same query parameters as the full view and builds its context
@@ -270,7 +273,7 @@ def jobs_table(request: Request,
     the page was rendered with.
     """
     return _render(request, "_jobs_table.html",
-                   **_jobs_context(q, state, target_os, page))
+                   **_jobs_context(q, state, target_os, page, identity))
 
 
 @router.get("/jobs", response_class=HTMLResponse)
@@ -278,7 +281,8 @@ def jobs_view(request: Request,
               q: str = Query("", max_length=64),
               state: BlankableState = None,
               target_os: BlankableOs = None,
-              page: int = Query(1, ge=1)) -> HTMLResponse:
+              page: int = Query(1, ge=1),
+              identity: auth.Identity = None) -> HTMLResponse:
     """History, with a search over the sample digest.
 
     Matches from the START of the digest, which is the only partial form
@@ -293,7 +297,7 @@ def jobs_view(request: Request,
     The value is bound as a parameter regardless, so this is belt over braces.
     """
     return _render(request, "jobs.html", view="jobs",
-                   **_jobs_context(q, state, target_os, page))
+                   **_jobs_context(q, state, target_os, page, identity))
 
 
 def _tab_body(slug: str) -> str:
@@ -303,9 +307,9 @@ def _tab_body(slug: str) -> str:
     }.get(slug, "tabs/_pending.html")
 
 
-def _job_context(job_id: UUID, tab: str) -> dict:
+def _job_context(job_id: UUID, tab: str, identity) -> dict:
     with connection() as conn:
-        job = _detail(conn, job_id)
+        job = _detail(conn, job_id, identity)
 
     tabs = catalogue.tabs_for(job.target_os)
     slugs = {t.slug for t in tabs}
@@ -335,6 +339,12 @@ def _job_context(job_id: UUID, tab: str) -> dict:
         # panel is absent rather than rendered-and-broken when the capability
         # is switched off.
         "console_enabled": settings.console_enabled,
+        # The states in which a clone exists, and therefore the states in which
+        # a console can exist. Passed from here rather than written as a
+        # literal in the template, for the same reason `terminal_states` is:
+        # two definitions of the window would be free to drift, and the symptom
+        # is a panel offering a session the API then refuses.
+        "console_states": sorted(s.value for s in RUNNING_STATES),
     }
 
 
@@ -349,15 +359,17 @@ def _filled(job) -> set[str]:
 @router.get("/jobs/{job_id}", response_class=HTMLResponse)
 def job_view(request: Request,
              job_id: UUID = PathParam(),
-             tab: str = Query("overview")) -> HTMLResponse:
+             tab: str = Query("overview"),
+             identity: auth.Identity = None) -> HTMLResponse:
     return _render(request, "job.html", view="jobs",
-                   **_job_context(job_id, tab))
+                   **_job_context(job_id, tab, identity))
 
 
 @router.get("/jobs/{job_id}/live", response_class=HTMLResponse)
 def job_live(request: Request,
              job_id: UUID = PathParam(),
-             tab: str = Query("overview")) -> HTMLResponse:
+             tab: str = Query("overview"),
+             identity: auth.Identity = None) -> HTMLResponse:
     """The job's live region, for htmx tab clicks and job.js's SSE refresh.
 
     Renders the same partial the full page includes, so there is one
@@ -369,14 +381,15 @@ def job_live(request: Request,
     underline stayed on whichever tab the server first rendered -- and an SSE
     refresh needs the state block and the tab bar, not just the body.
     """
-    ctx = _job_context(job_id, tab)
+    ctx = _job_context(job_id, tab, identity)
     return _render(request, "_job_live.html", **ctx)
 
 
 @router.get("/jobs/{job_id}/tabs", response_class=HTMLResponse)
 def job_tabs(request: Request,
              job_id: UUID = PathParam(),
-             tab: str = Query("overview")) -> HTMLResponse:
+             tab: str = Query("overview"),
+             identity: auth.Identity = None) -> HTMLResponse:
     """Just the tab bar and its body, for a tab click.
 
     Narrower than `/live` deliberately. `/live` also carries the live console
@@ -388,5 +401,5 @@ def job_tabs(request: Request,
     swapping only the tab body left the underline wherever the server first
     put it.
     """
-    ctx = _job_context(job_id, tab)
+    ctx = _job_context(job_id, tab, identity)
     return _render(request, "_job_tabs.html", **ctx)

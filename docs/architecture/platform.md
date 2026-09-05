@@ -537,8 +537,25 @@ all are live inside a double-quoted guest shell word. Two consequences:
 | Dom0 → platform | **Nothing, against Dom0 root.** Dom0 is the platform's hypervisor and owns its disks | Job history, artifacts, the MinIO service account, the API's TLS key |
 | `sandboxd` → platform | Scoped worker token over mTLS — least privilege, **not containment** | A compromise of the daemon short of root can update job state and upload artifacts; it cannot read the DB or enumerate MinIO |
 | Platform → CA | **The signing key is not on this machine** | Nothing: a full host compromise cannot mint worker certificates |
-| Browser → API | Cloudflare Access, JWT `iss` + `aud` verified | Ordinary web auth surface; M8/#40 owns multi-tenancy |
+| Browser → API | Cloudflare Access, JWT `iss` + `aud` verified | Ordinary web auth surface |
+| Browser user → another browser user | **One SQL predicate**, `auth.visible_to`, in the WHERE clause of every browser read (#40) | One user reads, cancels and streams another's analyses, samples and extracted payloads included. **Not yet deployed** — see the caveat below |
 | Platform → internet | Cloudflare Tunnel outward only | M8 |
+
+**The browser-to-browser row is code, not yet a deployed property**
+(2026-09-05). The scope predicate and its twenty tests are in the repository;
+nothing has been deployed or verified against the running platform. Until that
+happens the operating constraint is the one it exists to remove: **Cloudflare
+Access must admit only people who may see everything.**
+
+Three parts of #40 are deliberately not in that row, and each is a real gap
+rather than a detail:
+
+- **Browser routes are not bound to loopback** (decision 3), so "Access is the
+  gate" remains a property of application code rather than of the network.
+- **Nothing publishes.** `visibility` is read by the predicate and written by
+  no route, so the third arm is inert and every job is private.
+- **There is no quota** (decision 8), so one user can still consume the whole
+  machine's analysis time.
 
 <details>
 <summary>The pre-migration table, kept for its reasoning</summary>

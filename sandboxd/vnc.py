@@ -124,6 +124,7 @@ async def bridge(ws, host: str, port: int, stop=None) -> None:
     carried in binary frames and nothing else is.
     """
     reader = writer = None
+    viewer_left = False
 
     async def wait_for_viewer():
         """Read frames until the platform says a viewer has attached.
@@ -143,11 +144,16 @@ async def bridge(ws, host: str, port: int, stop=None) -> None:
             )
 
     async def to_console():
+        nonlocal viewer_left
         while True:
             frame = await ws.recv()
             if isinstance(frame, str):
-                # Control, not data. A viewer leaving ends the session.
+                # Control, not data. A viewer leaving ends this VIEWING, not
+                # the relay -- recorded so the loop below can tell "the
+                # operator closed the tab" from "the platform went away", which
+                # look identical from here and mean opposite things.
                 if frame == PEER_GONE:
+                    viewer_left = True
                     return
                 continue
             if not frame:
@@ -197,25 +203,63 @@ async def bridge(ws, host: str, port: int, stop=None) -> None:
         return [("stop", watch_stop())] if stop is not None else []
 
     try:
-        # **The stop flag is watched from the FIRST await, not from after a
-        # viewer has attached.** `wait_for_viewer` blocks on `ws.recv()` with no
-        # timeout, and sandboxd dials for every trace whether or not anyone
-        # opens the panel -- so waiting here unguarded meant `ConsoleSession.
-        # stop()` set a flag nothing was reading, timed out its 5s join, and
-        # then dropped the only reference to a thread still blocked in this
-        # call. One leaked thread and one open WebSocket per unviewed analysis,
-        # for the life of the daemon.
-        if "viewer" not in await first_of(
-                [("viewer", wait_for_viewer())] + stop_watch()):
-            log.info("console for %s:%d stopped before a viewer arrived",
+        # **One iteration per VIEWER, not one per analysis.**
+        #
+        # Leaving the job page used to end the relay for good: `to_console`
+        # returned on PEER_GONE, this function returned, and `ConsoleSession`
+        # dials exactly once -- so re-opening a still-running analysis waited
+        # out the platform's pair timeout for a peer that no longer existed.
+        # Looping here is what makes coming back work.
+        #
+        # **A NEW TCP connection each time, which is the point rather than an
+        # implementation detail.** RFB state lives in the connection: the
+        # handshake happens once and framebuffer updates are meaningless
+        # without it. Handing a second viewer the existing socket mid-stream
+        # would feed noVNC updates for a session it never negotiated. Closing
+        # and reconnecting gives each viewer its own handshake, and costs
+        # nothing because the connection is already opened per viewer (F10).
+        while True:
+            # **The stop flag is watched from the FIRST await, not from after a
+            # viewer has attached.** `wait_for_viewer` blocks on `ws.recv()`
+            # with no timeout, and sandboxd dials for every trace whether or not
+            # anyone opens the panel -- so waiting here unguarded meant
+            # `ConsoleSession.stop()` set a flag nothing was reading, timed out
+            # its 5s join, and then dropped the only reference to a thread still
+            # blocked in this call. One leaked thread and one open WebSocket per
+            # unviewed analysis, for the life of the daemon.
+            if "viewer" not in await first_of(
+                    [("viewer", wait_for_viewer())] + stop_watch()):
+                log.info("console for %s:%d stopped before a viewer arrived",
+                         host, port)
+                return
+
+            viewer_left = False
+            reader, writer = await asyncio.open_connection(host, port)
+            log.info("console bridged to %s:%d", host, port)
+            try:
+                await first_of([("to_console", to_console()),
+                                ("to_platform", to_platform())] + stop_watch())
+            finally:
+                # Closed on every exit from this viewing, so the next viewer
+                # opens a fresh one and no socket is held into a malware VM's
+                # console while nobody is watching -- the property
+                # `live-console.md` §4.1b was uneasy about, preserved now that
+                # there can be more than one viewing per analysis.
+                if writer is not None:
+                    writer.close()
+                    try:
+                        await writer.wait_closed()
+                    except Exception as exc:
+                        log.debug("console socket close: %s", exc)
+                    reader = writer = None
+
+            if not viewer_left:
+                # The platform's socket closed, the console socket closed, or
+                # the trace is stopping. Nothing left to wait for -- only a
+                # departing VIEWER is worth going round again for.
+                return
+            log.info("viewer left the console for %s:%d; waiting for another",
                      host, port)
-            return
-
-        reader, writer = await asyncio.open_connection(host, port)
-        log.info("console bridged to %s:%d", host, port)
-
-        await first_of([("to_console", to_console()),
-                        ("to_platform", to_platform())] + stop_watch())
     finally:
         if writer is not None:
             writer.close()

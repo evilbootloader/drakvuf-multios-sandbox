@@ -241,9 +241,10 @@ class JobSummary(BaseModel):
     # anything submitted over the mTLS listener: a client certificate
     # identifies a machine, and this column is for a person.
     #
-    # Every reader sees every submitter. That matches the current posture --
-    # Access admits only people who may see everything -- and is precisely
-    # what #40 has to revisit once `visibility` means something.
+    # Since #40 a reader only ever sees rows this value permits: their own,
+    # the ownerless ones, and published ones. So `owner` on a returned row is
+    # either the caller, NULL, or the publisher of something public -- never
+    # an arbitrary third party's address harvested from a listing.
     owner: str | None = None
 
 
@@ -310,10 +311,11 @@ class JobDetail(JobSummary):
     # Deliberately absent: blocking_job_id and need_mib.
     #
     # A held job reports THAT something is reserved ahead of it, never which
-    # job or how large. Those are another submitter's details the moment
-    # `owner` and `visibility` mean anything (M8), and they live on the worker
-    # channel where Dom0 needs them for capacity accounting. Do not add them
-    # here for symmetry with /worker/claim.
+    # job or how large. Those are another submitter's details -- literally so
+    # since #40, because the job ahead is frequently one this caller may not
+    # read -- and they live on the worker channel where Dom0 needs them for
+    # capacity accounting. Do not add them here for symmetry with
+    # /worker/claim.
     reserved_ahead: bool = False
 
 
@@ -437,18 +439,26 @@ def _reject(conn, job_id: UUID, reason: RejectReason) -> None:
 
 
 @router.post("/{job_id}/uploaded")
-def mark_uploaded(job_id: Annotated[UUID, Path()]) -> JobDetail:
+def mark_uploaded(job_id: Annotated[UUID, Path()],
+                  identity: auth.Identity = None) -> JobDetail:
     """Run admission: received -> admitted -> queued, or rejected with a reason.
 
     Every check happens before a clone exists, so a rejection costs no VM.
+
+    Scoped like every other read, although the caller here is by construction
+    the job's own submitter -- it holds an id issued to it seconds earlier by
+    `create_job`. The check buys nothing on the honest path and is here anyway,
+    because a `_detail` that is scoped on some paths and not others is what
+    gets copied into the next route.
     """
+    scope, scope_params = auth.visible_to(identity)
     with connection() as conn:
         with conn.cursor(row_factory=dict_row) as cur:
             cur.execute(
                 "SELECT id, state, target_os, submitted_filename,"
                 "       egress_mode, egress_exit FROM jobs"
-                " WHERE id = %s",
-                (job_id,),
+                f" WHERE id = %s AND {scope}",
+                (job_id, *scope_params),
             )
             job = cur.fetchone()
 
@@ -466,13 +476,13 @@ def mark_uploaded(job_id: Annotated[UUID, Path()]) -> JobDetail:
         stored = objects.head(key)
         if stored is None or stored[0] == 0:
             _reject(conn, job_id, RejectReason.UNREADABLE)
-            return _detail(conn, job_id)
+            return _detail(conn, job_id, identity)
 
         # The REAL size, not the declared one. The signed policy bounds what
         # could be written; this establishes what actually was.
         if stored[0] > settings.max_sample_bytes:
             _reject(conn, job_id, RejectReason.REJECTED_SIZE)
-            return _detail(conn, job_id)
+            return _detail(conn, job_id, identity)
 
         # Streamed: hashed without being stored, header kept for libmagic.
         facts = objects.inspect(key)
@@ -490,7 +500,7 @@ def mark_uploaded(job_id: Annotated[UUID, Path()]) -> JobDetail:
         # (issue #3). It must never be used to pick a pipeline.
         if _contradicts(detected, TargetOs(job["target_os"])):
             _reject(conn, job_id, RejectReason.UNSUPPORTED_TYPE)
-            return _detail(conn, job_id)
+            return _detail(conn, job_id, identity)
 
         # Could any registered host ever run this? Asked against TOTAL
         # capacity, not free: a job that only fails because a host is busy
@@ -499,7 +509,7 @@ def mark_uploaded(job_id: Annotated[UUID, Path()]) -> JobDetail:
         capacity = dal.capacity_for(conn, job["target_os"])
         if reason := capacity.reject_reason:
             _reject(conn, job_id, RejectReason(reason))
-            return _detail(conn, job_id)
+            return _detail(conn, job_id, identity)
 
         # Can any host route this sample where the submitter asked?
         #
@@ -521,7 +531,7 @@ def mark_uploaded(job_id: Annotated[UUID, Path()]) -> JobDetail:
             if not dal.exit_available(conn, name=job["egress_exit"],
                                       mode=job["egress_mode"]):
                 _reject(conn, job_id, RejectReason.NO_EGRESS)
-                return _detail(conn, job_id)
+                return _detail(conn, job_id, identity)
 
         conn.execute(
             "UPDATE jobs SET state = %s, required_mib = ("
@@ -529,7 +539,7 @@ def mark_uploaded(job_id: Annotated[UUID, Path()]) -> JobDetail:
             ") WHERE id = %s",
             (JobState.QUEUED.value, job["target_os"], job_id),
         )
-        return _detail(conn, job_id)
+        return _detail(conn, job_id, identity)
 
 
 # Contradictions worth acting on, and no more. libmagic's output is a free
@@ -563,10 +573,44 @@ def _contradicts(detected: str, target: TargetOs) -> bool:
 
 
 # --- reading --------------------------------------------------------------
+#
+# **Every read below is scoped by `auth.visible_to`** (issue #40, DRAFT-047
+# decision 4), and the scope goes into the WHERE clause rather than into an
+# `if` after the fetch. That is deliberate: a post-fetch check leaves a window
+# where another user's row exists as a Python object, and the next person to
+# add a code path through here has to remember it. In the WHERE clause there is
+# nothing to remember.
+#
+# **A job the caller may not see is 404, never 403**, and with the same detail
+# string a genuinely missing id gets. A 403 confirms the id exists, which turns
+# this API into an oracle for enumerating other people's job ids.
+#
+# `scope` is interpolated with an f-string, and that is not a SQL injection:
+# it is a literal fragment this process wrote, and every VALUE it refers to is
+# passed separately as a bound parameter. Same construction as `_filters`
+# below, for the same reason.
 
-def _detail(conn, job_id: UUID) -> JobDetail:
+
+def _visible_or_404(conn, job_id: UUID, identity: str | None) -> None:
+    """Refuse unless this caller may see this job.
+
+    For the routes that act rather than read -- cancel, console request, event
+    subscription -- where there is no row to return and only the permission
+    question matters.
+    """
+    scope, params = auth.visible_to(identity)
+    row = conn.execute(
+        f"SELECT 1 FROM jobs WHERE id = %s AND {scope}", (job_id, *params)
+    ).fetchone()
+    if row is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "no such job")
+
+
+def _detail(conn, job_id: UUID, identity: str | None) -> JobDetail:
+    scope, scope_params = auth.visible_to(identity)
     with conn.cursor(row_factory=dict_row) as cur:
-        cur.execute("SELECT * FROM jobs WHERE id = %s", (job_id,))
+        cur.execute(f"SELECT * FROM jobs WHERE id = %s AND {scope}",
+                    (job_id, *scope_params))
         row = cur.fetchone()
     if row is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "no such job")
@@ -641,18 +685,19 @@ def list_jobs(
         None, description="keyset cursor: return jobs created strictly before this"
     ),
     limit: int = Query(50, ge=1, le=200),
+    identity: auth.Identity = None,
 ) -> list[JobSummary]:
-    """Job history.
+    """Job history, scoped to what the caller may see.
 
     Keyset pagination on created_at rather than OFFSET: this table grows
     without bound, and OFFSET degrades quietly -- page 1 is fast and page 400
     scans everything before it.
     """
-    return query_jobs(state=state, target_os=target_os, sha256=sha256,
-                      before=before, limit=limit)
+    return query_jobs(identity=identity, state=state, target_os=target_os,
+                      sha256=sha256, before=before, limit=limit)
 
 
-def _filters(state, target_os, sha256, sha256_prefix, before):
+def _filters(state, target_os, sha256, sha256_prefix, before, identity):
     """WHERE fragments and their bound values.
 
     One builder, used by both the page query and the count. Two copies of this
@@ -660,9 +705,15 @@ def _filters(state, target_os, sha256, sha256_prefix, before):
     while showing a different set -- the count and the page must be able to
     disagree only about LIMIT.
 
+    **The tenancy scope is built in here rather than added by each caller**, so
+    the count and the page cannot disagree about it either. A total that
+    included other people's jobs while the page did not would leak how many
+    they have, and page through to empty results.
+
     Every fragment is a literal; no caller-supplied text enters the statement.
     """
-    clauses, params = ["TRUE"], []
+    scope, scope_params = auth.visible_to(identity)
+    clauses, params = ["TRUE", scope], list(scope_params)
     if state:
         clauses.append("state = %s")
         params.append(state.value)
@@ -696,9 +747,16 @@ def _filters(state, target_os, sha256, sha256_prefix, before):
     return clauses, params
 
 
-def query_jobs(*, state=None, target_os=None, sha256=None,
+def query_jobs(*, identity, state=None, target_os=None, sha256=None,
                sha256_prefix=None, before=None, offset=0, limit=50):
     """The route body as a plain function, so other callers can reuse it.
+
+    **`identity` has no default, on purpose.** Every other argument here is a
+    filter, where "not specified" sensibly means "no restriction"; tenancy is
+    not, and a default would make forgetting it return every user's jobs
+    silently. Required, so forgetting is a TypeError at import-time reach
+    rather than a leak nobody sees. Pass None explicitly for the unscoped
+    mTLS path -- see `auth.visible_to`.
 
     The UI (#38) renders the same history, and calling the route directly
     would pass FastAPI's `Query(...)` sentinels through as if they were
@@ -719,7 +777,8 @@ def query_jobs(*, state=None, target_os=None, sha256=None,
     rows; past that the UI moves to next/previous links rather than this
     function changing.
     """
-    clauses, params = _filters(state, target_os, sha256, sha256_prefix, before)
+    clauses, params = _filters(state, target_os, sha256, sha256_prefix, before,
+                               identity)
     params.extend([limit, offset])
     sql = (
         "SELECT id, created_at, target_os, submitted_filename, state, sha256,"
@@ -732,24 +791,30 @@ def query_jobs(*, state=None, target_os=None, sha256=None,
         return [JobSummary(**row) for row in cur.fetchall()]
 
 
-def count_jobs(*, state=None, target_os=None, sha256=None,
+def count_jobs(*, identity, state=None, target_os=None, sha256=None,
                sha256_prefix=None, before=None) -> int:
     """How many rows the same filters match, for the page links.
 
     A second query rather than `count(*) OVER ()` alongside the page: that
     window returns no row at all on a page past the end, which is exactly when
     the UI most needs the total -- to send someone back to a page that exists.
+
+    `identity` is required here for the same reason as in `query_jobs`, and
+    must be the SAME value: the count and the page are one answer split across
+    two statements.
     """
-    clauses, params = _filters(state, target_os, sha256, sha256_prefix, before)
+    clauses, params = _filters(state, target_os, sha256, sha256_prefix, before,
+                               identity)
     sql = f"SELECT count(*) FROM jobs WHERE {' AND '.join(clauses)}"
     with connection() as conn:
         return conn.execute(sql, params).fetchone()[0]
 
 
 @router.get("/{job_id}")
-def get_job(job_id: Annotated[UUID, Path()]) -> JobDetail:
+def get_job(job_id: Annotated[UUID, Path()],
+            identity: auth.Identity = None) -> JobDetail:
     with connection() as conn:
-        return _detail(conn, job_id)
+        return _detail(conn, job_id, identity)
 
 
 # --- downloading ----------------------------------------------------------
@@ -771,16 +836,26 @@ def get_job(job_id: Annotated[UUID, Path()]) -> JobDetail:
 # `objects.chunks` are both generators, so an abandoned download stops pulling
 # from the store rather than running to completion.
 
-def _for_download(job_id: UUID):
+def _for_download(job_id: UUID, identity: str | None):
     """The artifacts a download route may serve, or the reason it may not.
 
     410 rather than 404 for an expired job: the objects existed and the
     manifest still records what they were, which is a different thing to say
     than "no such job".
+
+    **This is where the tenancy check has to happen for artifacts, and it has
+    to happen here rather than at the point of streaming.** DRAFT-047 states
+    the requirement as "the scope check goes before the presigned URL is
+    minted", because a presigned URL is a bearer capability that has already
+    left. These routes wrap rather than presign (see the block above), so the
+    equivalent moment is before `objects.chunks` opens a read against the
+    store -- which is what refusing here achieves.
     """
+    scope, scope_params = auth.visible_to(identity)
     with connection() as conn, conn.cursor(row_factory=dict_row) as cur:
-        cur.execute("SELECT created_at, manifest FROM jobs WHERE id = %s",
-                    (job_id,))
+        cur.execute(
+            f"SELECT created_at, manifest FROM jobs WHERE id = %s AND {scope}",
+            (job_id, *scope_params))
         row = cur.fetchone()
     if row is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "no such job")
@@ -816,9 +891,10 @@ def _attachment(stem: str) -> dict[str, str]:
 
 
 @router.get("/{job_id}/artifacts.zip")
-def download_all_artifacts(job_id: Annotated[UUID, Path()]) -> StreamingResponse:
+def download_all_artifacts(job_id: Annotated[UUID, Path()],
+                           identity: auth.Identity = None) -> StreamingResponse:
     """Every artifact of one run, in a single password-protected ZIP."""
-    artifacts = _for_download(job_id)
+    artifacts = _for_download(job_id, identity)
     prefix = objects.result_prefix(job_id)
 
     return StreamingResponse(
@@ -834,6 +910,7 @@ def download_all_artifacts(job_id: Annotated[UUID, Path()]) -> StreamingResponse
 def download_one_artifact(
     job_id: Annotated[UUID, Path()],
     name: Annotated[str, Query(description="artifact name from the manifest")],
+    identity: auth.Identity = None,
 ) -> StreamingResponse:
     """One artifact, wrapped the same way.
 
@@ -843,7 +920,8 @@ def download_one_artifact(
     malware; resolving it to a manifest entry first means the only reachable
     objects are the ones this job actually declared.
     """
-    match = next((a for a in _for_download(job_id) if a.name == name), None)
+    match = next((a for a in _for_download(job_id, identity) if a.name == name),
+                 None)
     if match is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND,
                             "no such artifact for this job")
@@ -857,20 +935,29 @@ def download_one_artifact(
 
 
 @router.post("/{job_id}/cancel")
-def cancel_job(job_id: Annotated[UUID, Path()]) -> CancelResponse:
+def cancel_job(job_id: Annotated[UUID, Path()],
+               identity: auth.Identity = None) -> CancelResponse:
     """Cancel, by whichever route the job's state allows.
 
     Before a clone exists this is one UPDATE and terminal -- the operation
     DRAFT-040 recorded as unexpressible under dirwatch, where a queued job was
     a file in a directory with no id to name it by. While running it is a
     request the worker collects on its next heartbeat.
+
+    **The scope is checked here rather than pushed into `dal.cancel`.** That
+    keeps the data-access layer free of any notion of `owner`, which is what
+    stops a later change from owner-scoping the queries the worker channel also
+    reaches. Both statements run on one connection, and `owner` never changes,
+    so there is nothing for the gap between them to race with.
     """
     with connection() as conn:
+        _visible_or_404(conn, job_id, identity)
         return CancelResponse(outcome=dal.cancel(conn, job_id))
 
 @router.post("/{job_id}/console/request",
              status_code=status.HTTP_204_NO_CONTENT)
-def request_console(job_id: Annotated[UUID, Path()]) -> None:
+def request_console(job_id: Annotated[UUID, Path()],
+                    identity: auth.Identity = None) -> None:
     """Ask for a live console on this job (DRAFT-056).
 
     **`/console/request`, not `/console`** -- the WebSocket lives at
@@ -898,8 +985,10 @@ def request_console(job_id: Annotated[UUID, Path()]) -> None:
             status.HTTP_404_NOT_FOUND, "the live console is disabled"
         )
 
+    scope, scope_params = auth.visible_to(identity)
     with connection() as conn, conn.cursor() as cur:
-        cur.execute("SELECT state FROM jobs WHERE id = %s", (job_id,))
+        cur.execute(f"SELECT state FROM jobs WHERE id = %s AND {scope}",
+                    (job_id, *scope_params))
         row = cur.fetchone()
         if row is None:
             raise HTTPException(status.HTTP_404_NOT_FOUND, "no such job")
@@ -914,17 +1003,26 @@ def request_console(job_id: Annotated[UUID, Path()]) -> None:
 
 
 @router.get("/{job_id}/events")
-async def job_events(job_id: Annotated[UUID, Path()]) -> StreamingResponse:
+async def job_events(job_id: Annotated[UUID, Path()],
+                     identity: auth.Identity = None) -> StreamingResponse:
     """Server-sent events for one job, backed by Postgres LISTEN/NOTIFY.
 
     No Redis, and no polling loop on the server: migration 0002's trigger
     emits on every state change and events.py fans it out from one connection
     shared by the whole process.
 
+    **Checked before the stream is opened**, not inside it. Once
+    `StreamingResponse` has the generator the status line is already 200, so a
+    refusal from within would arrive as an empty or truncated event stream --
+    indistinguishable to a client from the job simply not changing.
+
     `X-Accel-Buffering: no` because a buffering proxy turns a live stream into
     a stream that arrives all at once when the job finishes -- which looks
     exactly like the stream not working.
     """
+    with connection() as conn:
+        _visible_or_404(conn, job_id, identity)
+
     return StreamingResponse(
         events.stream(job_id),
         media_type="text/event-stream",

@@ -17,6 +17,7 @@ from conftest import WORKER_TOKEN
 from sandbox_platform.console import (
     AlreadyAttached, Registry, Session, Side, pump,
 )
+from sandbox_platform.enums import RUNNING_STATES
 
 # anyio's pytest plugin rather than pytest-asyncio: anyio is already a FastAPI
 # dependency, so this adds nothing to a container whose security argument rests
@@ -91,16 +92,69 @@ async def test_waiting_returns_true_once_paired(reg):
 
 # --- lifetime ---------------------------------------------------------------
 
-async def test_either_side_leaving_ends_the_session(reg):
-    """Not just the one that left. A browser with no worker has nothing to
-    show; a worker with no browser is a socket into a malware VM's console
-    with nobody watching it -- and the second is the one that matters."""
+async def test_the_worker_leaving_ends_the_session(reg):
+    """A worker with no browser is a socket into a malware VM's console with
+    nobody watching it, and there is nothing left to show either way."""
+    session = await reg.open("job-1", Side.BROWSER, object())
+    await reg.open("job-1", Side.WORKER, object())
+
+    await reg.close("job-1", Side.WORKER)
+
+    assert session.closed
+
+
+async def test_the_browser_leaving_does_not_end_the_session(reg):
+    """**Changed 2026-09-05, and it is what makes re-entry possible.**
+
+    This used to close the session whichever side left. So closing the job
+    page ended the relay permanently: sandboxd returned from `bridge()` and
+    dials only once, and coming back waited out the pair timeout for a peer
+    that no longer existed.
+
+    A viewer leaving means nobody is watching, not that nothing is left to
+    watch -- the analysis is still running and Dom0 still holds its end.
+    """
     session = await reg.open("job-1", Side.BROWSER, object())
     await reg.open("job-1", Side.WORKER, object())
 
     await reg.close("job-1", Side.BROWSER)
 
-    assert session.closed
+    assert not session.closed
+    assert session.browser is None, "the viewer's own socket is released"
+    assert session.worker is not None, "Dom0's end is untouched"
+
+
+async def test_a_viewer_can_come_back_to_the_same_session(reg):
+    """The point of the change: the SAME session, so Dom0's relay is reused.
+
+    A new session object here would mean the worker is attached to the old one
+    and the returning viewer waits for a peer that will never arrive -- which
+    is precisely the bug, moved rather than fixed.
+    """
+    first = await reg.open("job-1", Side.BROWSER, object())
+    await reg.open("job-1", Side.WORKER, object())
+    await reg.close("job-1", Side.BROWSER)
+
+    returning = object()
+    second = await reg.open("job-1", Side.BROWSER, returning)
+
+    assert second is first
+    assert second.browser is returning
+    assert second.paired, "re-paired with the worker that never left"
+
+
+async def test_a_second_viewer_is_still_refused_while_one_is_watching(reg):
+    """Re-entry must not have turned "one viewer" into "any number".
+
+    The rule is unchanged: a session is one viewer and a second is refused
+    rather than queued. What changed is only that the seat is vacated when the
+    first viewer leaves.
+    """
+    await reg.open("job-1", Side.BROWSER, object())
+    await reg.open("job-1", Side.WORKER, object())
+
+    with pytest.raises(AlreadyAttached):
+        await reg.open("job-1", Side.BROWSER, object())
 
 
 async def test_the_job_ending_ends_the_session(reg):
@@ -433,3 +487,127 @@ def test_the_leaseholder_is_admitted(client, conn, console_on, relayed):
     dial(client, job_id, worker_id="dom0-1")
 
     assert relayed == [(str(job_id), Side.WORKER)]
+
+
+# --- the session window: a live clone, not just a trace --------------------
+#
+# Widened 2026-09-05. DRAFT-056 scoped a session to `executing`; the real
+# constraint is the DOMAIN, because the relay ends at a VNC port QEMU serves
+# for a live clone. `RUNNING_STATES` already names exactly those states.
+#
+# The states are driven from `RUNNING_STATES` rather than listed here, so a
+# state added to the pipeline joins these tests instead of quietly falling
+# outside them.
+
+def job_in(conn, state: str, owner: str = "dom0-1", job_owner=None):
+    return conn.execute(
+        """
+        INSERT INTO jobs (target_os, submitted_filename, state, lease_owner,
+                          lease_expires_at, owner)
+        VALUES ('ubuntu', 'x.bin', %s, %s, now() + interval '2 min', %s)
+        RETURNING id
+        """,
+        (state, owner, job_owner),
+    ).fetchone()[0]
+
+
+@pytest.mark.parametrize("state", sorted(s.value for s in RUNNING_STATES))
+def test_the_worker_may_dial_whenever_a_clone_exists(
+        client, conn, console_on, relayed, state):
+    """**`cloning` and `preparing` are the point.** sandboxd dials as soon as
+    the clone exists, so a check that admitted only `executing` would reject
+    its own relay for the whole of preconfig."""
+    job_id = job_in(conn, state)
+
+    dial(client, job_id, worker_id="dom0-1")
+
+    assert relayed == [(str(job_id), Side.WORKER)], f"refused in {state}"
+
+
+@pytest.mark.parametrize("state", ["received", "queued", "cleaning",
+                                   "completed", "failed", "cancelled"])
+def test_the_worker_is_refused_when_no_clone_exists(
+        client, conn, console_on, relayed, state):
+    """Before the clone and after teardown there is no domain to bridge to.
+
+    `cleaning` is in this list and not the one above: the worker still holds
+    the LEASE through cleanup -- that is what `LEASED_STATES` is for -- but
+    `_teardown` has already destroyed the domain by then, so there is nothing
+    left to serve a framebuffer.
+    """
+    job_id = job_in(conn, state)
+
+    assert dial(client, job_id, worker_id="dom0-1") == 1008
+    assert relayed == [], f"admitted in {state}"
+
+
+@pytest.mark.parametrize("state", sorted(s.value for s in RUNNING_STATES))
+def test_the_browser_may_watch_whenever_a_clone_exists(
+        client, conn, console_on, relayed, access_token, state):
+    """The operator's end of the same window -- preconfig and collection
+    included, which is the whole of what the widening buys."""
+    job_id = job_in(conn, state, job_owner="analyst@example.test")
+
+    from starlette.websockets import WebSocketDisconnect
+    try:
+        with client.websocket_connect(
+                f"/api/v1/jobs/{job_id}/console",
+                headers=access_token("analyst@example.test")):
+            pass
+    except WebSocketDisconnect as exc:  # pragma: no cover - a failure path
+        pytest.fail(f"refused in {state}: {exc.reason}")
+
+    assert relayed == [(str(job_id), Side.BROWSER)]
+
+
+@pytest.mark.parametrize("state", ["queued", "cleaning", "completed"])
+def test_the_browser_is_refused_when_no_clone_exists(
+        client, conn, console_on, relayed, access_token, state):
+    from starlette.websockets import WebSocketDisconnect
+
+    job_id = job_in(conn, state, job_owner="analyst@example.test")
+
+    with pytest.raises(WebSocketDisconnect) as exc:
+        with client.websocket_connect(
+                f"/api/v1/jobs/{job_id}/console",
+                headers=access_token("analyst@example.test")) as ws:
+            ws.receive_text()
+
+    assert "live clone" in exc.value.reason
+    assert relayed == []
+
+
+# --- the reaper must not be narrower than the window it reaps --------------
+
+@pytest.mark.parametrize("state", sorted(s.value for s in RUNNING_STATES))
+def test_maintenance_keeps_a_session_while_the_clone_lives(conn, client, state):
+    """`stale_sessions` read `state = 'executing'` until 2026-09-05.
+
+    Left that way it would have reaped a session the moment the job reached
+    `collecting`, and refused to let one exist during `cloning` at all -- so
+    the widened window would have worked in the routers and been closed a
+    maintenance tick later. A reaper narrower than the thing it reaps is how a
+    feature ends up working only in tests.
+    """
+    from sandbox_platform import maintenance
+
+    job_id = str(job_in(conn, state))
+
+    assert maintenance.stale_sessions([job_id]) == []
+
+
+@pytest.mark.parametrize("state", ["completed", "cleaning", "queued"])
+def test_maintenance_reaps_a_session_with_no_clone(conn, client, state):
+    from sandbox_platform import maintenance
+
+    job_id = str(job_in(conn, state))
+
+    assert maintenance.stale_sessions([job_id]) == [job_id]
+
+
+def test_maintenance_reaps_a_session_for_a_job_that_does_not_exist(conn, client):
+    """A registry entry with no row at all -- deleted, or never real."""
+    from sandbox_platform import maintenance
+
+    ghost = "00000000-0000-0000-0000-000000000000"
+    assert maintenance.stale_sessions([ghost]) == [ghost]

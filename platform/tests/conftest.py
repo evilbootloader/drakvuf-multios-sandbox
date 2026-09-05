@@ -255,6 +255,59 @@ def remove_object():
 
 
 @pytest.fixture
+def access_token(monkeypatch):
+    """Mint verifiable Cloudflare Access headers for arbitrary users.
+
+    A real RSA key and a real signature, checked by the real verification path
+    -- only `auth._signing_key` is patched, to serve the public half rather
+    than fetching it from Cloudflare. That matters for the tenancy tests: a
+    404 they observe came from the scope predicate, not from a token the
+    verifier happened to reject for an unrelated reason.
+
+    `test_access_jwt.py` keeps its own issuer rather than using this one. It
+    needs control of the PRIVATE key to forge signatures with the wrong one,
+    which this factory deliberately does not expose -- these two want opposite
+    things from the same machinery.
+    """
+    import dataclasses
+    import time as _time
+
+    import jwt as _jwt
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric import rsa
+
+    from sandbox_platform import auth
+    from sandbox_platform.config import settings as _settings
+
+    team = "https://testteam.cloudflareaccess.com"
+    aud = "0123456789abcdef"
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    pem = key.private_bytes(
+        serialization.Encoding.PEM,
+        serialization.PrivateFormat.PKCS8,
+        serialization.NoEncryption(),
+    )
+
+    # Settings is frozen, so replace the object auth.py resolved. This is also
+    # closer to deployment, where the two listeners each hold one immutable
+    # snapshot with a different REQUIRE_ACCESS_JWT.
+    monkeypatch.setattr(auth, "settings", dataclasses.replace(
+        _settings, require_access_jwt=True,
+        access_team_domain=team, access_aud=aud))
+    monkeypatch.setattr(auth, "_signing_key", lambda _t: key.public_key())
+
+    def _headers(email: str) -> dict[str, str]:
+        token = _jwt.encode(
+            {"aud": aud, "iss": team, "email": email,
+             "exp": int(_time.time()) + 600, "iat": int(_time.time())},
+            pem, algorithm="RS256", headers={"kid": "test-key-1"},
+        )
+        return {"Cf-Access-Jwt-Assertion": token}
+
+    return _headers
+
+
+@pytest.fixture
 def worker_headers():
     """Credentials for the worker channel: the token, plus the worker id that
     job-scoped routes check the lease against."""

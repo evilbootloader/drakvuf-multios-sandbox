@@ -106,17 +106,36 @@ class Session:
             self._paired.set()
 
     def detach(self, side: Side) -> None:
-        """Either side leaving ends the session.
+        """Release one side. The WORKER leaving ends the session; the browser's
+        leaving does not.
 
-        Not just the one that left: a browser with no worker has nothing to
-        show, and a worker with no browser is a socket into a malware VM's
-        console with nobody watching it. The second is the one that matters.
+        **Asymmetric since 2026-09-05, and the asymmetry is the whole of
+        re-entry.** This used to close the session whichever side left, on the
+        reasoning that "a worker with no browser is a socket into a malware
+        VM's console with nobody watching it". That reasoning still holds and
+        is still honoured -- but it is `sandboxd` that holds the socket to the
+        VM, and it closes its TCP connection on PEER_GONE and reopens it for
+        the next viewer. So a browser leaving means nobody is watching, not
+        that nothing is left to watch: the analysis is still running and the
+        relay is still there.
+
+        Closing here made leaving a job page permanent. The viewer's departure
+        ended the session, `sandboxd` returned from `bridge()` and never
+        redialled, and coming back waited out the pair timeout for a peer that
+        no longer existed.
+
+        The worker leaving still ends it, because then there really is nothing
+        to show.
         """
-        if side is Side.BROWSER:
-            self.browser = None
-        else:
+        if side is Side.WORKER:
             self.worker = None
-        self.close()
+            self.close()
+            return
+
+        self.browser = None
+        # Cleared, not set: the worker's next `wait_paired` must block until a
+        # new viewer arrives rather than return immediately on a stale flag.
+        self._paired.clear()
 
     def close(self) -> None:
         self._closed.set()
@@ -216,7 +235,8 @@ class Registry:
 registry = Registry()
 
 
-async def pump(source, sink, session: Session, *, mark_input: bool = False):
+async def pump(source, sink, session: Session, *, mark_input: bool = False,
+               closes_session: bool = True):
     """Move bytes one way until either side stops.
 
     **This is the whole relay.** It does not know what RFB is. It reads a
@@ -229,6 +249,11 @@ async def pump(source, sink, session: Session, *, mark_input: bool = False):
     bookkeeping: a report from an interactive session is not comparable to an
     automated one, because a person made choices that changed what happened.
     Two reports that look alike must not describe different experiments.
+
+    `closes_session` is False on the BROWSER direction, so a viewer closing
+    their tab does not end a session the worker is still holding -- that is
+    what lets them come back to a running analysis. The worker direction keeps
+    it True: when Dom0's end stops, there is genuinely nothing left.
     """
     try:
         while not session.closed:
@@ -239,4 +264,5 @@ async def pump(source, sink, session: Session, *, mark_input: bool = False):
                 session.interacted = True
             await sink(data)
     finally:
-        session.close()
+        if closes_session:
+            session.close()

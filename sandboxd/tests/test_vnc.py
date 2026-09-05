@@ -190,6 +190,7 @@ def _fake_ws(frames):
 
 
 import asyncio  # noqa: E402
+import threading  # noqa: E402
 
 
 def test_no_console_socket_is_opened_before_a_viewer_attaches(monkeypatch):
@@ -332,3 +333,113 @@ def test_the_stop_flag_still_ends_a_bridged_session(monkeypatch):
     asyncio.run(asyncio.wait_for(run(), timeout=5))
 
     assert FakeWriter.closed, "the console socket was left open"
+
+
+# --- coming back to a running analysis -------------------------------------
+#
+# Added 2026-09-05. `bridge` used to return on PEER_GONE and `ConsoleSession`
+# dials exactly once, so closing the job page ended the relay for the rest of
+# the trace. Re-opening then waited out the platform's pair timeout for a peer
+# that no longer existed.
+
+class _CountingOpen:
+    """Stands in for asyncio.open_connection, one FakeWriter per call."""
+
+    def __init__(self):
+        self.opened = []
+        self.writers = []
+
+    async def __call__(self, host, port):
+        self.opened.append((host, port))
+
+        outer = self
+
+        class FakeReader:
+            async def read(self, n):
+                await asyncio.sleep(3600)
+
+        class FakeWriter:
+            def __init__(self): self.closed = False
+            def write(self, d): pass
+            async def drain(self): pass
+            def close(self): self.closed = True
+            async def wait_closed(self): pass
+
+        writer = FakeWriter()
+        outer.writers.append(writer)
+        return FakeReader(), writer
+
+
+def test_a_viewer_leaving_does_not_end_the_relay(monkeypatch):
+    """**The defect.** PEER_GONE returned from `bridge`, and nothing redials.
+
+    A second PEER_ATTACHED must be served, because the operator coming back to
+    a still-running analysis is the whole of what re-entry means.
+    """
+    opener = _CountingOpen()
+    monkeypatch.setattr(vnc.asyncio, "open_connection", opener)
+    ws = _fake_ws([vnc.PEER_ATTACHED, vnc.PEER_GONE, vnc.PEER_ATTACHED])
+
+    async def run():
+        await asyncio.wait_for(vnc.bridge(ws, "127.0.0.1", 5900), timeout=0.4)
+
+    with pytest.raises((asyncio.TimeoutError, TimeoutError)):
+        asyncio.run(run())
+
+    assert opener.opened == [("127.0.0.1", 5900), ("127.0.0.1", 5900)], \
+        "the returning viewer got no console connection"
+
+
+def test_each_viewer_gets_a_FRESH_console_connection(monkeypatch):
+    """**Not the same socket handed on.** RFB state lives in the connection:
+    the handshake happens once, and framebuffer updates mean nothing without
+    it. A second viewer joining the first one's stream would be fed updates
+    for a session it never negotiated, so the old connection must be closed
+    and a new one opened."""
+    opener = _CountingOpen()
+    monkeypatch.setattr(vnc.asyncio, "open_connection", opener)
+    ws = _fake_ws([vnc.PEER_ATTACHED, vnc.PEER_GONE, vnc.PEER_ATTACHED])
+
+    async def run():
+        await asyncio.wait_for(vnc.bridge(ws, "127.0.0.1", 5900), timeout=0.4)
+
+    with pytest.raises((asyncio.TimeoutError, TimeoutError)):
+        asyncio.run(run())
+
+    assert len(opener.writers) == 2
+    assert opener.writers[0].closed, \
+        "the departed viewer's console socket was left open"
+
+
+def test_the_platform_socket_closing_still_ends_the_relay(monkeypatch):
+    """Only a departing VIEWER is worth waiting again for.
+
+    An empty frame is the platform's end going away -- there is nothing left
+    to wait for, and looping would spin on a dead socket.
+    """
+    opener = _CountingOpen()
+    monkeypatch.setattr(vnc.asyncio, "open_connection", opener)
+    ws = _fake_ws([vnc.PEER_ATTACHED, b""])
+
+    # No `wait_for`: the point is that the bridge RETURNS on its own.
+    asyncio.run(vnc.bridge(ws, "127.0.0.1", 5900))
+
+    assert len(opener.opened) == 1
+
+
+def test_the_stop_flag_still_ends_the_relay_between_viewers(monkeypatch):
+    """The trace ending while nobody is watching must not leave the loop
+    parked in `wait_for_viewer`, which is the leak F-something closed."""
+    opener = _CountingOpen()
+    monkeypatch.setattr(vnc.asyncio, "open_connection", opener)
+    ws = _fake_ws([vnc.PEER_ATTACHED, vnc.PEER_GONE])
+    stop = threading.Event()
+
+    async def run():
+        async def trip():
+            await asyncio.sleep(0.05)
+            stop.set()
+        await asyncio.gather(trip(),
+                             vnc.bridge(ws, "127.0.0.1", 5900, stop=stop))
+
+    asyncio.run(asyncio.wait_for(run(), timeout=2.0))

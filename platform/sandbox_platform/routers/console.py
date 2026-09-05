@@ -31,7 +31,7 @@ from fastapi import (
 from .. import auth, console
 from ..config import settings
 from ..db import connection
-from ..enums import JobState
+from ..enums import RUNNING_STATES, JobState
 
 log = logging.getLogger(__name__)
 
@@ -44,12 +44,25 @@ browser_router = APIRouter(prefix="/api/v1/jobs", tags=["console"])
 worker_router = APIRouter(prefix="/api/v1/worker/jobs", tags=["console"])
 
 
-def _job_row(job_id: UUID):
+def _job_row(job_id: UUID, identity: str | None):
+    """The row both console ends need, scoped to what the caller may see.
+
+    **`identity` has no default, and the two callers pass different things.**
+    The browser end passes the authenticated user, so it reaches its own jobs
+    and nothing else (issue #40). The worker end passes None -- explicitly,
+    because Dom0 is infrastructure rather than a tenant and must be able to
+    attach to anyone's job. It is scoped instead by `lease_owner`, checked by
+    its caller below.
+
+    A default here would have picked one of those two answers for whichever
+    caller was written next, silently and probably wrongly.
+    """
+    scope, scope_params = auth.visible_to(identity)
     with connection() as conn, conn.cursor() as cur:
         cur.execute(
             "SELECT state, console_requested, lease_owner FROM jobs "
-            "WHERE id = %s",
-            (job_id,),
+            f"WHERE id = %s AND {scope}",
+            (job_id, *scope_params),
         )
         return cur.fetchone()
 
@@ -103,23 +116,24 @@ async def _relay(websocket: WebSocket, job_id: UUID, side: console.Side):
             )
             return
 
-        other = (session.worker if side is console.Side.BROWSER
-                 else session.browser)
-
-        if side is console.Side.WORKER:
-            # Tell Dom0 a viewer has arrived, so it can open the TCP
-            # connection to the console NOW rather than at dial time.
+        if side is console.Side.BROWSER:
+            # **The BROWSER announces its own arrival**, because it is the
+            # arrival being announced -- and because it is the side that can
+            # happen more than once. Dom0's relay outlives a viewer now, so a
+            # second viewer needs a second PEER_ATTACHED; sending it from the
+            # worker's handler, which runs once, could only ever announce the
+            # first. It is the exact mirror of the PEER_GONE this side already
+            # sends on the way out.
             #
-            # RFB has the SERVER speak first, so a connection opened before
-            # anyone is watching sends its banner to nobody and waits -- which
-            # QEMU gives up on. sandboxd dials at the start of the trace so the
-            # relay is ready; this is what tells it the other half is real
-            # (F10).
+            # It tells Dom0 to open the TCP connection to the console NOW
+            # rather than at dial time. RFB has the SERVER speak first, so a
+            # connection opened before anyone is watching sends its banner to
+            # nobody and waits -- which QEMU gives up on (F10).
             #
             # A TEXT frame, where all data is BINARY. That split is the entire
             # control channel: nothing has to be parsed to tell them apart, and
             # RFB bytes can never be read as a control message.
-            await websocket.send_text(console.PEER_ATTACHED)
+            await session.worker.send_text(console.PEER_ATTACHED)
 
         async def source():
             try:
@@ -128,12 +142,28 @@ async def _relay(websocket: WebSocket, job_id: UUID, side: console.Side):
                 return None
 
         async def sink(data: bytes):
-            await other.send_bytes(data)
+            # **Resolved per frame, not captured once.** The worker's peer
+            # changes when a viewer leaves and another arrives; a reference
+            # taken at pairing time would still point at the departed socket.
+            peer = (session.worker if side is console.Side.BROWSER
+                    else session.browser)
+            if peer is None:
+                # No viewer at this instant. Dropped rather than buffered: the
+                # next viewer gets a fresh RFB connection from Dom0, so frames
+                # from the previous one are not merely stale, they belong to a
+                # session that no longer exists.
+                return
+            await peer.send_bytes(data)
 
         # `mark_input` on the browser direction only. Watching changes nothing
         # about the experiment, so it must not mark the run as interactive.
+        #
+        # `closes_session` False on the browser direction: a viewer leaving
+        # must not end a session Dom0 is still holding, which is what lets them
+        # reopen a running analysis.
         await console.pump(source, sink, session,
-                           mark_input=side is console.Side.BROWSER)
+                           mark_input=side is console.Side.BROWSER,
+                           closes_session=side is console.Side.WORKER)
 
         if side is console.Side.BROWSER and session.interacted:
             _mark_interacted(job_id)
@@ -148,8 +178,12 @@ async def _relay(websocket: WebSocket, job_id: UUID, side: console.Side):
         # `session.closed`) until their next mouse movement raised out of
         # `sink`. noVNC reports that as "Session lost" rather than the clean
         # "the analysis finished" message console.js exists to show.
-        # `Session.detach` already promised better: "Either side leaving ends
-        # the session."
+        #
+        # **The two announcements now mean different things**, since
+        # `Session.detach` stopped being symmetric (2026-09-05). A worker
+        # leaving ends the session. A browser leaving ends only this VIEWING:
+        # PEER_GONE tells Dom0 to close its TCP connection to the console and
+        # wait for the next viewer, rather than to stop.
         #
         # Dom0 gets a PEER_GONE text frame because sandboxd is our code and
         # reads the control channel. The browser gets a socket CLOSE, because
@@ -185,9 +219,15 @@ async def browser_console(websocket: WebSocket, job_id: UUID):
     reuses the SAME verification (JWKS fetch, audience, issuer) and turns a
     refusal into a close code a client can read. A second implementation of
     Access verification is exactly what must not exist.
+
+    **The identity it returns is now used, not just demanded** (issue #40).
+    Verifying who the caller is and then opening a console on any job by id was
+    authentication without authorization: a session here streams the framebuffer
+    of a live malware VM and accepts input into it.
     """
     try:
-        auth.access_identity(websocket.headers.get("cf-access-jwt-assertion"))
+        identity = auth.access_identity(
+            websocket.headers.get("cf-access-jwt-assertion"))
     except HTTPException as exc:
         await websocket.close(POLICY, str(exc.detail))
         return
@@ -196,18 +236,40 @@ async def browser_console(websocket: WebSocket, job_id: UUID):
         await websocket.close(POLICY, "the live console is disabled")
         return
 
-    row = _job_row(job_id)
+    # Scoped, so someone else's job closes with the SAME message a missing id
+    # gets -- the close-code equivalent of returning 404 rather than 403.
+    row = _job_row(job_id, identity)
     if row is None:
         await websocket.close(POLICY, "no such job")
         return
 
     state = JobState(row[0])
-    if state is not JobState.EXECUTING:
-        # DRAFT-056 scopes a session to a job that is EXECUTING: not before the
-        # clone exists, not after teardown. Outside that window there is
-        # nothing to show and nothing to drive.
+    if state not in RUNNING_STATES:
+        # **Widened from EXECUTING to "a clone exists"** (2026-09-05).
+        #
+        # DRAFT-056 originally scoped a session to `executing`. The real
+        # constraint was never the trace, it is the DOMAIN: the relay ends at a
+        # VNC port QEMU serves for a live clone, so the window is exactly the
+        # states in which one exists -- which `RUNNING_STATES` already names,
+        # and which now lets an operator watch preconfig and collection rather
+        # than only the trace.
+        #
+        # Still not before the clone exists and not after teardown. Outside
+        # this window there is no domain, so there is nothing to show and
+        # nothing to drive -- and no amount of authentication changes that.
+        #
+        # **KNOWN GAP (DRAFT-056): input is not restricted to `executing`.**
+        # View-only was deferred (`live-console.md`, "view-only is DEFERRED"),
+        # so v1 is interactive-only and widening the window widens what can be
+        # TYPED as well as what can be watched. During `collecting` that
+        # reaches the guest while artifacts are being pulled, which can change
+        # what gets collected after the trace has ended. `interacted` records
+        # that a human was involved, but not that it happened post-trace.
+        # Dropping client->server frames outside `executing` is the fix and is
+        # its own change.
         await websocket.close(
-            POLICY, f"job is {state.value}; a console needs an executing job")
+            POLICY,
+            f"job is {state.value}; a console needs a job with a live clone")
         return
 
     # Asking is what tells sandboxd to dial out -- it learns on its next
@@ -242,9 +304,15 @@ async def worker_console(websocket: WebSocket, job_id: UUID):
         await websocket.close(POLICY, "bad worker token")
         return
 
-    row = _job_row(job_id)
-    if row is None or JobState(row[0]) is not JobState.EXECUTING:
-        await websocket.close(POLICY, "job is not executing")
+    # None: the worker is not a tenant. See `_job_row`; the lease check below
+    # is what scopes this end.
+    row = _job_row(job_id, None)
+    if row is None or JobState(row[0]) not in RUNNING_STATES:
+        # Same window as the browser end, and it has to be: sandboxd now dials
+        # as soon as the clone exists rather than at the start of the trace, so
+        # refusing anything but `executing` here would reject its own relay for
+        # the whole of `cloning` and `preparing`.
+        await websocket.close(POLICY, "job has no live clone")
         return
 
     # **The caller must hold this job's lease, not merely the worker token.**
