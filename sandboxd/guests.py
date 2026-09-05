@@ -484,20 +484,8 @@ def _android_netcfg(job: Job, subnet: str) -> str:
 def _windows_netcfg(job: Job, subnet: str) -> str:
     paths = PATHS[TargetOs.WINDOWS]
     return (
-        "powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "
-        f"\"$if='Ethernet'; "
-        f"Get-NetIPAddress -InterfaceAlias $if -AddressFamily IPv4 "
-        f"-ErrorAction SilentlyContinue | Remove-NetIPAddress -Confirm:$false; "
-        f"Get-NetRoute -InterfaceAlias $if -AddressFamily IPv4 "
-        f"-ErrorAction SilentlyContinue | "
-        f"Where-Object {{$_.DestinationPrefix -eq '0.0.0.0/0'}} | "
-        f"Remove-NetRoute -Confirm:$false; "
-        f"New-NetIPAddress -InterfaceAlias $if "
-        f"-IPAddress '{subnet}.{job.vlan}.2' -PrefixLength 24 "
-        f"-DefaultGateway '{subnet}.{job.vlan}.1'; "
-        f"Set-DnsClientServerAddress -InterfaceAlias $if "
-        f"-ServerAddresses '{paths.nameserver}'\""
-    )
+        f"\"netsh interface ip set address name=\\\"Local Area Connection\\\" static {subnet}.{job.vlan}.2 255.255.255.0 {subnet}.{job.vlan}.1 && netsh interface ip set dns name=\\\"Local Area Connection\\\" static ${ns} validate=no"\"    
+        )
 
 
 def argv_configure_network(job: Job, subnet: str = "172.16") -> list[str]:
@@ -518,11 +506,12 @@ def argv_configure_network(job: Job, subnet: str = "172.16") -> list[str]:
         script = (_windows_netcfg(job, subnet))
 
     mode = "shellexec" if job.target_os == TargetOs.WINDOWS else "execproc"
+    launch_command = "-Command -NoProfile -ExecutionPolicy Bypass" if job.target_os == TargetOs.WINDOWS else "-c"
 
     return [
         "injector", "-r", str(job.profile), "-d", str(job.domid),
         "-i", str(job.injection_pid), "-m", mode,
-        "-e", shell, "-f", "-c", "-f", script,
+        "-e", shell, "-f", launch_command, "-f", script,
     ]
 
 
