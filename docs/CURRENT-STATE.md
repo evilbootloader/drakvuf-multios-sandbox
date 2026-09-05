@@ -80,7 +80,7 @@ CT 102, and everything `qm` and `pct` could do.
 |---|---|---|
 | Xen | **4.20.1**, the *noble* `.deb` from drakvuf-builds | 2026-08-28 |
 | DRAKVUF | **`v1.1-da982ab`**, built from source from `lfreijo/drakvuf` branch `memdump` | 2026-08-28 |
-| DRAKVUF provenance | **UNCONFIRMED** — every measurement before 2026-08-28 was taken on the packaged `…+52df0bc8-1`. Whether `da982ab` is the same tree has never been checked: run `git -C ~/drakvuf log -1` on Dom0 | — |
+| DRAKVUF provenance | **CONTRADICTED, 2026-09-04.** A failing run printed `DRAKVUF injector v1.1-52df0bc` — the *packaged* build, not `da982ab`. `injector` and `drakvuf` are separate binaries, so this proves the toolchain is mixed or the row above is wrong, not which. Settle with `drakvuf --version` and `injector --version` on Dom0; `git -C ~/drakvuf log -1` still answers what the source tree is | 2026-09-04 |
 | Xen boot line | `dom0_mem=8192M,max:8192M dom0_max_vcpus=6 dom0_vcpus_pin=1 force-ept=1 ept=ad=0 hap_1gb=0 hap_2mb=0 altp2m=1 hpet=legacy-replacement smt=0 sched=credit no-real-mode edd=off` — the last two were added by the bare-metal install | 2026-08-28 |
 | Dom0 resources | 8192 MiB, 6 vCPUs | 2026-08-28 |
 | CPU partition **as deployed** | Dom0 → the first six **online** pCPUs **0,2,4,6,8,10**; clones → **12,14**; platform → **16,17**. 14 of 24 online pCPUs idle | 2026-08-29 |
@@ -373,6 +373,6 @@ accurate as dated evidence.
 |---|---|
 | sandboxd modules | 16 |
 | test files | 16 sandboxd, 15 platform |
-| documents under `docs/` | 35 |
+| documents under `docs/` | 36 |
 
 <!-- END GENERATED -->

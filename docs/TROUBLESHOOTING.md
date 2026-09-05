@@ -1,8 +1,10 @@
 # Troubleshooting — things that have actually gone wrong
 
-**Every entry below happened.** Nothing here is anticipated, hypothetical, or
-copied from upstream documentation. If a failure mode is not in this file, it
-has not bitten this project yet.
+**Every symptom below happened.** Nothing here is anticipated or copied from
+upstream documentation. If a failure mode is not in this file, it has not
+bitten this project yet.
+
+**Causes are diagnosed unless an entry says otherwise.** 
 
 ## How to use this file
 
@@ -1338,6 +1340,76 @@ mismatch against a previously recorded baseline is the **expected** result, not
 evidence of corruption — `1844fc0a…` belongs to the pre-EthernetConfig Android
 template. Record the new value as the baseline and update it wherever it is
 quoted, rather than treating the mismatch as a fault.
+
+### `injector readfile` fails with `syscall return code: -2`, but sometimes works
+
+**Symptom.** An Android APK analysis fails in preconfig:
+
+```
+Failed at injector readfile -- injector readfile exited 1
+  argv: ('injector', ..., '-m', 'readfile',
+         '-B', '.../launch-component', '-e', '/data/local/tmp/.pm.tmp')
+  syscall return code: -2
+  Could not open file in guest
+```
+
+Resubmitting the same sample usually works. Observed 2026-09-04.
+
+**It is rare** — not reproduced in 11 consecutive runs (operator, 2026-09-04).
+Which also means a clean run does not demonstrate a fix: only a run that would
+otherwise have failed does, and those cannot be arranged on demand.
+
+**Check the injection PID in the argv before assuming this entry applies.**
+Android's is `3251`. A paste showing **`-i 1`** is from a build between
+2026-08-29 (`77909eb`) and 2026-08-31 (`921c04c`), when the anchor was briefly
+PID 1 — a different failure, on an abandoned configuration, and not this one.
+Two errors from the same pipeline can come from different builds, and the
+anchor PID is what tells them apart.
+
+**The injection is NOT the problem, and reading it as one wastes a day.**
+`injector` attached to the anchor, ran in the guest, executed the syscall and
+got a result back. `-2` is `-ENOENT`. The anchor PID is right, the anchor was
+scheduled, and there is no VMI fault here: the handoff file simply was not
+there yet.
+
+**Cause. `execproc` returns when the guest shell STARTS, and a fixed sleep is
+the only synchronisation Dom0 has** (`sandboxd/stages.py`, the APK branch of
+`_preconfig`). The sequence is: install via `execproc`, sleep
+`waits.apk_install`, then `readfile` the handoff.
+
+The handoff is created by shell redirection on the install line
+(`guests.argv_install_apk`), so it appears the instant that line begins. But the
+line before it is `B=$(pm list packages)`, which talks to the package service
+over binder — and on a freshly restored clone that service is not necessarily
+up. Warm, it returns at once; cold, it blocks. **ENOENT therefore means the
+guest shell had not reached the install line before the sleep expired.**
+
+That is why it is intermittent and why a resubmit clears it.
+
+**The wait was sized against the wrong variable.** `timing.py` records
+`APK_INSTALL_WAIT` as *"3 seconds MEASURED for a 12 MB APK on 2026-08-17"* —
+one measurement, on the nested host that no longer exists, timing the
+**install**. It never covered the package service's post-restore cold start,
+which is the part that varies.
+
+**Fix.** Poll for the component instead of sleeping a guess — and poll for
+**content that parses as a launchable component, not for the file existing.**
+
+The handoff is written **twice**: `pm install` redirects its own output there
+first (deliberately, so a failed install explains itself), and
+`resolve-activity` overwrites it on success. An existence-poll therefore
+succeeds on the install diagnostic and hands it on as if it were a component,
+which `component_is_launchable()` rejects as "no usable launcher component" —
+blaming the sample for a Dom0-side timing fault. That is the same misdiagnosis
+the 2026-08-29 redirect fix existed to remove, arriving by a new route.
+
+On deadline, read whatever the handoff holds and report *that*: it is the
+install diagnostic, and it is the most useful thing available.
+
+**Do not "fix" this by re-deriving the anchor PID, reverting the anchor to
+PID 1, or raising the sleep.** The first two are answers to a different
+failure — the injection worked. The third moves the threshold without removing
+it, and the guest gets slower when two clones share the E-cores.
 
 ### `getent` is not available in the Android guest
 
