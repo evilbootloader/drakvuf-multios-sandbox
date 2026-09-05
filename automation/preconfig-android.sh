@@ -225,21 +225,29 @@ fi
 # repository-wide it would hide the real mistake of writing an intended
 # Dom0 expansion in single quotes.
 NETCFG='while IFS=" " read -r a n v; do [ "$a" = export ] && export "$n=$v"; done < /data/system/environ/classpath; '
-# THE ANDROID_* EXPORTS ARE REQUIRED BECAUSE THE ANCHOR IS PID 1 (2026-08-29).
-#
-# A child of `init` inherits init's environment, which on this build is four
-# variables: PATH, _, and init's own SELINUX_STARTED_AT and
-# FIRST_STAGE_STARTED_AT. The classpath import above adds only BOOTCLASSPATH
-# and its three siblings -- it was written to top up a SHELL's environment,
-# back when the anchor was a backgrounded `ping` started from a booted
-# session, and it does not build one from nothing.
+# THE ANDROID_* EXPORTS BUILD app_process64 A RUNTIME ENVIRONMENT RATHER THAN
+# ASSUMING IT INHERITS ONE. KEEP THEM.
 #
 # Without these, app_process64 cannot find its dalvik-cache or APEX roots and
 # EXITS 0 HAVING PRINTED NOTHING AND DONE NOTHING. execproc returns at process
 # start, so Dom0 sees a successful injection either way: every clone ran with
 # no address while reporting success. Measured on a live clone -- with the
 # exports the same command prints SUCCESS and `ip addr show eth0` reports
-# 172.16.1.2/24; without them, silence and no address.
+# 172.16.1.2/24; without them, silence and no address. The classpath import
+# above does not substitute: it adds only BOOTCLASSPATH and its three
+# siblings, and was written to top up a SHELL's environment.
+#
+# THE REASON THEY WERE ADDED NO LONGER HOLDS, AND WHETHER THEY ARE STILL
+# REQUIRED IS UNVERIFIED (2026-09-04). Added 2026-08-29, when the anchor was
+# PID 1 and a child of init inherited four variables: PATH, _, and init's own
+# SELINUX_STARTED_AT and FIRST_STAGE_STARTED_AT. The anchor reverted to a
+# backgrounded `ping` from a booted session on 2026-08-31, whose environment
+# is not that sparse, so these may now be redundant.
+#
+# Settle it on a clone, not by argument -- the measurement above was taken
+# under the other anchor. Do NOT delete them on the reasoning alone: the
+# failure they prevent is silent and reports success. Anchor history is in
+# pipeline-android.env, above INJECTION_PID.
 #
 # `pm` does not need this, which is why the install path kept working: it is a
 # two-line wrapper around `cmd`, which is native. Only the runtime needs it.

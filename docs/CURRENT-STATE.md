@@ -239,7 +239,7 @@ the filename was never renamed with the rest of the `linux` → `ubuntu` pass.
 | LibVMI profile | `profiles/linux.json` | `profiles/android.json` | — |
 | Saved state | `state/ubuntu_sandbox.bak` | `state/android_sandbox.bak` | — |
 | Guest staging | `/home/carlos/Desktop/` | `/data/local/tmp/` | — |
-| Injection PID | **1** — anchor `systemd`; samples run as root, 2026-08-29 | **1** — anchor `init`, 2026-08-29 | — |
+| Injection PID | **1** — anchor `systemd`; samples run as root, 2026-08-29 | **3251** — anchor is a backgrounded `ping` to loopback. Reverted from PID 1 on 2026-08-31: Android's `init` gives `app_process64` no runtime environment, which the APK path needs. **Re-derive after every re-save** | **4696** — `sandboxd/stages.py`, from the `.bak`; same re-save cost as Android |
 | Clone LV size | inherited: **1 T** | inherited: **128 G** | — |
 | Sample dirs | `/malware_{incoming,processing,finished}/ubuntu` | `…/android` | `…/windows` |
 
@@ -323,7 +323,8 @@ accurate as dated evidence.
 | `clone-ubuntu.pl` | older docs | `automation/clone.pl`, shared by all three OS pipelines |
 | unnumbered runbook filenames | pre-2026-08-27 links | now `NN-<name>.md`, numbered oldest to newest |
 | Injection PID `1415`, `1490` | `baremetal-trial.md` D5.4/D5.7, `09-verify-…` | **`1`** — the anchor is systemd. `nano` and `gedit` are both unschedulable without guest input, so neither can be injected into unattended |
-| Android injection PID `3163`, `3164`, `3174` | `docs/checklists/android.md` §1.4/§1.5 | **`1`** — the anchor is Android `init`. The `ping`-to-loopback anchor those PIDs refer to worked, but had to be re-derived after every re-save |
+| Android injection PID `3163`, `3164`, `3174` | `docs/checklists/android.md` §1.4/§1.5 | **`3251`** — same `ping`-to-loopback anchor those PIDs refer to, re-read after a later re-save. Each value is valid only for the `.bak` it came from |
+| **"Android anchors on `init` / PID 1"** | `sandboxd/guests.py:439`, `automation/preconfig-android.sh:228`, `sandboxd/tests/test_guests.py:182`, and the *upper* half of `pipeline-android.env`'s anchor block | **Only Ubuntu does.** Android went to PID 1 on 2026-08-29 and **reverted on 2026-08-31**, because Android's `init` provides no runtime environment for `app_process64` and the APK path needs one. `pipeline-android.env:289` records the reversal and deliberately keeps the case *for* PID 1 above it, so text arguing for PID 1 there is history, not the current posture |
 | `CLONE_LV_SIZE`, "Clone LV size 64G / 32G" | `pipeline-*.env`, older docs | **retired 2026-08-29.** Clones are thin snapshots and inherit the golden LV's size — 1 T for Ubuntu, 128 G for Android. `-L` never sized the clone; it forced a *thick* snapshot whose exception store came from VG free space |
 | `required_mib: 2198`, `memory = 2048` | `platform.md`, older runbooks | **4246** / `memory = 4096` for both templates as of 2026-08-29 |
 

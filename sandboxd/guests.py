@@ -436,13 +436,8 @@ def _android_netcfg(job: Job, subnet: str) -> str:
     stream instead of the domains the sample looked up. Silently, with nothing
     failing. Pcap-evidenced both ways in 06-verify-android-isolation.md.
 
-    **The ANDROID_* exports are required because the anchor is PID 1.** A child
-    of `init` inherits `init`'s environment, which on this build is four
-    variables -- `PATH`, `_`, and init's own `SELINUX_STARTED_AT` and
-    `FIRST_STAGE_STARTED_AT`. The `classpath` import above only adds
-    BOOTCLASSPATH and its three siblings; it was written to top up a SHELL's
-    environment, back when the anchor was a backgrounded `ping` started from a
-    booted session, and it does not build one from nothing.
+    **The ANDROID_* exports build `app_process64` a runtime environment rather
+    than assuming it inherits one. KEEP THEM.**
 
     Without them `app_process64` cannot locate its dalvik-cache or its APEX
     roots, so it **exits 0 having printed nothing and done nothing** -- and
@@ -450,7 +445,23 @@ def _android_netcfg(job: Job, subnet: str) -> str:
     injection either way. Every clone ran with no address while reporting
     success. Measured 2026-08-29 on a live clone: with the exports the same
     command prints `SUCCESS` and `ip addr show eth0` reports 172.16.1.2/24;
-    without them, silence and no address.
+    without them, silence and no address. The `classpath` import above does not
+    substitute: it adds BOOTCLASSPATH and its three siblings, and was written
+    to top up a SHELL's environment rather than to build one from nothing.
+
+    **The reason they were added no longer holds, and whether they are still
+    REQUIRED is unverified (2026-09-04).** They were added on 2026-08-29 because
+    the anchor was then PID 1, and a child of `init` inherits init's
+    environment -- four variables on this build: `PATH`, `_`, and init's own
+    `SELINUX_STARTED_AT` and `FIRST_STAGE_STARTED_AT`. On 2026-08-31 the anchor
+    reverted to a backgrounded `ping` started from a booted session, whose
+    environment is not that sparse, so they may now be redundant.
+
+    That question needs a clone, not an argument, and the measurement above was
+    taken under the other anchor. **Do not delete them on the reasoning alone:**
+    the failure they prevent is silent and reports success, so a regression here
+    is invisible until someone reads a pcap. See `sandboxd/stages.py`
+    `injection_pids` for the anchor history.
 
     `pm` is unaffected and that is why the install path kept working -- it is a
     two-line wrapper around `cmd`, which is native. Only the runtime needs this.

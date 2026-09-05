@@ -179,20 +179,24 @@ def test_android_uses_the_bliss_bass_configurator(tmp_path):
 
 
 def test_android_builds_a_runtime_environment_for_app_process64(tmp_path):
-    """The anchor is PID 1, and a child of `init` inherits init's environment:
-    PATH, `_`, and init's own SELINUX_STARTED_AT and FIRST_STAGE_STARTED_AT.
-    That is all. The classpath import supplies BOOTCLASSPATH and its three
-    siblings and nothing else -- it was written to top up a SHELL's
-    environment, when the anchor was a backgrounded `ping` from a booted
-    session.
+    """The ANDROID_* roots are built rather than inherited: without them
+    app_process64 cannot find its dalvik-cache or APEX roots and EXITS 0 HAVING
+    DONE NOTHING. `execproc` returns at process start, so Dom0 sees success
+    either way and every clone runs with no address. Measured on a live clone
+    2026-08-29: with them, `SUCCESS` and 172.16.1.2/24 on eth0; without them,
+    silence and no address. The classpath import does not substitute -- it
+    supplies BOOTCLASSPATH and its three siblings and nothing else.
 
-    Without the ANDROID_* roots, app_process64 cannot find its dalvik-cache or
-    APEX roots and EXITS 0 HAVING DONE NOTHING. `execproc` returns at process
-    start, so Dom0 sees success either way and every clone runs with no
-    address. Measured on a live clone 2026-08-29: with them, `SUCCESS` and
-    172.16.1.2/24 on eth0; without them, silence and no address.
+    **Why they were added has been superseded; this test has not.** They were
+    added when the anchor was PID 1, whose environment is four variables, and
+    the anchor reverted to a backgrounded `ping` on 2026-08-31 (see
+    `sandboxd/stages.py` `injection_pids`). Whether they are still strictly
+    required under that anchor is unverified as of 2026-09-04.
 
-    Deleting any of these is not a cleanup -- it restores a silent failure.
+    This test therefore pins them as *present*, which is the conservative side:
+    deleting any of them is not a cleanup, it risks restoring a failure that
+    reports success. Retire it on evidence from a clone, not on the argument
+    that the premise changed.
     """
     script = G.argv_configure_network(job(tmp_path, TargetOs.ANDROID))[-1]
 
