@@ -72,12 +72,12 @@ From github.com:evilbootloader/drakvuf-multios-sandbox
    ad855cb..329df81  master     -> origin/master
 Updating ad855cb..329df81
 Fast-forward
- .github/issue-drafts/DRAFT-018.md                           |  474 ++++
- .github/issue-drafts/DRAFT-019.md                           |   12 +-
- .github/issue-drafts/DRAFT-048.md                           |   10 +
- .github/issue-drafts/DRAFT-049.md                           |   10 +
- .github/issue-drafts/DRAFT-051.md                           |   10 +
- .github/issue-drafts/DRAFT-060.md                           |   97 +-
+ .github/issue-drafts/completed/DRAFT-018.md                           |  474 ++++
+ .github/issue-drafts/todo/DRAFT-019.md                           |   12 +-
+ .github/issue-drafts/todo/DRAFT-048.md                           |   10 +
+ .github/issue-drafts/todo/DRAFT-049.md                           |   10 +
+ .github/issue-drafts/todo/DRAFT-051.md                           |   10 +
+ .github/issue-drafts/completed/DRAFT-060.md                           |   97 +-
  .github/issue-drafts/issue-index.md                         |    2 +-
  docs/architecture/analysis-pipeline.md                      |   19 +-
  docs/architecture/live-console.md                           |  395 +++
@@ -191,7 +191,7 @@ Fast-forward
  sandboxd/tls.py                                             |   51 +
  sandboxd/vnc.py                                             |  173 ++
  118 files changed, 27800 insertions(+), 192 deletions(-)
- create mode 100644 .github/issue-drafts/DRAFT-018.md
+ create mode 100644 .github/issue-drafts/completed/DRAFT-018.md
  create mode 100644 docs/architecture/live-console.md
  create mode 100644 platform/migrations/0005_console.sql
  create mode 100644 platform/sandbox_platform/console.py

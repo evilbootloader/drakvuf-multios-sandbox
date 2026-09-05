@@ -2134,8 +2134,8 @@ From github.com:evilbootloader/drakvuf-multios-sandbox
    fde4eff..1a1f027  master     -> origin/master
 Updating fde4eff..1a1f027
 Fast-forward
- .github/issue-drafts/DRAFT-044.md           | 109 +++++-
- .github/issue-drafts/DRAFT-047.md           |   4 +-
+ .github/issue-drafts/completed/DRAFT-044.md           | 109 +++++-
+ .github/issue-drafts/in-progress/DRAFT-047.md           |   4 +-
  .github/issue-drafts/issue-index.md         |  24 +-
  docs/architecture/platform.md               |  45 ++-
  docs/architecture/result-schema.md          |  15 +

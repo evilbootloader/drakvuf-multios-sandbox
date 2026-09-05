@@ -652,7 +652,7 @@ this issue *writes* rather than of what it runs:
   `xenbr1`"*.
 - `.github/issue-drafts/issue-index.md` — this row, and DRAFT-016's
   dependency line.
-- `.github/issue-drafts/DRAFT-016.md` — it names `clone-android.pl` as a
+- `.github/issue-drafts/completed/DRAFT-016.md` — it names `clone-android.pl` as a
   DRAFT-015 deliverable in three places (`:7`, `:368`, `:391`).
 
 # Recovery / rollback

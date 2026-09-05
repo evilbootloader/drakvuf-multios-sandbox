@@ -207,8 +207,9 @@ per-OS quality track, not a gate for anything else.
 ## Issue index
 
 See `.github/issue-drafts/issue-index.md` for the full draft-title index with
-areas, priorities, and dependencies, and `.github/issue-drafts/DRAFT-*.md`
-for the fully specified first batch (DRAFT-001 through DRAFT-008).
+areas, priorities, and dependencies. The draft files themselves are filed by
+state as of 2026-09-04 — `.github/issue-drafts/{completed,in-progress,todo}/DRAFT-NNN.md`
+— with the placement rule in that directory's `README.md`.
 
 ## Risk register
 
@@ -285,7 +286,7 @@ for the fully specified first batch (DRAFT-001 through DRAFT-008).
    (DRAFT-035) needs a queued job to have a record at all, which today it
    does not; and M7 needs both. Deferring now means building a
    filesystem-shaped queue and discarding it — the cost the deferral
-   existed to avoid. See `.github/issue-drafts/DRAFT-040.md`.
+   existed to avoid. See `.github/issue-drafts/completed/DRAFT-040.md`.
    **Answered 2026-08-21 (DRAFT-041): Postgres**, holding both job state and
    the queue, on a separate platform VM alongside MinIO. Redis was considered
    and deferred rather than rejected — with the queue in Redis and the state

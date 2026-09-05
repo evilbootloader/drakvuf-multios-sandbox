@@ -295,8 +295,8 @@ abandoned baseline.
 # Documentation changes
 
 - **New:** `docs/architecture/platform.md`; this file.
-- **Annotated in place:** `.github/issue-drafts/DRAFT-040.md` (D1/D3/D4/D5
-  answered, D2 moot); `.github/issue-drafts/DRAFT-036.md` (superseded).
+- **Annotated in place:** `.github/issue-drafts/completed/DRAFT-040.md` (D1/D3/D4/D5
+  answered, D2 moot); `.github/issue-drafts/completed/DRAFT-036.md` (superseded).
 - **Updated:** `.github/issue-drafts/issue-index.md`;
   `docs/architecture/analysis-pipeline.md`; `docs/checklists/windows.md`;
   `docs/roadmap/project-roadmap.md` decision #6, whose "revisit near M7"

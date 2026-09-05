@@ -1367,8 +1367,8 @@ Your branch is behind 'origin/master' by 5 commits, and can be fast-forwarded.
 root@drakvuf:~/sandbox_project# git pull
 \u00e7Updating bc199db..aed37af
 Fast-forward
- .github/issue-drafts/DRAFT-022.md         |   87 +++++++++--
- .github/issue-drafts/DRAFT-029.md         |  476 ++++++++++++++++++++++++++++++++++---------------------
+ .github/issue-drafts/todo/DRAFT-022.md         |   87 +++++++++--
+ .github/issue-drafts/completed/DRAFT-029.md         |  476 ++++++++++++++++++++++++++++++++++---------------------
  .github/issue-drafts/issue-index.md       |   49 +++++-
  automation/network-setup.sh               |  149 ++++++++++++++++--
  docs/architecture/networking.md           |  116 ++++++++++++--

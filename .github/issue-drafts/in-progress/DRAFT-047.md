@@ -261,7 +261,7 @@ validated.
 
 - **Updated:** `docs/architecture/platform.md` — the trust boundary table
   gains a browser-to-browser row it does not currently have.
-- **Updated:** `.github/issue-drafts/DRAFT-043.md` — annotate that
+- **Updated:** `.github/issue-drafts/completed/DRAFT-043.md` — annotate that
   multi-tenancy moved out of M8.
 - **Updated:** `docs/runbooks/08-deploy-platform-lxc.md` — Access application,
   identity provider, audience tag.

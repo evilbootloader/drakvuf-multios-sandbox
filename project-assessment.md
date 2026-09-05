@@ -118,8 +118,8 @@ as the starting point for any future change:
 
 | File | Your edit | Verdict |
 |---|---|---|
-| `.github/issue-drafts/DRAFT-008.md` | `target_os_source` "likely not needed we only need to know target OS of analysis vm" | **Accepted** — with one Windows-related caveat, see Issue #3. |
-| `.github/issue-drafts/DRAFT-025.md` | "LibVMI setup shouldn't be needed as the drakvuf program is run with the profile path during automated analysis" | **Accepted, and confirmed by stronger evidence than the draft had.** See PATH-04. |
+| `.github/issue-drafts/completed/DRAFT-008.md` | `target_os_source` "likely not needed we only need to know target OS of analysis vm" | **Accepted** — with one Windows-related caveat, see Issue #3. |
+| `.github/issue-drafts/completed/DRAFT-025.md` | "LibVMI setup shouldn't be needed as the drakvuf program is run with the profile path during automated analysis" | **Accepted, and confirmed by stronger evidence than the draft had.** See PATH-04. |
 
 Neither edit was reverted, rewritten, or "restored" to an earlier version.
 

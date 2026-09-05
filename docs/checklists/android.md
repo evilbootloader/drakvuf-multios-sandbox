@@ -1285,7 +1285,7 @@ Startup log:
 > creating an Android copy. C1/C2 in `analysis-pipeline.md` are amended.
 >
 > Disposition of the eighteen "required Android changes" below, worked
-> through in `.github/issue-drafts/DRAFT-015.md`:
+> through in `.github/issue-drafts/completed/DRAFT-015.md`:
 >
 > - **1 was already done** — "change the saved-state path to
 >   `android_sandbox.bak`". Derived from the origin argument since issue #4

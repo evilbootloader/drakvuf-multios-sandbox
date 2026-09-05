@@ -296,7 +296,7 @@ accident, and one to record if taken.
 - **Updated:** `docs/architecture/networking.md` — the two trust domains.
 - **Updated:** `docs/architecture/platform.md` — its topology figure shows
   HTTPS without saying what verifies it, and does not show the tunnel.
-- **Updated:** `.github/issue-drafts/DRAFT-043.md` — annotate that the reverse
+- **Updated:** `.github/issue-drafts/completed/DRAFT-043.md` — annotate that the reverse
   proxy it assumed is deferred to M8, with the reason.
 
 # Recovery / rollback

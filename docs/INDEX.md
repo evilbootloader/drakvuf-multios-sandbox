@@ -701,9 +701,9 @@ It maps **headings, not content**: a fact stated in the middle of a section is n
   - `docs/roadmap/project-roadmap.md:161` — [Dependency graph (condensed)](roadmap/project-roadmap.md#dependency-graph-condensed)
   - `docs/roadmap/project-roadmap.md:192` — [Milestones](roadmap/project-roadmap.md#milestones)
   - `docs/roadmap/project-roadmap.md:207` — [Issue index](roadmap/project-roadmap.md#issue-index)
-  - `docs/roadmap/project-roadmap.md:213` — [Risk register](roadmap/project-roadmap.md#risk-register)
-  - `docs/roadmap/project-roadmap.md:255` — [Architecture decisions needing experiments](roadmap/project-roadmap.md#architecture-decisions-needing-experiments)
-  - `docs/roadmap/project-roadmap.md:297` — [Test classification](roadmap/project-roadmap.md#test-classification)
+  - `docs/roadmap/project-roadmap.md:214` — [Risk register](roadmap/project-roadmap.md#risk-register)
+  - `docs/roadmap/project-roadmap.md:256` — [Architecture decisions needing experiments](roadmap/project-roadmap.md#architecture-decisions-needing-experiments)
+  - `docs/roadmap/project-roadmap.md:298` — [Test classification](roadmap/project-roadmap.md#test-classification)
 
 ## `docs/runbooks/01-verify-user-placeholder.md`
 

@@ -379,7 +379,7 @@ write-from-Ubuntu instruction), `automation/pipeline-ubuntu.env` (per-variable
 classification comments), `docs/checklists/android.md` §2.5/§2.7–2.8 and
 `docs/checklists/windows.md` (annotations pointing at the checklist),
 `.github/issue-drafts/issue-index.md` (dependency corrections),
-`.github/issue-drafts/DRAFT-025.md` (annotate the carried-forward criterion
+`.github/issue-drafts/completed/DRAFT-025.md` (annotate the carried-forward criterion
 to name this issue as where it is discharged).
 
 # CREATE completed 2026-08-10

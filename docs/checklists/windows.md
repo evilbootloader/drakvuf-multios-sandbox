@@ -25,7 +25,7 @@
 > - That output also reads **64-bit Windows 10**, not the Windows 11 the
 >   baseline row below plans for.
 > - The guest software build is largely done and is recorded in
->   `.github/issue-drafts/DRAFT-020.md`, not here, because none of it is
+>   `.github/issue-drafts/in-progress/DRAFT-020.md`, not here, because none of it is
 >   backed by a transcript either.
 >
 > No Windows *automation* has been built, so the pipeline checklist is still
