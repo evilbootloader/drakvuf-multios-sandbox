@@ -13,10 +13,67 @@
 */
 import RFB from "./novnc/core/rfb.js";
 
-const panel = document.getElementById("console");
-if (panel) {
-    start(panel);
+/*
+  THIS MODULE EVALUATES ONCE AND MUST SURVIVE EVERY SWAP AFTER IT.
+
+  `job.js` refreshes `#job-live` with `htmx.ajax(..., swap: "innerHTML")` on
+  each state change, and the console panel lives inside it. So the panel this
+  module binds to is DESTROYED AND REBUILT on every transition through
+  `console_states` -- cloning, preparing, executing, collecting.
+
+  The script tag comes back with each swapped fragment, which looks like it
+  should re-run this file and does not: a module URL is evaluated ONCE PER
+  PAGE, so re-inserting the same `src` is a no-op. Bind once at load and the
+  console attaches to the first panel, dies with it at the next state change,
+  and never comes back -- which is what "the console only works if you reload
+  the page while it is executing" looks like from the outside.
+
+  Hence a watcher rather than a one-shot. It compares element IDENTITY, not
+  presence: a swapped-in panel is a different object carrying the same id, so
+  `panel !== bound` catches replacement and removal in the same test.
+*/
+let bound = null;   // the #console element we attached to, or null
+let session = null; // its RFB, or null if construction failed
+
+function sync() {
+    const panel = document.getElementById("console");
+    if (panel === bound) {
+        return;
+    }
+
+    // What we were attached to is gone or has been replaced. Drop the socket
+    // rather than leave it open against a domain being torn down.
+    if (session) {
+        session.disconnect();
+    }
+    session = null;
+    bound = panel;
+
+    // Null when the job left `console_states`: nothing to attach to, and the
+    // next swap that brings a panel back will be picked up by the same test.
+    if (panel) {
+        session = start(panel);
+    }
 }
+
+/*
+  A state change therefore costs a reconnect, and that is honest rather than a
+  regression -- the canvas the session was drawing on no longer exists. It does
+  not disturb interactive work, because `job.js` swaps only when the state
+  CHANGES and an operator drives a sample within `executing`.
+
+  Deliberately no test on which state we are in. The panel's presence already
+  encodes that: `_job_status.html` renders it for `console_states`, and a
+  second copy of that window here would be free to drift from the first. The
+  symptom of the drift is a panel offering a session the page then declines to
+  open, or -- as happened on 2026-09-05 -- a JS gate on `executing` silently
+  cancelling a template change that had just widened it to four states.
+*/
+new MutationObserver(sync).observe(document.body, {
+    childList: true,
+    subtree: true,
+});
+sync();
 
 function start(panel) {
     const jobId = panel.dataset.jobId;
@@ -53,7 +110,10 @@ function start(panel) {
         });
     } catch (err) {
         say(`Could not start the console: ${err.message}`);
-        return;
+        // `sync` has already recorded this panel as the bound one, so a
+        // failure here is not retried against the same element on every
+        // mutation -- only against the next panel a swap brings in.
+        return null;
     }
 
     // Scale down to fit, never up. An upscaled framebuffer invents detail.
@@ -79,15 +139,10 @@ function start(panel) {
         say(`Refused: ${e.detail.reason || "the relay closed the session"}`);
     });
 
-    // The job page re-renders its status region on every state change, which
-    // is what makes the panel appear when the job starts executing. When it
-    // disappears -- because the job stopped executing -- the RFB object would
-    // otherwise keep a socket open against a domain being torn down.
-    const observer = new MutationObserver(() => {
-        if (!document.getElementById("console")) {
-            rfb.disconnect();
-            observer.disconnect();
-        }
-    });
-    observer.observe(document.body, { childList: true, subtree: true });
+    // Teardown belongs to `sync`, not here. This function used to install its
+    // own observer that disconnected as soon as `#console` went missing, and
+    // then disconnected ITSELF -- so the first swap both killed the session
+    // and removed the only thing watching for the panel's return. One watcher
+    // owning the whole lifecycle is what makes reattachment possible.
+    return rfb;
 }
