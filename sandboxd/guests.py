@@ -329,7 +329,7 @@ PATHS = {
                                  shell="/system/bin/sh"),
 
     TargetOs.WINDOWS: GuestPaths(staging_dir="C:\\Users\\carlos\\Desktop",
-                                 shell="C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"),
+                                 shell="C:\\Windows\\System32\\cmd.exe"),
 }
 
 
@@ -484,7 +484,7 @@ def _android_netcfg(job: Job, subnet: str) -> str:
 def _windows_netcfg(job: Job, subnet: str) -> str:
     paths = PATHS[TargetOs.WINDOWS]
     return (
-        f"\"netsh interface ip set address name=\\\"Ethernet\\\" static {subnet}.{job.vlan}.2 255.255.255.0 {subnet}.{job.vlan}.1 && netsh interface ip set dns name=\\\"Ethernet\\\" static {paths.nameserver} validate=no\""
+        f"/c netsh interface ip set address name=Ethernet static {subnet}.{job.vlan}.2 255.255.255.0 {subnet}.{job.vlan}.1 && netsh interface ip set dns name=Ethernet static {paths.nameserver} validate=no"
         )
 
 
@@ -499,19 +499,23 @@ def argv_configure_network(job: Job, subnet: str = "172.16") -> list[str]:
     shell = PATHS[job.target_os].shell
 
     if job.target_os == TargetOs.ANDROID:
-        script = (_android_netcfg(job, subnet))
+        script = f"-c {_android_netcfg(job, subnet)}"
+        mode = "execproc"
+
     elif job.target_os == TargetOs.UBUNTU:
-        script = (_ubuntu_netcfg(job, subnet))
+        script = f"-c {_ubuntu_netcfg(job, subnet)}"
+        mode = "execproc"
+
     elif job.target_os == TargetOs.WINDOWS:
-        script = (_windows_netcfg(job, subnet))
+        script = f"/c {_windows_netcfg(job, subnet)}"
+        mode = "shellexec"
 
     mode = "shellexec" if job.target_os == TargetOs.WINDOWS else "execproc"
-    launch_command = "-Command -NoProfile -ExecutionPolicy Bypass" if job.target_os == TargetOs.WINDOWS else "-c"
 
     return [
         "injector", "-r", str(job.profile), "-d", str(job.domid),
         "-i", str(job.injection_pid), "-m", mode,
-        "-e", shell, "-f", launch_command, "-f", script,
+        "-e", shell, "-f", script,
     ]
 
 
