@@ -279,7 +279,7 @@ rejected at the device with `EHOSTUNREACH`. `argv_apply` points a default route
 at `wg0`, so a narrow list here means every Internet-bound clone packet dies on
 transmit and Dom0 answers the clone with ICMP host unreachable — a tunnel that
 is up, handshaking, and carrying nothing.
-See [TROUBLESHOOTING](docs/TROUBLESHOOTING.md#a-routed-clone-gets-icmp-host-unreachable-and-the-tunnel-carries-no-data).
+See [TROUBLESHOOTING](../TROUBLESHOOTING.md#a-routed-clone-gets-icmp-host-unreachable-and-the-tunnel-carries-no-data).
 
 **`Table = off` is not optional, and is the reason `0.0.0.0/0` is safe above.**
 wg-quick's default `Table = auto` reacts to a `0.0.0.0/0` peer by installing its
@@ -444,7 +444,7 @@ restart it before continuing.
 pref 1001, so `ip route get` prints `dev xenbr1.1` whether or not the fix is
 present: the right answer for the wrong reason, on exactly the hosts this exists
 to catch.
-See [TROUBLESHOOTING](docs/TROUBLESHOOTING.md#dom0s-own-icmp-errors-appear-on-the-tunnel-instead-of-reaching-the-clone).
+See [TROUBLESHOOTING](../TROUBLESHOOTING.md#dom0s-own-icmp-errors-appear-on-the-tunnel-instead-of-reaching-the-clone).
 
 ```text
 root@dom0:~/drakvuf-multios-sandbox# ip rule show pref 1001                      # expect: ... iif xenbr1.1 ...
@@ -1056,18 +1056,29 @@ signature is a TLS handshake completing and the first big response hanging. If
 it appears, the fix is MSS clamping on the tunnel in the per-VLAN chain; it is
 in the design record and is deliberately not installed until observed.
 
-## What to record when this is done
+## Filed 2026-09-06
 
-- Move this file to `docs/runbooks/14-verify-routed-egress.md`. Every EVIDENCE
-  block is filled; the banner is corrected.
-- Re-run `scripts/gen-current-state.py`, `scripts/gen-doc-index.py` and
-  `scripts/check-refs.py`, and commit the regenerated files with it. Confirm the
-  new row reads `yes` in `CURRENT-STATE.md` §3.
-- Tick DRAFT-057's kill-switch criterion, and the mode-leak one. **Not the
-  country one** — that needs a provider, and this runbook cannot speak to it.
-- Capture a trace baseline for the Ubuntu fixture, so 9a's regression check
-  becomes answerable for the next change to shared code.
-- Destroy the temporary DomU, and remove `local-peer` from `EXITS`. An exit
-  left declared against a peer that no longer exists is offered whenever the
-  interface happens to be up.
-- Anything that went wrong goes to `docs/TROUBLESHOOTING.md`, symptom first.
+Late: this ran 2026-09-02 to 09-04 and sat at the repository root for two days
+afterwards, which the 2026-09-04 assessment recorded as F8. A runbook at the
+root means "written but not yet executed", so a filed-late runbook is one that
+spent two days claiming the opposite of its own banner.
+
+Done at filing:
+
+- Moved to `docs/runbooks/`; generators re-run; `CURRENT-STATE.md` §3 reads
+  `yes`.
+- DRAFT-057's kill-switch and mode-leak criteria ticked. **Not the country
+  one** — that needed a provider, and this runbook cannot speak to it. It was
+  descoped 2026-09-05 rather than proven; see the draft.
+
+Still open, and not this runbook's to close:
+
+- **A trace baseline for the Ubuntu fixture**, so 9a's regression check becomes
+  answerable for the next change to shared code. Step 9a already says it cannot
+  be diffed against a baseline because none was ever recorded.
+- **Destroy the temporary DomU and remove `local-peer` from `EXITS`.** An exit
+  declared against a peer that no longer exists is offered whenever the
+  interface happens to be up. Step 11 tears the DomU down; confirm `EXITS`
+  matches before the next `routed` job.
+
+Anything that went wrong is in `docs/TROUBLESHOOTING.md`, symptom first.

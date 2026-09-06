@@ -564,6 +564,12 @@ needs the platform path to cover every case the watcher does.
 
 ## F8 — runbook 14 is executed and still parked at the root
 
+> **Fixed 2026-09-06.** Filed to `docs/runbooks/14-verify-routed-egress.md`;
+> two markdown links to `TROUBLESHOOTING.md` rewritten relative to the new
+> location, generators re-run, `CURRENT-STATE.md` §3 row reads `yes`. Its
+> closing section now records what filing did and did not settle — the Ubuntu
+> trace baseline and the `local-peer` removal from `EXITS` are still open.
+
 `14-verify-routed-egress.md` says **"Status: EXECUTED 2026-09-02 to
 2026-09-04"** and carries pasted `root@dom0` output. `CLAUDE.md` says a runbook
 at the root is one *"written but not yet fully executed"*. Filing it is a move

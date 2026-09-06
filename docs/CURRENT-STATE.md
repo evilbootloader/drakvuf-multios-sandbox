@@ -355,7 +355,8 @@ accurate as dated evidence.
 | `11-pbs-backups.md` | 2026-08-27 | **yes** — 19 prompt(s) |  |
 | `12-baremetal-trial.md` | 2026-08-27 | **yes** — 32 prompt(s) |  |
 | `13-verify-egress-modes.md` | 2026-08-31 | **yes** — 21 prompt(s) |  |
-| `15-verify-egress-throttles.md` | 2026-09-05 | **yes** — 47 prompt(s) |  |
+| `14-verify-routed-egress.md` | 2026-09-04 | **yes** — 47 prompt(s) |  |
+| `15-verify-egress-throttles.md` | 2026-09-05 | **yes** — 50 prompt(s) |  |
 
 ### How components are started
 
@@ -374,6 +375,6 @@ accurate as dated evidence.
 |---|---|
 | sandboxd modules | 16 |
 | test files | 16 sandboxd, 16 platform |
-| documents under `docs/` | 37 |
+| documents under `docs/` | 38 |
 
 <!-- END GENERATED -->

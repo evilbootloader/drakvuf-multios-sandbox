@@ -568,6 +568,70 @@ Chain DRAKVUF_EGRESS_V2 (1 references)
 to step 4 rather than accepting a degraded baseline; a control that fires on
 ordinary traffic will be silently worked around later.
 
+### 6a — the legacy launcher path, recorded once and not to be repeated
+
+**Do not use this as a standing regression step.** `run_analysis-ubuntu.sh`
+and `dirwatch` are scheduled for retirement (DRAFT-041,
+`docs/architecture/automation-files.md`), and the 2026-09-04 assessment's F7
+records that the living documents still present them as a live path. Verify
+future changes to shared egress code against a **submitted job**, which is what
+step 6 does — that is the path that builds a per-VLAN chain and therefore the
+only one the throttles exist in.
+
+It is recorded here because it was run (2026-09-06) and because of what it
+turned up, not because the next change should run it again.
+
+```sh
+# DOM0 -- run once, 2026-09-06. Not a step to repeat.
+ALLOW_DIRECT=1 ./automation/run_analysis-ubuntu.sh
+```
+
+```sh
+# DOM0 -- second terminal, while it runs
+iptables -S DRAKVUF_EGRESS       # expect: the wildcard, NOT a _V<n> jump
+ip rule show                     # expect: NO 1000-range rule at all
+```
+
+```text
+root@dom0:~/drakvuf-multios-sandbox# ALLOW_DIRECT=1 ./automation/run_analysis-ubuntu.sh
+network-setup.sh: WARNING -- egress mode 'direct': every clone NATs  out xenbr0 with no per-job control. On a residential line  this is the posture DRAFT-057 exists to replace.
+network-setup.sh: provisioned 2 VLAN sub-interface(s) on xenbr1
+DRAKVUF dirwatch v1.1-git20260806065707+da982ab-1 Copyright (C) 2014-2024 Tamas K Lengyel
+
+root@dom0:~/drakvuf-multios-sandbox# iptables -S DRAKVUF_EGRESS       # expect: the wildcard, NOT a _V<n> jump
+-N DRAKVUF_EGRESS
+-A DRAKVUF_EGRESS -i xenbr1.+ -o xenbr0 -j ACCEPT
+root@dom0:~/drakvuf-multios-sandbox# ip rule show                     # expect: NO 1000-range rule at all
+0:	from all lookup local
+32766:	from all lookup main
+32767:	from all lookup default
+```
+
+Phase 5 changed nothing on the legacy path: the wildcard installs exactly as
+runbook 14 step 9a recorded it on 2026-09-03, and no policy route appears
+beside it.
+
+> **FINDING — `ALLOW_DIRECT=1` has no throttles at all, and that is now a
+> bigger statement than it used to be.** The three DROP rules live in the
+> per-VLAN chain `argv_apply` builds. This path builds no per-VLAN chain: it
+> installs one wildcard `-i xenbr1.+ -o xenbr0 -j ACCEPT` in the parent chain
+> plus a wildcard MASQUERADE (`network-setup.sh:878`). The output above is the
+> whole chain — one rule, no `_V<n>` jump — so a clone launched this way has no
+> rate cap, no byte cap and no concurrency cap.
+>
+> This is consistent with the design: the mode is opt-in per invocation, is
+> unreachable from the web UI, and the script's own warning says "no per-job
+> control". But that warning was written before Phase 5, and a reader maps
+> "no per-job control" to mode selection rather than to the absence of three
+> named limits. **Two things now share the word `direct`** — `argv_apply`'s,
+> which is throttled, and `ALLOW_DIRECT`'s, which is not — and DRAFT-057 and
+> this runbook both describe the throttles as covering "`direct` and `routed`"
+> without distinguishing them.
+>
+> Not a defect to fix here. It needs one sentence in the warning text naming
+> what else is off, so the escape hatch states its full cost at the moment
+> somebody uses it.
+
 ---
 
 ## Step 7 — the connection-rate cap binds
