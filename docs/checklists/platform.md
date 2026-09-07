@@ -68,12 +68,48 @@ tested in the development container only.
   mint worker certificates.
 - [ ] **AuthZ / per-user isolation** (#40) — open, and partly landed.
   Read-path scoping is in the repository as of 2026-09-05: one predicate,
-  `auth.visible_to`, in the WHERE clause of every browser read, with
-  `platform/tests/test_tenancy.py` covering the negative cases against a
-  second user. **Not deployed and not verified on the deployment**, so this
-  stays unticked. Still outstanding from DRAFT-047: loopback-only browser
-  routes (decision 3), the publish endpoint that would make `visibility` mean
-  something (5/6), the per-user key prefix (7), and the runtime quota (8).
+  `auth.visible_to`, in the WHERE clause of every browser read. Publishing
+  followed on 2026-09-06 — migration 0007, `POST /jobs/{id}/publish` and
+  `/unpublish` gated on `owner = %s` rather than on that predicate, and the UI
+  control behind an irreversibility warning. `platform/tests/test_tenancy.py`
+  covers both against a second user. **Not deployed and not verified on the
+  deployment**, so this stays unticked.
+
+  **Decisions 7 and 8 landed 2026-09-07**, both in migration 0008. Objects
+  gain a per-user key prefix, `u/<owner>/<3 hex of job id>/`, taken from the
+  row rather than from whoever is asking — the shard bounds directory fan-out
+  under one owner for MinIO's listing and lifecycle scan, and is unmeasured
+  but cheap now and expensive later. And the runtime quota became a **prepaid
+  balance** rather than a rolling window: a `tenants` row per Access identity,
+  3600 s granted on first contact, drawn down by
+  `worker._charge_for_runtime` when a job reaches a terminal state having had
+  a clone. 402 at admission when it is spent. `platform/tests/test_quota.py`
+  is sixteen tests.
+
+  **A job the platform lost track of is not charged.** `REAP` and `RECONCILE`
+  fire because Dom0 crashed, restarted or lost its link, and the platform
+  cannot say when the job stopped — `updated_at` is when the sweep noticed, so
+  the elapsed time carries 120–150 s of detection lag at minimum and
+  unbounded lag for a reconcile. That decision is why the charge lives in the
+  worker routes rather than in a trigger.
+
+  **`owner` is NOT NULL as of 0008**, for traceability. The mTLS listener can
+  therefore no longer submit — `auth.required_identity` refuses it with a 403
+  — which resolves once the CLI routes through the tunnel and carries an
+  Access service token. `visible_to`'s `owner IS NULL` arm is now unreachable
+  and kept deliberately; see the docstring there.
+
+  **Decision 3 is deployed**, 2026-09-06: the browser listener binds
+  `127.0.0.1` and `cloudflared` dials it over TLS on loopback
+  (`platform-domu.md` §E4a). `curl` from Dom0 to `192.168.1.10:8000` is
+  refused; the UI loads through the tunnel. It closes the LAN path, not every
+  path — both listeners still serve one ASGI app, so a client-certificate
+  holder reaches the browser routes on 8443. Splitting the app is deferred and
+  is its own change.
+  The scope check on the SSE stream and the console socket runs once, at
+  connect, so it depends on publication being restricted to terminal jobs —
+  no connection can be open on a job that is publishable. Relaxing that
+  restriction would reopen it; the two rules are coupled.
 - [ ] **Rate limiting, abuse controls** — not started.
 - [ ] **Tenant isolation** — not started; depends on #40.
 - [ ] **Egress routing** (#42) — open. Whether analysis traffic goes offline,

@@ -79,8 +79,13 @@ def server():
         "S3_BUCKET": os.environ.get("S3_BUCKET", "analysis"),
         "S3_REGION": os.environ.get("S3_REGION", "eu-central-1"),
     }
+    # `tests/_browser_app.py`, not `sandbox_platform.app` -- see that module.
+    # It is the same app with the identity dependency overridden, because a
+    # browser cannot present an Access token and every submission would
+    # otherwise be a 403.
     proc = subprocess.Popen(
-        [sys.executable, "-m", "uvicorn", "sandbox_platform.app:app",
+        [sys.executable, "-m", "uvicorn", "_browser_app:app",
+         "--app-dir", str(PLATFORM_DIR / "tests"),
          "--host", "127.0.0.1", "--port", str(port), "--log-level", "warning"],
         cwd=str(PLATFORM_DIR), env=env,
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
@@ -113,8 +118,9 @@ def seed():
         with psycopg.connect(DSN, autocommit=True) as c:
             row = c.execute(
                 "INSERT INTO jobs (target_os, submitted_filename, state,"
-                "                  sha256, size_bytes, detected_type)"
-                " VALUES (%s, %s, %s, 'af9c4ea0', 19, 'ASCII text')"
+                "                  sha256, size_bytes, detected_type, owner)"
+                " VALUES (%s, %s, %s, 'af9c4ea0', 19, 'ASCII text',"
+                "         'fixture-owner@example.test')"
                 " RETURNING id",
                 (target_os, filename, state),
             ).fetchone()[0]

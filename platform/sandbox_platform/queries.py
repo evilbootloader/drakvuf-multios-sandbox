@@ -46,7 +46,21 @@ UPDATE jobs
        lease_owner      = %(worker_id)s,
        lease_expires_at = now() + %(lease)s::interval,
        attempt          = attempt + 1,
-       queue_reason     = NULL
+       queue_reason     = NULL,
+       -- The billing clock (DRAFT-047 decision 8), started HERE because this
+       -- is the moment a host takes the job -- everything before it is queue
+       -- time, which is the platform being busy rather than work the
+       -- submitter asked for.
+       --
+       -- Not in report_state, where it was first written: this statement sets
+       -- 'cloning' itself, so a worker never REPORTS that transition and the
+       -- branch waiting for it never ran. started_at stayed NULL and both
+       -- charge sites raised on `updated_at - None`.
+       --
+       -- Needs no `WHERE started_at IS NULL` guard: this matches only a
+       -- 'queued' row, and nothing returns a job to 'queued' -- a retry is a
+       -- new job with a new id.
+       started_at       = now()
  WHERE id = (
          SELECT id
            FROM jobs
@@ -58,7 +72,7 @@ UPDATE jobs
        )
    AND required_mib <= %(free_mib)s
 RETURNING id, target_os, sha256, submitted_filename, required_mib,
-          lease_expires_at, attempt, egress_mode, egress_exit
+          lease_expires_at, attempt, egress_mode, egress_exit, key_prefix
 """
 
 # --------------------------------------------------------------------------

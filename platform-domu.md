@@ -8,7 +8,11 @@
 > `docs.rglob("*.md")` off the filesystem, so a new `.md` under `docs/` fails
 > `test_current_state.py` while still untracked. Move and rename at commit time.
 >
-> **Every command here is Candidate.** None has been run on this lab.
+> **Every command here is Candidate**, with one exception: **§E4a was executed
+> and verified on 2026-09-06** and carries real output. The banner above stays
+> until the rest does too — `gen-current-state.py` gives it no vote and counts
+> pasted host prompts instead, so the two disagreeing is visible rather than
+> silent.
 
 ## Why this exists
 
@@ -47,7 +51,8 @@ what differs.
 | 17 Cloudflare, Zero Trust, AUD | **Skip** — external state, unaffected by the migration |
 | 18 environment file | Carries over |
 | 19 TLS material | **Reissue the server cert** from the workstation CA — §E2. Do NOT regenerate the CA |
-| 19a MinIO on TLS · 20 API · 20a cloudflared · 20b browser listener | Carry over unchanged |
+| 19a MinIO on TLS · 20 API · 20a cloudflared | Carry over unchanged |
+| **20b browser listener** | **Changed** — binds `127.0.0.1`, not the LAN address, and `cloudflared`'s API origin follows it. §E4a (#40 decision 3) |
 | 21–27 verification, object store, UI | Carry over unchanged |
 
 ---
@@ -683,7 +688,8 @@ BROWSER_ORIGIN=https://sandbox.evilbootloader.com BUCKET_QUOTA=200GiB \
 
 ## E4. Then the rest
 
-Runbook 08 **18, 20, 20a, 20b** unchanged.
+Runbook 08 **18, 20, 20a** unchanged. **20b changes** — the browser listener
+binds loopback here, not the LAN address. See §E4a.
 
 > ### Step 20b's `sed` genuinely does not work — use the written-out unit
 >
@@ -704,6 +710,223 @@ Runbook 08 **18, 20, 20a, 20b** unchanged.
 > `systemd-analyze verify` before `enable` is what catches this class of thing.
 > `enable` only creates a symlink, so it succeeds against a unit that can never
 > start.
+
+## E4a. Bind the browser listener to loopback — **executed 2026-09-06**
+
+Issue #40 (DRAFT-047) decision 3. Runbook 08 step 20b puts the browser listener
+on `192.168.1.10:8000`, and says so plainly at `:1489`: *"reachable from Dom0
+and from anything else on that segment without a certificate — that is the
+exposure #40 closes."* This is that change.
+
+`cloudflared` runs inside this DomU, so it can reach a loopback origin. Nothing
+else needs to.
+
+> ### DECISION — TLS stays on, and the certificate already allows it
+>
+> The obvious worry is that the listener's certificate is issued for the LAN
+> address (§E2) and so cannot match `127.0.0.1`. **It can.**
+> `tls/issue-cert.sh:98` appends `IP:127.0.0.1,DNS:localhost` to the SAN list of
+> every server certificate it issues, and has since its first commit —
+> *"cloudflared reaches its origins over loopback, so every server certificate
+> covers localhost as well as its LAN address."* DRAFT-046 designed for this
+> before there was a reason to.
+>
+> So `service:` becomes `https://127.0.0.1:8000`, `caPool` stays, and neither
+> `noTLSVerify` nor `originServerName` is needed — the first turns off a check
+> rather than satisfying it, and the second aliases a name the certificate
+> already carries.
+>
+> **Plain HTTP was considered and dropped.** It is defensible on a loopback hop
+> and it costs a reissue-free change either way, but it would make this the one
+> listener on the host not serving TLS, which is a rule worth keeping whole.
+>
+> **This does not apply to MinIO.** Its `/analysis` origin stays
+> `https://192.168.1.10:9000` with `caPool`, because Dom0 fetches samples and
+> pushes artifacts over presigned URLs against that address. MinIO cannot move
+> to loopback, and moving it is how someone "finishes" this step and breaks the
+> worker channel.
+
+Write the unit out in full rather than editing the ExecStart in place — the same
+reason the note above gives.
+
+```bash
+# on the platform DomU
+cat > /etc/systemd/system/sandbox-api-browser.service <<'EOF'
+[Unit]
+Description=DRAKVUF sandbox platform API (browser origin for cloudflared)
+After=network.target postgresql.service
+Wants=postgresql.service
+
+[Service]
+User=platform
+Group=platform
+WorkingDirectory=/opt/platform/src/platform
+EnvironmentFile=/etc/sandbox-platform/api.env
+ExecStart=/opt/platform/src/platform/.venv/bin/python -m uvicorn \
+    sandbox_platform.app:app \
+    --host 127.0.0.1 --port 8000 \
+    --ssl-certfile /etc/sandbox-platform/tls/api.crt \
+    --ssl-keyfile  /etc/sandbox-platform/tls/api.key
+Restart=on-failure
+RestartSec=5
+
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target
+EOF
+systemd-analyze verify /etc/systemd/system/sandbox-api-browser.service
+systemctl daemon-reload
+systemctl restart sandbox-api-browser
+systemctl is-active sandbox-api-browser
+```
+
+The Access drop-in at
+`/etc/systemd/system/sandbox-api-browser.service.d/access.conf` survives
+rewriting the unit — it is a separate file. Confirm it anyway, because losing it
+turns the browser listener into an unauthenticated one:
+
+```bash
+systemctl show sandbox-api-browser -p Environment --no-pager   # REQUIRE_ACCESS_JWT=1
+systemctl show sandbox-api         -p Environment --no-pager   # must stay empty
+```
+
+Then repoint `cloudflared`. **Only the API origin changes**; the MinIO entry
+keeps its LAN address and its `caPool`:
+
+```bash
+# on the platform DomU
+# First confirm the deployed certificate covers loopback -- the file that is
+# actually being served, not the copy in the workstation checkout:
+openssl x509 -in /etc/sandbox-platform/tls/api.crt -noout -ext subjectAltName
+
+# Expect IP Address:192.168.1.10, ..., IP Address:127.0.0.1, DNS:localhost
+# If 127.0.0.1 is absent the certificate predates tls/issue-cert.sh; reissue
+# with `./tls/issue-cert.sh server api 192.168.1.10 platform.lan` on the
+# WORKSTATION -- the loopback SANs are added automatically -- and copy it over.
+
+# Then, in /etc/cloudflared/config.yml, the ADDRESS changes and nothing else:
+#   - hostname: sandbox.evilbootloader.com
+#     service: https://127.0.0.1:8000       # was https://192.168.1.10:8000
+#     originRequest:
+#       caPool: /etc/cloudflared/ca.crt     # unchanged -- same CA, same check
+
+cloudflared --config /etc/cloudflared/config.yml tunnel ingress validate
+systemctl restart cloudflared
+```
+
+### Verify — the negative first
+
+```bash
+# on the platform DomU: bound to loopback, and nothing else
+ss -lntp | grep 8000
+
+# from any other host on the segment: must FAIL, and this is the whole point
+curl --max-time 5 -sS http://192.168.1.10:8000/healthz
+
+# on the platform DomU: the origin itself, exactly as cloudflared dials it.
+# --cacert rather than -k, so this ALSO proves the certificate covers loopback
+# -- which is the whole reason `service:` can stay on https.
+curl -sS --cacert /etc/sandbox-platform/tls/ca.crt https://127.0.0.1:8000/healthz
+
+# and whether cloudflared is reaching it. A scheme mismatch shows up here as a
+# dial error against the origin, NOT at the public hostname -- see FINDING E-6.
+journalctl -u cloudflared -n 30 --no-pager
+```
+
+Then the check that is actually conclusive: **open
+`https://sandbox.evilbootloader.com/ui/jobs` in a browser**, which carries an
+Access session. The job list means the hop works end to end; a `502` means
+`cloudflared` and the listener still disagree about the scheme.
+
+**Done 2026-09-06 — the job list rendered through the tunnel.** Recorded as a
+statement rather than a transcript because a browser session is what makes the
+check meaningful and there is no shell output to paste. Together with the two
+refusals above, that is the step: the browser path works only through
+Cloudflare, and the LAN path does not answer at all.
+
+**Not** a bare `curl` at the public hostname: Access answers that at the edge
+before the origin is consulted, so it cannot distinguish a working origin from
+an unreachable one. See FINDING E-6.
+
+**And the check that records what this does NOT do**, which is why the
+acceptance criterion in DRAFT-047 is worded the way it is. The mTLS listener
+runs the same ASGI app, so a client-certificate holder still reaches the browser
+routes on 8443:
+
+```bash
+curl --cacert ca.crt --cert dom0-lab.crt --key dom0-lab.key \
+     https://192.168.1.10:8443/api/v1/jobs
+```
+
+That returns jobs, by design — Dom0 and `submit.py` need it, and
+`auth.visible_to` returns `TRUE` for a caller with no Access identity. Splitting
+the ASGI app is what would change it, and that is not this step.
+
+```
+EVIDENCE E4a                                                       2026-09-06
+
+root@platform:~# ss -lntp | grep 8000
+LISTEN 0      2048       127.0.0.1:8000       0.0.0.0:*    users:(("python",pid=34223,fd=9))
+
+root@dom0:~/drakvuf-multios-sandbox# curl --max-time 5 -sS http://192.168.1.10:8000/healthz
+curl: (7) Failed to connect to 192.168.1.10 port 8000 after 0 ms: Couldn't connect to server
+
+root@dom0:~/drakvuf-multios-sandbox# curl -s -o /dev/null -w '%{http_code}\n' https://sandbox.evilbootloader.com/ui/jobs
+302
+
+root@platform:~# openssl x509 -in /etc/sandbox-platform/tls/api.crt -noout -ext subjectAltName
+X509v3 Subject Alternative Name:
+    IP Address:192.168.1.10, DNS:platform.lan, IP Address:127.0.0.1, DNS:localhost
+
+root@platform:~# curl -sS --cacert /etc/sandbox-platform/tls/ca.crt https://127.0.0.1:8000/healthz
+{"status":"ok"}
+```
+
+**That last line is the one that settles the scheme.** It is a full TLS
+handshake to `127.0.0.1:8000` verified against the internal CA — so the listener
+serves TLS, the certificate covers loopback, and `cloudflared` must dial
+`https://`, not `http://`. An earlier revision of this step said `http://`,
+which produced `curl: (52) Empty reply from server` against the same listener:
+uvicorn receiving a plaintext request on a TLS socket closes without answering.
+See [TROUBLESHOOTING](docs/TROUBLESHOOTING.md#empty-reply-from-server-from-a-listener-that-is-running).
+
+The first two are the step. **`Couldn't connect` from Dom0 is the exposure
+closed** — that same command returned `{"status":"ok"}` while the listener was
+on `192.168.1.10:8000`, and Dom0 sits on the analysis segment holding no Access
+session at all.
+
+> ## FINDING E-6 — the 302 above proves the edge, not the origin
+>
+> The third command was written into this step as "through the tunnel:
+> unchanged", and it does not establish that. `302` is Cloudflare Access
+> redirecting an unauthenticated `curl` to its login page, generated **at the
+> edge before any origin is consulted** — so it is identical whether
+> `cloudflared` can reach `127.0.0.1:8000` or cannot reach it at all. A broken
+> origin surfaces as `502`, and only *after* Access has authenticated the
+> caller.
+>
+> Runbook 08 records the same trap against its own version of this check at
+> `:1886` — *"The 302 only proves Cloudflare is doing its job"* — and it was
+> reproduced here by writing the check without reading that note first.
+>
+> **What does establish it:** a request from the DomU straight at the origin,
+> and `cloudflared`'s own log. See the two commands below.
+
+> ### The cost, stated
+>
+> **The UI becomes unreachable from the LAN, including from this machine's own
+> LAN address.** With the tunnel down there is no local way in except a loopback
+> client inside the DomU. DRAFT-047 accepted this trade explicitly: *"On loopback
+> there is no path to reach, so a missing check is not exploitable from the
+> network."*
+>
+> `/healthz` and `/` move with it — they hang off the app, not off a router, so
+> any LAN monitoring pointed at `192.168.1.10:8000/healthz` stops answering. The
+> mTLS listener's `/healthz` on 8443 is unaffected and is the one to watch.
 
 > ## FINDING E-5 — the Access team domain: both work, only `iss` discriminates
 >

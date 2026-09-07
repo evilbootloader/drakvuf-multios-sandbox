@@ -178,15 +178,33 @@ def test_owner_is_recorded_and_returned(client, issuer):
     assert listed[job_id] == "analyst@example.test"
 
 
-def test_owner_is_null_without_access(client):
-    """The mTLS path records no owner, because a certificate is not a person."""
+def test_a_caller_with_no_identity_cannot_submit(client, no_identity):
+    """The mTLS path can no longer create a job, and this is the change.
+
+    It used to record `owner = NULL` -- a certificate is not a person, and the
+    ownerless set was readable by everyone. Migration 0008 made `jobs.owner`
+    NOT NULL for traceability, so there is nothing to record and nothing to
+    charge, and `auth.required_identity` says so.
+
+    **403, not 401.** The caller authenticated fine; on the deployment it holds
+    a client certificate. What it lacks is an identity work can be attributed
+    to, and reporting an authentication failure would send whoever hits this
+    looking for a broken token.
+
+    Takes `no_identity` so `client` leaves the real dependency in place with
+    Access still OFF -- see that fixture. `issuer` would not do: it switches
+    Access on, and then a tokenless request is a 401 from the verifier rather
+    than the 403 this is about.
+    """
     created = client.post(
         "/api/v1/jobs",
         json={"target_os": "ubuntu", "filename": "y.bin", "size_bytes": 4},
     )
-    assert created.status_code == 201
-    job_id = created.json()["job_id"]
-    assert client.get(f"/api/v1/jobs/{job_id}").json()["owner"] is None
+
+    assert created.status_code == 403, created.text
+    # And no row: the refusal is before the INSERT, not a status painted over
+    # a job that already exists.
+    assert client.get("/api/v1/jobs").json() == []
 
 
 # --- the JWKS cache --------------------------------------------------------

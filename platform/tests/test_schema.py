@@ -75,8 +75,10 @@ def test_claim_uses_the_partial_index_not_a_sequential_scan(conn):
     """
     with conn.cursor() as cur:
         cur.execute("""
-            INSERT INTO jobs (target_os, submitted_filename, required_mib, state)
-            SELECT 'ubuntu', 'bulk-' || g || '.bin', 2198, 'queued'
+            INSERT INTO jobs (target_os, submitted_filename, required_mib, state,
+                              owner)
+            SELECT 'ubuntu', 'bulk-' || g || '.bin', 2198, 'queued',
+                   'fixture-owner@example.test'
               FROM generate_series(1, 5000) AS g
         """)
         cur.execute("ANALYZE jobs")

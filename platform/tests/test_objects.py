@@ -61,7 +61,7 @@ def test_inspect_reads_the_etag_from_the_get_not_a_second_request(
     from one object version, so the ETag on that response and the bytes on it
     cannot disagree, and nothing else is needed.
     """
-    key = objects.sample_key(uuid.uuid4(), "s.bin")
+    key = objects.sample_key(uuid.uuid4(), "s.bin", "")
     put_object(key, b"\x7fELF" + b"\x00" * 64)
 
     def forbidden(*_a, **_kw):
@@ -87,7 +87,7 @@ def test_inspect_reports_the_etag_of_the_bytes_it_hashed(put_object):
     import hashlib
 
     body = b"MZ" + b"\x00" * 100
-    key = objects.sample_key(uuid.uuid4(), "s.bin")
+    key = objects.sample_key(uuid.uuid4(), "s.bin", "")
     put_object(key, body)
 
     facts = objects.inspect(key)
@@ -203,7 +203,11 @@ def test_a_hostile_filename_round_trips_through_a_real_presigned_post(
     job_id = uuid.uuid4()
     body = b"\x7fELF" + b"\x00" * 60
 
-    ticket = objects.presigned_upload(job_id, name, len(body))
+    # The empty prefix is the pre-#40 flat layout, and it is what this asserts
+    # below. Passed explicitly rather than defaulted: every job written before
+    # migration 0008 carries it, so this is the shape with real objects behind
+    # it in the deployment, and it must keep resolving byte-identically.
+    ticket = objects.presigned_upload(job_id, name, len(body), "")
     r = httpx.post(ticket.url, data=ticket.fields,
                    files={"file": (name, body)})
 

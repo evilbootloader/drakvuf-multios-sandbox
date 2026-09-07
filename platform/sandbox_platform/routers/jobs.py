@@ -17,7 +17,7 @@ import re
 from datetime import UTC, datetime, timedelta
 from typing import Annotated, Literal
 from urllib.parse import quote
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import magic
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, status
@@ -39,7 +39,11 @@ from ..enums import (
     JobState,
     RejectReason,
     TargetOs,
+    Visibility,
 )
+
+import logging
+log = logging.getLogger(__name__)
 
 # The identity dependency is attached to the ROUTER, not to routes, so a
 # route added later cannot forget it. It is a no-op unless
@@ -50,8 +54,16 @@ router = APIRouter(prefix="/api/v1/jobs", tags=["jobs"],
 
 # --- models ---------------------------------------------------------------
 
-# An S3 key caps at 1024 BYTES and `samples/<uuid>/` spends 45 of them, so the
-# ceiling is 979. 512 leaves room and is far above any real sample name.
+# An S3 key caps at 1024 BYTES. `samples/<uuid>/` spends 45 and the owner
+# prefix `u/<owner>/<shard>/` up to 261 more (`objects.MAX_OWNER`), leaving
+# 718. 512 is well inside that and far above any real sample name.
+#
+# The sample path is NOT the binding one -- `manifest.MAX_ARTIFACT_NAME` is
+# 718 against this 512, so it is the constant that actually exhausts the
+# budget and the one `test_the_longest_admissible_key_still_fits_s3` measures.
+# An earlier version of that test checked only this path, which is how
+# MAX_ARTIFACT_NAME came to be 900 while the prefix it budgeted for grew from
+# 45 bytes to 306.
 #
 # Bytes, not characters: pydantic's max_length counts characters, so the
 # previous `max_length=1024` admitted a multi-byte name that minted a key S3
@@ -247,6 +259,16 @@ class JobSummary(BaseModel):
     # an arbitrary third party's address harvested from a listing.
     owner: str | None = None
 
+    # Decisions 5/6 of #40: private by default, published by the owner after the
+    # fact. Read by `auth.visible_to`'s third arm; written only by the two
+    # routes at the foot of this module.
+    #
+    # **No default, for the same reason `egress_mode` above has none.** This
+    # model is built from an explicit key list in `_detail`, so a default would
+    # answer for a column dropped from that list -- and `private` is exactly the
+    # reassuring lie nobody would notice on a report.
+    visibility: Visibility
+
 
 class JobDetail(JobSummary):
     updated_at: datetime
@@ -323,6 +345,12 @@ class CancelResponse(BaseModel):
     outcome: Literal["cancelled", "cancel_requested", "not_cancellable"]
 
 
+class VisibilityResponse(BaseModel):
+    """The row's visibility after the write, so a caller re-renders from fact
+    rather than from what it assumed the request would do."""
+
+    visibility: Visibility
+
 # --- submission -----------------------------------------------------------
 
 #: Tried in order when a submitter expresses no preference. **Every entry must
@@ -387,31 +415,87 @@ def _resolve_egress(conn, req: CreateJobRequest) -> tuple[str, str | None]:
 
 @router.post("", status_code=status.HTTP_201_CREATED)
 def create_job(req: CreateJobRequest,
-               owner: auth.Identity = None) -> CreateJobResponse:
+               owner: auth.RequiredIdentity) -> CreateJobResponse:
     """Create a job record and hand back an upload capability.
 
     `size_bytes` is checked before the URL is issued, so an oversized sample
     is refused without the transfer ever happening. It is a claim by the
     client, not a fact -- `mark_uploaded` re-checks it against the stored
     object. The early check saves bandwidth; the later one establishes truth.
+
+    **RequiredIdentity, not Identity**: this writes `jobs.owner`, which is NOT
+    NULL since migration 0008, so a caller without an identity is refused with
+    a 403 rather than a constraint violation. See `auth.required_identity`.
     """
+    # The same upsert `routers.account.get_balance` uses, and it has to be the
+    # same shape: the UI asks for a balance on page load while a headless
+    # client submits without ever asking, so on a first visit these two race
+    # by construction. Test-then-insert loses that race.
+    #
+    # **Its own transaction, separate from the job INSERT below, on purpose.**
+    # A 402 raised here still leaves the tenant row committed, which is what
+    # should happen: the row is a fact about who has reached the platform, not
+    # part of the submission, and creating it again on the next attempt would
+    # be the same INSERT with the same result. Rolling it back would mean a
+    # refused submitter has no balance to be shown why they were refused.
+    with connection() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO tenants (owner) VALUES (%s)
+            ON CONFLICT (owner) DO UPDATE SET owner = EXCLUDED.owner
+            RETURNING balance_seconds
+            """,
+            (owner,),
+        )
+        balance_seconds = cur.fetchone()[0]
+
+    # At or below zero, not below: a balance of exactly nothing buys nothing.
+    #
+    # This is the ONLY gate. Nothing stops a job already running from taking a
+    # balance negative -- the charge lands when it finishes and no per-job cap
+    # exists -- which is deliberate, because refusing mid-analysis would
+    # destroy host time already spent. See the tenants comment in 0008.
+    if balance_seconds <= 0:
+        raise HTTPException(
+            status.HTTP_402_PAYMENT_REQUIRED,
+            f"account has {balance_seconds} analysis seconds remaining",
+        )
+
     if req.size_bytes > settings.max_sample_bytes:
         raise HTTPException(
             status.HTTP_413_CONTENT_TOO_LARGE,
             f"sample exceeds the {settings.max_sample_bytes} byte limit",
         )
 
+    # Generated here rather than by the column default, because `key_prefix`
+    # contains a shard derived from the id and has to be a value in the same
+    # INSERT -- see migration 0008.
+    job_id = uuid4()
+    try:
+        key_prefix = objects.owner_prefix(job_id, owner)
+    except ValueError as exc:
+        # Nothing the submitter can fix -- the value is the Access token's
+        # `email` claim -- so the operator is told at error level and the
+        # caller gets the reason rather than a bare failure.
+        #
+        # 400 rather than 500: this is a deliberate refusal with a specific
+        # cause, not the platform breaking, and it must not be retried.
+        # Rather than 401 because the token verified fine; the identity in it
+        # is simply not one this layout can hold.
+        log.error("identity unusable as a key prefix: %s", exc)
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
     with connection() as conn, conn.cursor() as cur:
         egress_mode, egress_exit = _resolve_egress(conn, req)
         cur.execute(
             """
-            INSERT INTO jobs (target_os, submitted_filename, size_bytes,
-                              state, owner, egress_mode, egress_exit)
-            VALUES (%s, %s, %s, %s, %s, %s, %s)
+            INSERT INTO jobs (id, target_os, submitted_filename, size_bytes,
+                              state, owner, egress_mode, egress_exit, key_prefix)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
             RETURNING id
             """,
-            (req.target_os.value, req.filename, req.size_bytes,
-             JobState.RECEIVED.value, owner, egress_mode, egress_exit),
+            (job_id, req.target_os.value, req.filename, req.size_bytes,
+             JobState.RECEIVED.value, owner, egress_mode, egress_exit,
+             key_prefix),
         )
         job_id = cur.fetchone()[0]
 
@@ -420,7 +504,7 @@ def create_job(req: CreateJobRequest,
     # with the cap alone would make `size_bytes` decorative, which it was
     # until 2026-08-23.
     ticket = objects.presigned_upload(
-        job_id, req.filename, min(req.size_bytes, settings.max_sample_bytes)
+        job_id, req.filename, min(req.size_bytes, settings.max_sample_bytes), key_prefix
     )
     return CreateJobResponse(
         job_id=job_id,
@@ -456,7 +540,7 @@ def mark_uploaded(job_id: Annotated[UUID, Path()],
         with conn.cursor(row_factory=dict_row) as cur:
             cur.execute(
                 "SELECT id, state, target_os, submitted_filename,"
-                "       egress_mode, egress_exit FROM jobs"
+                "       egress_mode, egress_exit, key_prefix FROM jobs"
                 f" WHERE id = %s AND {scope}",
                 (job_id, *scope_params),
             )
@@ -470,7 +554,7 @@ def mark_uploaded(job_id: Annotated[UUID, Path()],
                 f"job is {job['state']}; admission runs once, from received",
             )
 
-        key = objects.sample_key(job_id, job["submitted_filename"])
+        key = objects.sample_key(job_id, job["submitted_filename"], job["key_prefix"])
 
         # Missing or empty. Checked first because everything below reads bytes.
         stored = objects.head(key)
@@ -659,13 +743,13 @@ def _detail(conn, job_id: UUID, identity: str | None) -> JobDetail:
             )
             reserved_ahead = cur.fetchone()[0]
 
-    return JobDetail(
+    job_detail =JobDetail(
         **{k: row[k] for k in (
             "id", "created_at", "updated_at", "target_os", "submitted_filename",
             "state", "sha256", "size_bytes", "detected_type", "queue_reason",
             "failure_stage", "failure_reason", "attempt", "cancel_requested",
             "owner", "interacted",
-            "egress_mode", "egress_exit", "egress_applied",
+            "egress_mode", "egress_exit", "egress_applied", "visibility",
         )},
         manifest=row["manifest"] if isinstance(row["manifest"], dict) else None,
         artifacts=artifacts,
@@ -674,6 +758,10 @@ def _detail(conn, job_id: UUID, identity: str | None) -> JobDetail:
         reserved_ahead=reserved_ahead,
         artifacts_expired=expired,
     )
+
+    if job_detail.visibility == "public" and job_detail.owner != identity:
+        job_detail.owner = "REDACTED"
+    return job_detail
 
 
 @router.get("")
@@ -714,6 +802,7 @@ def _filters(state, target_os, sha256, sha256_prefix, before, identity):
     """
     scope, scope_params = auth.visible_to(identity)
     clauses, params = ["TRUE", scope], list(scope_params)
+
     if state:
         clauses.append("state = %s")
         params.append(state.value)
@@ -782,13 +871,17 @@ def query_jobs(*, identity, state=None, target_os=None, sha256=None,
     params.extend([limit, offset])
     sql = (
         "SELECT id, created_at, target_os, submitted_filename, state, sha256,"
-        "       size_bytes, owner FROM jobs"
+        "       size_bytes, owner, visibility FROM jobs"
         f" WHERE {' AND '.join(clauses)}"
         " ORDER BY created_at DESC LIMIT %s OFFSET %s"
     )
     with connection() as conn, conn.cursor(row_factory=dict_row) as cur:
         cur.execute(sql, params)
-        return [JobSummary(**row) for row in cur.fetchall()]
+        job_summary_list = [ JobSummary(**row) for row in cur.fetchall() ]
+        for job_summary in job_summary_list:
+            if job_summary.visibility == "public" and job_summary.owner  != identity:
+                job_summary.owner = "REDACTED"
+        return job_summary_list
 
 
 def count_jobs(*, identity, state=None, target_os=None, sha256=None,
@@ -854,7 +947,7 @@ def _for_download(job_id: UUID, identity: str | None):
     scope, scope_params = auth.visible_to(identity)
     with connection() as conn, conn.cursor(row_factory=dict_row) as cur:
         cur.execute(
-            f"SELECT created_at, manifest FROM jobs WHERE id = %s AND {scope}",
+            f"SELECT created_at, manifest, key_prefix FROM jobs WHERE id = %s AND {scope}",
             (job_id, *scope_params))
         row = cur.fetchone()
     if row is None:
@@ -870,10 +963,11 @@ def _for_download(job_id: UUID, identity: str | None):
     # the manifest, so a name this platform could not check never reaches a
     # download: degraded means fewer capabilities, never looser ones.
     artifacts = manifest_schema.parse(row["manifest"]).artifacts
+    key_prefix = row["key_prefix"]
     if not artifacts:
         raise HTTPException(status.HTTP_404_NOT_FOUND,
                             "this run has no artifacts to download")
-    return artifacts
+    return artifacts, key_prefix 
 
 
 def _attachment(stem: str) -> dict[str, str]:
@@ -894,12 +988,13 @@ def _attachment(stem: str) -> dict[str, str]:
 def download_all_artifacts(job_id: Annotated[UUID, Path()],
                            identity: auth.Identity = None) -> StreamingResponse:
     """Every artifact of one run, in a single password-protected ZIP."""
-    artifacts = _for_download(job_id, identity)
-    prefix = objects.result_prefix(job_id)
+    artifacts, key_prefix = _for_download(job_id, identity)
+    
+    key = objects.result_prefix(job_id, key_prefix)
 
     return StreamingResponse(
         packaging.stream(
-            (a.name, objects.chunks(f"{prefix}{a.name}")) for a in artifacts
+            (a.name, objects.chunks(f"{key}{a.name}")) for a in artifacts
         ),
         media_type="application/zip",
         headers=_attachment(f"job-{job_id}-artifacts"),
@@ -920,15 +1015,16 @@ def download_one_artifact(
     malware; resolving it to a manifest entry first means the only reachable
     objects are the ones this job actually declared.
     """
-    match = next((a for a in _for_download(job_id, identity) if a.name == name),
+    artifacts, key_prefix =  _for_download(job_id, identity) 
+    match  = next((a for a in artifacts if a.name == name),
                  None)
     if match is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND,
                             "no such artifact for this job")
 
-    key = f"{objects.result_prefix(job_id)}{match.name}"
+    key = objects.result_prefix(job_id, key_prefix)
     return StreamingResponse(
-        packaging.stream([(match.name, objects.chunks(key))]),
+        packaging.stream([(match.name, objects.chunks(f"{key}{match.name}"))]),
         media_type="application/zip",
         headers=_attachment(match.name.rsplit("/", 1)[-1]),
     )
@@ -1028,3 +1124,89 @@ async def job_events(job_id: Annotated[UUID, Path()],
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+def _publisher(identity: str | None) -> str:
+    """The person publishing, or a refusal. Publication needs a person.
+
+    `access_identity` returns None only on the certificate-gated listener,
+    where the caller is Dom0 or a command-line tool -- a machine. Publishing is
+    a judgement about a result, `owner` is a column for a person, and nothing in
+    `submit.py` publishes; refusing here also keeps Dom0's one credential from
+    carrying an authority it has no use for.
+
+    403 rather than the 404 the rest of this section returns, because it is a
+    fact about the LISTENER and not about a job. Answered before any id is
+    looked up, so it reveals nothing about which ids exist.
+    """
+    if identity is None:
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            "publication requires an authenticated browser session",
+        )
+    return identity
+
+def _owned_or_404(conn, job_id: UUID, owner: str) -> str:
+    """The state of a job this caller OWNS, or 404. Never a 403.
+
+    The same refusal a missing id gets, with the same detail string, for the
+    reason `_visible_or_404` gives: a 403 confirms the id exists, which turns
+    this into an oracle for enumerating other people's jobs.
+    """
+    row = conn.execute(
+        "SELECT state FROM jobs WHERE id = %s AND owner = %s", (job_id, owner)
+    ).fetchone()
+    if row is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "no such job")
+    return row[0]
+
+@router.post("/{job_id}/publish")
+def publish_analysis(job_id: Annotated[UUID, Path()],
+                     identity: auth.Identity = None) -> VisibilityResponse:
+    """Make a finished analysis readable by every authenticated user.
+
+    **Terminal states, not `completed` alone.** A run that failed, was cancelled
+    or was interrupted is frequently the thing worth sharing -- a sample that
+    detected the sandbox and bailed is a finding. What is refused is publishing
+    something still queued or running, which is exactly the "before anyone has
+    seen what came out" case decision 5 exists to prevent.
+
+    Idempotent: publishing an already-public job is not an error. There is no
+    state to conflict over, and a 409 would turn the UI's retry into a failure.
+
+    Two statements on one connection rather than one guarded UPDATE, matching
+    `cancel_job` above and for the same reason: `owner` never changes, so there
+    is nothing for the gap between them to race with.
+    """
+    owner = _publisher(identity)
+    with connection() as conn:
+        state = _owned_or_404(conn, job_id, owner)
+        if JobState(state) not in TERMINAL_STATES:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                f"job is {state}; an analysis is published once it has finished",
+            )
+        conn.execute("UPDATE jobs SET visibility = %s WHERE id = %s",
+                     (Visibility.PUBLIC.value, job_id))
+    return VisibilityResponse(visibility=Visibility.PUBLIC)
+
+@router.post("/{job_id}/unpublish")
+def unpublish_analysis(job_id: Annotated[UUID, Path()],
+                           identity: auth.Identity = None) -> VisibilityResponse:
+    """Restore the access check on a published analysis.
+
+    **No state check**, unlike publishing. Withdrawing access is the remedy, and
+    a remedy refusable on account of the job's state is not one.
+
+    **This restores the check, not the secret.** Anything downloadable while the
+    job was public, somebody has -- so this closes the door and recovers
+    nothing. Which is why the warning belongs at the moment of PUBLISHING: by
+    the time anyone reaches for this route, the decision it would have informed
+    was already taken.
+    """
+    owner = _publisher(identity)
+    with connection() as conn:
+        _owned_or_404(conn, job_id, owner)
+        conn.execute("UPDATE jobs SET visibility = %s WHERE id = %s",
+                     (Visibility.PRIVATE.value, job_id))
+    return VisibilityResponse(visibility=Visibility.PRIVATE)
+

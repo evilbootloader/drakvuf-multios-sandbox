@@ -13,12 +13,14 @@ Real signed Access tokens throughout, via the `access_token` fixture -- two
 identities that differ only in their `email` claim, which is exactly what
 distinguishes two real users at the edge.
 
+Publishing (decisions 5/6) is section 7. The predicate's third arm and the
+route that writes it are tested separately and on purpose: section 6 sets
+`visibility` directly, so a failure there is the READ rule; section 7 goes
+through `POST /publish`, so a failure there is the WRITE rule. Collapsing them
+would leave either fault able to hide behind the other.
+
 What is deliberately NOT here, because it is not built yet:
 
-  * **Publishing** (decisions 5/6). `test_a_public_job_is_readable_by_anyone`
-    sets `visibility` directly, which tests the predicate's third arm; the
-    `POST /publish` route that would set it is a later change, and
-    owner-only-may-publish belongs with it.
   * **Loopback binding** (decision 3) and the **runtime quota** (decision 8).
   * **Forged and absent tokens** -- covered in `test_access_jwt.py`, which
     owns verification. This module assumes a verified identity and asks what
@@ -32,10 +34,15 @@ import json
 import zipfile
 
 import dataclasses
+import hashlib
+from urllib.parse import unquote, urlsplit
+from uuid import UUID, uuid4
+
 import pytest
 from starlette.websockets import WebSocketDisconnect
 
 from conftest import enqueue
+from sandbox_platform import objects
 
 A = "analyst-a@example.test"
 B = "analyst-b@example.test"
@@ -62,17 +69,38 @@ def submit(client, headers, filename="sample.bin"):
     return r.json()["job_id"]
 
 
-def completed_with_artifacts(conn, put_object, owner, files):
-    """A finished job owned by `owner`, with real objects behind its manifest."""
+def completed_with_artifacts(conn, put_object, owner, files, key_prefix="",
+                             job_id=None):
+    """A finished job owned by `owner`, with real objects behind its manifest.
+
+    `key_prefix` defaults to the pre-#40 flat layout, which is what every
+    caller below wants: those tests are about who may read a job, and the flat
+    layout is the one with real objects behind it in the deployment.
+
+    Pass `objects.owner_prefix(job_id, owner)` to place the objects where a job
+    submitted after migration 0008 actually puts them -- section 12 is what
+    that is for. That needs the id BEFORE the row exists, because the prefix
+    contains a shard derived from it, so a caller doing this generates the id
+    and passes it in -- the same ordering `routers.jobs.create_job` now uses,
+    and for the same reason.
+    """
     job_id = conn.execute(
         """
-        INSERT INTO jobs (target_os, submitted_filename, state, manifest, owner)
-        VALUES ('ubuntu', 'x.bin', 'completed', %s, %s) RETURNING id
+        INSERT INTO jobs (id, target_os, submitted_filename, state, manifest,
+                          owner, key_prefix)
+        VALUES (%s, 'ubuntu', 'x.bin', 'completed', %s, %s, %s) RETURNING id
         """,
-        (json.dumps({"artifacts": sorted(files)}), owner),
+        (job_id or uuid4(), json.dumps({"artifacts": sorted(files)}), owner,
+         key_prefix),
     ).fetchone()[0]
     for name, body in files.items():
-        put_object(f"results/{job_id}/{name}", body)
+        # **Built literally, NOT through objects.result_prefix.** Using the
+        # builder here would place the object wherever the code currently
+        # thinks it goes, so a builder that ignored `key_prefix` entirely would
+        # write and read the same wrong key and every test would pass. Checked:
+        # it does -- these tests were green against exactly that break until
+        # this line stopped calling the code under test.
+        put_object(f"{key_prefix}results/{job_id}/{name}", body)
     return job_id
 
 
@@ -246,12 +274,12 @@ def test_a_can_still_download_their_own(client, conn, put_object, as_a):
 
 def test_a_public_job_is_readable_by_anyone_in_full(client, conn, put_object,
                                                     as_a, as_b):
-    """Test 6, as far as it can be tested today.
+    """Test 6, against the READ rule alone.
 
-    `visibility` is set directly here because nothing writes it yet -- the
-    publish route is decisions 5/6 and has not landed. So this proves the
-    predicate's third arm works, which is what makes that route a pure
-    addition rather than a change to every read path.
+    `visibility` is set directly rather than through `POST /publish`, so what
+    this proves is the predicate's third arm and nothing else. Section 7 drives
+    the route. Two tests rather than one because a broken predicate and a broken
+    publish route would otherwise be able to hide behind each other.
 
     **In full, sample and `extracted/` included.** DRAFT-047 considered and
     rejected metadata-only publishing: for a malware lab the payload is
@@ -272,34 +300,230 @@ def test_a_public_job_is_readable_by_anyone_in_full(client, conn, put_object,
     assert archive.read("extracted/evil.exe") == payload
 
 
-# --- ownerless jobs ---------------------------------------------------------
+# --- 7. publishing ----------------------------------------------------------
 #
-# The case DRAFT-047 does not mention, decided 2026-09-05: an unowned job is an
-# infrastructure job, not a private one.
+# Decisions 5/6: publication is the OWNER's, after the fact, and unpublishing
+# restores the check.
+#
+# **The gate is `owner = %s`, NOT `auth.visible_to`**, and
+# `test_b_cannot_unpublish_as_published_job` is the test that holds it there.
+# `visible_to` admits public rows through its third arm, so a route gated on it
+# would be reflexive: the instant A publishes, B is inside the gate and can
+# revoke it. Every other test in this section passes against that mistake --
+# only that one fails, which is why it is here rather than left implied by the
+# others.
+#
+# Checked against a neutered gate -- `_owned_or_404`'s `AND owner = %s` removed,
+# leaving it owner-blind. Exactly three of these fail, and they are the three
+# that assert the gate: `test_b_cannot_publish_as_job`,
+# `test_b_cannot_unpublish_as_published_job` and
+# `test_an_ownerless_job_cannot_be_published_by_anyone`.
+#
+# The rest stay green, which is not a weakness in them -- they cover the other
+# three rules, and each has its own way of being wrong. The state rule
+# (`..._has_not_finished`, `..._failed_run_is_publishable`) breaks if the
+# terminal check is dropped or narrowed to `completed`; idempotency breaks if a
+# second publish is made a 409; and `test_the_mtls_listener_cannot_publish`
+# guards `_publisher`, a different gate that fails open in a different way.
 
-def test_an_mtls_submission_is_visible_to_authenticated_users(client, conn, as_b):
-    """`submit.py` and the other command-line tools record no owner, because a
-    client certificate identifies a machine rather than a person. Those jobs
-    stay readable in the browser -- otherwise every CLI submission, and every
-    job already in the table, vanishes from the UI on deploy.
-
-    **The consequence, stated:** the ownerless set is a shared pool. It is not
-    where one tenant's samples should land once there is more than one tenant.
-
-    The row is inserted directly rather than submitted, because `as_b` puts
-    this process on the browser listener for the duration of the test and an
-    unauthenticated POST would simply 401. What is under test is how an
-    ownerless ROW reads, not how one comes to exist.
-    """
-    job_id = conn.execute(
-        "INSERT INTO jobs (target_os, submitted_filename, state, owner) "
-        "VALUES ('ubuntu', 'cli.bin', 'received', NULL) RETURNING id"
+def visibility_of(conn, job_id) -> str:
+    return conn.execute(
+        "SELECT visibility FROM jobs WHERE id = %s", (job_id,)
     ).fetchone()[0]
 
+
+def test_b_cannot_publish_as_job(client, conn, as_a, as_b):
+    """Test 7. Publication is the owner's, and B is not the owner.
+
+    404 with the same body a missing id gets, for the reason every read path
+    here does it: this route takes a job id, so it is an enumeration oracle on
+    exactly the same terms.
+    """
+    job_id = _completed_job_of(conn, A)
+
+    refused = client.post(f"/api/v1/jobs/{job_id}/publish", headers=as_b)
+    missing = client.post(
+        "/api/v1/jobs/00000000-0000-0000-0000-000000000000/publish",
+        headers=as_b)
+
+    assert refused.status_code == missing.status_code == 404
+    assert refused.json() == missing.json()
+    assert visibility_of(conn, job_id) == "private"
+
+
+def test_a_can_publish_their_own_and_b_then_reads_it_in_full(
+        client, conn, put_object, as_a, as_b):
+    """The route's positive case, end to end.
+
+    **In full, sample and `extracted/` included** -- decision 6, which
+    considered and rejected metadata-only publishing because for a malware lab
+    the payload is frequently the point of sharing.
+
+    The 404 before publication is asserted too: without it this would pass
+    against a build where B could always read the job, and the publish call
+    would be proving nothing.
+    """
+    payload = b"MZ" + b"\x90" * 512
+    job_id = completed_with_artifacts(
+        conn, put_object, A, {"extracted/evil.exe": payload})
+
+    assert client.get(f"/api/v1/jobs/{job_id}", headers=as_b).status_code == 404
+
+    published = client.post(f"/api/v1/jobs/{job_id}/publish", headers=as_a)
+    assert published.status_code == 200
+    assert published.json()["visibility"] == "public"
+
+    assert client.get(f"/api/v1/jobs/{job_id}", headers=as_b).status_code == 200
+    r = client.get(f"/api/v1/jobs/{job_id}/artifact.zip",
+                   params={"name": "extracted/evil.exe"}, headers=as_b)
+    assert r.status_code == 200
+    archive = zipfile.ZipFile(io.BytesIO(r.content))
+    archive.setpassword(b"infected")
+    assert archive.read("extracted/evil.exe") == payload
+
+
+def test_b_cannot_unpublish_as_published_job(client, conn, as_a, as_b):
+    """**The test this section exists for.**
+
+    Once A has published, B may read the job -- `visible_to`'s third arm says
+    so, and the middle assertion checks that rather than assuming it. A route
+    gated on that predicate would therefore let B revoke A's publication, and
+    control of publication would pass from the owner to everyone the act of
+    publishing had just admitted.
+    """
+    job_id = _completed_job_of(conn, A)
+    assert client.post(f"/api/v1/jobs/{job_id}/publish",
+                       headers=as_a).status_code == 200
+
+    # B can read it now. That is the point: the gate must not widen with it.
     assert client.get(f"/api/v1/jobs/{job_id}", headers=as_b).status_code == 200
 
+    assert client.post(f"/api/v1/jobs/{job_id}/unpublish",
+                       headers=as_b).status_code == 404
+    assert visibility_of(conn, job_id) == "public"
 
-def test_the_mtls_listener_still_sees_everything(client, conn):
+
+def test_unpublishing_restores_the_check(client, conn, as_a, as_b):
+    """The second half of test 7.
+
+    Reversible for the ACCESS CHECK and for nothing else. Anything downloadable
+    while the job was public, somebody has -- which is why the warning belongs
+    at the moment of publishing rather than here.
+    """
+    job_id = _completed_job_of(conn, A)
+    client.post(f"/api/v1/jobs/{job_id}/publish", headers=as_a)
+    assert client.get(f"/api/v1/jobs/{job_id}", headers=as_b).status_code == 200
+
+    r = client.post(f"/api/v1/jobs/{job_id}/unpublish", headers=as_a)
+
+    assert r.status_code == 200
+    assert r.json()["visibility"] == "private"
+    assert client.get(f"/api/v1/jobs/{job_id}", headers=as_b).status_code == 404
+
+
+def test_a_job_that_has_not_finished_cannot_be_published(client, conn, as_a):
+    """409, not 404: the caller owns it, so withholding its existence would be
+    a lie rather than a defence.
+
+    Publishing something nobody has seen the result of is the case decision 5
+    exists to prevent -- the whole argument for publishing after the fact is
+    that a result cannot be judged before it exists.
+    """
+    job_id = submit(client, as_a)
+
+    r = client.post(f"/api/v1/jobs/{job_id}/publish", headers=as_a)
+
+    assert r.status_code == 409
+    assert visibility_of(conn, job_id) == "private"
+
+
+def test_a_failed_run_is_publishable(client, conn, as_a):
+    """Terminal, not `completed`.
+
+    A sample that detected the sandbox and bailed is a finding, and frequently
+    the one worth sharing. Restricting this to `completed` would make the rule
+    about whether the pipeline succeeded rather than about whether there is a
+    result to judge.
+    """
+    job_id = _completed_job_of(conn, A)
+    conn.execute("UPDATE jobs SET state = 'failed' WHERE id = %s", (job_id,))
+
+    assert client.post(f"/api/v1/jobs/{job_id}/publish",
+                       headers=as_a).status_code == 200
+
+
+def test_publishing_twice_is_not_an_error(client, conn, as_a):
+    """Idempotent. Two tabs, or a retry after a dropped response, must not
+    report a failure for a state the row is already in."""
+    job_id = _completed_job_of(conn, A)
+
+    first = client.post(f"/api/v1/jobs/{job_id}/publish", headers=as_a)
+    second = client.post(f"/api/v1/jobs/{job_id}/publish", headers=as_a)
+
+    assert first.status_code == second.status_code == 200
+    assert visibility_of(conn, job_id) == "public"
+
+
+def test_an_ownerless_job_cannot_exist_at_all(conn):
+    """The database refuses the row, which is why nothing else here tests it.
+
+    Two tests used to live at this spot: an ownerless job is readable by every
+    authenticated user, and publishable by none of them. Both described the
+    mTLS submission path, where a client certificate identified a machine and
+    `owner` was left NULL.
+
+    Migration 0008 ended that. `owner` is NOT NULL for traceability, and
+    `auth.required_identity` refuses the callers who cannot supply one -- so
+    the rows those tests built by hand can no longer be created by any route,
+    and asserting on them would be asserting on a state the schema forbids.
+
+    **This stands in their place deliberately rather than deleting the
+    coverage.** `auth.visible_to` still carries an `owner IS NULL` arm, and
+    that arm is a shared pool visible to every authenticated user. The only
+    thing keeping it empty is the constraint below. If someone drops it, this
+    test fails first and the docstring on that arm explains what comes back.
+    """
+    import psycopg
+
+    with pytest.raises(psycopg.errors.NotNullViolation):
+        conn.execute(
+            "INSERT INTO jobs (target_os, submitted_filename, state, owner) "
+            "VALUES ('ubuntu', 'cli.bin', 'completed', NULL)"
+        )
+
+
+def test_the_mtls_listener_cannot_publish(client, conn, no_identity):
+    """403, and it never reaches the database.
+
+    The certificate-gated listener authenticates a MACHINE -- Dom0 and the
+    command-line tools -- and publication is a judgement about a result. It also
+    keeps Dom0's one credential from carrying an authority nothing uses:
+    `submit.py` has no publish command.
+
+    403 rather than the 404 everything else in this section returns, because it
+    is a fact about the LISTENER and not about the job, so it discloses nothing
+    about which ids exist.
+
+    `no_identity` rather than `access_token`, deliberately: this test needs
+    the settings a deployment gives the mTLS listener -- Access off, identity
+    None -- which the `client` fixture otherwise overrides away.
+    """
+    job_id = _completed_job_of(conn, A)
+
+    r = client.post(f"/api/v1/jobs/{job_id}/publish")
+
+    assert r.status_code == 403
+    assert visibility_of(conn, job_id) == "private"
+
+
+# --- the mTLS listener ------------------------------------------------------
+#
+# It reads everything and writes nothing owned. An "ownerless jobs" section
+# lived here until 2026-09-07, when migration 0008 made `jobs.owner` NOT NULL
+# and the shared pool it described stopped being reachable --
+# `test_an_ownerless_job_cannot_exist_at_all` above is what it became.
+
+def test_the_mtls_listener_still_sees_everything(client, conn, no_identity):
     """No token, no scope, and that is not the hole it looks like.
 
     `access_identity` returns None only where REQUIRE_ACCESS_JWT is unset,
@@ -308,8 +532,9 @@ def test_the_mtls_listener_still_sees_everything(client, conn):
     unauthenticated over the browser one'. Dom0 and the command-line tools
     must not be locked out of a job a browser user submitted.
 
-    No `access_token` fixture here deliberately: this test needs the settings
-    a deployment gives the mTLS listener, which are the defaults.
+    `no_identity` rather than `access_token`, deliberately: this test needs the
+    settings a deployment gives the mTLS listener -- Access off, identity None
+    -- which the `client` fixture otherwise overrides away.
     """
     job_id = conn.execute(
         "INSERT INTO jobs (target_os, submitted_filename, state, owner) "
@@ -440,3 +665,283 @@ def test_a_can_open_a_console_socket_on_their_own_job(client, conn, monkeypatch,
     with client.websocket_connect(f"/api/v1/jobs/{job_id}/console",
                                   headers=as_a):
         pass
+
+# --- 12. the per-user key prefix -------------------------------------------
+#
+# Issue #40 (DRAFT-047) decision 7. **The prefix is stored on the row, never
+# derived from whoever is asking**, and these are the tests that hold it there.
+#
+# Three kinds of caller need the same key and only one of them holds the
+# identity it was built from: the submitter at admission, Dom0 on the worker
+# channel with no browser identity at all, and a second user reading a
+# published job. Deriving from the caller gives a different answer to each --
+# and it fails silently as a missing object, which is indistinguishable from
+# retention expiry.
+#
+# Everything else in this suite runs through the EMPTY prefix, because the
+# fixtures insert rows directly and the column defaults to it. That is worth
+# having -- it is the layout with real objects behind it in the deployment --
+# but it means nothing above this line exercises decision 7 at all.
+
+
+def test_a_legacy_row_still_resolves_to_the_flat_layout(conn, put_object,
+                                                        client, as_a):
+    """The empty prefix must reproduce the pre-#40 key BYTE FOR BYTE.
+
+    This is what makes migration 0008 safe against a populated bucket: every
+    object already in the store is at `results/<job_id>/<name>`, and nothing
+    moved them. A prefix that merely *looked* empty -- a stray separator
+    producing `/results/…` or `//results/…` -- is a different S3 key and would
+    strand every artifact the deployment has ever collected.
+    """
+    payload = b"MZ" + b"\x90" * 64
+    job_id = completed_with_artifacts(
+        conn, put_object, A, {"trace.log": payload})
+
+    stored = conn.execute("SELECT key_prefix FROM jobs WHERE id = %s",
+                          (job_id,)).fetchone()[0]
+    assert stored == ""
+
+    # Both arms of the builder, spelled out. The empty case is the regression
+    # that would strand every object already in the deployment; the non-empty
+    # case is the one a builder ignoring its argument still passes without.
+    assert objects.result_prefix(job_id, "") == f"results/{job_id}/"
+    assert objects.sample_key(job_id, "s.bin", "") == f"samples/{job_id}/s.bin"
+    assert objects.result_prefix(job_id, "u/x/") == f"u/x/results/{job_id}/"
+    assert (objects.sample_key(job_id, "s.bin", "u/x/")
+            == f"u/x/samples/{job_id}/s.bin")
+
+    r = client.get(f"/api/v1/jobs/{job_id}/artifact.zip",
+                   params={"name": "trace.log"}, headers=as_a)
+    assert r.status_code == 200
+    archive = zipfile.ZipFile(io.BytesIO(r.content))
+    archive.setpassword(b"infected")
+    assert archive.read("trace.log") == payload
+
+
+def test_a_published_job_under_a_prefix_is_readable_by_b_in_full(
+        client, conn, put_object, as_a, as_b):
+    """**The test decision 7 exists to be checked by.**
+
+    A's objects live under A's prefix. B reads them after publication, so the
+    key B's request resolves to must come from the ROW and not from B. Deriving
+    it from the caller yields `u/analyst-b.../results/…`, where nothing was ever
+    written, and the download 404s or streams an empty archive -- which looks
+    exactly like the retention window having expired.
+
+    Decision 6 x decision 7, and the only place in this suite where the prefix
+    and the reader disagree.
+    """
+    payload = b"MZ" + b"\x90" * 512
+    job_id = uuid4()
+    prefix = objects.owner_prefix(job_id, A)
+    completed_with_artifacts(
+        conn, put_object, A, {"extracted/evil.exe": payload},
+        key_prefix=prefix, job_id=job_id)
+
+    # The premise: the objects really are somewhere B could not have guessed.
+    # Spelled out rather than rebuilt through `owner_prefix`, so this pins the
+    # layout instead of agreeing with whatever the function currently returns.
+    assert prefix == f"u/analyst-a@example.test/{job_id.hex[:3]}/"
+    assert client.get(f"/api/v1/jobs/{job_id}", headers=as_b).status_code == 404
+
+    assert client.post(f"/api/v1/jobs/{job_id}/publish",
+                       headers=as_a).status_code == 200
+
+    r = client.get(f"/api/v1/jobs/{job_id}/artifact.zip",
+                   params={"name": "extracted/evil.exe"}, headers=as_b)
+    assert r.status_code == 200
+    archive = zipfile.ZipFile(io.BytesIO(r.content))
+    archive.setpassword(b"infected")
+    assert archive.read("extracted/evil.exe") == payload
+
+    # And the whole-run download, which builds the key by a different route.
+    every = client.get(f"/api/v1/jobs/{job_id}/artifacts.zip", headers=as_b)
+    assert every.status_code == 200
+    assert zipfile.ZipFile(io.BytesIO(every.content)).namelist() == [
+        "extracted/evil.exe"]
+
+
+def test_a_worker_reaches_a_sample_under_someone_elses_prefix(
+        client, conn, put_object, worker_headers):
+    """The decision-7 twin of test 11.
+
+    Dom0 has no browser identity -- `access_identity` returns None on the
+    certificate-gated listener -- so there is nothing for it to derive a prefix
+    from even in principle. The claim must carry the stored value through, or
+    every owned job hands the worker a `sample_url` for an object that does not
+    exist and the pipeline breaks for exactly the jobs decision 7 applies to.
+
+    `conftest.enqueue` cannot be used: it writes the flat layout, which is the
+    one case this change does not touch.
+    """
+    body = b"\x7fELF" + b"\x00" * 60
+    job_id = uuid4()
+    prefix = objects.owner_prefix(job_id, A)
+    conn.execute(
+        "INSERT INTO jobs (id, target_os, submitted_filename, required_mib,"
+        "                  state, owner, key_prefix)"
+        " VALUES (%s, 'ubuntu', 's.bin', 2048, 'queued', %s, %s)",
+        (job_id, A, prefix),
+    )
+
+    # Literal, for the reason `completed_with_artifacts` gives: the fixture must
+    # be able to disagree with the code, or it proves only self-consistency.
+    key = f"{prefix}samples/{job_id}/s.bin"
+    put_object(key, body)
+    # A claim re-checks the sample against the ETag admission recorded, and a
+    # queued job without one fails closed. For a single-part upload MinIO's
+    # ETag is the MD5, so it can be computed here rather than read back.
+    conn.execute("UPDATE jobs SET sample_etag = %s WHERE id = %s",
+                 (hashlib.md5(body).hexdigest(), job_id))
+
+    client.post("/api/v1/worker/register", headers=worker_headers, json={
+        "worker_id": worker_headers["X-Worker-Id"],
+        "total_mib": 12082, "total_vlans": 8, "total_slots": 2,
+        "pipelines": [{"os": "ubuntu", "required_mib": 2048}],
+    })
+    claimed = client.post("/api/v1/worker/claim", headers=worker_headers, json={
+        "worker_id": worker_headers["X-Worker-Id"],
+        "free_mib": 8192, "free_vlans": 6, "free_slots": 2,
+    })
+
+    assert claimed.status_code == 200, claimed.text
+    body_json = claimed.json()
+    assert body_json["status"] == "leased"
+
+    # The path, unquoted and compared whole. `@` arrives as %40 in a signed
+    # URL, so a substring check against the raw key fails for a reason that has
+    # nothing to do with what is under test -- and comparing the whole path
+    # rules out the flat layout as well, which `in` would not.
+    signed = unquote(urlsplit(body_json["sample_url"]).path)
+    assert signed.endswith(key), signed
+
+
+def test_the_longest_admissible_key_still_fits_s3(conn):
+    """An S3 key caps at 1024 BYTES, and three constants share that budget.
+
+    **The ARTIFACT path is the binding one, not the sample path.**
+    `manifest.MAX_ARTIFACT_NAME` is 718 against `_MAX_SAMPLE_NAME`'s 512, so
+    the sample key has 200-odd bytes of slack and would pass at any owner
+    length -- certifying nothing. An earlier version of this test measured
+    only that one, which is how `MAX_ARTIFACT_NAME` came to be 900 while the
+    prefix it budgets for grew from 45 bytes to 261.
+
+        u/ + 254 + / + 3 + /   =  261     owner prefix, worst case
+        results/ + 36 + /      =   45     job segment
+        MAX_ARTIFACT_NAME      =  718
+                                 -----
+                                  1024
+
+    Equality rather than `<=`, deliberately: the three are one budget, so this
+    fails in BOTH directions and raising any of them shows up as spending
+    another's share.
+    """
+    from sandbox_platform.manifest import MAX_ARTIFACT_NAME
+    from sandbox_platform.routers.jobs import _MAX_SAMPLE_NAME
+
+    owner = ("a" * 189) + "@" + ("b" * 59) + ".test"      # 254 bytes, RFC max
+    assert len(owner.encode()) == objects.MAX_OWNER
+
+    job_id = UUID("00000000-0000-0000-0000-000000000000")
+    prefix = objects.owner_prefix(job_id, owner)
+
+    worst = objects.result_prefix(job_id, prefix) + "r" * MAX_ARTIFACT_NAME
+    assert len(worst.encode()) == 1024        # exact, not <= -- see MAX_OWNER
+
+    # The sample path is checked too, but it is not the binding one.
+    assert len(objects.sample_key(
+        job_id, "n" * _MAX_SAMPLE_NAME, prefix).encode()) <= 1024
+
+    # The database agrees the prefix is well formed -- the CHECK in 0008 is
+    # what stops a malformed one ever reaching a key.
+    conn.execute(
+        "INSERT INTO jobs (target_os, submitted_filename, state, key_prefix,"
+        "                  owner)"
+        " VALUES ('ubuntu', 'x.bin', 'received', %s, %s)", (prefix, owner))
+
+
+# --- 13. identities that cannot become a key --------------------------------
+#
+# The budget above holds only while the owner segment stays inside
+# `objects.MAX_OWNER`, and nothing upstream guarantees that: the value is the
+# Access JWT's `email` claim, which arrives from whatever identity provider
+# the deployment is wired to. `owner_prefix` is where that becomes the
+# platform's problem, and these are the two ways it can go wrong.
+#
+# Both must be refused BEFORE the INSERT. Failing later is not a smaller
+# version of the same thing -- an over-long key gets the submitter a 201 and
+# an upload URL that can only ever fail, and a separator gets them a 500 from
+# the 0008 CHECK. Neither tells them anything, and both leave the operator
+# reading MinIO errors to find out an address was too long.
+
+def _long_email(nbytes: int) -> str:
+    """An address of exactly `nbytes`, shaped like a real one."""
+    local = "a" * (nbytes - len("@" + "b" * 59 + ".test"))
+    email = f"{local}@{'b' * 59}.test"
+    assert len(email.encode()) == nbytes
+    return email
+
+
+def test_an_identity_too_long_for_a_key_is_refused_at_submission(
+        client, conn, access_token):
+    """One byte over the bound, and admission stops rather than minting a key.
+
+    The failure this prevents is silent: `presigned_upload` signs whatever it
+    is given, MinIO rejects the key only when the bytes arrive, and by then
+    the submitter has had a 201 and the job row exists. So the assertion that
+    matters is the second one -- refused, and nothing written.
+    """
+    over = access_token(_long_email(objects.MAX_OWNER + 1))
+
+    r = client.post("/api/v1/jobs", headers=over,
+                    json={"target_os": "ubuntu", "filename": "s.bin",
+                          "size_bytes": 4})
+
+    assert r.status_code == 400, r.text
+    assert str(objects.MAX_OWNER) in r.json()["detail"]
+    assert conn.execute("SELECT count(*) FROM jobs").fetchone()[0] == 0
+
+
+def test_the_longest_real_address_is_still_admitted(client, conn, access_token):
+    """The guard must not have closed the door on RFC-legal addresses.
+
+    `MAX_OWNER` is RFC 5321's limit exactly, so 254 bytes is a valid address
+    and has to work. Without this, `>=` in place of `>` -- or a bound picked
+    from the artifact arithmetic, which would be 72 -- passes every other test
+    in this section while locking out real users.
+    """
+    ok = access_token(_long_email(objects.MAX_OWNER))
+
+    r = client.post("/api/v1/jobs", headers=ok,
+                    json={"target_os": "ubuntu", "filename": "s.bin",
+                          "size_bytes": 4})
+
+    assert r.status_code == 201, r.text
+    prefix = conn.execute("SELECT key_prefix FROM jobs WHERE id = %s",
+                          (r.json()["job_id"],)).fetchone()[0]
+    assert len(prefix.encode()) == 261         # the worst case the budget assumes
+
+
+def test_an_identity_containing_a_separator_is_refused_at_submission(
+        client, conn, access_token):
+    """A `/` in the claim would add a path segment to the prefix.
+
+    The 0008 CHECK refuses it too -- `^u/[^/]+/[0-9a-f]{3}/$` cannot match --
+    so this is about WHERE it is caught, not whether. Left to the constraint
+    it surfaces as an integrity error from inside the INSERT, which reaches
+    the submitter as a 500 and the operator as a stack trace.
+
+    With `raise_server_exceptions` on, TestClient re-raises the integrity
+    error rather than returning a 500, so removing the guard makes this fail
+    on the psycopg exception instead of on the status. Red either way; the
+    status assertion is what names the intent.
+    """
+    weird = access_token("a/b@example.test")
+
+    r = client.post("/api/v1/jobs", headers=weird,
+                    json={"target_os": "ubuntu", "filename": "s.bin",
+                          "size_bytes": 4})
+
+    assert r.status_code == 400, r.text
+    assert conn.execute("SELECT count(*) FROM jobs").fetchone()[0] == 0

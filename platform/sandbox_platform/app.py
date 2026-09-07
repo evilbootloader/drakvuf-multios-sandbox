@@ -21,7 +21,7 @@ from fastapi.responses import RedirectResponse
 from . import events, maintenance
 from .db import close_pool, connection, open_pool
 from .routers import console as console_router
-from .routers import jobs, worker
+from .routers import jobs, worker, account
 from .ui import router as ui_router, static as ui_static
 
 
@@ -60,6 +60,7 @@ app = FastAPI(
 
 app.include_router(jobs.router)
 app.include_router(worker.router)
+app.include_router(account.router)
 # Two ends of a live console session, on two routers because they authenticate
 # differently -- Access for the browser, the worker token over the LAN for
 # Dom0. Both are no-ops unless CONSOLE_ENABLED is set (DRAFT-056).

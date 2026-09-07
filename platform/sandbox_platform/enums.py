@@ -134,3 +134,18 @@ class RejectReason(StrEnum):
     # else and reporting success answers a different question than the one on
     # the report.
     NO_EGRESS = "no_egress"
+
+class Visibility(StrEnum):
+    """Who may read a finished analysis besides its owner. Authority: 0007.
+
+    Two values at M1 and no more. Publication is all-or-none to authenticated
+    users; roles, groups and sharing with named users are out of scope for #40,
+    so a third value here would be a decision taken by accident.
+
+    `auth.visible_to` writes `'public'` as a SQL literal rather than binding
+    this, because it is a fragment of a WHERE clause and not a value. The two
+    must not drift.
+    """
+
+    PRIVATE = "private"
+    PUBLIC = "public"

@@ -410,8 +410,9 @@ def executing_job(conn, owner: str):
     return conn.execute(
         """
         INSERT INTO jobs (target_os, submitted_filename, state, lease_owner,
-                          lease_expires_at)
-        VALUES ('ubuntu', 'x.bin', 'executing', %s, now() + interval '2 min')
+                          lease_expires_at, owner)
+        VALUES ('ubuntu', 'x.bin', 'executing', %s, now() + interval '2 min',
+                'fixture-owner@example.test')
         RETURNING id
         """,
         (owner,),
@@ -499,7 +500,8 @@ def test_the_leaseholder_is_admitted(client, conn, console_on, relayed):
 # state added to the pipeline joins these tests instead of quietly falling
 # outside them.
 
-def job_in(conn, state: str, owner: str = "dom0-1", job_owner=None):
+def job_in(conn, state: str, owner: str = "dom0-1",
+           job_owner="fixture-owner@example.test"):
     return conn.execute(
         """
         INSERT INTO jobs (target_os, submitted_filename, state, lease_owner,

@@ -18,6 +18,7 @@ from psycopg.types.json import Jsonb
 from . import queries
 
 
+
 # --- claim results ---------------------------------------------------------
 #
 # Three shapes, not job-or-None. Collapsing the last two makes "a large job is
@@ -35,6 +36,7 @@ class Lease:
     required_mib: int
     lease_expires_at: datetime
     attempt: int
+    key_prefix: str
     # Where this job's traffic may go (DRAFT-057). Snapshotted onto the row at
     # submission, so a host that stops offering an exit after a job was queued
     # cannot silently change where that job's sample ends up talking -- Dom0
@@ -93,6 +95,7 @@ def claim(
                 attempt=row["attempt"],
                 egress_mode=row["egress_mode"],
                 egress_exit=row["egress_exit"],
+                key_prefix=row["key_prefix"],
             )
 
         # Zero rows is ambiguous -- empty queue, or head does not fit -- so
@@ -136,6 +139,7 @@ def reap(conn: psycopg.Connection) -> list[UUID]:
     with conn.cursor() as cur:
         cur.execute(queries.REAP)
         return [r[0] for r in cur.fetchall()]
+
 
 
 def abandon(conn: psycopg.Connection, *, grace_seconds: int) -> list[UUID]:

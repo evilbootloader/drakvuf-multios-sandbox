@@ -82,12 +82,12 @@ def _client(audience: Audience):
 # self-checks are real evasion surface. sha256 is an indexed column for
 # search; it is not a path component.
 
-def sample_key(job_id: UUID, filename: str) -> str:
-    return f"samples/{job_id}/{filename}"
+def sample_key(job_id: UUID, filename: str, key_prefix: str) -> str:
+    return f"{key_prefix}samples/{job_id}/{filename}"
 
 
-def result_prefix(job_id: UUID) -> str:
-    return f"results/{job_id}/"
+def result_prefix(job_id: UUID, key_prefix: str) -> str:
+    return f"{key_prefix}results/{job_id}/"
 
 
 # --- issuing capabilities -------------------------------------------------
@@ -101,7 +101,7 @@ class UploadTicket:
     expires_in: int
 
 
-def presigned_upload(job_id: UUID, filename: str, max_bytes: int) -> UploadTicket:
+def presigned_upload(job_id: UUID, filename: str, max_bytes: int, key_prefix: str) -> UploadTicket:
     """A browser-usable upload capability, with the size cap enforced by MinIO.
 
     **POST rather than PUT, and this is the whole reason.** A presigned PUT
@@ -128,11 +128,11 @@ def presigned_upload(job_id: UUID, filename: str, max_bytes: int) -> UploadTicke
     """
     conditions = [
         ["content-length-range", 1, max_bytes],
-        {"key": sample_key(job_id, filename)},
+        {"key": sample_key(job_id, filename, key_prefix)},
     ]
     signed = _client(Audience.BROWSER).generate_presigned_post(
         Bucket=settings.s3_bucket,
-        Key=sample_key(job_id, filename),
+        Key=sample_key(job_id, filename, key_prefix),
         Conditions=conditions,
         ExpiresIn=settings.upload_ttl,
     )
@@ -336,3 +336,42 @@ def inspect(key: str, head_limit: int | None = None) -> ObjectFacts:
 
     return ObjectFacts(size_bytes=size, sha256=digest.hexdigest(),
                        head_bytes=head_bytes, etag=etag)
+
+
+
+# The owner segment is bounded so the composed key cannot exceed S3's 1024
+# bytes. 254 is RFC 5321's maximum address, so anything longer is not an
+# address at all -- a refusal that explains itself. The bound the arithmetic
+# alone would give is 72, which is explicable to nobody.
+#
+# It is not always an email: auth.access_identity returns
+# `service:<common_name>` for an Access service token, and X.520 caps a CN at
+# 64, so that form tops out at 72 bytes and never approaches this.
+#
+# Shares one budget with manifest.MAX_ARTIFACT_NAME: 261 + 45 + 718 = 1024
+# exactly. Raising either without lowering the other mints a key the store
+# refuses, and test_the_longest_admissible_key_still_fits_s3 is what couples
+# them.
+MAX_OWNER = 254
+
+
+def owner_prefix(job_id: UUID, owner: str | None) -> str:
+    """Where this owner's objects live, or '' for the pre-#40 flat layout.
+
+    ValueError rather than HTTPException: this module has no FastAPI import
+    and should not acquire one. `create_job` is the only caller and is what
+    turns this into a response.
+    """
+    if owner is None:
+        return ""
+    if len(owner.encode()) > MAX_OWNER:
+        raise ValueError(
+            f"identity is {len(owner.encode())} bytes, over the "
+            f"{MAX_OWNER}-byte limit"
+        )
+    if "/" in owner:
+        # Would add a path segment, so the stored prefix and the key built
+        # from it stop agreeing. The 0008 CHECK catches this too, but at
+        # INSERT and as a 500.
+        raise ValueError(f"identity contains a path separator: {owner!r}")
+    return f"u/{owner.lower()}/{job_id.hex[:3]}/"

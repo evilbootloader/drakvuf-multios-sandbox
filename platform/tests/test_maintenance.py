@@ -19,8 +19,9 @@ from sandbox_platform.config import settings
 def _job(conn, *, state: str, age: str = "0 seconds") -> uuid.UUID:
     return conn.execute(
         """
-        INSERT INTO jobs (target_os, submitted_filename, state, created_at)
-        VALUES ('ubuntu', 'x.bin', %s, now() - %s::interval)
+        INSERT INTO jobs (target_os, submitted_filename, state, created_at, owner)
+        VALUES ('ubuntu', 'x.bin', %s, now() - %s::interval,
+                'fixture-owner@example.test')
         RETURNING id
         """,
         (state, age),

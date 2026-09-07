@@ -45,8 +45,8 @@ def _job(conn, filename: str, *, state: str = "completed",
     return conn.execute(
         """
         INSERT INTO jobs (target_os, submitted_filename, state, sha256,
-                          size_bytes, detected_type)
-        VALUES (%s, %s, %s, 'af9c4ea0', 19, 'ASCII text')
+                          size_bytes, detected_type, owner)
+        VALUES (%s, %s, %s, 'af9c4ea0', 19, 'ASCII text', 'fixture-owner@example.test')
         RETURNING id
         """,
         (target_os, filename, state),
@@ -512,8 +512,9 @@ def test_the_history_table_refreshes_while_a_job_can_still_change(client, conn):
     or a new global stream, where one cheap query every few seconds is far less
     machinery for a page read at human speed.
     """
-    conn.execute("INSERT INTO jobs (target_os, submitted_filename, state)"
-                 " VALUES ('ubuntu', 'running.bin', 'executing')")
+    conn.execute("INSERT INTO jobs (target_os, submitted_filename, state, owner)"
+                 " VALUES ('ubuntu', 'running.bin', 'executing',"
+                 "         'fixture-owner@example.test')")
 
     body = client.get("/ui/jobs").text
 
@@ -526,8 +527,9 @@ def test_a_page_of_finished_jobs_does_not_poll(client, conn):
     """What stops it polling forever. The server says whether anything on THIS
     page can still change and the htmx trigger reads it, so a history of
     completed work makes no requests at all."""
-    conn.execute("INSERT INTO jobs (target_os, submitted_filename, state)"
-                 " VALUES ('ubuntu', 'done.bin', 'completed')")
+    conn.execute("INSERT INTO jobs (target_os, submitted_filename, state, owner)"
+                 " VALUES ('ubuntu', 'done.bin', 'completed',"
+                 "         'fixture-owner@example.test')")
 
     assert 'data-live="0"' in client.get("/ui/jobs").text
 
@@ -539,8 +541,9 @@ def test_the_refresh_keeps_the_filters_and_the_page(client, conn):
     # A row that MATCHES the filter. Without one the page renders its empty
     # state instead of the table, so there is no poll to inspect -- which is
     # correct behaviour and was the first version of this test's mistake.
-    conn.execute("INSERT INTO jobs (target_os, submitted_filename, state)"
-                 " VALUES ('ubuntu', 'filtered.bin', 'completed')")
+    conn.execute("INSERT INTO jobs (target_os, submitted_filename, state, owner)"
+                 " VALUES ('ubuntu', 'filtered.bin', 'completed',"
+                 "         'fixture-owner@example.test')")
 
     body = client.get("/ui/jobs",
                       params={"state": "completed", "target_os": "ubuntu",
@@ -559,8 +562,9 @@ def test_the_refresh_keeps_the_filters_and_the_page(client, conn):
 def test_the_table_fragment_renders_the_same_rows_as_the_page(client, conn):
     """One context builder for both, so the polled fragment cannot drift from
     the full page."""
-    conn.execute("INSERT INTO jobs (target_os, submitted_filename, state)"
-                 " VALUES ('ubuntu', 'both.bin', 'executing')")
+    conn.execute("INSERT INTO jobs (target_os, submitted_filename, state, owner)"
+                 " VALUES ('ubuntu', 'both.bin', 'executing',"
+                 "         'fixture-owner@example.test')")
 
     assert "both.bin" in client.get("/ui/jobs").text
     assert "both.bin" in client.get("/ui/jobs/table").text
@@ -631,8 +635,9 @@ def test_the_cache_key_tracks_the_files(tmp_path, monkeypatch):
 def _with_artifacts(conn, names: list[str]) -> uuid.UUID:
     return conn.execute(
         """
-        INSERT INTO jobs (target_os, submitted_filename, state, manifest)
-        VALUES ('ubuntu', 'sample.bin', 'completed', %s) RETURNING id
+        INSERT INTO jobs (target_os, submitted_filename, state, manifest, owner)
+        VALUES ('ubuntu', 'sample.bin', 'completed', %s,
+                'fixture-owner@example.test') RETURNING id
         """,
         (json.dumps({"artifacts": names}),),
     ).fetchone()[0]

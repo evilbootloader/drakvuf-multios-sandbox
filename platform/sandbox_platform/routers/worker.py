@@ -32,7 +32,7 @@ from .. import objects
 from ..auth import LeasedJob, require_worker_token
 from ..config import settings
 from ..db import connection
-from ..enums import EgressMode, JobState, TargetOs
+from ..enums import TERMINAL_STATES, EgressMode, JobState, TargetOs
 
 router = APIRouter(
     prefix="/api/v1/worker",
@@ -140,6 +140,7 @@ class LeaseResponse(BaseModel):
     # rather than by agreement.
     egress_mode: EgressMode
     egress_exit: str | None = None
+    key_prefix: str
 
 
 class ReservedResponse(BaseModel):
@@ -288,7 +289,7 @@ def claim(req: ClaimRequest):
             )
 
         if isinstance(last, dal.Lease):
-            key = objects.sample_key(last.job_id, last.submitted_filename)
+            key = objects.sample_key(last.job_id, last.submitted_filename, last.key_prefix)
 
             # The sample must be the one admission looked at.
             #
@@ -339,6 +340,7 @@ def claim(req: ClaimRequest):
                                                  ttl=settings.lease_seconds),
                 egress_mode=EgressMode(last.egress_mode),
                 egress_exit=last.egress_exit,
+                key_prefix=last.key_prefix,
             )
 
         if time.monotonic() >= deadline:
@@ -354,6 +356,64 @@ def claim(req: ClaimRequest):
 
 # --- reporting on work ----------------------------------------------------
 
+def _charge_for_runtime(cur, job_id) -> None:
+    """Draw this job's runtime down from its owner's balance, exactly once.
+
+    Issue #40 (DRAFT-047) decision 8. Takes a CURSOR rather than opening its
+    own connection, so the charge commits with the state transition that
+    caused it -- a separate transaction could leave a job terminal and
+    uncharged with nothing left to notice.
+
+    **The conditional UPDATE is the idempotence check.** Testing
+    `charged_seconds IS NULL` in Python and then writing it is check-then-act:
+    two concurrent reports both read NULL and both charge. Here the read and
+    the write are one statement, so the second caller matches no row, gets
+    None back, and returns having done nothing.
+
+    `started_at IS NOT NULL` is the "a clone existed" rule, and it is why no
+    list of chargeable states appears anywhere. A rejected submission and one
+    abandoned before upload never reached `CLAIM`, so they carry no start and
+    cost nothing -- by construction rather than by an enumeration someone has
+    to remember to extend.
+
+    **Nothing here excludes the reaper**, because the reaper cannot reach it:
+    `auth.leased_job` refuses any job outside LEASED_STATES with a 409, so once
+    REAP or RECONCILE has marked a job `interrupted` the worker's next report
+    bounces. That is the intended split -- a job the platform lost track of is
+    not charged, because `now() - started_at` for it would include up to
+    LEASE_SECONDS plus a sweep interval of pure detection lag and would not be
+    a number anyone could defend.
+
+    Duration is computed in SQL, not Python, so the two call sites cannot
+    disagree about units -- they did, briefly: one returned epoch seconds and
+    the other raw timestamps, and `bigint - interval` is not an operator.
+
+    GREATEST(0, ...) because a backwards clock must never CREDIT a tenant.
+    """
+    charged = cur.execute(
+        """
+        UPDATE jobs
+           SET charged_seconds =
+                   GREATEST(0, EXTRACT(EPOCH FROM now() - started_at)::bigint)
+         WHERE id = %s
+           AND charged_seconds IS NULL
+           AND started_at IS NOT NULL
+        RETURNING owner, charged_seconds
+        """,
+        (job_id,),
+    ).fetchone()
+
+    if charged is None:
+        return          # already charged, or never had a clone
+
+    owner, seconds = charged
+    cur.execute(
+        "UPDATE tenants SET balance_seconds = balance_seconds - %s"
+        " WHERE owner = %s",
+        (seconds, owner),
+    )
+
+
 @router.post("/jobs/{job_id}/state", status_code=status.HTTP_204_NO_CONTENT)
 def report_state(job: LeasedJob, req: StateRequest) -> None:
     """Record a state transition, if the state machine permits it."""
@@ -368,8 +428,8 @@ def report_state(job: LeasedJob, req: StateRequest) -> None:
 
     # COALESCE so a report carrying only a state does not erase diagnostics an
     # earlier report set. A worker sends what it learned, not the whole row.
-    with connection() as conn:
-        conn.execute(
+    with connection() as conn, conn.cursor() as cur:
+        cur.execute(
             """
             UPDATE jobs
                SET state          = %s,
@@ -389,6 +449,13 @@ def report_state(job: LeasedJob, req: StateRequest) -> None:
                 job["id"],
             ),
         )
+
+        # TERMINAL_STATES rather than `WORKER_TRANSITIONS[CLEANING]`, which
+        # names the same four states today but says "reachable from cleaning"
+        # when the question is "has this job stopped". Same cursor, so the
+        # charge and the transition that earned it commit together.
+        if req.state in TERMINAL_STATES:
+            _charge_for_runtime(cur, job["id"])
 
 
 @router.post("/jobs/{job_id}/heartbeat", response_model=HeartbeatResponse)
@@ -509,7 +576,7 @@ def artifact_urls(job: LeasedJob,
                 f"{settings.max_artifact_bytes} byte limit",
             )
         ticket = objects.presigned_artifact_upload(
-            f"{objects.result_prefix(job['id'])}{name}",
+            f"{objects.result_prefix(job["id"], job["key_prefix"])}{name}",
             min(size, settings.max_artifact_bytes),
         )
         tickets[name] = ArtifactTicket(url=ticket.url, fields=ticket.fields,
@@ -536,8 +603,8 @@ def complete(job: LeasedJob, req: CompleteRequest) -> None:
             f"job is {job['state']}; complete is reachable only from cleaning",
         )
 
-    with connection() as conn:
-        conn.execute(
+    with connection() as conn, conn.cursor() as cur:
+        cur.execute(
             """
             UPDATE jobs
                SET state = %s, manifest = %s, lease_expires_at = NULL
@@ -545,3 +612,8 @@ def complete(job: LeasedJob, req: CompleteRequest) -> None:
             """,
             (JobState.COMPLETED.value, req.manifest.model_dump_json(), job["id"]),
         )
+
+        # The successful exit, and the one `report_state` never sees: a
+        # finished analysis arrives here rather than there, because this is the
+        # call that carries the manifest.
+        _charge_for_runtime(cur, job["id"])

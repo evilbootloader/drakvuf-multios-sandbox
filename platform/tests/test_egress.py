@@ -39,8 +39,14 @@ def submit(client, **kw):
     return client.post("/api/v1/jobs", json=body)
 
 
-def admit(client, put_object, job_id):
-    put_object(f"samples/{job_id}/sample.bin", ELF)
+def admit(client, put_object, created):
+    # The key comes from the SIGNED POLICY the API just handed back, not from a
+    # path built here. Every submission is owned since migration 0008, so the
+    # object lives under `u/<owner>/<shard>/` and a hand-built `samples/<id>/`
+    # key misses it -- which surfaces as `unreadable`, a real rejection reason,
+    # and looks like the thing under test failing.
+    job_id = created["job_id"]
+    put_object(created["upload_fields"]["key"], ELF)
     return client.post(f"/api/v1/jobs/{job_id}/uploaded").json()
 
 
@@ -117,7 +123,7 @@ def test_an_undeclared_exit_is_rejected(client, worker_headers, put_object):
     """
     register(client, worker_headers, SIMULATED)
     job = submit(client, egress_mode="tor", egress_exit="tor-default").json()
-    detail = admit(client, put_object, job["job_id"])
+    detail = admit(client, put_object, job)
     assert detail["state"] == "rejected"
     assert detail["failure_reason"] == "no_egress"
 
@@ -133,7 +139,7 @@ def test_direct_is_unreachable_until_a_host_declares_it(
     register(client, worker_headers, SIMULATED)
     job = submit(client, egress_mode="direct",
                  egress_exit="host-uplink").json()
-    detail = admit(client, put_object, job["job_id"])
+    detail = admit(client, put_object, job)
     assert detail["state"] == "rejected"
     assert detail["failure_reason"] == "no_egress"
 
@@ -146,7 +152,7 @@ def test_direct_works_once_the_host_opts_in(client, worker_headers, put_object):
     register(client, worker_headers, DIRECT)
     job = submit(client, egress_mode="direct",
                  egress_exit="host-uplink").json()
-    detail = admit(client, put_object, job["job_id"])
+    detail = admit(client, put_object, job)
     assert detail["state"] == "queued"
 
 
@@ -161,7 +167,7 @@ def test_withdrawing_an_exit_removes_it(client, worker_headers, put_object):
     register(client, worker_headers, SIMULATED)
     job = submit(client, egress_mode="direct",
                  egress_exit="host-uplink").json()
-    detail = admit(client, put_object, job["job_id"])
+    detail = admit(client, put_object, job)
     assert detail["state"] == "rejected"
     assert detail["failure_reason"] == "no_egress"
 
@@ -177,7 +183,7 @@ def test_a_mode_cannot_be_paired_with_another_modes_exit(
     register(client, worker_headers, TOR)
     job = submit(client, egress_mode="routed",
                  egress_exit="tor-default").json()
-    detail = admit(client, put_object, job["job_id"])
+    detail = admit(client, put_object, job)
     assert detail["state"] == "rejected"
     assert detail["failure_reason"] == "no_egress"
 
@@ -208,7 +214,7 @@ def test_offline_needs_no_host_at_all(client, put_object):
     refused, which is the wrong direction to fail in.
     """
     job = submit(client, egress_mode="offline").json()
-    detail = admit(client, put_object, job["job_id"])
+    detail = admit(client, put_object, job)
     assert detail["failure_reason"] != "no_egress"
 
 
@@ -220,7 +226,7 @@ def test_the_lease_carries_the_choice(client, worker_headers, put_object, conn):
     # behind and assert against the wrong row.
     register(client, worker_headers, TOR)
     job = submit(client, egress_mode="tor").json()
-    admit(client, put_object, job["job_id"])
+    admit(client, put_object, job)
 
     claim = client.post("/api/v1/worker/claim", headers=worker_headers, json={
         "worker_id": WORKER, "free_mib": 8192, "free_vlans": 4,
@@ -241,7 +247,7 @@ def test_the_host_records_what_it_actually_applied(
     register(client, worker_headers, SIMULATED)
     job = submit(client, egress_mode="simulated").json()
     job_id = job["job_id"]
-    admit(client, put_object, job_id)
+    admit(client, put_object, job)
     client.post("/api/v1/worker/claim", headers=worker_headers, json={
         "worker_id": WORKER, "free_mib": 8192, "free_vlans": 4,
         "free_slots": 4})
@@ -272,7 +278,7 @@ def test_an_old_worker_registering_without_exits_offers_none(
                     json=BASE)
     assert r.status_code == 204
     job = submit(client, egress_mode="tor", egress_exit="tor-default").json()
-    detail = admit(client, put_object, job["job_id"])
+    detail = admit(client, put_object, job)
     assert detail["failure_reason"] == "no_egress"
 
 

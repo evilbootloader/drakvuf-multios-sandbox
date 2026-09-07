@@ -13,6 +13,50 @@
   console should appear or disappear anyway.
 #}
 <dl class="dl">
+  <dt>Visibility</dt>
+  <dd>
+    <span class="mono" data-visibility="{{ job.visibility.value }}">{{ job.visibility.value }}</span>
+    {#
+      One control, never two. Unpublish when the job is public; Publish when it
+      is private AND finished; nothing otherwise -- absent rather than disabled,
+      for the reason the console block below gives, that a control which looks
+      available and does nothing reads as a fault.
+
+      `terminal_states` comes from _job_context, like `console_states` and for
+      the same reason: written here as a literal, the template and the route
+      would be free to disagree about when publishing is offered.
+    #}
+    {% if job.visibility.value == 'public' %}
+        <button type="button" data-publish="unpublish">Unpublish</button>
+    {% elif job.state.value in terminal_states %}
+        <button type="button" data-publish="publish"
+          data-warning="Publishing cannot be undone. Every authenticated user will be able to download this analysis in full, including the sample.">Publish…</button>
+        <dialog id="publish-warning">
+        {# method="dialog" closes it on submit and sets returnValue to the
+           button's value, so no JS is needed to dismiss it. #}
+        <form method="dialog">
+          <p class="note danger">
+            <strong>Publishing cannot be undone.</strong>
+            Every authenticated user of this deployment will be able to read
+            this analysis in full — the sample itself and everything under
+            <span class="mono">extracted/</span> included. They arrive as
+            password-protected archives, so nothing acts on the bytes in
+            transit, but they are retrievable.
+          </p>
+          <p class="note">
+            Unpublishing later restores the access check. It does not restore
+            the secret: anything downloadable while this was public, somebody
+            may already have.
+          </p>
+          <menu>
+            <button value="cancel">Cancel</button>
+            <button value="publish">Publish</button>
+          </menu>
+        </form>
+      </dialog>
+    {% endif %}
+    <span class="mono" data-publish-error></span>
+  </dd>
   <dt>State</dt>
   <dd>
     <span class="state" data-state="{{ job.state.value }}">{{ job.state.value }}</span>

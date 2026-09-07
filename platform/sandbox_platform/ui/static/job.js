@@ -91,4 +91,87 @@
         pending = false;
       });
   }
+
+  // Publication (#40, decisions 5/6).
+  //
+  // **Delegated on `root`, not bound to the button.** refresh() swaps this
+  // region's innerHTML, so a listener attached to the button is discarded on
+  // the first state change and the control goes dead with no symptom. `root`
+  // is the one node in here that survives a swap.
+  var publishing = false;
+
+  function send(action, button) {
+    publishing = true;
+    button.disabled = true;
+
+    // **`Content-Type: application/json` is load-bearing, not decoration.**
+    // The app installs no CORS middleware, so a request needing a preflight is
+    // one the browser will not send cross-origin. A form POST or a urlencoded
+    // body is a *simple* request: no preflight, so it WOULD be sent -- and
+    // Cloudflare injects the victim's Access assertion on the way through,
+    // because their session is valid. The JSON content type is the whole of
+    // what makes this route unreachable from another origin.
+    fetch("/api/v1/jobs/" + encodeURIComponent(jobId) + "/" + action, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" }
+    })
+      .then(function (r) {
+        if (r.ok) {
+          // Re-rendered by the server rather than flipped here, for the reason
+          // at the head of this file: one place decides how a job renders.
+          refresh();
+          return;
+        }
+        // 409: another tab acted while this one showed a stale state.
+        // 403: served from the mTLS listener -- a deployment fault, not a user
+        // error, and worth saying differently.
+        throw new Error(
+          r.status === 409 ? "state changed — reload"
+            : r.status === 403 ? "this listener cannot publish"
+            : "failed (" + r.status + ")"
+        );
+      })
+      .catch(function (err) {
+        // Loud. A security control that silently did nothing is the worst of
+        // the three outcomes.
+        button.disabled = false;
+        var note = root.querySelector("[data-publish-error]");
+        if (note) note.textContent = err.message;
+      })
+      .finally(function () {
+        publishing = false;
+      });
+  }
+
+  root.addEventListener("click", function (event) {
+    var button = event.target.closest("[data-publish]");
+    if (!button || publishing) return;
+
+    // Unpublishing needs no consent: nothing has to be confirmed to become
+    // less visible. Publishing is the irreversible direction -- see below.
+    if (button.dataset.publish === "unpublish") return send("unpublish", button);
+    confirmThenPublish(button);
+  });
+
+  function confirmThenPublish(button) {
+    // Looked up per click, never cached: refresh() replaces this region's
+    // innerHTML, so a reference taken at load time points at a detached node.
+    var warning = root.querySelector("#publish-warning");
+
+    if (!warning || typeof warning.showModal !== "function") {
+      // No <dialog> support. Falling through to the POST would publish with no
+      // warning at all, which is the one outcome this control must never have,
+      // so degrade to the ugly-but-universal prompt instead.
+      if (window.confirm(button.dataset.warning)) send("publish", button);
+      return;
+    }
+
+    warning.returnValue = "";
+    warning.addEventListener("close", function once() {
+      warning.removeEventListener("close", once);
+      if (warning.returnValue === "publish") send("publish", button);
+    });
+    warning.showModal();
+  }
 })();
+

@@ -109,6 +109,13 @@ code, .mono, pre { font-family: var(--mono); font-size: 0.9em; }
 .masthead nav a { color: var(--fg-muted); text-decoration: none; font-size: 0.9rem; }
 .masthead nav a:hover, .masthead nav a[aria-current="page"] { color: var(--fg); }
 
+/* Remaining analysis seconds. Empty until balance.js fills it, and left empty
+   if that fails -- see the note there. `cursor: default` because it is the one
+   thing in this nav that is not a link. */
+#balance { cursor: default; font-variant-numeric: tabular-nums; }
+#balance:hover { color: var(--fg-muted); }
+#balance.balance-low { color: var(--red); }
+
 #theme-toggle {
     background: none;
     border: 1px solid var(--line);

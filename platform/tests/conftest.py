@@ -98,7 +98,12 @@ def conn():
     deterministic per test rather than depending on execution order.
     """
     with psycopg.connect(DSN, autocommit=True) as c:
-        c.execute("TRUNCATE jobs, worker_pipelines, workers RESTART IDENTITY CASCADE")
+        # `tenants` belongs here for the same reason `jobs` does: a balance
+        # surviving into the next test makes a first-submission grant look
+        # like a top-up, and a test asserting on a drawn-down balance passes
+        # or fails on what ran before it.
+        c.execute("TRUNCATE jobs, tenants, worker_pipelines, workers"
+                  " RESTART IDENTITY CASCADE")
         yield c
 
 
@@ -122,8 +127,17 @@ def _s3():
     )
 
 
+# Who a fixture-built job belongs to when the test does not care.
+#
+# It has to be SOMEONE: `jobs.owner` is NOT NULL since migration 0008, and the
+# deployment has no ownerless rows, so a fixture that made one would build a
+# state production cannot reach -- which is how the old ownerless fixtures were
+# testing the queue against jobs no submission could produce.
+DEFAULT_OWNER = "fixture-owner@example.test"
+
+
 def enqueue(conn, target_os: str, required_mib: int, filename: str | None = None,
-            body: bytes | None = None):
+            body: bytes | None = None, owner: str = DEFAULT_OWNER):
     """Put one job on the queue, with a real object behind it, and return its id.
 
     The object and its ETag are not decoration. A worker claim verifies that
@@ -134,16 +148,27 @@ def enqueue(conn, target_os: str, required_mib: int, filename: str | None = None
     Fabricating a row straight into `queued` with nothing in the bucket would
     therefore test a state production never reaches, and every claim in this
     suite would fail for the wrong reason.
+
+    The tenant row is created for the same reason. A terminal transition draws
+    the job's runtime down from `tenants` (DRAFT-047 decision 8), and an absent
+    tenant makes that UPDATE match zero rows -- silently, since it is not an
+    error. Tests asserting on a balance would then pass against a charge that
+    never landed.
     """
     name = filename or f"{target_os}-{required_mib}.bin"
     with conn.cursor() as cur:
         cur.execute(
+            "INSERT INTO tenants (owner) VALUES (%s) ON CONFLICT DO NOTHING",
+            (owner,),
+        )
+        cur.execute(
             """
-            INSERT INTO jobs (target_os, submitted_filename, required_mib, state)
-            VALUES (%s, %s, %s, 'queued')
+            INSERT INTO jobs (target_os, submitted_filename, required_mib, state,
+                              owner)
+            VALUES (%s, %s, %s, 'queued', %s)
             RETURNING id
             """,
-            (target_os, name, required_mib),
+            (target_os, name, required_mib, owner),
         )
         job_id = cur.fetchone()[0]
 
@@ -175,19 +200,57 @@ def count_in_state(conn, state: str) -> int:
 # --- API fixtures ---------------------------------------------------------
 
 @pytest.fixture
-def client(conn):
-    """A test client against a clean database.
+def client(conn, request):
+    """A test client against a clean database, authenticated as someone.
 
     Depends on `conn` so the TRUNCATE runs first: the API opens its own pooled
     connections, and a test that truncated afterwards would be deleting rows
     the request under test had just written.
+
+    **The identity override is what makes this the browser listener.**
+    `REQUIRE_ACCESS_JWT` is unset by default, so `access_identity` returns None
+    -- which since migration 0008 means `create_job` refuses with a 403, because
+    `jobs.owner` is NOT NULL and there is nobody to record. That is correct for
+    the mTLS listener and wrong for the ninety-odd tests here that are about
+    admission, file magic, size policy or UI rendering and merely need a
+    submitter to exist.
+
+    A test that is genuinely ABOUT identity asks for `access_token` -- or for
+    `issuer`, which `test_access_jwt.py` keeps for itself because it needs the
+    private key to forge signatures -- and gets the real dependency with real
+    verification. Keyed on `request.fixturenames` rather than on fixture
+    ordering, which is not something to depend on: that set is resolved before
+    any of them run.
     """
     from fastapi.testclient import TestClient
 
+    from sandbox_platform import auth
     from sandbox_platform.app import app
 
-    with TestClient(app) as c:
-        yield c
+    if not {"access_token", "issuer", "no_identity"} & set(request.fixturenames):
+        app.dependency_overrides[auth.access_identity] = lambda: DEFAULT_OWNER
+    try:
+        with TestClient(app) as c:
+            yield c
+    finally:
+        app.dependency_overrides.clear()
+
+
+@pytest.fixture
+def no_identity():
+    """Opt out of `client`'s identity override and get a genuinely anonymous one.
+
+    A marker rather than a value: requesting it is the whole signal, which is
+    why it returns nothing.
+
+    Needed because the other two opt-outs do not reach this case. `issuer` and
+    `access_token` both switch `REQUIRE_ACCESS_JWT` on, so a request without a
+    token gets a 401 from `access_identity` and never reaches the route. The
+    state under test here is the OTHER listener: Access off, a client
+    certificate at the TLS layer, and therefore an identity of None -- which is
+    what `auth.required_identity` refuses with a 403.
+    """
+    return None
 
 
 @pytest.fixture

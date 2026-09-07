@@ -52,9 +52,11 @@ def submit(client, target_os="ubuntu", filename="sample.bin", size=len(ELF)):
 
 
 def upload_and_admit(client, put_object, body=ELF, **kw):
+    # The key comes from the signed policy, not from a path built here -- see
+    # the note in test_egress.admit. Owned submissions live under a prefix.
     created = submit(client, size=len(body), **kw)
     job_id = created["job_id"]
-    put_object(f"samples/{job_id}/{kw.get('filename', 'sample.bin')}", body)
+    put_object(created["upload_fields"]["key"], body)
     return job_id, client.post(f"/api/v1/jobs/{job_id}/uploaded").json()
 
 
@@ -248,7 +250,11 @@ def test_a_missing_object_is_unreadable(registered, put_object):
 
 def test_an_empty_object_is_unreadable(registered, put_object):
     created = submit(registered)
-    put_object(f"samples/{created['job_id']}/sample.bin", b"")
+    # The signed key, so EMPTINESS is what this tests. A hand-built flat key
+    # is simply absent now that submissions are owned, and "unreadable" is
+    # also what absent produces -- the assertion would hold for the wrong
+    # reason.
+    put_object(created["upload_fields"]["key"], b"")
     detail = registered.post(f"/api/v1/jobs/{created['job_id']}/uploaded").json()
     assert detail["failure_reason"] == "unreadable"
 
@@ -284,7 +290,7 @@ def test_no_workers_is_distinct_from_no_capacity(client, put_object):
     """On a fresh install refusing every submission is CORRECT -- but the
     reason must be actionable, not 'submission failed'."""
     created = submit(client)
-    put_object(f"samples/{created['job_id']}/sample.bin", ELF)
+    put_object(created["upload_fields"]["key"], ELF)
     detail = client.post(f"/api/v1/jobs/{created['job_id']}/uploaded").json()
     assert detail["failure_reason"] == "no_workers"
 
@@ -294,7 +300,7 @@ def test_a_job_no_host_can_afford_is_rejected(client, worker_headers, put_object
     client.post("/api/v1/worker/register", headers=worker_headers,
                 json=small_host)
     created = submit(client, target_os="windows")
-    put_object(f"samples/{created['job_id']}/sample.bin", PE)
+    put_object(created["upload_fields"]["key"], PE)
     detail = client.post(f"/api/v1/jobs/{created['job_id']}/uploaded").json()
     assert detail["failure_reason"] == "no_capacity"
 
@@ -473,9 +479,9 @@ def _completed_with_artifacts(conn, age_days: int) -> uuid.UUID:
     return conn.execute(
         """
         INSERT INTO jobs (target_os, submitted_filename, state, manifest,
-                          created_at)
+                          created_at, owner)
         VALUES ('ubuntu', 'x.bin', 'completed', '{"artifacts": ["trace.log"]}',
-                now() - %s::interval)
+                now() - %s::interval, 'fixture-owner@example.test')
         RETURNING id
         """,
         (f"{age_days} days",),
@@ -513,8 +519,9 @@ def _completed_with_objects(conn, put_object, files: dict[str, bytes]):
     names = json.dumps({"artifacts": sorted(files)})
     job_id = conn.execute(
         """
-        INSERT INTO jobs (target_os, submitted_filename, state, manifest)
-        VALUES ('ubuntu', 'x.bin', 'completed', %s) RETURNING id
+        INSERT INTO jobs (target_os, submitted_filename, state, manifest, owner)
+        VALUES ('ubuntu', 'x.bin', 'completed', %s,
+                'fixture-owner@example.test') RETURNING id
         """,
         (names,),
     ).fetchone()[0]
@@ -601,9 +608,9 @@ def test_an_expired_job_refuses_the_download_rather_than_404ing(client, conn):
 
 def test_a_run_with_no_artifacts_has_nothing_to_download(client, conn):
     job_id = conn.execute(
-        "INSERT INTO jobs (target_os, submitted_filename, state, manifest) "
-        "VALUES ('ubuntu', 'x.bin', 'completed', '{\"artifacts\": []}') "
-        "RETURNING id"
+        "INSERT INTO jobs (target_os, submitted_filename, state, manifest, owner) "
+        "VALUES ('ubuntu', 'x.bin', 'completed', '{\"artifacts\": []}', "
+        "        'fixture-owner@example.test') RETURNING id"
     ).fetchone()[0]
 
     assert client.get(f"/api/v1/jobs/{job_id}/artifacts.zip").status_code == 404
@@ -626,9 +633,10 @@ def test_an_artifact_name_is_url_encoded_into_the_link(client, conn):
     says so -- and an unencoded one would silently truncate at the `&`."""
     job_id = conn.execute(
         """
-        INSERT INTO jobs (target_os, submitted_filename, state, manifest)
+        INSERT INTO jobs (target_os, submitted_filename, state, manifest, owner)
         VALUES ('ubuntu', 'x.bin', 'completed',
-                '{"artifacts": ["extracted/a b&c.exe"]}')
+                '{"artifacts": ["extracted/a b&c.exe"]}',
+                'fixture-owner@example.test')
         RETURNING id
         """
     ).fetchone()[0]
@@ -749,8 +757,9 @@ def test_the_stream_opens_with_the_current_state(client, conn):
     tunnel put Cloudflare, an Access check and a TLS handshake in it.
     """
     job_id = conn.execute(
-        "INSERT INTO jobs (target_os, submitted_filename, state) "
-        "VALUES ('ubuntu', 'x.bin', 'completed') RETURNING id"
+        "INSERT INTO jobs (target_os, submitted_filename, state, owner) "
+        "VALUES ('ubuntu', 'x.bin', 'completed',"
+        "        'fixture-owner@example.test') RETURNING id"
     ).fetchone()[0]
 
     frames = _stream_frames(client, job_id)
@@ -767,8 +776,9 @@ def test_the_stream_ends_at_a_terminal_state(client, conn):
     that never closes is a client that never exits.
     """
     job_id = conn.execute(
-        "INSERT INTO jobs (target_os, submitted_filename, state) "
-        "VALUES ('ubuntu', 'x.bin', 'failed') RETURNING id"
+        "INSERT INTO jobs (target_os, submitted_filename, state, owner) "
+        "VALUES ('ubuntu', 'x.bin', 'failed',"
+        "        'fixture-owner@example.test') RETURNING id"
     ).fetchone()[0]
 
     with client.stream("GET", f"/api/v1/jobs/{job_id}/events") as r:

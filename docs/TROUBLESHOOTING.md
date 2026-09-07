@@ -851,6 +851,37 @@ launcher must carry the same guard — this is not optional.
 
 # The platform, TLS and the tunnel
 
+### `Empty reply from server` from a listener that is running
+
+**Symptom.** `curl: (52) Empty reply from server` against a service that `ss`
+shows listening, that `systemctl is-active` calls `active`, and whose log
+records no error. Through `cloudflared` the same origin returns `502` — but
+only to a caller Access has already authenticated, so an unauthenticated
+`curl` at the public hostname shows `302` and looks healthy.
+
+**Cause. The request used `http://` against a listener serving TLS.** uvicorn
+started with `--ssl-certfile` reads the plaintext request line as a failed
+handshake and closes the connection without replying. There is no error
+because, from its side, nothing went wrong.
+
+**Fix.** Match the scheme to the listener rather than guessing:
+
+```bash
+curl -sS --cacert /etc/sandbox-platform/tls/ca.crt https://127.0.0.1:8000/healthz
+systemctl cat sandbox-api-browser | grep -- --ssl-      # is TLS configured at all?
+```
+
+`--cacert` rather than `-k`: it answers the scheme *and* proves the certificate
+covers the address dialled, which `-k` deliberately does not.
+
+**Where it bites.** `cloudflared`'s `service:` must carry the same scheme as the
+origin. Moving the browser listener to loopback (`platform-domu.md` §E4a) is an
+address change, not a scheme change — `service: https://127.0.0.1:8000`, with
+`caPool` unchanged, because `tls/issue-cert.sh` puts `IP:127.0.0.1` in every
+server certificate it issues.
+
+*Found 2026-09-06, moving the browser listener to loopback for issue #40.*
+
 ### `openssl s_client` reported `Verify return code: 0 (ok)` against plain HTTP
 
 **Symptom.** A TLS verification check passes against a service that is **not

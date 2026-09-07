@@ -542,20 +542,31 @@ all are live inside a double-quoted guest shell word. Two consequences:
 | Platform → internet | Cloudflare Tunnel outward only | M8 |
 
 **The browser-to-browser row is code, not yet a deployed property**
-(2026-09-05). The scope predicate and its twenty tests are in the repository;
-nothing has been deployed or verified against the running platform. Until that
-happens the operating constraint is the one it exists to remove: **Cloudflare
-Access must admit only people who may see everything.**
+(2026-09-05, still true 2026-09-07). The scope predicate and its tests are in
+the repository; nothing has been deployed or verified against the running
+platform. Until that happens the operating constraint is the one it exists to
+remove: **Cloudflare Access must admit only people who may see everything.**
 
-Three parts of #40 are deliberately not in that row, and each is a real gap
-rather than a detail:
+The three gaps listed here on 2026-09-05 have since closed in the repository,
+and are recorded because the shape of each answer matters:
 
-- **Browser routes are not bound to loopback** (decision 3), so "Access is the
-  gate" remains a property of application code rather than of the network.
-- **Nothing publishes.** `visibility` is read by the predicate and written by
-  no route, so the third arm is inert and every job is private.
-- **There is no quota** (decision 8), so one user can still consume the whole
-  machine's analysis time.
+- **Browser routes bind loopback** — decision 3, **deployed and verified
+  2026-09-06** (`platform-domu.md` §E4a). It closes the LAN path, not every
+  path: both listeners still serve one ASGI app, so a client-certificate
+  holder reaches the browser routes on 8443. Splitting the app is deferred.
+- **Publishing exists** — 2026-09-06, migration 0007. Owner-only, after the
+  fact, and gated on `owner = %s` rather than on `visible_to`, which is
+  reflexive: once a job is public every caller is inside that predicate, so a
+  write gated on it would pass control to everyone the last write admitted.
+- **The quota exists** — 2026-09-07, migration 0008. A prepaid balance in
+  `tenants`, drawn down when a job reaches a terminal state having had a
+  clone. It bounds analysis time, not storage: many small fast-failing jobs
+  still write artifacts, which is the residual DRAFT-041 watches.
+
+One boundary the same migration moved: **`jobs.owner` is NOT NULL**, so there
+is no longer an ownerless shared pool. The `owner IS NULL` arm of
+`visible_to` survives as unreachable code, and that constraint is the only
+thing holding it empty.
 
 <details>
 <summary>The pre-migration table, kept for its reasoning</summary>

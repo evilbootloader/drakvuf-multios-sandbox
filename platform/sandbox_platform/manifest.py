@@ -40,10 +40,29 @@ from pydantic import (
     model_validator,
 )
 
-# S3 keys cap at 1024 bytes UTF-8 and `results/<uuid>/` spends 45 of them.
+# S3 keys cap at 1024 bytes UTF-8, and this is the BINDING share of that
+# budget -- the artifact path is longer than the sample path, so it is the one
+# that has to be checked:
+#
+#     u/ + 254 + / + 3 + /   =  261     objects.MAX_OWNER, worst case
+#     results/ + <uuid> + /  =   45
+#     MAX_ARTIFACT_NAME      =  718
+#                              -----
+#                               1024
+#
+# It was 900 while `results/<uuid>/` was the whole prefix. Issue #40's decision
+# 7 spent 261 more bytes on `u/<owner>/<shard>/`, and 900 + 45 + 261 is 1206 --
+# a key MinIO refuses, reached only by a long artifact name under a long
+# address, so it would have shipped and failed on somebody else's sample.
+#
+# `objects.MAX_OWNER` and this constant are one budget. Raising either without
+# lowering the other mints an unstorable key, and
+# `test_the_longest_admissible_key_still_fits_s3` asserts the sum EXACTLY so
+# the trade is visible in both directions.
+#
 # Refused rather than truncated: a truncated artifact name is a wrong one, and
 # `extracted/` names are evidence of what the sample wrote.
-MAX_ARTIFACT_NAME = 900
+MAX_ARTIFACT_NAME = 718
 
 # Above any measured need and stated as a refusal point rather than a natural
 # limit -- `extracted/` is named after files the SAMPLE wrote, so the real
@@ -52,7 +71,7 @@ MAX_ARTIFACT_NAME = 900
 # endpoint several times. `truncated` is what makes bounding this safe: a run
 # that hit the cap says so, and a reader that knows the list is incomplete is
 # in a different position from one that thinks it is looking at everything.
-MAX_ARTIFACTS = 512
+MAX_ARTIFACTS = 1024
 
 
 def reject_unsafe_name(name: str) -> str:

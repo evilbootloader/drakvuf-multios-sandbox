@@ -59,7 +59,7 @@ log = logging.getLogger(__name__)
 # `execute(q, (v,))` and `execute(q % v)` is the whole of the defence.
 _SELECT_JOB = """
     SELECT id, state, lease_owner, cancel_requested, target_os,
-           submitted_filename, sha256
+           submitted_filename, sha256, key_prefix
       FROM jobs
      WHERE id = %s
 """
@@ -278,6 +278,42 @@ def access_identity(
 Identity = Annotated[str | None, Depends(access_identity)]
 
 
+def required_identity(identity: Identity = None) -> str:
+    """The caller's identity, refusing the callers that do not have one.
+
+    **Reads may be ownerless; writes may not.** `None` is a meaningful answer
+    on the read side -- `visible_to` treats it as "arrived over the
+    certificate-gated listener" and scopes nothing, which is what lets Dom0
+    and the command-line tools see every job. It cannot mean anything on the
+    write side since migration 0008: `jobs.owner` is NOT NULL and
+    `tenants.owner` is a primary key, so a None here reaches the database as a
+    constraint violation and surfaces as a 500 naming a column.
+
+    So this exists to turn that into one refusal, stated once, where a reader
+    looking for the rule will find it. Attach it to routes that create an
+    owned row -- `create_job` and the balance endpoint -- and leave every read
+    route on the optional `Identity`.
+
+    403 rather than 401: the caller authenticated fine, with a client
+    certificate. What it lacks is an identity work can be attributed to.
+
+    **Expected to stop firing rather than be removed.** The only callers it
+    refuses today are the command-line tools on the mTLS listener; once those
+    route through the tunnel they carry an Access service token, and
+    `access_identity` returns `service:<common_name>` for them.
+    """
+    if identity is None:
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            "this route records an owner and the caller has no identity; "
+            "submit through the browser listener with an Access token",
+        )
+    return identity
+
+
+RequiredIdentity = Annotated[str, Depends(required_identity)]
+
+
 # --- browser scope --------------------------------------------------------
 #
 # Issue #40 (DRAFT-047), decision 4: a user reads their own jobs plus published
@@ -293,6 +329,18 @@ Identity = Annotated[str | None, Depends(access_identity)]
 # Dom0 is infrastructure, not a tenant, and it has to be able to run anyone's
 # job. A future change that "unifies" the two breaks the pipeline for every job
 # not owned by whoever Dom0's certificate names.
+#
+# **Read scope only -- NOT an authorization predicate for writes.** The third
+# arm makes this reflexive: once a job is public, every authenticated caller is
+# inside the predicate. A mutating route gated on it would therefore hand
+# control of the mutation to everyone the previous mutation admitted --
+# publication would pass from the owner to anyone who could read it, and B
+# could unpublish A's analysis.
+#
+# `routers.jobs._owned_or_404` is the write-side gate, deliberately a narrower
+# predicate. A new mutating route wants that one.
+# `tests/test_tenancy.py::test_b_cannot_unpublish_as_published_job` is what
+# holds the two apart; it is the only test that fails if they are merged.
 
 
 def visible_to(identity: str | None) -> tuple[str, list]:
@@ -308,18 +356,29 @@ def visible_to(identity: str | None) -> tuple[str, list]:
         The caller's own submissions.
 
     `owner IS NULL`
-        Submitted over the mTLS listener -- `submit.py` and the other
-        command-line tools, where `access_identity` returns None and there is
-        no person to record. Unowned means an infrastructure job, not a private
-        one, so it stays readable in the browser and the UI. **The consequence
-        worth knowing:** the ownerless set is a shared pool, visible to every
-        authenticated user, so it is not where one tenant's samples should land
-        once there is more than one tenant.
+        **Unreachable since migration 0008, and kept deliberately.** It used to
+        admit jobs submitted over the mTLS listener, where `access_identity`
+        returns None and there was no person to record. 0008 made `jobs.owner`
+        NOT NULL for traceability and `required_identity` refuses those callers
+        before a row exists, so no matching row can be created.
+
+        Left in place because it costs one always-false comparison and removing
+        it is a change to a security predicate. **What to know if you touch
+        it:** this arm is a shared pool visible to every authenticated user,
+        and the only thing keeping it empty is the NOT NULL constraint. Drop
+        that constraint and cross-tenant reads come back silently, here.
 
     `visibility = 'public'`
-        **Inert today.** Nothing writes that column -- the publish endpoint is
-        DRAFT-047's decisions 5/6 and has not landed. It is written now so that
-        publishing is a pure addition rather than a change to every read path.
+        Published by the owner through `POST /jobs/{id}/publish` (decisions
+        5/6), live since 2026-09-06. It was written here before anything set
+        the column, which is what let publishing land as a pure addition rather
+        than a change to every read path.
+
+        NOT NULL with a CHECK since migration 0007, so this arm is a plain
+        two-valued comparison and there is no NULL case to reason about. The
+        value is a literal rather than a bound parameter because it is a
+        fragment of a WHERE clause; `enums.Visibility` is the other half of the
+        pair and carries the same warning against drift.
 
     A None identity is NOT scoped at all. That reads like a hole and is not
     one: `access_identity` returns None only where `REQUIRE_ACCESS_JWT` is

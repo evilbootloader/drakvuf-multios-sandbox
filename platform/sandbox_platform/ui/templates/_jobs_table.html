@@ -11,7 +11,7 @@
   <thead>
     <tr>
       <th>Submitted</th><th>Target</th><th>Filename</th>
-      <th>State</th><th>SHA-256</th><th>Owner</th>
+      <th>State</th><th>SHA-256</th><th>Owner</th><th>Visibility</th>
     </tr>
   </thead>
   <tbody>
@@ -41,6 +41,7 @@
         {% else %}—{% endif %}
       </td>
       <td>{{ job.owner or '—' }}</td>
+      <td>{{ job.visibility.value }}</td>
     </tr>
   {% endfor %}
   </tbody>

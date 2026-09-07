@@ -257,8 +257,9 @@ def _completed(conn, manifest: object) -> uuid.UUID:
     """A committed row, which is the situation parse() exists for: validation
     at the door cannot help what is already stored."""
     return conn.execute(
-        "INSERT INTO jobs (target_os, submitted_filename, state, manifest)"
-        " VALUES ('ubuntu', 'x.bin', 'completed', %s) RETURNING id",
+        "INSERT INTO jobs (target_os, submitted_filename, state, manifest, owner)"
+        " VALUES ('ubuntu', 'x.bin', 'completed', %s,"
+        "         'fixture-owner@example.test') RETURNING id",
         (json.dumps(manifest),),
     ).fetchone()[0]
 
