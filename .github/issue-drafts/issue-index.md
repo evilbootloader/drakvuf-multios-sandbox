@@ -968,6 +968,7 @@ rather than close it. See below.
 | DRAFT-058 | Guest locale and keyboard layout as an analysis control | core | ALL | M5 | P2 | DRAFT-052, golden images | `ideas.md` |
 | DRAFT-059 | Archive submission — password-protected archives and multi-file samples | core/platform | ALL | M4 | P1 | #36, #37, DRAFT-060 | Maintainer, 2026-08-25 |
 | DRAFT-060 | `sandboxd` — the analysis orchestrator, and argv instead of shell | core/platform | ALL | M2 → gates M7 | **P0** | #35, #36, #37 | DRAFT-041, **never drafted until now** |
+| DRAFT-061 | One listener, our own identity — replace Cloudflare Access with credentials we hold and JWTs we issue | core/platform, security | ALL | M1 | P1 (**F12 inside it is P0**) | #40 (closed) | Successor to #40 decision 3, reversed 2026-09-10 |
 
 ### What this batch is, and why it is shaped this way
 

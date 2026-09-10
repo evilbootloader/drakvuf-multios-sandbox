@@ -327,6 +327,9 @@ accurate as dated evidence.
 | **"Android anchors on `init` / PID 1"** | `sandboxd/guests.py:439`, `automation/preconfig-android.sh:228`, `sandboxd/tests/test_guests.py:182`, and the *upper* half of `pipeline-android.env`'s anchor block | **Only Ubuntu does.** Android went to PID 1 on 2026-08-29 and **reverted on 2026-08-31**, because Android's `init` provides no runtime environment for `app_process64` and the APK path needs one. `pipeline-android.env:289` records the reversal and deliberately keeps the case *for* PID 1 above it, so text arguing for PID 1 there is history, not the current posture |
 | `CLONE_LV_SIZE`, "Clone LV size 64G / 32G" | `pipeline-*.env`, older docs | **retired 2026-08-29.** Clones are thin snapshots and inherit the golden LV's size — 1 T for Ubuntu, 128 G for Android. `-L` never sized the clone; it forced a *thick* snapshot whose exception store came from VG free space |
 | `required_mib: 2198`, `memory = 2048` | `platform.md`, older runbooks | **4246** / `memory = 4096` for both templates as of 2026-08-29 |
+| **"the browser listener binds `127.0.0.1`"** | `platform-domu.md` §E4a, `16-deploy-…`, DRAFT-047 decision 3 | **Held 2026-09-06 → 2026-09-10, then reversed.** Back on `192.168.1.10:8000`, because `sandboxd` dials the browser listener for the console relay and loopback is unreachable across machines. `REQUIRE_ACCESS_JWT=1` is the gate today; the bind was defence in depth behind it. EVIDENCE E4a is real output of a real change and is kept — it is history, not the current posture. DRAFT-061 owns the fix |
+| **"the worker channel is LAN-only"** | `live-console.md` §4.4 (corrected 2026-09-10), general assumption | **False through the tunnel.** The `sandbox.evilbootloader.com` ingress has no path rule, so `/api/v1/worker/*` routes from the internet — verified 2026-09-10. Gated by Access and the worker token, **not** by a client certificate. Runbook 09 F12 wrote the fix on 2026-08-26 and it was never applied; `16-deploy-…` "Known gaps" carries it |
+| **"the console dial is mutual TLS"** | `live-console.md` §4.4 before 2026-09-10 | **Server-authenticated TLS plus the bearer worker token.** The console dials `:8000`, which has no `--ssl-ca-certs`; only `:8443` demands a client certificate. §4.1c always said so and §4.4 contradicted it for five weeks |
 
 ---
 
@@ -357,6 +360,7 @@ accurate as dated evidence.
 | `13-verify-egress-modes.md` | 2026-08-31 | **yes** — 21 prompt(s) |  |
 | `14-verify-routed-egress.md` | 2026-09-04 | **yes** — 47 prompt(s) |  |
 | `15-verify-egress-throttles.md` | 2026-09-05 | **yes** — 50 prompt(s) |  |
+| `16-deploy-tenancy-and-quota.md` | 2026-09-10 | **yes** — 3 prompt(s) |  |
 
 ### How components are started
 
@@ -375,6 +379,6 @@ accurate as dated evidence.
 |---|---|
 | sandboxd modules | 16 |
 | test files | 16 sandboxd, 17 platform |
-| documents under `docs/` | 38 |
+| documents under `docs/` | 39 |
 
 <!-- END GENERATED -->

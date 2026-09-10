@@ -419,6 +419,27 @@ internet needs those paths. The browser's own console socket is at
 Recorded as F12 in `docs/runbooks/09-verify-sandboxd-and-console.md`, with the
 rule and its verification.
 
+> **CONFIRMED OPEN on the deployment, 2026-09-10.** The rule was written and
+> never applied:
+>
+> ```
+> root@platform:~# cloudflared --config /etc/cloudflared/config.yml tunnel ingress rule \
+>     https://sandbox.evilbootloader.com/api/v1/worker/claim
+> Using rules from /etc/cloudflared/config.yml
+> Matched rule #1
+>     hostname: sandbox.evilbootloader.com
+>     service: https://192.168.1.10:8000
+> ```
+>
+> So every worker route — claim, heartbeat, state, artifacts, and the console's
+> worker end — is reachable from the internet today, behind Access and the
+> worker token but **not** behind a client certificate. Two layers, where the
+> LAN door has three.
+>
+> A "recommended" fix with no evidence block is one nobody applied. This is now
+> tracked as a known gap in the deploy runbook rather than as advice in a
+> design record.
+
 ### 4.2 What a compromised platform can reach
 
 Once a session is open the platform can send bytes toward the clone's console.
@@ -453,27 +474,45 @@ system exists to misconfigure**, which was the decisive argument against
 Guacamole: it brings its own user and authentication model, and two auth
 systems on one door is how the weaker one gets forgotten.
 
-**Dom0 → platform: the LAN, mutual TLS, and the worker token.** It does **not**
-pass through Cloudflare, and it never has — `sandboxd` reaches the platform
-directly at `192.168.1.10:9000`, which is exactly what the deploy runbook's
-step 5 checks succeeds. Access protects the tunnel hostname; the worker channel
-is a different door on a different network, and it is already authenticated by
-the client certificate the platform requires (`--ssl-cert-reqs 2`) plus the
-bearer token.
+**Dom0 → platform: the LAN, server-authenticated TLS, and the worker token.**
+It does **not** pass through Cloudflare — `sandboxd` reaches the platform
+directly at `192.168.1.10:8000`, over the LAN. Access protects the tunnel
+hostname; this is a different door on a different network.
+
+> **CORRECTED 2026-09-10. This section previously said "mutual TLS… the client
+> certificate the platform requires (`--ssl-cert-reqs 2`)", and that is wrong
+> for the console.** It describes the *worker channel on 8443*. The console
+> dials **8000**, which has no `--ssl-ca-certs` and therefore asks for no
+> client certificate — §4.1c says so, and these two sections contradicted each
+> other for five weeks. §4.4 is the one headed "Authentication", so it is the
+> one a reader checks.
+>
+> The console hop is: **TLS with the SERVER authenticated** (Dom0 validates the
+> platform's certificate against the internal CA, `vnc.py` passes the same
+> `SSLContext` the rest of the channel uses), and **the caller authenticated by
+> the bearer worker token plus `X-Worker-Id`**, which `worker_console` checks
+> against the job's `lease_owner`. One credential, not two.
+>
+> **The consequence, stated:** anything holding the worker token can attach to
+> a running clone's console over the LAN. On 8443 that would additionally need
+> a client certificate signed by our CA. The console is the one part of the
+> worker channel that cannot have that, because both ends must land in the same
+> uvicorn process and a browser cannot present a certificate.
 
 So the relay socket needs no new credential in either direction. It reuses what
 each side already presents:
 
 ```text
-browser  ──> Cloudflare Access ──> platform      (Access JWT)
-sandboxd ──> LAN, 192.168.1.10 ──> platform      (mTLS + worker token)
+browser  ──> Cloudflare Access ──> platform :8000   (Access JWT)
+sandboxd ──> LAN, 192.168.1.10 ──> platform :8000   (worker token; server-auth TLS)
+sandboxd ──> LAN, 192.168.1.10 ──> platform :8443   (mTLS + worker token)  ← everything else
 ```
 
-Stating this precisely matters because the two are easy to blur into "the
+Stating this precisely matters because the three are easy to blur into "the
 relay is authenticated", which would leave the reader unable to tell which
 failure removes which protection. Losing Access exposes the console to the
-internet; losing the client certificate exposes it to the LAN. They are not
-the same incident.
+internet; losing the worker token exposes it to the LAN — and to the internet
+too, for as long as F12 below is open. They are not the same incident.
 
 > **Scoped as of #40** (2026-09-05, in the repository — not yet deployed).
 > Both console routes now resolve the job through `auth.visible_to`: the

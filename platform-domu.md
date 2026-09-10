@@ -711,7 +711,30 @@ binds loopback here, not the LAN address. See §E4a.
 > `enable` only creates a symlink, so it succeeds against a unit that can never
 > start.
 
-## E4a. Bind the browser listener to loopback — **executed 2026-09-06**
+## E4a. Bind the browser listener to loopback — **executed 2026-09-06, REVERSED 2026-09-10**
+
+> ### REVERSED — the live console needs this listener reachable from Dom0
+>
+> This step held for four days and was undone on 2026-09-10. `sandboxd` dials
+> the BROWSER listener for the console relay, not the mTLS one — both ends of a
+> session must land in the same uvicorn process and a browser cannot present a
+> client certificate (`live-console.md` §4.1c). Dom0 is a different machine, so
+> a loopback bind is unreachable from it, and every trace logged
+> `ConnectionRefusedError` from `vnc.py:368`.
+>
+> **The listener is back on the LAN address, and `REQUIRE_ACCESS_JWT=1` is now
+> the whole gate.** The bind was defence in depth behind it, not the gate
+> itself.
+>
+> **The procedure below is left exactly as it was executed**, because
+> `EVIDENCE E4a` is dated output of commands that did work and is never
+> rewritten. Read it as history, not as the current configuration. `service:`
+> in `/etc/cloudflared/config.yml` is back to `https://192.168.1.10:8000`.
+>
+> **DRAFT-061 owns the durable fix**, which is the same work as splitting the
+> ASGI app: with a browser-only app on its own listener, the bind can return
+> without taking the console with it.
+
 
 Issue #40 (DRAFT-047) decision 3. Runbook 08 step 20b puts the browser listener
 on `192.168.1.10:8000`, and says so plainly at `:1489`: *"reachable from Dom0

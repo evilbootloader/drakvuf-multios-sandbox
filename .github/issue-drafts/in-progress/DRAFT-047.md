@@ -10,7 +10,7 @@ first part landed before the draft was written:
 | 1, 2 — verify the JWT, set `owner` from it | Landed in **#36**, 2026-08-24 |
 | 4 — scope every browser read | **Landed 2026-09-05**, in the repository. `auth.visible_to`, `platform/tests/test_tenancy.py`. Not deployed |
 | 5, 6 — publishing | **Landed 2026-09-06**, in the repository. Migration 0007, `POST /jobs/{id}/publish` and `/unpublish`, the UI control, nine tests in section 7. Not deployed |
-| 3 — loopback-only browser routes | **Deployed and verified 2026-09-06.** `platform-domu.md` §E4a. Criterion restated — see below |
+| 3 — loopback-only browser routes | **Deployed 2026-09-06, REVERSED 2026-09-10.** The live console dials that listener from Dom0 and loopback is unreachable across machines. Carried to **DRAFT-061** — see below |
 | 7 — per-user key prefix | **Landed 2026-09-07**, in the repository. Migration 0008, `objects.owner_prefix`, section 12 of `test_tenancy.py`. Not deployed |
 | 8 — runtime quota | **Landed 2026-09-07**, in the repository. Migration 0008's `tenants`, `routers/account.py`, `worker._charge_for_runtime`, `platform/tests/test_quota.py`. Not deployed. **Shape changed** — see below |
 
@@ -387,7 +387,7 @@ column records what is written and tested in the dev container.
 | [ ] | The Access JWT is verified — signature, `exp`, `aud` — never trusted from the header alone | Yes, #36 |
 | [ ] | `owner` is set from the verified email, never from a request field | Yes, #36 |
 | [ ] | Every browser read is scoped by one shared predicate | Yes, 2026-09-05 |
-| [x] | Browser routes are unreachable from a non-loopback address **without a client certificate signed by our CA** — restated 2026-09-06, see below | **Deployed and verified 2026-09-06**, `platform-domu.md` §E4a |
+| [ ] | Browser routes are unreachable from a non-loopback address **without a client certificate signed by our CA** — restated 2026-09-06 | **Held 2026-09-06 to 2026-09-10, then reversed.** The bind broke the live console; `REQUIRE_ACCESS_JWT=1` is the gate today. Carried to **DRAFT-061** |
 | [ ] | Publishing is owner-only, after the fact, and grants full access | Yes, 2026-09-06 |
 | [ ] | Objects are written under a per-owner key prefix, taken from the row rather than the caller | Yes, 2026-09-07, migration 0008 |
 | [ ] | Runtime quota is enforced at admission with its own status | Yes, 2026-09-07 — 402, `test_quota.py`. Reject *reason* dropped: a refusal at admission never creates a job to carry one |

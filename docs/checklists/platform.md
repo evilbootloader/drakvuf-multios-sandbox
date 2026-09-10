@@ -99,13 +99,20 @@ tested in the development container only.
   Access service token. `visible_to`'s `owner IS NULL` arm is now unreachable
   and kept deliberately; see the docstring there.
 
-  **Decision 3 is deployed**, 2026-09-06: the browser listener binds
-  `127.0.0.1` and `cloudflared` dials it over TLS on loopback
-  (`platform-domu.md` §E4a). `curl` from Dom0 to `192.168.1.10:8000` is
-  refused; the UI loads through the tunnel. It closes the LAN path, not every
-  path — both listeners still serve one ASGI app, so a client-certificate
-  holder reaches the browser routes on 8443. Splitting the app is deferred and
-  is its own change.
+  **Decision 3 was deployed 2026-09-06 and REVERSED 2026-09-10.** The browser
+  listener bound `127.0.0.1` and `cloudflared` dialled it over TLS on loopback
+  (`platform-domu.md` §E4a). It held for four days, and what ended it was the
+  live console: `sandboxd` dials that same listener from Dom0, and loopback is
+  not reachable across machines, so every trace logged a
+  `ConnectionRefusedError`. The listener is back on the LAN address and
+  **`REQUIRE_ACCESS_JWT=1` is the whole gate** — the bind was defence in depth
+  behind it.
+
+  Two things that costs, both being the pre-2026-09-06 state rather than new:
+  a lost `access.conf` drop-in is now a config slip on a LAN socket, and the
+  console's worker end on `:8000` has no `--ssl-ca-certs`, so attaching to a
+  running clone over the LAN needs only the bearer token. **DRAFT-061** owns
+  the durable fix, which is the same work as splitting the ASGI app.
   The scope check on the SSE stream and the console socket runs once, at
   connect, so it depends on publication being restricted to terminal jobs —
   no connection can be open on a job that is publishable. Relaxing that

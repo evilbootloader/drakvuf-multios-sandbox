@@ -114,6 +114,85 @@ first place. See `platform/minio/provision.sh` and runbook `08` §2351.
 *Cost when it bit: a false alarm on a `sandboxd` change that touched no platform
 code, 2026-08-26.*
 
+### `Recv failure: Connection reset by peer` from 8443
+
+**Symptom.** `curl --cacert ca.crt https://192.168.1.10:8443/healthz` fails with
+`curl: (56) Recv failure: Connection reset by peer`. The service is running and
+the browser listener on 8000 answers fine, so it reads as the worker channel
+being down.
+
+**Cause.** It is not down. **8443 is mutual TLS** — `--ssl-cert-reqs 2` in its
+unit — so the server demands a client certificate during the handshake and
+resets when the caller offers none. `--cacert` only tells curl whom to *trust*;
+it does not present an identity. The reset is the gate working.
+
+**Fix.** Call it the way Dom0 does, with the client certificate:
+
+```bash
+curl -sS --cacert /etc/sandboxd/tls/ca.crt \
+     --cert /etc/sandboxd/tls/dom0-lab.crt \
+     --key  /etc/sandboxd/tls/dom0-lab.key \
+     https://192.168.1.10:8443/healthz; echo      # {"status":"ok"}
+```
+
+Those paths are Dom0's. On the platform DomU itself there is no client
+certificate to present — the CA signing key lives on the workstation and the
+platform deliberately holds no ability to mint one — so **this check belongs on
+Dom0**, not on the machine serving it.
+
+**The two listeners fail differently, and that is diagnostic.** A reset on 8443
+means no client certificate. `Empty reply from server` on 8000 means `http://`
+against a TLS listener — a different entry in this file.
+
+*Cost when it bit: one line of a deploy runbook written without `--cert`,
+recorded as a failure against a listener that was healthy, 2026-09-10.*
+
+### `ConnectionRefusedError` to `192.168.1.10:8000` from `sandboxd/vnc.py`
+
+**Symptom.** Every trace logs a stack trace ending
+`ConnectionRefusedError: [Errno 111] Connect call failed ('192.168.1.10', 8000)`
+from `vnc.py:368`. **The analysis itself is unaffected** — `ConsoleSession._run`
+and `_start_console` both swallow it, by design: the console is an observer of
+the run, not a participant. So this is log noise, not a failed job, and the
+clone still runs and the trace still completes.
+
+**Cause.** Decision 3 of #40, deployed 2026-09-06 (`platform-domu.md` §E4a),
+rebound the browser listener from `192.168.1.10:8000` to `127.0.0.1:8000`. Dom0
+is a different machine, so the DomU's loopback is not reachable from it.
+`SANDBOXD_CONSOLE_API` still points at the address that worked the day before.
+
+**Do NOT "fix" it by pointing `SANDBOXD_CONSOLE_API` at 8443.** The connection
+would succeed and the console would then **hang forever**, which is strictly
+worse — a refusal names its cause in one line, a hang reads as infrastructure
+trouble and gets retried. The console relay pairs two sockets in an
+**in-process registry**, and the browser end arrives on 8000 via cloudflared.
+A worker end on 8443 lands in a different uvicorn process, so the two sides can
+never meet and both simply wait. That is F11, Dom0 2026-08-26, and it is the
+whole reason `Settings.console_api` exists separately from `Settings.api`.
+
+**Fix, taken 2026-09-10: the listener was rebound to the LAN address**, undoing
+decision 3. The console works again and the gate is now `REQUIRE_ACCESS_JWT=1`
+alone — the loopback bind was defence in depth behind it. Two things that costs,
+both being the pre-2026-09-06 state rather than new: a lost `access.conf`
+drop-in becomes a config slip on a LAN socket rather than a loopback one, and
+the console's worker end on `:8000` has no `--ssl-ca-certs`, so attaching to a
+running clone over the LAN is gated by the bearer token alone.
+
+`SANDBOXD_CONSOLE_ENABLED=0` is the alternative if you would rather keep the
+loopback bind than have the console. It is the shipped default.
+
+**One other thing not to do.** Routing the browser's console socket to 8443
+through cloudflared would put it on the listener where `auth.visible_to` returns
+`TRUE` — any Access user could then open any job's console.
+
+**The real fix** is to move the pairing registry out of process; Postgres
+`LISTEN`/`NOTIFY` needs no new dependency, since both listeners already hold a
+pool. That is a design change and wants its own draft.
+
+*Cost when it bit: a stack trace on a pre-clone test, 2026-09-07, on a
+deployment where the console had already been silently broken for a day —
+neither §E4a nor `CURRENT-STATE.md` mentioned the console.*
+
 ### The platform test suite destroyed job history
 
 **Symptom.** Running the platform suite anywhere other than the dev container.
