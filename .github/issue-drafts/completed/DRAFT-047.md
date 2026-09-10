@@ -1,6 +1,6 @@
 # DRAFT-047: Per-user isolation, using the identity Cloudflare Access already establishes
 
-**Status:** Published as [#40](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/40), 2026-08-24. **Open.**
+**Status:** Published as [#40](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/40), 2026-08-24. **CLOSED 2026-09-10**, deployed from commit `9ab3a35` — `docs/runbooks/16-deploy-tenancy-and-quota.md`. **Decision 3 is not closed by it** and is carried to DRAFT-061; see the table below.
 
 Landing in three parts rather than the one this draft assumed, because the
 first part landed before the draft was written:
