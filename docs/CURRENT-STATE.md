@@ -203,7 +203,7 @@ started empty, and one server certificate was reissued from the workstation CA.
 | Boot | **direct kernel**, from `/var/lib/xen/platform/` on Dom0 | 2026-08-28 |
 | Disks | `vg-root/platform` 20 G root, `vg-root/platform_data` 256 G at `/srv/minio` | 2026-08-28 |
 | Services | Postgres 17 (UTF-8 cluster), MinIO, FastAPI | 2026-08-28 |
-| Listeners | **8443** mutual-TLS (worker channel), **8000** behind cloudflared (browser), 9000 MinIO, 9001 MinIO console (loopback) | 2026-08-28 |
+| Listeners | **8000** — one API listener, browser and worker traffic together, `192.168.1.10` over TLS. 9000 MinIO, 9001 MinIO console (loopback). **8443 mutual-TLS was retired 2026-09-15**, runbook 17 step 11; `sandbox-api` is `disable --now` | 2026-09-15 |
 | Source | `/opt/platform/src/platform`, venv `.venv`, user `platform` | 2026-08-26 |
 
 > **A DomU reservation is not a cgroup cap.** CT 102's 4096 MiB was a ceiling
@@ -332,10 +332,12 @@ accurate as dated evidence.
 | **"Android anchors on `init` / PID 1"** | `sandboxd/guests.py:439`, `sandboxd/tests/test_guests.py:182`, and older docs | **Only Ubuntu does.** Android went to PID 1 on 2026-08-29 and **reverted on 2026-08-31**, because Android's `init` provides no runtime environment for `app_process64` and the APK path needs one. The contradicting text lived in `automation/pipeline-android.env`, which was deleted 2026-09-15; the value now lives in `StageConfig.injection_pids` (`sandboxd/stages.py`) with nothing arguing against it. Do not put Android back on PID 1 |
 | `CLONE_LV_SIZE`, "Clone LV size 64G / 32G" | older docs (was `pipeline-*.env`, deleted) | **retired 2026-08-29.** Clones are thin snapshots and inherit the golden LV's size — 1 T for Ubuntu, 128 G for Android. `-L` never sized the clone; it forced a *thick* snapshot whose exception store came from VG free space |
 | `required_mib: 2198`, `memory = 2048` | `platform.md`, older runbooks | **4246** / `memory = 4096` for both templates as of 2026-08-29 |
-| **"the browser listener binds `127.0.0.1`"** | `platform-domu.md` §E4a, `16-deploy-…`, DRAFT-047 decision 3 | **Held 2026-09-06 → 2026-09-10, then reversed.** Back on `192.168.1.10:8000`, because `sandboxd` dials the browser listener for the console relay and loopback is unreachable across machines. `REQUIRE_ACCESS_JWT=1` is the gate today; the bind was defence in depth behind it. EVIDENCE E4a is real output of a real change and is kept — it is history, not the current posture. DRAFT-061 owns the fix |
+| **"the browser listener binds `127.0.0.1`"** | `platform-domu.md` §E4a, `16-deploy-…`, DRAFT-047 decision 3 | **Held 2026-09-06 → 2026-09-10, then reversed.** Back on `192.168.1.10:8000`, because `sandboxd` dials the browser listener for the console relay and loopback is unreachable across machines. EVIDENCE E4a is real output of a real change and is kept — it is history, not the current posture. **The gate is no longer `REQUIRE_ACCESS_JWT=1`**: DRAFT-061 landed 2026-09-15 and the listener now authenticates sessions this platform issued, per the row below |
 | **"the worker channel is reachable through the tunnel"** (F12) | `09-verify-…` §F12, `live-console.md` §4.1c, `16-deploy-…` "Known gaps", DRAFT-061 context | **Closed 2026-09-10.** True from 2026-08-26, when the rule was written and not applied, until it was applied. `^/api/v1/worker(/\|$)` now matches `http_status:404` ahead of the API catch-all, so **the worker channel is LAN-only again** — reachable on `:8000` and `:8443` from the LAN, not through `sandbox.evilbootloader.com`. Verified past Access, not in front of it: an anonymous request is bounced by the edge and proves nothing either way. EVIDENCE F12 in `16-deploy-…`. The text describing it as open is dated evidence and is kept |
 | **The shell/C launcher pipeline** — `dirwatch.c`, `dirwatch_old.c`, `clone.pl`, `cleanup.sh`, `tcpdump.sh`, `run_analysis-{ubuntu,android}.sh`, `drakvuf-{ubuntu,android}.sh`, `preconfig-{ubuntu,android}.sh`, `pipeline-{ubuntu,android}.env` | runbooks 01–15, the issue drafts, the reviews, `project-assessment.md` | **All 13 deleted 2026-09-15** (4,795 lines) once `sandboxd` had replaced every one. Those documents are dated evidence and are **not** rewritten — read the filenames in them as history. `docs/architecture/automation-files.md` maps each file to its successor and carries the facts worth keeping; `scripts/check-refs.py`'s `ALLOW_PATHS` keeps the names resolving. `automation/` now holds only `network-setup.sh`, `platform.env` and the egress assets |
-| **"the console dial is mutual TLS"** | `live-console.md` §4.4 before 2026-09-10 | **Server-authenticated TLS plus the bearer worker token.** The console dials `:8000`, which has no `--ssl-ca-certs`; only `:8443` demands a client certificate. §4.1c always said so and §4.4 contradicted it for five weeks |
+| **"the console dial is mutual TLS"** | `live-console.md` §4.4 before 2026-09-10 | **Server-authenticated TLS plus the bearer worker token.** The console dials `:8000`, which has no `--ssl-ca-certs`; only `:8443` demanded a client certificate, and that listener no longer exists — see the row below. §4.1c always said so and §4.4 contradicted it for five weeks |
+| **"Cloudflare Access is what authenticates a browser"**, and `REQUIRE_ACCESS_JWT=1` as the gate | `platform-domu.md`, `16-deploy-…`, `docs/architecture/platform.md`, DRAFT-047, the §2b row above | **Superseded 2026-09-15**, runbook 17 step 10. The platform issues its own credentials — argon2id passwords, signed access and refresh tokens, TOTP — and the Access *application* was deleted. `REQUIRE_ACCESS_JWT`, `ACCESS_TEAM_DOMAIN` and `ACCESS_AUD` are unset on the deployment. **The tunnel is kept**: it is transport, not identity, and it is what means no inbound ports. `access_identity` remains in the code for a deployment that wants an external provider; this one is not it |
+| **"the worker channel is mutual TLS on 8443 with a shared `WORKER_TOKEN`"** | `09-verify-…`, `live-console.md`, `docs/architecture/platform.md`, every runbook before 17 | **Superseded 2026-09-15**, runbook 17 steps 7 and 11. One listener on `:8000` carries both; each analysis host has **its own** token, issued by `create_worker.py`, stored as a sha256 and revocable with `--rotate`. The platform no longer reads `WORKER_TOKEN` at all — it is sandboxd's credential, not a shared secret. `SANDBOXD_API` is `https://192.168.1.10:8000`; a host still pointed at `:8443` simply stops claiming, see [TROUBLESHOOTING](TROUBLESHOOTING.md#sandboxd-stopped-claiming-after-the-mtls-listener-was-disabled). `SANDBOXD_CLIENT_CERT`/`_KEY` are inert rather than wrong. **The channel is now one factor on the LAN** — a deliberate decision, recorded at the head of runbook 17 |
 
 ---
 
@@ -367,6 +369,7 @@ accurate as dated evidence.
 | `14-verify-routed-egress.md` | 2026-09-04 | **yes** — 47 prompt(s) |  |
 | `15-verify-egress-throttles.md` | 2026-09-05 | **yes** — 50 prompt(s) |  |
 | `16-deploy-tenancy-and-quota.md` | 2026-09-10 | **yes** — 3 prompt(s) |  |
+| `17-deploy-own-identity.md` | 2026-09-15 | **yes** — 7 prompt(s) |  |
 
 ### How components are started
 
@@ -384,6 +387,6 @@ accurate as dated evidence.
 |---|---|
 | sandboxd modules | 16 |
 | test files | 16 sandboxd, 25 platform |
-| documents under `docs/` | 39 |
+| documents under `docs/` | 40 |
 
 <!-- END GENERATED -->

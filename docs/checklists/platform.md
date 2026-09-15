@@ -58,10 +58,19 @@ tested in the development container only.
 
 # M8 — Public hardening + legal gate
 
-- [x] **AuthN** — Cloudflare Access at the edge, JWT verified against the team
-  domain's JWKS with both `iss` and `aud` checked. The worker channel on 8443
-  does *not* require an Access JWT; it authenticates by client certificate and
-  worker token, and must not be given the Access drop-in.
+- [x] **AuthN** — **this platform issues its own credentials as of 2026-09-15**
+  (DRAFT-061, `docs/runbooks/17-deploy-own-identity.md`). Passwords hashed with
+  argon2id, sessions as signed access and refresh tokens, TOTP as a second
+  factor, and per-worker tokens on the worker channel in place of one shared
+  secret. Cloudflare Access was removed at step 10 and the tunnel kept: it is
+  transport, not identity.
+
+  Until then this read "Cloudflare Access at the edge, JWT verified against the
+  team domain's JWKS" with a separate mTLS worker channel on 8443. Both are
+  gone — 8443 was retired at step 11, and `REQUIRE_ACCESS_JWT`,
+  `ACCESS_TEAM_DOMAIN` and `ACCESS_AUD` are no longer set on the deployment.
+  `access_identity` remains in the code so a future deployment *could* sit
+  behind an external provider; nothing here does.
 - [x] **Transport security** (#39) — Cloudflare Tunnel outward, an internal CA
   inward. The CA's signing key lives on the operator's workstation and
   deliberately not on the platform: a platform compromise must not be able to
@@ -111,13 +120,26 @@ tested in the development container only.
   Two things that costs, both being the pre-2026-09-06 state rather than new:
   a lost `access.conf` drop-in is now a config slip on a LAN socket, and the
   console's worker end on `:8000` has no `--ssl-ca-certs`, so attaching to a
-  running clone over the LAN needs only the bearer token. **DRAFT-061** owns
-  the durable fix, which is the same work as splitting the ASGI app.
+  running clone over the LAN needs only the bearer token.
+
+  **DRAFT-061 delivered its half on 2026-09-15** (runbook 17): that bearer
+  token is now per worker, issued by `create_worker.py`, stored as a sha256
+  and revocable per host with `--rotate`. What it does not do is add a second
+  factor — the decision at the head of that runbook dropped Caddy and mTLS, so
+  **the worker channel is one factor on the LAN** by choice, and that is
+  recorded as a known gap rather than closed.
   The scope check on the SSE stream and the console socket runs once, at
   connect, so it depends on publication being restricted to terminal jobs —
   no connection can be open on a job that is publishable. Relaxing that
   restriction would reopen it; the two rules are coupled.
-- [ ] **Rate limiting, abuse controls** — not started.
+- [ ] **Rate limiting, abuse controls** — the login path only, and unexercised
+  on the deployment. DRAFT-061 shipped per-identity and per-IP throttling with
+  lockout and decay in front of argon2, configured at runbook 17 step 3 and
+  live since the cut-over removed Access from in front of it. It stays unticked
+  for two reasons: **nothing has driven a burst of failed logins at it on this
+  host**, so its behaviour under load — and whether `TRUSTED_CLIENT_IP_HEADER`
+  picks the right bucket behind cloudflared — is unevidenced; and abuse
+  controls on submission, which is where the compute is, are not started.
 - [ ] **Tenant isolation** — not started; depends on #40.
 - [ ] **Egress routing** (#42) — open. Whether analysis traffic goes offline,
   direct, or through an exit of our choosing. See `ideas.md` for the VPN

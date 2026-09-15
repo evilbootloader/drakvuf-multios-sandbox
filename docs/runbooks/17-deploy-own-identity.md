@@ -1,15 +1,29 @@
 # Deploy DRAFT-061 — our own identity, per-worker credentials, one listener
 
-**Status: NOT YET EXECUTED.** Every command below is **Candidate** until its
-`EVIDENCE` block holds real output. Nothing here has run on this Dom0 or on the
-platform DomU.
-
-**Issue:** [DRAFT-061](.github/issue-drafts/todo/DRAFT-061.md). Successor to #40
-decision 3. F12 shipped separately on 2026-09-10 and is already live.
-
-**What this deploys:** the platform stops relying on Cloudflare Access for
-identity and starts issuing its own credentials — passwords, sessions, a second
-factor — and the worker channel stops using one shared token.
+> **Issue:** [DRAFT-061](../../.github/issue-drafts/completed/DRAFT-061.md).
+> Successor to #40 decision 3.
+>
+> **Status: EXECUTED on the platform DomU and Dom0, 2026-09-15.** All twelve
+> steps ran, from commit `566d397`. Migration 0009 applied in one pass, Access
+> was removed, and the mTLS listener on 8443 was retired. F12 shipped
+> separately on 2026-09-10 and was already live before any of this.
+>
+> **What this deploys:** the platform stops relying on Cloudflare Access for
+> identity and starts issuing its own credentials — passwords, sessions, a
+> second factor — and the worker channel stops using one shared token.
+>
+> **What this proves:** a session this platform issued reaches the whole API
+> and not only `/auth/*`; sign-out revokes every refresh token rather than
+> only clearing cookies; the F12 ingress rule still refuses the worker routes
+> from outside with Access gone; and one listener carries browser and worker
+> traffic together.
+>
+> **Two things it discovered.** Disabling the mTLS listener in step 11 breaks
+> `sandboxd` until `SANDBOXD_API` is repointed — the step now does that, and
+> the symptom is in
+> [TROUBLESHOOTING](../TROUBLESHOOTING.md#sandboxd-stopped-claiming-after-the-mtls-listener-was-disabled).
+> And the masthead balance did not move when a job finished; see the FINDING
+> at step 12.
 
 ---
 
@@ -101,9 +115,11 @@ per-host is unknown.
 curl -sS -o /dev/null -w '%{http_code}\n' https://api.telegram.org
 ```
 
-A `404` is a **success** here: the host resolved and answered. A hang or a
-connection error means signup and password reset cannot work, and steps 5 and 9
-should set `TELEGRAM_BOT_TOKEN` empty rather than half-configure them.
+**Any HTTP status is a success here** — the host resolved and answered, which
+is the whole question. `302` is what it actually returned; `404` would do just
+as well. A hang or a connection error means signup and password reset cannot
+work, and steps 5 and 9 should set `TELEGRAM_BOT_TOKEN` empty rather than
+half-configure them.
 
 ```
 EVIDENCE 0b                                                     2026-09-15
@@ -115,7 +131,7 @@ api.telegram.org:                       302
 
 ### 0c. Check how `REQUIRE_ACCESS_JWT` is spelled on the live listener
 
-**Candidate.** Until 2026-09-15 this one setting was parsed as
+Until 2026-09-15 this one setting was parsed as
 `os.environ.get("REQUIRE_ACCESS_JWT", "") == "1"` while every other boolean went
 through `config._bool`, which also accepts `true`, `yes` and `on`. So a listener
 configured with the spelling that works everywhere else had Access verification
@@ -135,12 +151,18 @@ from "will the cut-over work" to "what was exposed, and for how long". The fix i
 already in the code — `_bool` now parses all four spellings — so no action is
 needed beyond recording what was there.
 
+**FINDING — it was spelled `1`, so nothing was exposed.** This listener had
+been verifying Access on every request for its whole life, and the fail-open
+path was never taken here. The question this step exists to raise is therefore
+answered, and answered in the good direction: step 10 removes a gate that was
+actually doing its job, not one that had quietly stopped.
+
 ```
 EVIDENCE 0c                                                     2026-09-15
 root@platform:~# sudo systemctl cat sandbox-api-browser | grep -i REQUIRE_ACCESS_JWT
 Environment=REQUIRE_ACCESS_JWT=1
 
-REQUIRE_ACCESS_JWT as configured:       yes
+REQUIRE_ACCESS_JWT as configured:       1
 ```
 
 ---
@@ -153,11 +175,11 @@ sudo -u platform git status --short | head
 ```
 
 ```
-EVIDENCE 1             
+EVIDENCE 1                                                      2026-09-15
 platform@platform:/opt/platform/src$ git pull origin platform-domu
 From github.com:evilbootloader/drakvuf-multios-sandbox
  * branch            platform-domu -> FETCH_HEAD
-Updating 9ab3a35..566d397                                         2026-09-15
+Updating 9ab3a35..566d397
 root@platform:/opt/platform/src# cd /opt/platform/src && sudo -u platform git fetch && sudo -u platform git log --oneline -1
 566d397 (HEAD -> platform-domu, origin/platform-domu) Move to one listener, implement auth not going through Cloudflare IDP
 root@platform:/opt/platform/src# sudo -u platform git status --short | head
@@ -242,14 +264,17 @@ And **remove** `WORKER_TOKEN` from this file. It is now sandboxd's own
 credential, not a secret both ends share.
 
 ```bash
-sudo grep -c WORKER_TOKEN /etc/sandbox-platform/api.env      # expect: 0
+# Anchored, and counting only what the loader would READ. An unanchored
+# `grep -c WORKER_TOKEN` also matches the line commented out rather than
+# deleted, so it answers 1 against a file that is correct.
+sudo grep -cE '^WORKER_TOKEN' /etc/sandbox-platform/api.env  # expect: 0
 sudo grep -c JWT_SIGNING_KEY /etc/sandbox-platform/api.env   # expect: 1
 ```
 
 ```
 EVIDENCE 3                                                      2026-09-15
 
-WORKER_TOKEN removed:                   Yes, commented out
+WORKER_TOKEN removed:                   Yes
 JWT_SIGNING_KEY present:                Yes
 ```
 
@@ -302,7 +327,7 @@ reason this migration is safe against a populated bucket. The objects are where
 they are, and every key builder concatenates the stored value.
 
 ```
-EVIDENCE 5a                                                     ____-__-__
+EVIDENCE 5a                                                     2026-09-15
 
 jobs.owner type:                        uuid
 rows / legacy prefixes:                 190 / 13
@@ -320,7 +345,7 @@ Expect a `Telegram disabled` warning if `TELEGRAM_BOT_TOKEN` is empty — that i
 the intended behaviour, not a fault.
 
 ```
-EVIDENCE 6                                                      ____-__-__
+EVIDENCE 6                                                      2026-09-15
 
 is-active:                              yes
 startup log:                            
@@ -393,7 +418,7 @@ accepted by the rest of the API and not only by `/auth/*`.
 > **Do not verify this with an anonymous `curl`.** Access is still in front
 > until step 10, and it answers a 302 to its own login page regardless of
 > whether the platform works. See
-> [TROUBLESHOOTING](docs/TROUBLESHOOTING.md#curl-from-outside-returns-the-expected-status-and-proves-nothing).
+> [TROUBLESHOOTING](../TROUBLESHOOTING.md#curl-from-outside-returns-the-expected-status-and-proves-nothing).
 
 ```
 EVIDENCE 9                                                      2026-09-15
@@ -431,8 +456,8 @@ sign-in demands a code:                 yes
 
 ### 9b. Sign out, and confirm the session is really gone
 
-**Candidate, and worth its own step because the control is new and the
-behaviour behind it was broken.** `POST /api/v1/auth/logout` revokes every
+**Worth its own step because the control is new and the behaviour behind it
+was broken.** `POST /api/v1/auth/logout` revokes every
 refresh token for the account, but no page ever called it — there was no
 sign-out control anywhere in the UI. Worse, the refresh cookie is scoped
 `Path=/api/v1/auth/refresh`, which is **not** a prefix of `/logout`, so a
@@ -469,8 +494,8 @@ root@platform:~# sudo -u platform psql sandbox_platform -c "
     0 |     2
 
 
-sign-out control present:               ______
-live refresh tokens after sign-out:     ______
+sign-out control present:               yes
+live refresh tokens after sign-out:     0
 ```
 
 ## 10. The cut-over — remove Access
@@ -495,7 +520,7 @@ curl -si https://sandbox.evilbootloader.com/api/v1/worker/claim | head -1
 ```
 
 ```
-EVIDENCE 10                                                     ____-__-__
+EVIDENCE 10                                                     2026-09-15
 
 Access application deleted:             yes
 sign-in still works:                    yes
@@ -508,20 +533,41 @@ GET /api/v1/worker/claim:               404
 worker channel now authenticates per worker, so the second unit has no job —
 and it is the **only** thing that would want `INFRASTRUCTURE_LISTENER`.
 
+**Repoint `sandboxd` first.** `SANDBOXD_API` is `https://192.168.1.10:8443` on
+this host — runbook 09 set it to the mTLS listener, which is the unit about to
+be disabled. Disabling the unit without moving the worker first takes analysis
+down, and the symptom is a connection error in a foreground process nobody is
+watching. On **Dom0**:
+
+```bash
+# /etc/sandboxd/sandboxd.env, mode 600.
+#   SANDBOXD_API=https://192.168.1.10:8000
+# SANDBOXD_CACERT stays -- 8000 is HTTPS too and its certificate still has to
+# be verified. SANDBOXD_CLIENT_CERT and SANDBOXD_CLIENT_KEY become inert: the
+# browser listener does not ask for a client certificate, and sandboxd only
+# builds one into its SSL context when both are set.
+sudo grep -E '^SANDBOXD_API=' /etc/sandboxd/sandboxd.env
+```
+
+Then, on the **platform DomU**:
+
 ```bash
 sudo systemctl disable --now sandbox-api
 systemctl is-enabled sandbox-api                             # expect: disabled
 sudo grep -c INFRASTRUCTURE_LISTENER /etc/sandbox-platform/api.env   # expect: 0
 ```
 
-Confirm `sandboxd` still claims work: it reaches `192.168.1.10:8000` over the
-LAN, which is unaffected — but that is a claim worth testing rather than
-assuming.
+Restart `sandboxd` — it runs in the foreground and has no unit, so that means
+stopping and re-running it per `docs/CURRENT-STATE.md` §1.2 — and confirm it
+claims work against `:8000`.
+
+> If this was done in the other order, the symptom is in
+> [TROUBLESHOOTING](../TROUBLESHOOTING.md#sandboxd-stopped-claiming-after-the-mtls-listener-was-disabled).
 
 ```
 EVIDENCE 11                                                     2026-09-15
-Needed to change SANDBOXD_API=https://192.168.1.10:8000
 
+SANDBOXD_API:                           https://192.168.1.10:8000
 sandbox-api disabled:                   yes
 sandboxd still claiming:                yes
 ```
@@ -536,6 +582,13 @@ development container.
 # was drawn down, and open a console session while it is executing.
 ```
 
+> **RESOLVED — cloudflared forwards the original `Host`.** It arrived as
+> `sandbox.evilbootloader.com`, same-origin matched, the console paired, and
+> `CONSOLE_ALLOWED_ORIGINS` was left unset. The default stays same-origin on
+> this deployment; the setting is a remedy nobody needs here. The paragraphs
+> below are what the question was, kept because they are why the answer is
+> worth having.
+>
 > **The console's `Origin` check is UNVERIFIED behind the tunnel, and this step
 > is where it is first observable.** Added 2026-09-15: the browser end of the
 > console now refuses a handshake whose `Origin` does not match its own `Host`.
@@ -569,7 +622,7 @@ journalctl -t sandboxd -n 50 --no-pager | grep -i console || \
 ```
 
 ```
-EVIDENCE 12                                                     ____-__-__
+EVIDENCE 12                                                     2026-09-15
 2026-09-15 10:51:38,609 INFO    httpx: HTTP Request: POST https://192.168.1.10:8000/api/v1/worker/claim "HTTP/1.1 200 OK"
 2026-09-15 10:51:53,659 INFO    httpx: HTTP Request: POST https://192.168.1.10:8000/api/v1/worker/claim "HTTP/1.1 200 OK"
 2026-09-15 10:51:53,667 INFO    httpx: HTTP Request: GET https://192.168.1.10:9000/analysis/u/6d845150-4c13-4b5f-a985-e5f9c087a8e7/54e/samples/54e00a6b-2656-4a39-b689-173e7fb8cba4/slow.sh?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=sandbox-platform-api%2F20260915%2Feu-central-1%2Fs3%2Faws4_request&X-Amz-Date=20260915T105137Z&X-Amz-Expires=120&X-Amz-SignedHeaders=host&X-Amz-Signature=7aebfefe47e9bec34d1f1ce4054b43744de50fdf4140a69e366fe0be113efedb "HTTP/1.1 200 OK"
@@ -584,12 +637,39 @@ EVIDENCE 12                                                     ____-__-__
 2026-09-15 10:52:00,370 INFO    sandboxd.vnc: console bridged to 127.0.0.1:5900
 
 job reached terminal state:             yes
-balance drawn down:                     yes, but balance does not update until page reload
+balance drawn down:                     yes, in the database
+balance shown in the masthead:          stale until reload -- see FINDING below
 sandboxd dialled out:                   yes
 console session paired:                 yes
-Host presented by cloudflared:          yes
+Host presented by cloudflared:          sandbox.evilbootloader.com
 CONSOLE_ALLOWED_ORIGINS needed:         no
 ```
+
+> **FINDING — the masthead balance did not move when the job finished.** The
+> seconds were drawn down correctly; only the number on screen was stale, and
+> it took an F5 to show it. `balance.js` fetched `POST /account/balance` once
+> inside a `DOMContentLoaded` handler and nothing ever called it again, so the
+> masthead was a snapshot from first paint — the same fault the live status
+> region was built to remove, one element to the left of it.
+>
+> Fixed after this run: the job page tells the masthead when an SSE frame ends
+> a job, the history page does it on the poll swap, and the charge commits in
+> the same transaction as the transition so there is no window where the old
+> number is refetched. Covered by `test_the_balance_follows_a_job_finishing_-
+> under_the_reader` and two beside it in `platform/tests/test_ui_browser.py`.
+>
+> A second defect fell out of reading that poll: `data-live` sat on the
+> `#jobs-table` wrapper, which `hx-swap="innerHTML"` never replaces, so a
+> history page that once had a running job polled every five seconds for the
+> life of the tab. The flag now rides on the fragment. Neither is a deployment
+> action — **pull on the DomU and restart `sandbox-api-browser`** to pick both
+> up.
+
+**The repeated `console bridged` / `viewer left` pairs above are not a fault.**
+Each state change makes `job.js` swap `#job-live`, which destroys the console
+panel; `console.js`'s MutationObserver drops the socket and opens a new one
+against the fresh canvas. Three cycles in three seconds is three state
+transitions, not a reconnect loop.
 
 ---
 
@@ -620,7 +700,10 @@ Then re-add the Access application in Cloudflare, and put the **shared**
 > the reason to keep the Access application **configured but unused** for a
 > while rather than deleting it at step 10 if there is any doubt.
 
-## Known gaps at deploy time
+## Known gaps
+
+Written before the deploy and revised against what it showed, so a reader is
+not told something is unknown that this run answered.
 
 - **`totp_secret` is stored in the clear.** A database disclosure yields the
   second factor beside the password hash it was meant to be independent of.
@@ -629,14 +712,17 @@ Then re-add the Access application in Cloudflare, and put the **shared**
   widely; recorded as `KNOWN GAP (DRAFT-061)` in `0009`.
 - **The worker channel is one factor**, per the decision at the top of this
   file. LAN reachability plus a per-worker credential, with no certificate.
-- **Login rate limiting has never run without Access in front of it.** The
-  mechanism is built and tested; step 10 is the first time it is the only thing
-  standing between the internet and argon2.
-- **The console's `Origin` check has never run behind cloudflared.** Same-origin
-  is the default and the safe direction to fail in — it refuses rather than
-  admits — but whether it refuses the legitimate operator depends on a `Host`
-  nobody has observed. Step 12 establishes it; `CONSOLE_ALLOWED_ORIGINS` is the
-  remedy if it does.
+- **Login rate limiting is now the only thing in front of argon2, and it has
+  not been exercised.** Step 10 removed Access, so this is live rather than
+  theoretical — but nothing in this run drove a burst of failed logins at it.
+  The mechanism is built and tested in `platform/tests`; what is unevidenced is
+  its behaviour under load on this host, with `TRUSTED_CLIENT_IP_HEADER`
+  deciding the bucket. **Still open.**
+- ~~**The console's `Origin` check has never run behind cloudflared.**~~
+  **Answered at step 12, 2026-09-15.** cloudflared forwards the original
+  `Host`, it arrived as `sandbox.evilbootloader.com`, same-origin matched and
+  the console paired. `CONSOLE_ALLOWED_ORIGINS` stays unset here. This holds
+  for the current tunnel configuration; a change to it puts the question back.
 - **`X-Sandbox-Request` is now required on every unsafe method**, not only on
   `/auth/*` — the jobs and account routers demand it too, because two of the
   UI's own calls were CORS-simple requests a cross-site page could have issued.

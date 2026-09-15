@@ -1331,6 +1331,42 @@ marked as read only"* — the deploy key is intentionally read-only.
 commit from. Inspect and discard local changes there rather than merging around
 them.
 
+### `sandboxd` stopped claiming after the mTLS listener was disabled
+
+**Symptom.** Every queued job stays `queued`. The platform is healthy, the UI
+answers, `sandbox-api-browser` is active — and no analysis host picks anything
+up. On Dom0, `sandboxd` logs a connection error against `192.168.1.10:8443`
+rather than a refusal, so it does not look like an authentication problem.
+
+Worse, there may be nothing to read: `sandboxd` runs in the **foreground** with
+no unit, so `journalctl -t sandboxd` is empty and the error is in a terminal
+somebody may have closed.
+
+**Cause.** `SANDBOXD_API` pointed at `https://192.168.1.10:8443`, the mTLS
+worker listener, because that is what runbook 09 set when 8443 was the worker
+channel. Retiring that listener (`systemctl disable --now sandbox-api`) removes
+the endpoint the worker was configured to dial. Nothing on the platform side is
+wrong; the worker is calling a port that no longer answers.
+
+**Fix.** Repoint the worker **before** disabling the unit, not after, in
+`/etc/sandboxd/sandboxd.env` on each analysis host:
+
+```sh
+SANDBOXD_API=https://192.168.1.10:8000
+```
+
+then stop and re-run `sandboxd` — a `git pull` alone changes nothing, because
+it holds its modules in memory. `SANDBOXD_CACERT` stays: 8000 is HTTPS too and
+its certificate still has to be verified. `SANDBOXD_CLIENT_CERT` and
+`SANDBOXD_CLIENT_KEY` become inert rather than wrong — the browser listener
+does not request a client certificate, and `Settings.from_env` only builds one
+into the SSL context when both are set.
+
+Hit on 2026-09-15 during
+[runbook 17](runbooks/17-deploy-own-identity.md#11-retire-the-mtls-listener),
+whose step 11 now repoints the worker first and whose prose used to assert the
+opposite — that `sandboxd` reached `:8000` already and was unaffected.
+
 ---
 
 # Guest execution and samples
