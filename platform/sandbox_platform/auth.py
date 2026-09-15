@@ -590,6 +590,38 @@ def caller_identity(
     )
 
 
+def session_is_ours(
+    sandbox_access: Annotated[str | None, Cookie()] = None,
+) -> bool:
+    """Whether this request's identity came from a session THIS platform issued.
+
+    **The UI needs it because sign-out is only honourable for our own
+    sessions.** While an external provider is in front, every request carries
+    its assertion and is re-authenticated regardless of what we do with our
+    cookies -- so `POST /auth/logout` returns 204, clears cookies that were
+    doing nothing, and leaves the caller fully signed in. Offering the control
+    anyway is what produced the reported symptom: the UI navigates to
+    `/ui/login`, the user believes they are out, and the next link they click
+    shows them signed in again.
+
+    A control that cannot do what it says must not be offered. `base.html`
+    renders the button only when this is true, which is also why it will simply
+    always be true after the cut-over -- there will be no other issuer.
+
+    Deliberately NOT derived from `caller_identity`: this has to answer for a
+    caller that has no identity at all, and it must not raise.
+    """
+    if not sandbox_access:
+        return False
+    from . import credentials
+
+    try:
+        credentials.decode_access_token(sandbox_access)
+    except credentials.CredentialsError:
+        return False
+    return True
+
+
 # The tenant id -- what every read predicate and every owned row uses.
 #
 # Re-pointed twice: to `resolve_tenant` by 0009, and to `caller_identity` when

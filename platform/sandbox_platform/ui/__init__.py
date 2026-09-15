@@ -104,6 +104,13 @@ public_router = APIRouter(prefix="/ui", tags=["ui"])
 
 def _render(request: Request, template: str, **ctx) -> HTMLResponse:
     ctx.setdefault("asset_version", ASSET_VERSION)
+    # **Whether the session is ours decides whether Sign out is offered.**
+    # Read from the cookie here rather than taken as a dependency because
+    # `/ui/login` is on the public router and must render for a caller with no
+    # identity at all -- a dependency that refused would make the sign-in page
+    # unreachable, which is the bug the public router exists to avoid.
+    ctx.setdefault("own_session",
+                   auth.session_is_ours(request.cookies.get("sandbox_access")))
     return templates.TemplateResponse(request, template, ctx)
 
 

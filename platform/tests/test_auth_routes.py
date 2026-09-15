@@ -345,7 +345,7 @@ def test_logout_without_a_session_is_not_an_error(client):
     outcome."""
     assert client.post("/api/v1/auth/logout", headers=CSRF).status_code == 204
 
-def test_the_masthead_offers_a_way_out(client):
+def test_the_masthead_offers_a_way_out(client, conn, account):
     """**The route had no caller in the UI at all.**
 
     `POST /api/v1/auth/logout` was implemented and tested while the masthead
@@ -353,8 +353,19 @@ def test_the_masthead_offers_a_way_out(client):
     way to sign out. Asserted on the rendered page rather than left to a
     reviewer noticing, because "implemented and unreachable" is the state it
     was already in once.
+
+    **Signed in with OUR OWN session, which is now the condition.** The default
+    `client` carries an Access identity, and the control is deliberately hidden
+    there: we cannot end a Cloudflare session, so offering to would produce the
+    "signed out but still signed in" state that
+    `test_cutover.py::test_sign_out_is_not_offered_while_an_external_provider_owns_the_session`
+    describes.
     """
-    body = client.get("/ui/account").text
+    email, _ = account
+    cookies = {"sandbox_access": _login(client, email,
+                                        PASSWORD).cookies["sandbox_access"]}
+
+    body = client.get("/ui/account", cookies=cookies).text
     assert 'id="sign-out"' in body
     assert "signout.js" in body, "the control is there with nothing driving it"
 

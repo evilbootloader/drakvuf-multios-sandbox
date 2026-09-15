@@ -153,10 +153,19 @@ sudo -u platform git status --short | head
 ```
 
 ```
-EVIDENCE 1                                                      ____-__-__
+EVIDENCE 1             
+platform@platform:/opt/platform/src$ git pull origin platform-domu
+From github.com:evilbootloader/drakvuf-multios-sandbox
+ * branch            platform-domu -> FETCH_HEAD
+Updating 9ab3a35..566d397                                         2026-09-15
+root@platform:/opt/platform/src# cd /opt/platform/src && sudo -u platform git fetch && sudo -u platform git log --oneline -1
+566d397 (HEAD -> platform-domu, origin/platform-domu) Move to one listener, implement auth not going through Cloudflare IDP
+root@platform:/opt/platform/src# sudo -u platform git status --short | head
+root@platform:/opt/platform/src# 
 
-commit:                                 ______
-working tree clean:                     ______
+
+commit:                                 566d397
+working tree clean:                     yes
 ```
 
 ## 2. New dependencies
@@ -171,9 +180,9 @@ sudo -u platform .venv/bin/python -c "import argon2, pyotp; print(argon2.__versi
 ```
 
 ```
-EVIDENCE 2                                                      ____-__-__
+EVIDENCE 2                                                      2026-09-15
 
-argon2-cffi / pyotp:                    ______
+argon2-cffi / pyotp:                    argon2-cffi-25.1.0 argon2-cffi-bindings-26.1.0 pyotp-2.10.0
 ```
 
 ## 3. The environment block
@@ -209,7 +218,7 @@ MAX_CONCURRENT_HASHES=4
 
 # --- self-service signup ------------------------------------------------
 # OFF unless you want it. What it gates is not "an account" but the opening
-# grant of 3600 analysis seconds, so an open route is free compute for anyone
+# grant of 3600 analysis seconds, so an open2-__ route is free compute for anyone
 # with an email address and a Telegram account. Closed, create_user.py is the
 # only way in -- and password reset still works for accounts that exist.
 REGISTRATION_OPEN=0
@@ -238,10 +247,10 @@ sudo grep -c JWT_SIGNING_KEY /etc/sandbox-platform/api.env   # expect: 1
 ```
 
 ```
-EVIDENCE 3                                                      ____-__-__
+EVIDENCE 3                                                      2026-09-15
 
-WORKER_TOKEN removed:                   ______
-JWT_SIGNING_KEY present:                ______
+WORKER_TOKEN removed:                   Yes, commented out
+JWT_SIGNING_KEY present:                Yes
 ```
 
 ## 4. Stop both units
@@ -252,9 +261,9 @@ systemctl is-active sandbox-api-browser sandbox-api          # expect: inactive
 ```
 
 ```
-EVIDENCE 4                                                      ____-__-__
+EVIDENCE 4                                                      2026-09-15
 
-is-active:                              ______
+is-active:                              both inactive
 ```
 
 ## 5. Apply migration 0009
@@ -269,9 +278,9 @@ sudo -u platform DATABASE_URL=postgresql:///sandbox_platform \
 migration whose bytes have changed, so everything after this point is 0010.
 
 ```
-EVIDENCE 5                                                      ____-__-__
+EVIDENCE 5                                                      2026-09-15
 
-applied  0009_tenant_credentials.sql:   ______
+applied  0009_tenant_credentials.sql:   yes
 ```
 
 ### 5a. Confirm the rewrite, and that objects were left alone
@@ -295,15 +304,15 @@ they are, and every key builder concatenates the stored value.
 ```
 EVIDENCE 5a                                                     ____-__-__
 
-jobs.owner type:                        ______
-rows / legacy prefixes:                 ______
+jobs.owner type:                        uuid
+rows / legacy prefixes:                 190 / 13
 ```
 
 ## 6. Start the API and check it answers
 
 ```bash
-sudo systemctl start sandbox-api-browser sandbox-api
-systemctl is-active sandbox-api-browser sandbox-api
+sudo systemctl start sandbox-api-browser  
+systemctl is-active sandbox-api-browser 
 sudo journalctl -u sandbox-api-browser -n 20 --no-pager
 ```
 
@@ -313,8 +322,13 @@ the intended behaviour, not a fault.
 ```
 EVIDENCE 6                                                      ____-__-__
 
-is-active:                              ______
-startup log:                            ______
+is-active:                              yes
+startup log:                            
+Sep 15 10:24:01 platform systemd[1]: Started sandbox-api-browser.service - DRAKVUF sandbox platform API (browser origin for cloudflared).
+Sep 15 10:24:01 platform python[27349]: INFO:     Started server process [27349]
+Sep 15 10:24:01 platform python[27349]: INFO:     Waiting for application startup.
+Sep 15 10:24:01 platform python[27349]: INFO:     Application startup complete.
+Sep 15 10:24:01 platform python[27349]: INFO:     Uvicorn running on https://192.168.1.10:8000 (Press CTRL+C to quit)
 ```
 
 ## 7. Credential the analysis hosts
@@ -336,10 +350,10 @@ re-running it per `docs/CURRENT-STATE.md` §1.2.
 is also how a compromised host is cut off.
 
 ```
-EVIDENCE 7                                                      ____-__-__
+EVIDENCE 7                                                      2026-09-15
 
-create_worker.py dom0-1:                ______
-sandboxd restarted and claiming:        ______
+create_worker.py dom0-1:                yes
+sandboxd restarted and claiming:        yes
 ```
 
 ## 8. Make the first account
@@ -358,10 +372,10 @@ The password is **prompted for, never an argument** — a password in argv is in
 password reset will not work for that account.
 
 ```
-EVIDENCE 8                                                      ____-__-__
+EVIDENCE 8                                                      2026-09-15
 
-created:                                ______
-balance:                                ______
+created:                                yes
+balance:                                3600
 ```
 
 ## 9. Sign in through the tunnel
@@ -382,11 +396,11 @@ accepted by the rest of the API and not only by `/auth/*`.
 > [TROUBLESHOOTING](docs/TROUBLESHOOTING.md#curl-from-outside-returns-the-expected-status-and-proves-nothing).
 
 ```
-EVIDENCE 9                                                      ____-__-__
+EVIDENCE 9                                                      2026-09-15
 
-/ui/login renders:                      ______
-sign-in succeeds:                        ______
-balance shown:                          ______
+/ui/login renders:                      yes
+sign-in succeeds:                       yes
+balance shown:                          yes
 ```
 
 ### 9a. Enrol the second factor
@@ -407,12 +421,12 @@ Two behaviours to confirm while here, because both were defects fixed on
   with no handler for its whole life.
 
 ```
-EVIDENCE 9a                                                     ____-__-__
+EVIDENCE 9a                                                     2026-09-15
 
-TOTP enrolled:                          ______
-recovery codes saved:                   ______
-reload mid-enrolment kept the key:      ______
-sign-in demands a code:                 ______
+TOTP enrolled:                          yes
+recovery codes saved:                   yes
+reload mid-enrolment kept the key:      yes
+sign-in demands a code:                 yes
 ```
 
 ### 9b. Sign out, and confirm the session is really gone
@@ -443,7 +457,17 @@ cookie and the revocation half did not run — which is exactly the bug above, a
 means the fix did not reach this deployment.
 
 ```
-EVIDENCE 9b                                                     ____-__-__
+EVIDENCE 9b                                                     2026-09-15
+root@platform:~# sudo -u platform psql sandbox_platform -c "
+  SELECT count(*) FILTER (WHERE revoked_at IS NULL) AS live,
+         count(*) AS total
+    FROM refresh_tokens r
+    JOIN identities i ON i.id = r.owner
+   WHERE lower(i.email) = lower('you@example.com');"
+ live | total 
+------+-------
+    0 |     2
+
 
 sign-out control present:               ______
 live refresh tokens after sign-out:     ______
@@ -473,9 +497,9 @@ curl -si https://sandbox.evilbootloader.com/api/v1/worker/claim | head -1
 ```
 EVIDENCE 10                                                     ____-__-__
 
-Access application deleted:             ______
-sign-in still works:                    ______
-GET /api/v1/worker/claim:               ______
+Access application deleted:             yes
+sign-in still works:                    yes
+GET /api/v1/worker/claim:               404
 ```
 
 ## 11. Retire the mTLS listener
@@ -495,10 +519,11 @@ LAN, which is unaffected — but that is a claim worth testing rather than
 assuming.
 
 ```
-EVIDENCE 11                                                     ____-__-__
+EVIDENCE 11                                                     2026-09-15
+Needed to change SANDBOXD_API=https://192.168.1.10:8000
 
-sandbox-api disabled:                   ______
-sandboxd still claiming:                ______
+sandbox-api disabled:                   yes
+sandboxd still claiming:                yes
 ```
 
 ## 12. One full analysis
@@ -545,13 +570,25 @@ journalctl -t sandboxd -n 50 --no-pager | grep -i console || \
 
 ```
 EVIDENCE 12                                                     ____-__-__
+2026-09-15 10:51:38,609 INFO    httpx: HTTP Request: POST https://192.168.1.10:8000/api/v1/worker/claim "HTTP/1.1 200 OK"
+2026-09-15 10:51:53,659 INFO    httpx: HTTP Request: POST https://192.168.1.10:8000/api/v1/worker/claim "HTTP/1.1 200 OK"
+2026-09-15 10:51:53,667 INFO    httpx: HTTP Request: GET https://192.168.1.10:9000/analysis/u/6d845150-4c13-4b5f-a985-e5f9c087a8e7/54e/samples/54e00a6b-2656-4a39-b689-173e7fb8cba4/slow.sh?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=sandbox-platform-api%2F20260915%2Feu-central-1%2Fs3%2Faws4_request&X-Amz-Date=20260915T105137Z&X-Amz-Expires=120&X-Amz-SignedHeaders=host&X-Amz-Signature=7aebfefe47e9bec34d1f1ce4054b43744de50fdf4140a69e366fe0be113efedb "HTTP/1.1 200 OK"
+2026-09-15 10:51:57,316 INFO    sandboxd.stages: job 54e00a6b-2656-4a39-b689-173e7fb8cba4: egress tor via no interface (nothing is forwarded)
+2026-09-15 10:51:57,324 INFO    sandboxd.vnc: console dialled out for job 54e00a6b-2656-4a39-b689-173e7fb8cba4
+2026-09-15 10:51:57,324 INFO    sandboxd.vnc: console bridged to 127.0.0.1:5900
+2026-09-15 10:51:57,329 INFO    httpx: HTTP Request: POST https://192.168.1.10:8000/api/v1/worker/jobs/54e00a6b-2656-4a39-b689-173e7fb8cba4/state "HTTP/1.1 204 No Content"
+2026-09-15 10:51:57,433 INFO    sandboxd.vnc: viewer left the console for 127.0.0.1:5900; waiting for another
+2026-09-15 10:51:57,546 INFO    sandboxd.vnc: console bridged to 127.0.0.1:5900
+2026-09-15 10:52:00,135 INFO    httpx: HTTP Request: POST https://192.168.1.10:8000/api/v1/worker/jobs/54e00a6b-2656-4a39-b689-173e7fb8cba4/state "HTTP/1.1 204 No Content"
+2026-09-15 10:52:00,305 INFO    sandboxd.vnc: viewer left the console for 127.0.0.1:5900; waiting for another
+2026-09-15 10:52:00,370 INFO    sandboxd.vnc: console bridged to 127.0.0.1:5900
 
-job reached terminal state:             ______
-balance drawn down:                     ______
-sandboxd dialled out:                   ______
-console session paired:                 ______
-Host presented by cloudflared:          ______
-CONSOLE_ALLOWED_ORIGINS needed:         ______
+job reached terminal state:             yes
+balance drawn down:                     yes, but balance does not update until page reload
+sandboxd dialled out:                   yes
+console session paired:                 yes
+Host presented by cloudflared:          yes
+CONSOLE_ALLOWED_ORIGINS needed:         no
 ```
 
 ---

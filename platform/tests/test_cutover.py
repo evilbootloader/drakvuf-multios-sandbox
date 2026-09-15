@@ -303,3 +303,91 @@ def test_an_unset_audience_refuses_rather_than_minting_dead_tokens(monkeypatch):
         credentials.mint_access_token("some-tenant-id")
     with pytest.raises(credentials.CredentialsUnconfigured):
         credentials.decode_access_token("anything")
+
+
+# --- sign-out is only offered where it can work -----------------------------
+
+
+def test_sign_out_is_not_offered_while_an_external_provider_owns_the_session(
+        client, conn, no_identity, monkeypatch):
+    """**The reported bug, and why hiding the control is the fix.**
+
+    While Cloudflare Access is in front, every request carries its assertion and
+    is re-authenticated regardless of what we do with our cookies. So
+    `POST /auth/logout` answers 204, clears cookies that were doing nothing, and
+    `signout.js` navigates to `/ui/login` -- at which point the user believes
+    they are out and the next link they click shows them signed in again. It
+    reads as a session that refuses to end.
+
+    We cannot end a Cloudflare session; it belongs to Cloudflare. A control that
+    cannot do what it says must not be offered.
+    """
+    from sandbox_platform import auth
+    from sandbox_platform.app import app
+
+    app.dependency_overrides[auth.access_identity] = lambda: "someone@example.test"
+    try:
+        page = client.get("/ui/jobs").text
+    finally:
+        app.dependency_overrides.pop(auth.access_identity, None)
+
+    assert 'id="sign-out"' not in page
+    # And the script that binds it is not loaded either -- a handler looking for
+    # a button that is not there is dead weight on every page.
+    assert "signout.js" not in page
+
+
+def test_sign_out_is_offered_for_a_session_this_platform_issued(
+        client, conn, no_identity, account):
+    """The other half. After the cut-over there is no other issuer, so this is
+    simply always the case -- which is why the condition is `own_session` rather
+    than a check on whether Access is configured."""
+    email, _ = account
+    cookies = _sign_in(client, email)
+
+    page = client.get("/ui/jobs", cookies=cookies).text
+
+    assert 'id="sign-out"' in page
+    assert "signout.js" in page
+
+
+def test_signing_out_clears_the_cookies_and_kills_renewal(client, conn,
+                                                          no_identity, account):
+    """What sign-out does, and the one thing it cannot do.
+
+    It clears both cookies and revokes every refresh token for the owner, so a
+    browser is anonymous immediately and the session cannot be renewed.
+
+    **It cannot invalidate an already-issued access token.** That token is a
+    signed assertion checked without a database round trip -- which is what
+    makes it cheap enough to verify on every request, and the reason
+    `ACCESS_TOKEN_TTL_MINUTES` is short: the TTL is the window a copy stays
+    usable after sign-out. Asserted here rather than left as folklore, because
+    "logged out" meaning "for up to an hour, if someone kept the cookie" is
+    worth knowing before it is discovered.
+    """
+    email, _ = account
+    cookies = _sign_in(client, email)
+    refresh = client.post(
+        "/api/v1/auth/login", headers={**CSRF, "X-Test-Client-IP": "203.0.113.31"},
+        json={"email": email, "password": PASSWORD},
+    ).cookies["sandbox_refresh"]
+
+    out = client.post("/api/v1/auth/logout", headers=CSRF, cookies=cookies)
+    assert out.status_code == 204
+
+    # Both cookies are cleared, so a real browser holds nothing.
+    for name in ("sandbox_access", "sandbox_refresh"):
+        cleared = [h for h in out.headers.get_list("set-cookie")
+                   if h.startswith(f"{name}=")]
+        assert cleared, f"{name} was not cleared"
+
+    # Renewal is dead: the refresh chain was revoked, so the session cannot
+    # outlive the access token it already minted.
+    assert client.post("/api/v1/auth/refresh", headers=CSRF,
+                       cookies={"sandbox_refresh": refresh}).status_code == 401
+
+    # And the honest limitation, stated as a test rather than a comment.
+    assert client.get("/ui/jobs", cookies=cookies).status_code == 200, (
+        "an already-issued access token is expected to survive to its expiry"
+    )

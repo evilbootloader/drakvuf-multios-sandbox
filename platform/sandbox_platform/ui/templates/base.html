@@ -23,9 +23,10 @@
 {# Deferred, unlike theme.js: nothing is laid out around it and a slow
    balance must not hold up the first paint. #}
 <script src="/ui/static/balance.js?v={{ asset_version }}" defer></script>
-{% if view != 'login' %}
-{# Not loaded on the sign-in page, which renders no sign-out control -- see
-   the masthead below. #}
+{% if view != 'login' and own_session %}
+{# Loaded on the same condition as the button it binds to -- see the masthead
+   below. Not on the sign-in page, which renders no control, and not while an
+   external provider owns the session, which we cannot end. #}
 <script src="/ui/static/signout.js?v={{ asset_version }}" defer></script>
 {% endif %}
 </head>
@@ -48,7 +49,17 @@
        broken either way. A button rather than a link because signing out is a
        POST -- `signout.js` sends it with the X-Sandbox-Request header the auth
        router requires, then navigates here. #}
-    {% if view != 'login' %}
+    {# **Only for a session THIS platform issued.** While an external provider
+       is in front, every request carries its assertion and is re-authenticated
+       regardless of what we do with our cookies -- so logout returns 204,
+       clears nothing that mattered, and `signout.js` navigates to /ui/login
+       while the caller is still fully signed in. The next link they click shows
+       them back inside, which reads as the session refusing to end.
+
+       We cannot end a Cloudflare Access session; it is Cloudflare's. So the
+       control is not offered rather than offered and broken. After the
+       cut-over there is no other issuer and this is simply always true. #}
+    {% if view != 'login' and own_session %}
     <button type="button" id="sign-out" title="Sign out">Sign out</button>
     {% endif %}
   </nav>
