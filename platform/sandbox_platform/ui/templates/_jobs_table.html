@@ -5,8 +5,16 @@
   on a job's own page, so the detail view went live while the list it was
   reached from stayed frozen -- an operator watching /ui/jobs saw `queued`
   while the analysis had already finished.
+
+  `data-live` rides on THIS element, inside the fragment, and not on the
+  #jobs-table wrapper in jobs.html where it started. The swap is
+  `hx-swap="innerHTML"`, so the wrapper is never replaced: its attribute was
+  frozen at whatever the first full render said, the trigger filter read that
+  same stale value every five seconds, and a page that once had a live row
+  polled for the life of the tab. Carried by the swapped markup, the server's
+  answer actually reaches the filter.
 #}
-<div class="scroll-x">
+<div class="scroll-x" data-live="{{ '1' if live else '0' }}">
 <table class="rows">
   <thead>
     <tr>

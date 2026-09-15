@@ -84,11 +84,16 @@
   `data-live` is what stops it polling forever: the server says whether any row
   on this page can still change, and the htmx trigger filter reads it. A page
   of finished jobs makes no requests at all.
+
+  It is read from INSIDE the swapped fragment -- see _jobs_table.html, which
+  carries it. On this wrapper, which innerHTML never replaces, it could only
+  ever report what was true when the page first loaded. `?.` because the timer
+  can fire between htmx emptying this element and filling it again, and a
+  throw there stops the poll for good.
 #}
 <div id="jobs-table"
-     data-live="{{ '1' if live else '0' }}"
      hx-get="/ui/jobs/table?{{ query }}"
-     hx-trigger="every 5s [document.getElementById('jobs-table').dataset.live === '1']"
+     hx-trigger="every 5s [document.querySelector('#jobs-table [data-live]')?.dataset.live === '1']"
      hx-target="#jobs-table"
      hx-swap="innerHTML">
 {% include "_jobs_table.html" %}

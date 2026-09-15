@@ -48,6 +48,17 @@
     if (payload.state !== state) {
       state = payload.state;
       refresh();
+
+      // The masthead balance is drawn down by exactly this transition, and it
+      // is outside #job-live so refresh() does not touch it. Told rather than
+      // polled; `balance.js` listens.
+      //
+      // On a CHANGE to a terminal state, not on every terminal frame. The
+      // first frame is a snapshot, so opening an already-finished job would
+      // otherwise refetch a balance that already includes the charge.
+      if (terminal.has(payload.state)) {
+        document.dispatchEvent(new CustomEvent("sandbox:balance-stale"));
+      }
     }
 
     // Checked on EVERY frame, not only on a change. The first frame is a

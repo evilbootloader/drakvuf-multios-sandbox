@@ -535,6 +535,30 @@ def test_a_page_of_finished_jobs_does_not_poll(client, conn):
     assert 'data-live="0"' in client.get("/ui/jobs").text
 
 
+def test_the_liveness_flag_travels_with_the_fragment(client, conn):
+    """What the poll condition reads has to be inside what the poll replaces.
+
+    `hx-swap="innerHTML"` never touches the `#jobs-table` wrapper, so a
+    `data-live` written as an attribute of that wrapper was frozen at first
+    render: the filter re-read the same stale value every five seconds, and a
+    page that loaded with one running job went on polling for the life of the
+    tab. The comment above it claimed the opposite, and the test beside it only
+    ever looked at the first render.
+    """
+    conn.execute("INSERT INTO jobs (target_os, submitted_filename, state, owner)"
+                 " VALUES ('ubuntu', 'running.bin', 'executing',"
+                 "         %s)", (owner_id(conn),))
+
+    # The fragment the swap brings in is what carries the server's answer.
+    assert 'data-live="1"' in client.get("/ui/jobs/table").text
+
+    # And the wrapper does not, because a second copy would be free to
+    # disagree with the first -- which is precisely how this went wrong.
+    body = client.get("/ui/jobs").text
+    opening = body[body.index('<div id="jobs-table"'):]
+    assert 'data-live="' not in opening[:opening.index(">")]
+
+
 def test_the_refresh_keeps_the_filters_and_the_page(client, conn):
     """A refresh that dropped the filter would show a different result set
     every five seconds; one that dropped the page would move the table under

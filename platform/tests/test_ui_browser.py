@@ -665,3 +665,135 @@ def test_a_tab_click_does_re_render_the_tab_bar(strict_page, server, seed):
         "the nav was not re-rendered, so aria-selected could not have moved")
     assert strict_page.locator(
         "nav.tabs a[aria-selected='true']").inner_text() == "Artifacts"
+
+
+# --- the masthead balance follows the charge -------------------------------
+#
+# Reported from the deployment 2026-09-15, runbook 17 step 12: a job ran to
+# completion under the operator's eye, the seconds were drawn down in the
+# database, and the number in the masthead did not move until F5. `balance.js`
+# fetched once on DOMContentLoaded and nothing called it again.
+#
+# These spend the balance directly rather than through a worker report, for
+# the reason `_advance` exists: the charge and the transition commit together
+# in `_charge_for_runtime`, so writing both here is the same pair of facts a
+# real run presents, without a second process to sequence.
+
+def _spend(seconds: int) -> None:
+    with psycopg.connect(DSN, autocommit=True) as c:
+        c.execute(
+            "UPDATE tenants SET balance_seconds = balance_seconds - %s"
+            " WHERE owner = %s",
+            (seconds, owner_id(c, BROWSER_OWNER)),
+        )
+
+
+def _quiesce(keep) -> None:
+    """Finish every OTHER job in the database.
+
+    The history page is not scoped to one test. Jobs seeded and advanced by
+    everything above are still here and still `executing`, and one of them on
+    page 1 is enough to keep the list live forever -- so a poll test would be
+    asserting against somebody else's liveness rather than its own.
+    """
+    with psycopg.connect(DSN, autocommit=True) as c:
+        c.execute("UPDATE jobs SET state = 'completed'"
+                  " WHERE id <> %s AND state <> 'completed'", (keep,))
+
+
+def _balance_settles(page) -> str:
+    """The masthead balance, once it has arrived.
+
+    It is fetched, not rendered, so the element exists empty for as long as
+    the round trip takes -- reading it too early yields "" and every later
+    comparison against that passes for the wrong reason.
+    """
+    page.wait_for_function(
+        "() => document.getElementById('balance').textContent !== ''",
+        timeout=10_000)
+    return page.locator("#balance").inner_text()
+
+
+def test_the_balance_follows_a_job_finishing_under_the_reader(
+        strict_page, server, seed):
+    """The bug, stated as a test. A balance that only moves on reload is the
+    same fault the live status region was built to remove, one element to the
+    left of it."""
+    job_id = seed("slow.bin", state="executing")
+    strict_page.goto(f"{server}/ui/jobs/{job_id}")
+    # Also what creates the tenant row: the balance route upserts on first
+    # contact, so _spend has nothing to update until this has been answered.
+    before = _balance_settles(strict_page)
+
+    _spend(120)
+    _advance(job_id, "completed")
+
+    strict_page.wait_for_function(
+        "t => document.getElementById('balance').textContent !== t",
+        arg=before, timeout=10_000)
+    assert strict_page.locator("#balance").inner_text() != before
+    assert strict_page.fired == [], strict_page.fired
+
+
+def test_the_balance_does_not_refetch_on_an_already_finished_job(
+        strict_page, server, seed):
+    """The first SSE frame is a snapshot. Opening a finished job would
+    otherwise fetch the balance twice on load -- the second time to learn the
+    same number, because the charge was in it before the page rendered."""
+    seen: list[str] = []
+    strict_page.on("request",
+                   lambda r: seen.append(r.url) if "/account/balance" in r.url else None)
+
+    job_id = seed("done.bin", state="completed")
+    strict_page.goto(f"{server}/ui/jobs/{job_id}")
+    _balance_settles(strict_page)
+    strict_page.wait_for_timeout(2_000)
+
+    assert len(seen) == 1, seen
+
+
+def test_the_balance_follows_the_history_poll(strict_page, server, seed):
+    """The history page has no SSE -- the NOTIFY channel is per job id, so the
+    list polls. The swap is the signal there, and it is self-limiting: the poll
+    runs only while a row can still change."""
+    job_id = seed("slow.bin", state="executing")
+    _quiesce(job_id)
+    strict_page.goto(f"{server}/ui/jobs")
+    before = _balance_settles(strict_page)
+
+    _spend(90)
+    _advance(job_id, "completed")
+
+    strict_page.wait_for_function(
+        "t => document.getElementById('balance').textContent !== t",
+        arg=before, timeout=15_000)
+    assert strict_page.fired == [], strict_page.fired
+
+
+def test_the_history_poll_stops_when_the_last_job_finishes(
+        strict_page, server, seed):
+    """`data-live` lived on the #jobs-table wrapper, which `hx-swap="innerHTML"`
+    never replaces -- so the trigger filter re-read the value from first render
+    every five seconds and a page that once had a running job polled for the
+    life of the tab. Costs nothing visible, like the EventSource reconnect
+    above, which is exactly why it survived.
+
+    Carried by the fragment, the server's answer reaches the filter. This also
+    bounds the balance refetch hung off the same swap.
+    """
+    seen: list[str] = []
+    strict_page.on("request",
+                   lambda r: seen.append(r.url) if "/ui/jobs/table" in r.url else None)
+
+    job_id = seed("slow.bin", state="executing")
+    _quiesce(job_id)
+    strict_page.goto(f"{server}/ui/jobs")
+    strict_page.wait_for_selector("[data-live='1']")
+
+    _advance(job_id, "completed")
+    strict_page.wait_for_selector("[data-live='0']", timeout=15_000)
+
+    settled = len(seen)
+    strict_page.wait_for_timeout(11_000)      # two poll intervals, and a margin
+
+    assert len(seen) == settled, seen[settled:]
