@@ -47,7 +47,7 @@ Its derived half is generated: `scripts/gen-current-state.py`, enforced by
 | Sequencing, open decisions | `docs/roadmap/project-roadmap.md` |
 | Per-OS progress | `docs/checklists/{android,ubuntu,windows,platform}.md` |
 | Orchestration, queue, web tier | `docs/architecture/platform.md` |
-| The `automation/` scripts in detail | `docs/architecture/automation-files.md` |
+| What the deleted launcher pipeline was, and what replaced each file | `docs/architecture/automation-files.md` |
 | Other design records | `docs/architecture/` |
 | Dated execution evidence | `docs/runbooks/NN-*.md`, numbered oldest to newest |
 | Dated project reviews | `docs/reviews/` |
@@ -61,9 +61,9 @@ one grep instead of reading a 3,000-line checklist or guessing at keywords.
 
 | | |
 |---|---|
-| `automation/` | the pipeline: `dirwatch.c`, `clone.pl`, and the per-OS `preconfig-`/`drakvuf-`/`run_analysis-` scripts, plus `pipeline-<os>.env` and host-global `platform.env` |
+| `automation/` | **not the pipeline** — host provisioning and deployment assets: `network-setup.sh` (run by `sandboxd` at every daemon start), host-global `platform.env`, and the egress configs. The shell/C pipeline that lived here was deleted 2026-09-15 |
+| `sandboxd/` | **the pipeline**, and the Dom0 orchestrator: clone, preconfig, trace, collect, destroy. Python, with its own tests |
 | `misc/` | **the Xen guest `.cfg` files** — golden, `_sandbox` templates, and `platform.cfg`. Not in `automation/` |
-| `sandboxd/` | the Dom0 orchestrator, Python, with its own tests |
 | `platform/` | the FastAPI service, migrations, MinIO provisioning, UI, tests |
 | `scripts/` | repository tooling: the three generators (`gen-current-state.py`, `gen-doc-index.py`, `gen-xen-configs.py`), `check-refs.py`, `dev-services.sh` |
 | `.claude/skills/` | **tracked** — routers to the docs below: `deployment-state`, `runbook`, `dom0-handoff`. The rest of `.claude/` is not |
@@ -108,24 +108,36 @@ them as working until validated.
 **Scripts in `automation/` run under `dash`, not `bash`.** Write POSIX. Use
 `$0`, never `${BASH_SOURCE[0]}` — it evaluates to empty under dash and the
 script carries on, which silently turned `SCRIPT_DIR` into `$PWD`. Check with
-`dash -n` as well as `bash -n`. `run_analysis-ubuntu.sh` is the one genuine
-bash script; it uses `$0` too, so the idiom stays uniform.
+`dash -n` as well as `bash -n`. `network-setup.sh` is the only script left
+there, and this binds it and the next one written.
 
 **Untrusted filenames must never be spliced into a guest shell string.**
 `sample_name_admissible()` rejects only `/` and control characters, so `"`,
 `$`, backtick and `;` all reach the guest. Use the `sh -c '…' sh "$UNSAFE"`
 idiom so the value arrives as a separate `execve` element. Sample-derived text
 may live in guest shell *variables* and be used quoted; it may not reach the
-guest as text Dom0 pasted into a command.
+guest as text Dom0 pasted into a command. The rule has **three live copies** —
+`routers/jobs.py::_reject_unsafe_filename`, `sandboxd/naming.py::sample_name_admissible`,
+`manifest.reject_unsafe_name` — and they must not disagree.
 
-**The two launchers must never run concurrently.** `dirwatch` derives each
-clone's VLAN from a process-local worker-slot index, so two watchers collide on
-VLANs, gateways and isolation rules with no symptom but interference. Both
-refuse to start if another is running.
+**Never discover a process by matching a rendered command line.** `ps aux |
+grep "tcpdump -i xenbr1.$VLAN"` is unanchored and `.` is a wildcard, so vlan 1
+also matched `xenbr1.10`–`.19` — one job's cleanup killing another job's
+capture, silently. `sandboxd/proc.py::iter_processes` reads `/proc/<pid>/cmdline`
+and compares argv **elements** for equality. CI gates on the idiom.
+
+**Two orchestrators must never share a host.** `dirwatch` derived each clone's
+VLAN from a process-local worker-slot index, so two collide on VLANs, gateways
+and isolation rules with no symptom but interference. `sandboxd` refuses to
+start when another `sandboxd` **or** a leftover `dirwatch` binary is running —
+the source was deleted 2026-09-15 but a compiled copy on an old Dom0 still
+allocates VLANs that way.
 
 **`shellcheck automation/*.sh` exits 0 against the baseline in
-`.shellcheckrc`,** which disables four codes repository-wide. Read that file
-before reading a clean run as clean code.
+`.shellcheckrc`,** which now disables one code (SC1091) over one file.
+SC2086 and SC2009 came out when the scripts carrying their findings were
+deleted, so both are **live again**. Read that file before reading a clean run
+as clean code.
 
 **IMPORTANT: do not modify Ubuntu pipeline behaviour unless explicitly
 requested.** It is the evidenced path.
@@ -141,16 +153,17 @@ requested.** It is the evidenced path.
   `<last-reviewed-sha>..HEAD` plus any dirty tree — not just uncommitted work,
   which this repo commits too fast for. Docs-only pushes are exempt; a push
   containing both is not. `CONTRIBUTING.md`, "Security review gate", has why.
-- Inspect the corresponding Ubuntu implementation before editing a script.
-- A new per-OS script means satisfying the conformance checklist (C1–C10) in
-  `docs/architecture/analysis-pipeline.md` — **not** copying the Ubuntu file,
-  which still carries known defects. Fix a known defect in the template before
-  copying it.
+- Inspect the corresponding Ubuntu implementation before editing shared code.
+- Adding a guest OS means satisfying the conformance checklist (C1–C10) in
+  `docs/architecture/analysis-pipeline.md`. **C1's "four per-OS files" is
+  superseded** — a guest is a `TargetOs` member plus rows in
+  `sandboxd/guests.py` and `sandboxd/stages.py`. The rule it defended stands:
+  add a value to the per-OS table, never a branch to shared code.
 - Prefer parameterisation over duplicated literals. Do not add an OS branch to
   shared code — add a variable.
 - Preserve interfaces until their callers have been inspected.
-- Never invent `dirwatch`, `injector` or DRAKVUF options. Check source, `--help`
-  or output first.
+- Never invent `injector` or DRAKVUF options. Check source, `--help` or output
+  first.
 - Distinguish commands validated by project evidence from commands that still
   need testing on Dom0.
 - Comments answer *why*. A comment asserting a security, isolation or
@@ -163,7 +176,6 @@ requested.** It is the evidenced path.
 
 ```
 bash -n SCRIPT && dash -n SCRIPT && shellcheck SCRIPT     # shell
-perl -c SCRIPT                                            # perl
 platform/.venv/bin/python -m pytest sandboxd/tests -q     # sandboxd, no infra needed
 scripts/dev-services.sh                                   # bring up postgres + minio first
 cd platform && .venv/bin/python -m pytest -q              # platform, needs both
@@ -178,8 +190,11 @@ scripts/gen-current-state.py    scripts/gen-doc-index.py
 scripts/gen-xen-configs.py      scripts/check-refs.py
 ```
 
-**The CPU partition lives in `automation/platform.env`**, and `misc/*.cfg` are
-generated from it. Editing a `cpus =` line by hand is reverted on the next run.
+**The CPU partition's source of truth is `sandboxd/config.py`**;
+`scripts/gen-xen-configs.py` pushes it into `automation/platform.env` and
+`misc/*.cfg`, which cannot import Python. Editing an assignment or a `cpus =`
+line by hand is reverted on the next run. **Comments in those files are NOT
+generated** and are hand-maintained — the generator rewrites values only.
 
 After changing shared Ubuntu/Android code, verify Ubuntu behaviour is unchanged.
 

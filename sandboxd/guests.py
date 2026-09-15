@@ -3,10 +3,11 @@
 Issue #41 (DRAFT-060).
 
 This is the per-OS boundary that `preconfig-<os>.sh` and `drakvuf-<os>.sh`
-occupy today, expressed as argv builders. Everything here is a **pure
-function** returning a list, so the parity criterion -- "the same sample
-produces the same artifact set" -- is checkable at the desk against the
-literal commands the scripts run, before any Dom0 time is spent.
+occupied, expressed as argv builders. Everything here is a **pure function**
+returning a list, so the parity criterion -- "the same sample produces the same
+artifact set" -- was checkable at the desk against the literal commands those
+scripts ran, before any Dom0 time was spent. They were deleted 2026-09-15; the
+literals they contributed are recorded at each builder below.
 
 ## What is carried across, and why each one
 
@@ -64,7 +65,7 @@ class SampleKind(str, Enum):
     """Chosen from the sample's own BYTES, never from `detected_type`.
 
     `detected_type` is advisory and submitter-influenced; this decides whether
-    a file is installed or executed. `drakvuf-android.sh` already draws the
+    a file is installed or executed. The Android trace script drew the same
     distinction and it is kept: a structural test, repeated where it is needed
     rather than carried between stages, because a marker file is state a sample
     could read.
@@ -121,8 +122,8 @@ class TraceOptions:
         return flags
 
 
-# The literals from drakvuf-ubuntu.sh:181 and drakvuf-android.sh:324. Identical
-# today; kept per-OS rather than shared because the plugin matrix is per-guest
+# The literals the per-OS trace scripts passed, carried across verbatim.
+# Identical; kept per-OS rather than shared because the plugin matrix is per-guest
 # (`drakvuf_plugin_os_support` in plugins.h) and a shared tuple would invite a
 # Windows-only plugin into a Linux list.
 _LINUX_PLUGINS = ("syscalls", "filetracer", "fileextractor", "memdump")
@@ -194,10 +195,10 @@ def parse_plugins_override(raw: str | None) -> tuple[str, ...] | None:
 
 
 def default_trace_options(os_: TargetOs, kind: SampleKind) -> TraceOptions:
-    """What the scripts do today, per guest.
+    """What the per-OS trace scripts did, per guest.
 
     `kind` matters only on Android, where the APK path gets `-t 150` rather
-    than 120: `dirwatch.c:653` arms a 180s timer over the trace, so 150 leaves
+    than 120: the C watcher armed a 180s timer over the trace, so 150 leaves
     roughly 20s of headroom where 120 left 55s unused -- and a launch is
     heavier than an execve (zygote fork, ART init, an activity start, all at
     the trace's slowdown).
@@ -308,7 +309,7 @@ def default_trace_options(os_: TargetOs, kind: SampleKind) -> TraceOptions:
 class GuestPaths:
     """Where a sample lands inside the guest, per OS.
 
-    From `pipeline-<os>.env`. `/data/local/tmp` is not arbitrary: it pre-exists
+    Carried from the per-OS env files. `/data/local/tmp` is not arbitrary: it pre-exists
     in the saved Android image and permits execution, where
     `/storage/self/primary/Download` is a noexec mount on which `chmod` is
     silently a no-op.
@@ -496,30 +497,47 @@ def argv_configure_network(job: Job, subnet: str = "172.16") -> list[str]:
     the mixed-expansion Android form safe -- Dom0 interpolates only the vlan
     and the nameserver; everything else expands in the guest.
     """
-    shell = PATHS[job.target_os].shell
-
+    # Each branch names its own `PATHS` key. A single `PATHS[job.target_os]`
+    # above the chain read fine, but it ran BEFORE any branch was chosen, so an
+    # unhandled `TargetOs` died on a `KeyError` here instead of reaching the
+    # refusal at the bottom -- which is the one that can name the guest and say
+    # what it is missing.
     if job.target_os == TargetOs.ANDROID:
         script = (_android_netcfg(job, subnet))
         return [
             "injector", "-r", str(job.profile), "-d", str(job.domid),
             "-i", str(job.injection_pid), "-m", "execproc",
-            "-e", shell, "-f", "-c", "-f", script,
+            "-e", PATHS[TargetOs.ANDROID].shell, "-f", "-c", "-f", script,
         ]
     elif job.target_os == TargetOs.UBUNTU:
         script = (_ubuntu_netcfg(job, subnet))
         return [
             "injector", "-r", str(job.profile), "-d", str(job.domid),
             "-i", str(job.injection_pid), "-m", "execproc",
-            "-e", shell, "-f", "-c", "-f", script,
+            "-e", PATHS[TargetOs.UBUNTU].shell, "-f", "-c", "-f", script,
         ]
     elif job.target_os == TargetOs.WINDOWS:
         script = f"/c {(_windows_netcfg(job, subnet))}"
         return [
             "injector", "-r", str(job.profile), "-d", str(job.domid),
             "-i", str(job.injection_pid), "-m", "shellexec",
-            "-e", shell, "-f", script,
+            "-e", PATHS[TargetOs.WINDOWS].shell, "-f", script,
         ]
 
+    # Not dead code, and the same guard `default_trace_options` ends with: it
+    # is what a fourth `TargetOs` member gets on the day one is added.
+    #
+    # Falling off the chain used to return `None`, which `proc._validate`
+    # rejected as "argv is empty" -- a complaint about the runner, several
+    # steps from the cause, on a path whose visible symptom is a clone with no
+    # address. Refusing here names the guest and the two things a new one needs
+    # before its clone can be addressed at all.
+    raise NotImplementedError(
+        f"no network configuration for {job.target_os}: it needs a netcfg "
+        f"builder here and a `PATHS` entry giving its staging directory and "
+        f"shell. Guessing either produces a clone that boots, takes an address "
+        f"nothing routes, and reads as a sample that chose not to talk."
+    )
 
 
 def argv_install_apk(job: Job, handoff: str) -> list[str]:
@@ -650,9 +668,11 @@ def component_is_launchable(component: str) -> bool:
 
     `$` is admitted because an inner class is a legitimate launcher activity.
     """
+    # The empty string is rejected by the slash count -- it has none -- so
+    # there is no separate `if not component` test. There was one, after this
+    # line and therefore unreachable; a reader who adds one back should put it
+    # first or not at all.
     if component.count("/") != 1:
-        return False
-    if not component:
         return False
     allowed = set("abcdefghijklmnopqrstuvwxyz"
                   "ABCDEFGHIJKLMNOPQRSTUVWXYZ"

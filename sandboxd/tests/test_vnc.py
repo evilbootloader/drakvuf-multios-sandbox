@@ -107,17 +107,26 @@ def test_the_relay_reuses_the_worker_token():
     s = vnc.ConsoleSession("https://p:9000", "sekrit", "job-1",
                            worker_id="dom0-1")
 
-    assert s.headers() == {"Authorization": "Bearer sekrit",
-                           "X-Worker-Id": "dom0-1"}
+    # The credential alone. The platform resolves the worker id from its hash
+    # (DRAFT-061), so there is no id header to send -- and therefore nothing
+    # for a credential and a claim to disagree about.
+    assert s.headers() == {"Authorization": "Bearer sekrit"}
 
 
-def test_the_relay_identifies_the_worker():
-    """The platform pairs the socket only if this matches the job's
-    `lease_owner`. Without it the token alone would let any registered host
-    attach to any other host's executing job."""
+def test_the_relay_sends_no_worker_id_header():
+    """**The identity travels IN the credential now** (DRAFT-061).
+
+    The platform pairs the socket only if the worker its token resolves to is
+    the job's `lease_owner`. Sending an id alongside would be a claim with
+    nothing behind it -- and an unbound claim is precisely what let any
+    registered host attach to any other host's executing malware console.
+    """
     s = vnc.ConsoleSession("https://p:9000", "t", "job-1", worker_id="dom0-2")
 
-    assert s.headers()["X-Worker-Id"] == "dom0-2"
+    # `worker_id` is still carried on the session for logging and for the
+    # daemon's own bookkeeping; what changed is that it is no longer SENT.
+    assert "X-Worker-Id" not in s.headers()
+    assert s.headers()["Authorization"] == "Bearer t"
 
 
 def test_the_url_carries_the_job_id_encoded():

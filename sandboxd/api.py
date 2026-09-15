@@ -149,8 +149,11 @@ class WorkerAPI:
 
         self._http = httpx.Client(
             base_url=self._base,
-            headers={"Authorization": f"Bearer {token}",
-                     "X-Worker-Id": worker_id},
+            # **No `X-Worker-Id`.** The platform derives the worker id from
+            # the credential itself (DRAFT-061), so sending one would be a
+            # claim with nothing behind it -- and the whole point of the change
+            # is that a claim and a token can no longer disagree.
+            headers={"Authorization": f"Bearer {token}"},
             transport=transport,
             **common,
         )
@@ -179,12 +182,21 @@ class WorkerAPI:
     # models without a running server. If RegisterRequest or ClaimRequest
     # changes shape, sandboxd's tests fail rather than the daemon failing at
     # 3am against a platform that was upgraded.
+    #
+    # **None of the three carries `worker_id`.** DRAFT-061 removed it from
+    # `RegisterRequest`, `ClaimRequest` and `ReconcileRequest`; the platform
+    # derives the worker from the credential's hash, so there is nothing for a
+    # claim and a token to disagree about. Sending it anyway was harmless only
+    # by accident -- those three models do not set `extra="forbid"`, unlike
+    # `Manifest` and `ArtifactEntry` -- and it contradicted the header comment
+    # in `__init__` saying such claims no longer exist. `self.worker_id` stays
+    # on the object: `stages._start_console` passes it to the relay, and it is
+    # what this host calls itself in its own logs.
 
     def register_body(self, *, total_mib: int, total_vlans: int,
                       total_slots: int, pipelines: dict[str, int],
                       exits: tuple = ()) -> dict:
         return {
-            "worker_id": self.worker_id,
             "total_mib": total_mib,
             "total_vlans": total_vlans,
             "total_slots": total_slots,
@@ -212,11 +224,11 @@ class WorkerAPI:
 
     def claim_body(self, *, free_mib: int, free_vlans: int,
                    free_slots: int) -> dict:
-        return {"worker_id": self.worker_id, "free_mib": free_mib,
-                "free_vlans": free_vlans, "free_slots": free_slots}
+        return {"free_mib": free_mib, "free_vlans": free_vlans,
+                "free_slots": free_slots}
 
     def reconcile_body(self, live_job_ids: list[str]) -> dict:
-        return {"worker_id": self.worker_id, "live_job_ids": list(live_job_ids)}
+        return {"live_job_ids": list(live_job_ids)}
 
     # -- calls --------------------------------------------------------------
 

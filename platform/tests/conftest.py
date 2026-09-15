@@ -102,7 +102,12 @@ def conn():
         # surviving into the next test makes a first-submission grant look
         # like a top-up, and a test asserting on a drawn-down balance passes
         # or fails on what ran before it.
-        c.execute("TRUNCATE jobs, tenants, worker_pipelines, workers"
+        # `rate_limit` belongs here for the same reason `tenants` does, and the
+        # leak is sharper: every request from TestClient reports a peer of
+        # `testclient`, so ALL tests share one `ip:testclient` bucket and its
+        # count climbs across the whole session. A throttling test then passes
+        # or fails on how many tests ran before it.
+        c.execute("TRUNCATE jobs, tenants, rate_limit, worker_pipelines, workers"
                   " RESTART IDENTITY CASCADE")
         yield c
 
@@ -136,6 +141,86 @@ def _s3():
 DEFAULT_OWNER = "fixture-owner@example.test"
 
 
+def identity_id(cur, email: str) -> str:
+    """The tenant id for an address, creating the identity if it is new.
+
+    **The same statement `auth.resolve_tenant` uses, deliberately duplicated**
+    rather than called. `resolve_tenant` takes its own pooled connection, and
+    these fixtures write on the `conn` fixture's connection inside a
+    transaction the API has not seen -- so calling it would either deadlock on
+    the uncommitted row or resolve against a different snapshot. Running the
+    upsert on the caller's cursor keeps one transaction.
+
+    Needed at all because `jobs.owner` and `tenants.owner` are `uuid` since
+    0009, so a fixture inserting an address gets `invalid input syntax for type
+    uuid` -- 252 of them, which is how this was found.
+
+    **Writes `access_subject` and NOT `email`, matching `resolve_tenant` after
+    DRAFT-061 split the two.** The address a test hands the `access_identity`
+    override is a provider assertion, so it belongs in the column that
+    resolution joins on; `email` is the login address, which only signup and
+    `create_user.py` write. Mirroring the wrong column made every job invisible
+    to the caller who submitted it -- the API resolved the override's address to
+    a NEW identity and `visible_to` scoped against that, so 106 tests saw an
+    empty history rather than their own row. That is the failure this split is
+    meant to produce when the two are confused, so it is worth keeping legible
+    here rather than papering over by writing both.
+    """
+    cur.execute(
+        """
+        INSERT INTO identities (access_subject) VALUES (lower(%s))
+        ON CONFLICT (lower(access_subject))
+            DO UPDATE SET access_subject = identities.access_subject
+        RETURNING id
+        """,
+        (email,),
+    )
+    return str(cur.fetchone()[0])
+
+
+def credentialed_identity_id(cur, email: str) -> str:
+    """`identity_id` for an account that signs in with a PASSWORD.
+
+    **The other half of the DRAFT-061 split, and the reason there are two of
+    these.** `identity_id` writes `access_subject`, which is what an external
+    provider asserts and what `resolve_tenant` resolves on. This writes `email`,
+    which is the login address -- what `/auth/login` looks up and the only one of
+    the two a stranger can ever propose. A fixture that writes the wrong column
+    produces a plausible-looking account that cannot be logged into at all: 41
+    tests failed exactly that way, with `invalid email or password` against a
+    password that was correct.
+
+    Mirrors what `/auth/signup` and `create_user.py` write. Neither of them
+    touches `access_subject`, and neither does this.
+    """
+    cur.execute(
+        """
+        INSERT INTO identities (email) VALUES (lower(%s))
+        ON CONFLICT (lower(email)) DO UPDATE SET email = identities.email
+        RETURNING id
+        """,
+        (email,),
+    )
+    return str(cur.fetchone()[0])
+
+
+def owner_id(conn, email: str = DEFAULT_OWNER) -> str:
+    """`identity_id` for the many tests that insert with `conn.execute`.
+
+    Tests name their submitters by address, because that is what reads as a
+    person and what the `access_identity` override hands the API. Since 0009 the
+    COLUMN wants the tenant id that address resolves to, and this is the one
+    line that bridges the two -- so a raw fixture insert stays as readable as it
+    was while writing what `visible_to` and `_owned_or_404` will match on.
+
+    Creates the identity if this is the first mention of the address, which is
+    what makes it safe for the one-off submitters in `test_quota.py` that no
+    earlier request has introduced.
+    """
+    with conn.cursor() as cur:
+        return identity_id(cur, email)
+
+
 def enqueue(conn, target_os: str, required_mib: int, filename: str | None = None,
             body: bytes | None = None, owner: str = DEFAULT_OWNER):
     """Put one job on the queue, with a real object behind it, and return its id.
@@ -157,9 +242,13 @@ def enqueue(conn, target_os: str, required_mib: int, filename: str | None = None
     """
     name = filename or f"{target_os}-{required_mib}.bin"
     with conn.cursor() as cur:
+        # `owner` arrives as an address, because that is what reads naturally in
+        # a test and what the `access_identity` override hands the API. Both
+        # columns below want the tenant id it resolves to.
+        owner_id = identity_id(cur, owner)
         cur.execute(
             "INSERT INTO tenants (owner) VALUES (%s) ON CONFLICT DO NOTHING",
-            (owner,),
+            (owner_id,),
         )
         cur.execute(
             """
@@ -168,7 +257,7 @@ def enqueue(conn, target_os: str, required_mib: int, filename: str | None = None
             VALUES (%s, %s, %s, 'queued', %s)
             RETURNING id
             """,
-            (target_os, name, required_mib, owner),
+            (target_os, name, required_mib, owner_id),
         )
         job_id = cur.fetchone()[0]
 
@@ -227,10 +316,24 @@ def client(conn, request):
     from sandbox_platform import auth
     from sandbox_platform.app import app
 
-    if not {"access_token", "issuer", "no_identity"} & set(request.fixturenames):
+    if not {"access_token", "issuer", "no_identity",
+            "infrastructure"} & set(request.fixturenames):
         app.dependency_overrides[auth.access_identity] = lambda: DEFAULT_OWNER
     try:
-        with TestClient(app) as c:
+        # **The CSRF header by default, on every request this client makes.**
+        #
+        # `sandbox_platform/csrf.py` is attached to the auth, jobs and account
+        # routers and refuses any unsafe method without it. Setting it here
+        # rather than at ~68 call sites keeps those tests about what they are
+        # about -- admission, tenancy, quota, rendering -- instead of turning a
+        # security rule into 68 opportunities to forget it and one enormous
+        # diff.
+        #
+        # The rule is still tested, and tested better, by the handful of tests
+        # that ask for it EXPLICITLY by sending no header. A negative test that
+        # has to construct the failure is a real assertion; sixty-eight positive
+        # ones that would all break together are a tripwire, not a test.
+        with TestClient(app, headers={"X-Sandbox-Request": "1"}) as c:
             yield c
     finally:
         app.dependency_overrides.clear()
@@ -238,18 +341,43 @@ def client(conn, request):
 
 @pytest.fixture
 def no_identity():
-    """Opt out of `client`'s identity override and get a genuinely anonymous one.
+    """Opt out of `client`'s identity override: a genuinely anonymous caller.
 
     A marker rather than a value: requesting it is the whole signal, which is
     why it returns nothing.
 
     Needed because the other two opt-outs do not reach this case. `issuer` and
     `access_token` both switch `REQUIRE_ACCESS_JWT` on, so a request without a
-    token gets a 401 from `access_identity` and never reaches the route. The
-    state under test here is the OTHER listener: Access off, a client
-    certificate at the TLS layer, and therefore an identity of None -- which is
-    what `auth.required_identity` refuses with a 403.
+    token gets a 401 from `access_identity` and never reaches the route.
+
+    **Since DRAFT-061 this is a 401 rather than an identity of None.** Nobody
+    is the same as nobody now: `caller_identity` refuses when no credential
+    produced an identity, instead of handing `visible_to` a None it read as
+    "see everything". `infrastructure` below is the fixture for the case that
+    used to share this one.
     """
+    return None
+
+
+@pytest.fixture
+def infrastructure(monkeypatch):
+    """A listener where an unauthenticated caller IS infrastructure.
+
+    The mTLS listener: reachable only over the LAN, behind a client certificate,
+    carrying Dom0 and the command-line tools. That used to be inferred from
+    Access being off, which made it the accidental meaning of every failure to
+    produce an identity. `INFRASTRUCTURE_LISTENER` says it out loud, and this
+    fixture is how a test asks for it.
+    """
+    import dataclasses
+
+    from sandbox_platform import auth
+    from sandbox_platform.config import settings
+
+    monkeypatch.setattr(
+        auth, "settings",
+        dataclasses.replace(settings, infrastructure_listener=True),
+    )
     return None
 
 
@@ -370,11 +498,57 @@ def access_token(monkeypatch):
     return _headers
 
 
+#: The worker every fixture here authenticates as. Named rather than passed
+#: around because `enqueue` hands jobs to it and the lease checks compare
+#: against it.
+TEST_WORKER_ID = "test-worker"
+
+
 @pytest.fixture
-def worker_headers():
-    """Credentials for the worker channel: the token, plus the worker id that
-    job-scoped routes check the lease against."""
-    return {
-        "Authorization": f"Bearer {WORKER_TOKEN}",
-        "X-Worker-Id": "test-worker",
-    }
+def worker_headers(conn):
+    """Credentials for the worker channel.
+
+    **A provisioned row, not a shared secret.** Since DRAFT-061 the platform
+    resolves the worker id from the token's own hash, so there is no
+    `X-Worker-Id` to send and no `WORKER_TOKEN` that every worker shares --
+    a fixture that sent one would be testing a door that no longer exists.
+
+    Depends on `conn` so the row is created after the TRUNCATE, not before it.
+    """
+    from sandbox_platform.credentials import hash_refresh_token
+
+    conn.execute(
+        """
+        INSERT INTO workers (worker_id, total_mib, total_vlans, total_slots,
+                             token_hash)
+        VALUES (%s, 1, 1, 1, %s)
+        ON CONFLICT (worker_id) DO UPDATE SET token_hash = EXCLUDED.token_hash
+        """,
+        (TEST_WORKER_ID, hash_refresh_token(WORKER_TOKEN)),
+    )
+    return {"Authorization": f"Bearer {WORKER_TOKEN}"}
+
+
+@pytest.fixture
+def other_worker_headers(conn):
+    """A SECOND provisioned worker, for the tests about one not reaching
+    another's job.
+
+    Before DRAFT-061 those tests changed an `X-Worker-Id` header and kept the
+    shared token -- which is exactly the thing that no longer exists, and
+    exactly why it was a gap. Impersonation is now expressed the only way it
+    can be: by holding a different credential.
+    """
+    from sandbox_platform.credentials import hash_refresh_token
+
+    token = "second-worker-token"
+    conn.execute(
+        """
+        INSERT INTO workers (worker_id, total_mib, total_vlans, total_slots,
+                             token_hash)
+        VALUES ('other-worker', 1, 1, 1, %s)
+        ON CONFLICT (worker_id) DO UPDATE SET token_hash = EXCLUDED.token_hash
+        """,
+        (hash_refresh_token(token),),
+    )
+    return {"Authorization": f"Bearer {token}"}

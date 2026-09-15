@@ -2,7 +2,7 @@
 
 Everything Dom0 is faked. What is under test is the SEQUENCE -- which states
 are reported, in what order, and that a clone is torn down on every path --
-because that is what the server enforces and what dirwatch got wrong.
+because that is what the server enforces and what the C watcher got wrong.
 """
 
 from __future__ import annotations
@@ -241,7 +241,7 @@ def test_the_trace_streams_are_never_merged(tmp_path):
 def test_both_plugin_output_directories_exist_before_drakvuf_runs(tmp_path):
     """DRAKVUF does not create them and says nothing when they are missing.
 
-    `drakvuf-ubuntu.sh:170` created both with one `mkdir -p` and the port to
+    The Ubuntu trace script created both with one `mkdir -p` and the port to
     `stages.py` dropped it. That stayed invisible because the two plugins fail
     differently: `-D` ends up created anyway, so `dump/` appears and looks like
     proof the output paths work, while `--memdump-dir` does not and `memdump`
@@ -283,7 +283,7 @@ def test_the_capture_runs_alongside_the_trace_and_is_stopped(tmp_path):
 # --- teardown on every path -------------------------------------------------
 
 def test_the_clone_is_destroyed_on_success(tmp_path):
-    """A real defect in dirwatch before 2026-08-19: cleanup ran only in the
+    """A real defect in the C watcher before 2026-08-19: cleanup ran only in the
     timeout branch, so a normal completion left its clone RUNNING -- malware
     with NAT'd egress and nothing watching it -- until the next sample happened
     to take the same VLAN slot."""
@@ -330,7 +330,7 @@ def test_a_clone_that_never_existed_still_reports_cleaning(tmp_path):
 
 
 def test_a_failure_carries_the_stage_it_failed_at(tmp_path):
-    """dirwatch.c:369 discards clone.pl's exit status, so every clone failure
+    """The C watcher discarded the Perl builder's exit status, so every clone failure
     looks identical. Here they are distinct reasons on the job row."""
     r = FakeRunner()
     r.script(("xl", "domid"), rc=1)
@@ -630,7 +630,7 @@ def test_a_trace_that_failed_is_recorded_rather_than_hidden(tmp_path):
     """Found in review: `_trace` had no `check=True`, so a DRAKVUF that never
     attached reported `completed` with an empty trace and nothing said so.
 
-    dirwatch ignores the exit status too (dirwatch.c:663 prints it; only the
+    The C watcher ignored the exit status too (it printed the status; only the
     timer decides), so hard-failing would diverge from the pipeline this must
     match -- and DRAKVUF exits non-zero for reasons that are not analysis
     failures. But completing SILENTLY is the failure this architecture exists
@@ -640,7 +640,7 @@ def test_a_trace_that_failed_is_recorded_rather_than_hidden(tmp_path):
 
     outcome, _ = run(tmp_path, runner=r)
 
-    # Parity with dirwatch, which reads DRAKVUF's status and ignores it: the
+    # Parity with the C watcher, which read DRAKVUF's status and ignored it: the
     # job completes and the artifacts are kept. What must NOT happen is the
     # failure vanishing -- so it is recorded in the manifest.
     assert outcome.state == "completed"

@@ -5,61 +5,65 @@ Issue #41 (DRAFT-060).
 **The root fact all of this follows from: `injector -m execproc` returns when
 the guest process STARTS, not when it finishes.** Dom0 gets no completion
 signal, so every injection that must finish before the next step needs an
-explicit wait. The scripts have these scattered across four files as bare
-`sleep` calls, two of which carry no explanation at all where they are written.
+explicit wait.
 
-Collected here because a wait with no stated reason is the first thing someone
-tunes down when a pipeline feels slow -- and two of these are load-bearing.
+**These numbers are inherited, and their sources are gone.** They were scattered
+across four files of the shell/C launcher pipeline as bare `sleep` calls, two of
+which carried no explanation where they were written. That pipeline was deleted
+on 2026-09-15 once `sandboxd` had replaced all of it, so this module is now the
+only record of what each wait is for. A wait with no stated reason is the first
+thing someone tunes down when a pipeline feels slow -- and two of these are
+load-bearing.
 
-## The inventory, and where each came from
+## The inventory, and what measured each
 
     5s    settle before the trace attaches
-          drakvuf-ubuntu.sh:157, drakvuf-android.sh:219.
           What it is REALLY covering: preconfig's network injection is an
           execproc, so it has returned without the guest having finished
           configuring. This sleep is the only thing between that and the
-          trace. Neither script says so -- stated here because "settling time"
-          reads as superstition and invites deletion.
+          trace. The scripts it came from never said so -- stated here because
+          "settling time" reads as superstition and invites deletion.
 
   <=90s   APK launcher component (APK_COMPONENT_TIMEOUT), a CEILING not a sleep
-          Was a fixed 20s (preconfig-android.sh:384, and still is on the legacy
-          dirwatch path). 3 seconds MEASURED for a 12 MB APK on 2026-08-17,
-          network configuration included -- but the margin was over the install,
-          and what actually overran was `pm list packages` waiting on the
-          package service after a restore. Jobs failed with `readfile` ENOENT.
-          Now polled: preconfig waits for content that parses as a launchable
-          component, so a healthy job is FASTER than the old sleep.
+          Was a fixed 20s sleep. 3 seconds MEASURED for a 12 MB APK on
+          2026-08-17, network configuration included -- but the margin was over
+          the install, and what actually overran was `pm list packages` waiting
+          on the package service after a restore. Jobs failed with `readfile`
+          ENOENT. Now polled: preconfig waits for content that parses as a
+          launchable component, so a healthy job is FASTER than the old sleep.
 
     5s    SIGINT -> SIGKILL
-          cleanup.sh:146. DRAKVUF flushes and detaches its introspection state
-          on SIGINT; killing it outright can leave stealth breakpoints written
-          into guest memory.
+          DRAKVUF flushes and detaches its introspection state on SIGINT;
+          killing it outright can leave stealth breakpoints written into guest
+          memory.
 
    10s    after `xl destroy`, before `lvremove`
-          clone.pl:405. `xl destroy` returns before the block device is
-          released -- measured on Dom0 2026-08-14, where lvremove reported
-          "Logical volume in use" and succeeded on a retry.
+          `xl destroy` returns before the block device is released -- MEASURED
+          on Dom0 2026-08-14, where `lvremove` reported "Logical volume in use"
+          and succeeded on a retry. This is the single fact behind
+          `DESTROY_SETTLE`, and the reason a clone teardown is not simply
+          destroy-then-remove.
 
    30s    flock retry on the clone name
-          clone.pl:377. Non-blocking with a bounded retry, never a blocking
-          LOCK_EX: nothing upstream imposes a timeout on the clone step, so a
-          blocking acquire would hang a worker with no way out.
+          Non-blocking with a bounded retry, never a blocking LOCK_EX: nothing
+          upstream imposes a timeout on the clone step, so a blocking acquire
+          would hang a worker with no way out.
 
-   60s    the preconfig phase       dirwatch.c:637
-  180s    the trace phase           dirwatch.c:653
+   60s    the preconfig phase
+  180s    the trace phase
           Wall-clock guards. Either firing triggers cleanup and a fresh clone.
 
 120/150s  `drakvuf -t`, the trace's own budget.
 
 ## What changes under sandboxd
 
-dirwatch's 60 and 180 are **compiled in** -- raising either needs a recompile,
-which is why drakvuf-android.sh:314 explains that `-t 150` cannot go higher.
-Here they are configuration, so a guest that legitimately needs longer can have
-it without rebuilding the orchestrator.
+The old 60 and 180 were **compiled into the C watcher** -- raising either needed
+a recompile, which is why the Android trace was pinned at `-t 150` and could not
+go higher. Here they are configuration, so a guest that legitimately needs
+longer can have it without rebuilding the orchestrator.
 
-Two waits are new, because dirwatch never did either: fetching the sample from
-the object store, and uploading artifacts to it.
+Two waits are new, because the old launcher did neither: fetching the sample
+from the object store, and uploading artifacts to it.
 """
 
 from __future__ import annotations
@@ -105,10 +109,13 @@ APK_COMPONENT_POLL = 2.0
 # a 270s guard for a phase that normally finishes in seconds.
 PRECONFIG_INJECTION_HEADROOM = 60.0
 
-# cleanup.sh's escalation. Also proc.DEFAULT_GRACE.
+# The old cleanup script's escalation, kept. Also proc.DEFAULT_GRACE.
 KILL_GRACE = 5.0
 
-# clone.pl's post-destroy poll.
+# The post-destroy settle. MEASURED on Dom0 2026-08-14: `xl destroy` returns
+# before the block device is released, and `lvremove` immediately after it
+# reported "Logical volume in use", then succeeded on a retry. Not a guess --
+# see the inventory above.
 DESTROY_SETTLE = 10.0
 
 # --- phase budgets -----------------------------------------------------------
@@ -117,7 +124,7 @@ DESTROY_SETTLE = 10.0
 # in clone.py. A phase that overruns means the clone is torn down.
 
 CLONE_BUDGET = 180.0        # lvcreate + xl restore, generous: a busy VG is slow
-COLLECT_BUDGET = 300.0      # NEW: artifact upload, which dirwatch never did
+COLLECT_BUDGET = 300.0      # NEW: artifact upload, which the old launcher never did
 FETCH_BUDGET = 300.0        # NEW: sample download from the object store
 CLEANUP_BUDGET = 60.0
 
@@ -137,10 +144,10 @@ class PhaseBudgets:
 class Waits:
     """The deliberate sleeps, as configuration rather than constants.
 
-    `pipeline-android.env` already reads `${APK_INSTALL_WAIT:-20}` from the
-    environment, so these were always meant to be tunable per host -- a slower
-    Dom0 legitimately needs longer, and a faster one is paying for margin it
-    does not need. Hard-coding them also made an analysis untestable without
+    The per-OS env file this replaced already read `${APK_INSTALL_WAIT:-20}`
+    from the environment, so these were always meant to be tunable per host -- a
+    slower Dom0 legitimately needs longer, and a faster one is paying for margin
+    it does not need. Hard-coding them also made an analysis untestable without
     really sleeping, which is its own argument.
 
     The defaults are the measured values above, and lowering one below what was
@@ -202,10 +209,10 @@ def budgets(os_: TargetOs, kind: SampleKind, trace_timeout: int,
     """Phase guards for one job, derived rather than tabulated.
 
     **The preconfig and trace budgets are computed from what they contain**,
-    which is what turns a margin question into an invariant. dirwatch's 60s
-    preconfig guard covers, on the Android APK path: a 12 MB `writefile`, a
-    network injection, a `pm install` injection, a deliberate 20s sleep, a
-    `readfile` and an `rm`. Nobody has measured the writefile. If it takes 35s
+    which is what turns a margin question into an invariant. The old watcher's
+    60s preconfig guard had to cover, on the Android APK path: a 12 MB
+    `writefile`, a network injection, a `pm install` injection, a deliberate 20s
+    sleep, a `readfile` and an `rm`. Nobody has measured the writefile. If it takes 35s
     the phase times out, the clone is destroyed, and the retry does the same
     thing again -- a loop with no error message.
 
@@ -218,13 +225,13 @@ def budgets(os_: TargetOs, kind: SampleKind, trace_timeout: int,
     return PhaseBudgets(
         clone=CLONE_BUDGET,
         # The worst-case waiting PLUS headroom for the injections, floored at
-        # dirwatch's 60. Additive rather than the former `* 3`: the multiplier
+        # the old watcher's 60. Additive rather than the former `* 3`: the multiplier
         # made sense against a sleep the phase always spent, and would give a
         # 270s guard now that the 90 is a ceiling a healthy job never reaches.
         # Non-APK jobs are unchanged at 60.
         preconfig=max(60.0, preconfig_floor + PRECONFIG_INJECTION_HEADROOM),
         # The trace's own -t plus the settle, plus 30s for process startup and
-        # DRAKVUF's own teardown. dirwatch used a flat 180 against -t 120,
+        # DRAKVUF's own teardown. The old watcher used a flat 180 against -t 120,
         # leaving 55s unused on Ubuntu and ~20s on the Android APK path.
         trace=trace_floor + 30.0,
         collect=COLLECT_BUDGET,

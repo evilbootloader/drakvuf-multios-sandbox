@@ -1,4 +1,4 @@
-"""The clone stage: issue #41 (DRAFT-060), the port of automation/clone.pl.
+"""The clone stage: issue #41 (DRAFT-060), the port of the Perl clone builder.
 
 Every Dom0 command is faked. What is under test is the argv that WOULD have
 run and the order it would have run in -- which is #41's parity criterion
@@ -6,7 +6,7 @@ run and the order it would have run in -- which is #41's parity criterion
 any Dom0 time is spent.
 
 The config rewrite is tested against the REAL misc/*.cfg files, because
-misc/android_sandbox.cfg records that clone.pl's rewrite "reproduces
+misc/android_sandbox.cfg records that the rewrite "reproduces
 byte-for-byte what 06-verify-android-isolation.md step 2 wrote out by hand",
 verified 2026-08-15. That gives the port a known-correct output to match
 rather than a plausible one.
@@ -80,7 +80,7 @@ def test_what_is_not_a_clone_is_left_alone(name):
 
 
 def test_an_origin_containing_a_dash_parses_from_the_right():
-    """clone.pl admits [A-Za-z0-9._-] in an origin, so the origin can contain
+    """The grammar admits [A-Za-z0-9._-] in an origin, so the origin can contain
     the separator. A left-to-right parse reads `a-b-3-clone` as origin `a`,
     vlan `b`, fails the integer check, and silently declines to clean up a real
     clone."""
@@ -159,7 +159,7 @@ def test_an_unparseable_vif_line_fails_loudly():
         C.rewrite_config("vif = nonsense\n", s)
 
 
-# --- argv parity with clone.pl ---------------------------------------------
+# --- argv parity with the Perl builder -------------------------------------
 
 def test_the_commands_match_what_clone_pl_runs(tmp_path):
     s = spec(tmp_path)
@@ -261,7 +261,7 @@ def test_the_settle_wait_after_destroy_is_kept(tmp_path):
     assert polls >= 4, "the post-destroy settle poll is gone"
 
 
-# --- failure paths that dirwatch could not tell apart ----------------------
+# --- failure paths the C watcher could not tell apart ----------------------
 
 def test_a_restore_that_exits_zero_with_no_domain_is_a_failure(tmp_path):
     """`xl restore` can exit 0 and leave no usable domain, so a successful exit
@@ -278,7 +278,7 @@ def test_a_restore_that_exits_zero_with_no_domain_is_a_failure(tmp_path):
 
 
 def test_a_diagnostic_is_never_mistaken_for_a_domain_id(tmp_path):
-    """clone.pl must print nothing but the id because dirwatch parses its
+    """The Perl builder had to print nothing but the id because the watcher parsed its
     stdout. The check survives the port: `xl domid` prints its own errors."""
     s = spec(tmp_path)
     r = ready(FakeRunner(), s.name, s.origin)
@@ -290,7 +290,7 @@ def test_a_diagnostic_is_never_mistaken_for_a_domain_id(tmp_path):
 
 
 def test_a_partial_clone_is_torn_down(tmp_path):
-    """clone.pl's END block: a half-built clone must not survive to block the
+    """The Perl builder's END block: a half-built clone must not survive to block the
     next run for this vlan."""
     s = spec(tmp_path)
     r = ready(FakeRunner(), s.name, s.origin)
@@ -304,8 +304,8 @@ def test_a_partial_clone_is_torn_down(tmp_path):
 
 
 def test_each_failure_names_its_stage(tmp_path):
-    """The improvement the port gets for free: dirwatch.c passes NULL for
-    exit_rc, so clone.pl's separated exit codes are computed and discarded and
+    """The improvement the port gets for free: the C watcher passed NULL for
+    exit_rc, so the Perl builder's separated exit codes were computed and discarded and
     every failure looks like "no id came back"."""
     s = spec(tmp_path)
     s = C.CloneSpec(origin=s.origin, vlan=s.vlan, config=s.config,

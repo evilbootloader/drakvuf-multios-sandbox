@@ -6,6 +6,10 @@
 >
 > Commands labelled **Existing** come from the current project files. Commands labelled **Candidate** are proposed commands and must be validated in this environment before being treated as final documentation.
 
+> **2026-09-15 — the per-OS scripts this checklist was written against were deleted.** `preconfig-android.sh`, `drakvuf-android.sh`, `run_analysis-android.sh`, `pipeline-android.env`, the shared `clone.pl`, `cleanup.sh`, `tcpdump.sh` and `dirwatch.c` are all gone; the Android path now lives in `sandboxd/guests.py`, selected by `TargetOs`, with the phase sequence in `sandboxd/stages.py`. See `docs/architecture/automation-files.md`.
+>
+> **Phase 1 is unaffected** — the golden→sandbox build, the ROM rebuild, the injection anchor and the saved memory state are recorded Dom0 evidence and are not touched. **Phase 2's *requirements* are still the requirements**; only the file layout they assumed is gone. Read any section that says "create/review `<script>.sh`" as "satisfy this in `sandboxd/guests.py`", and treat `Existing` commands naming a deleted script as history rather than as something to run.
+
 ---
 
 ## Project status
@@ -1817,18 +1821,38 @@ Second cleanup invocation safe:
 
 ---
 
-## 2.10 Review `tcpdump.sh`
+## 2.10 Review `tcpdump.sh` — CLOSED 2026-09-15 by the port
 
-- [ ] Locate the exact `tcpdump.sh` used by the current Ubuntu automation.
-- [ ] Confirm its argument order.
-- [ ] Confirm it captures only the clone VLAN/interface.
-- [ ] Store the tcpdump PID in a per-analysis PID file.
-- [ ] Confirm captures use unique paths.
-- [ ] Confirm captures are closed cleanly.
-- [ ] Avoid `ps | grep` PID discovery.
-- [ ] Ensure a stale PID file cannot kill an unrelated process.
+> `tcpdump.sh` was deleted. Packet capture is now
+> `sandboxd/guests.py::argv_tcpdump`, spawned by `sandboxd/stages.py` for the
+> trace's lifetime and stopped in a `finally`. Every box below is satisfied
+> **structurally** rather than by a fix to the script, and the requirements
+> are recorded here because they are what the replacement has to keep
+> satisfying.
 
-### Commands used
+- [x] Locate the exact `tcpdump.sh` used by the current Ubuntu automation.
+      *(Done; it was `automation/tcpdump.sh`, 131 lines of which 8 executed.)*
+- [x] Confirm its argument order. *(`VLAN`, `RUNFOLDER`, `RUNFILE`,
+      `OUTPUTFOLDER`. The replacement takes a `Job`, a bridge and a
+      destination path.)*
+- [x] Confirm it captures only the clone VLAN/interface. *(`-i
+      <bridge>.<vlan>`, unchanged.)*
+- [x] Store the tcpdump PID in a per-analysis PID file. *(Not needed, and
+      better: `sandboxd` spawns the process itself and holds the handle, so
+      there is no PID to write down and nothing to read it back.)*
+- [x] Confirm captures use unique paths. *(`job.result_dir / "capture.pcap"`
+      — per job, not the old md5-keyed directory, which collided for two
+      submissions of identical bytes.)*
+- [x] Confirm captures are closed cleanly. *(`-U` writes packets as they
+      arrive, and `tcpdump.stop()` runs in a `finally` around the trace.)*
+- [x] Avoid `ps | grep` PID discovery. *(This was the DRAFT-011 defect —
+      `grep "tcpdump -i xenbr1.$VLAN"` also matched `xenbr1.10`-`.19`.
+      `sandboxd/proc.py::iter_processes` compares argv elements for
+      equality.)*
+- [x] Ensure a stale PID file cannot kill an unrelated process. *(No PID
+      file exists.)*
+
+### Commands used (historical — these files no longer exist)
 
 ```bash
 sed -n '1,260p' ~/drakvuf-tools/tcpdump.sh

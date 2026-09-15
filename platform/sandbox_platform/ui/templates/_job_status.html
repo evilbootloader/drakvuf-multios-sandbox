@@ -68,7 +68,7 @@
   <dt>Size</dt>
   <dd class="mono">{% if job.size_bytes is not none %}{{ job.size_bytes | filesizeformat(binary=True) }}{% if job.size_bytes >= 1024 %} <span class="dim">({{ "{:,}".format(job.size_bytes) }} bytes)</span>{% endif %}{% else %}—{% endif %}</dd>
   <dt>Submitted</dt><dd class="mono">{{ job.created_at.strftime('%Y-%m-%d %H:%M:%S') }}</dd>
-  <dt>Owner</dt><dd>{{ job.owner or '—' }}</dd>
+  <dt>Owner</dt><dd>{{ job.owner_email or '—' }}</dd>
 </dl>
 
 {#

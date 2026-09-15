@@ -183,7 +183,7 @@ def test_the_timeout_path_does_not_burn_the_grace_period():
 # --- the long-lived child --------------------------------------------------
 
 def test_a_spawned_child_is_held_not_searched_for(tmp_path):
-    """tcpdump's case. drakvuf-<os>.sh stops it by grepping `ps aux` for its
+    """tcpdump's case. The old trace scripts stopped it by grepping `ps aux` for its
     own command line; the handle makes that unnecessary."""
     child = proc.spawn(["/bin/sleep", "30"])
     try:

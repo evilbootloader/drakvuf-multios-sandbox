@@ -129,16 +129,18 @@ def entrypoints() -> list[str]:
                else "**no systemd unit anywhere in the repo**")
     need = ", ".join(f"`{v}`" for v in required_env())
 
-    rows = [
+    # **One row, and that is the point.** This used to carry a second "legacy
+    # pipeline" row globbed from `automation/run_analysis-*.sh`. Those were
+    # deleted on 2026-09-15 with the rest of the shell/C launcher, so the glob
+    # matched nothing and the row rendered with an empty Command cell — a
+    # malformed table claiming a component this host does not have. There is
+    # exactly one way to start an analysis on Dom0 now.
+    return [
         "| `sandboxd` | **source the env file first**, then "
         "`python -m sandboxd.daemon` in the foreground — see §1.2 for the "
         f"exact Dom0 invocation. Exits immediately without {need}. | "
         f"{service} |",
     ]
-    launchers = sorted(p.name for p in (ROOT / "automation").glob("run_analysis-*.sh"))
-    rows.append(f"| legacy pipeline | {', '.join(f'`{n}`' for n in launchers)} | "
-                f"bash, invoked by an operator |")
-    return rows
 
 
 def env_vars() -> list[str]:

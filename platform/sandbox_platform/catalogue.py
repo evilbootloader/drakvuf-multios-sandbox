@@ -70,7 +70,7 @@ class Plugin:
     # Guests this has actually run against. Never inferred from `linux`.
     proven_on: frozenset[TargetOs] = frozenset()
     # Rough run-time cost. `ipt` and `apimon` are heavy enough to matter
-    # against dirwatch's 180s trace cap, and Android already needs
+    # against the 180s trace cap the old watcher compiled in, and Android already needs
     # `-F --disable-sysret` merely to finish.
     heavy: bool = False
 
@@ -162,6 +162,11 @@ class Tab:
     sources: tuple[str, ...] = ()
     # The issue that will fill it. Rendered in the empty state, because
     # "not collected yet" without a pointer is just a dead end.
+    #
+    # NOT the job's owner, and nothing to do with tenancy -- this is the DRAFT
+    # that owns delivering the tab, rendered as prose by `_job_tabs.html` and
+    # `tabs/_pending.html`. Typing it as a tenant id broke the package at
+    # import (a non-default field cannot follow `sources`), 2026-09-11.
     owner: str = ""
 
 
@@ -169,8 +174,9 @@ TABS: tuple[Tab, ...] = (
     Tab("overview", "Overview"),
     Tab("behaviour", "Behaviour",
         ("syscalls", "procmon", "apimon"), "DRAFT-050 + DRAFT-019"),
-    # Always present: `tcpdump.sh` captures a pcap on every run, outside
-    # DRAKVUF entirely, so network data does not depend on any plugin. The
+    # Always present: a pcap is captured on every run, outside DRAKVUF entirely
+    # (`sandboxd/guests.py::argv_tcpdump`, spawned for the trace's lifetime by
+    # `sandboxd/stages.py`), so network data does not depend on any plugin. The
     # plugins listed only ENRICH it -- socketmon attributes connections to
     # processes, tlsmon supplies keys to decrypt what was captured.
     Tab("network", "Network",
@@ -185,7 +191,7 @@ TABS: tuple[Tab, ...] = (
 # Tabs that exist for every guest, because nothing about them depends on a
 # plugin: Overview and Artifacts come from the job row and the manifest;
 # Static is driven by the uploaded bytes rather than the trace; Network rests
-# on the pcap tcpdump.sh captures on every run.
+# on the pcap sandboxd captures on every run, outside DRAKVUF.
 _ALWAYS = {"overview", "artifacts", "static", "network"}
 
 

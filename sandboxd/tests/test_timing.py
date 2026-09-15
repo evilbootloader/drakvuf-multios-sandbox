@@ -33,7 +33,7 @@ def budgets(os_, kind):
 def test_a_phase_budget_exceeds_the_time_it_spends_sleeping(os_, kind):
     """The invariant that replaces a margin note.
 
-    dirwatch's 60s preconfig guard covers, on the Android APK path: a 12 MB
+    The C watcher's 60s preconfig guard had to cover, on the Android APK path: a 12 MB
     writefile, a network injection, a `pm install` injection, a deliberate 20s
     sleep, a readfile and an rm. Nobody has measured the writefile. If it takes
     35s the phase times out, the clone is destroyed, and the retry does exactly
@@ -66,7 +66,7 @@ def test_the_android_apk_preconfig_has_real_headroom():
 
 def test_a_non_apk_preconfig_budget_did_not_move():
     """The 2026-09-04 poll change is scoped to the Android APK path. Every
-    other job keeps dirwatch's 60s guard, and this is what says so."""
+    other job keeps the C watcher's 60s guard, and this is what says so."""
     for os_, kind in [(TargetOs.UBUNTU, SampleKind.ELF),
                       (TargetOs.ANDROID, SampleKind.ELF)]:
         assert budgets(os_, kind).preconfig == 60.0
@@ -83,8 +83,8 @@ def test_the_trace_budget_covers_drakvufs_own_timeout():
         assert budgets(os_, kind).trace > t
 
 
-def test_the_apk_path_leaves_more_headroom_than_dirwatch_did():
-    """dirwatch used a flat 180s against `-t 150`, leaving ~20s once process
+def test_the_apk_path_leaves_more_headroom_than_the_c_watcher_did():
+    """The C watcher used a flat 180s against `-t 150`, leaving ~20s once process
     startup is counted -- and `-t` could not be raised without a recompile,
     because the 180 is compiled in. Here both are configuration."""
     b = budgets(TargetOs.ANDROID, SampleKind.APK)
@@ -108,8 +108,8 @@ def test_the_apk_path_no_longer_skips_the_settle():
     component appears, so a fast install reaches the trace seconds after the
     guest wrote the handoff -- the un-settled clone the exemption assumed away.
 
-    `drakvuf-android.sh:218` still makes the old exception; it is on the legacy
-    `dirwatch` path, which is stale (see CURRENT-STATE §2b)."""
+    The Android trace script made the old exception; it went with the rest of
+    the launcher pipeline on 2026-09-15."""
     assert T._trace_waits(TargetOs.ANDROID, SampleKind.APK) == T.PRE_TRACE_SETTLE
 
 
@@ -135,7 +135,7 @@ def test_the_component_poll_interval_is_not_a_busy_loop():
 
 
 def test_the_kill_grace_matches_cleanups_escalation():
-    """cleanup.sh sends SIGINT, sleeps 5, then SIGKILLs. The interval is doing
+    """The old cleanup script sent SIGINT, slept 5, then SIGKILLed. The interval is doing
     real work: DRAKVUF flushes and detaches its introspection state on SIGINT,
     and killing it outright can leave stealth breakpoints in guest memory."""
     from sandboxd import proc
@@ -149,10 +149,10 @@ def test_the_destroy_settle_matches_clone():
     assert T.DESTROY_SETTLE == clone.DESTROY_SETTLE_SECONDS
 
 
-# --- the two waits dirwatch never needed ------------------------------------
+# --- the two waits the C watcher never needed -------------------------------
 
 def test_fetching_and_uploading_have_their_own_budgets():
-    """dirwatch never touched an object store: the sample arrived in a watch
+    """The C watcher never touched an object store: the sample arrived in a watch
     directory and results stayed on local disk. Both are network operations
     now, and a network operation with no timeout is a daemon that stops."""
     b = budgets(TargetOs.UBUNTU, SampleKind.ELF)

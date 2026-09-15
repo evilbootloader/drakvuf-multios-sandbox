@@ -22,6 +22,7 @@ Dom0's loopback in all five `misc/*.cfg`.
 from __future__ import annotations
 
 import logging
+from urllib.parse import urlsplit
 from uuid import UUID
 
 from fastapi import (
@@ -44,7 +45,67 @@ browser_router = APIRouter(prefix="/api/v1/jobs", tags=["console"])
 worker_router = APIRouter(prefix="/api/v1/worker/jobs", tags=["console"])
 
 
-def _job_row(job_id: UUID, identity: str | None):
+def _worker_from_token(authorization: str) -> str | None:
+    """The worker id a bearer credential belongs to, or None.
+
+    The WebSocket counterpart of `auth.authenticated_worker`, duplicated rather
+    than shared because that one raises `HTTPException` and a WebSocket handler
+    has no way to turn that into anything a client can read. The LOOKUP is the
+    same, which is the part that matters -- the id comes from the credential.
+    """
+    from ..credentials import hash_refresh_token
+
+    scheme, _, presented = (authorization or "").partition(" ")
+    if scheme.lower() != "bearer" or not presented:
+        return None
+    with connection() as conn, conn.cursor() as cur:
+        cur.execute("SELECT worker_id FROM workers WHERE token_hash = %s",
+                    (hash_refresh_token(presented),))
+        row = cur.fetchone()
+    return row[0] if row else None
+
+
+def _origin_permitted(websocket: WebSocket) -> bool:
+    """Whether this handshake came from an origin allowed to drive a console.
+
+    **The one check that CSRF machinery cannot cover.** `routers/auth.py`
+    defends every mutating JSON route with a required header, and its comment
+    explains why that is complete: "a cross-site HTML form cannot set a request
+    header, and a cross-site `fetch` that tries triggers a preflight -- which
+    fails, because this app mounts no CORSMiddleware". Neither half reaches a
+    WebSocket. There is no preflight on a WebSocket handshake, and the browser
+    API takes no headers, so the defence that holds everywhere else is
+    unavailable here by construction.
+
+    `Origin` is what is left. The browser sets it on every WebSocket handshake
+    (RFC 6455) and page script cannot forge it, which makes it the only thing in
+    the request that distinguishes "the operator's own tab" from "a page on
+    another origin that knows a job id".
+
+    **A missing `Origin` is refused**, and that is deliberate rather than
+    incidental. Browsers always send one; a handshake without it is not a
+    browser, and this is the browser's end -- `sandboxd` has its own route, its
+    own credential and its own lease check. Fail closed: the cost of being wrong
+    is an operator's diagnostic tool needing `CONSOLE_ALLOWED_ORIGINS` set, and
+    the cost of being wrong the other way is an interactive channel into a
+    machine running malware.
+    """
+    origin = websocket.headers.get("origin")
+    if not origin:
+        return False
+
+    if settings.console_allowed_origins:
+        return origin.rstrip("/") in settings.console_allowed_origins
+
+    # Same-origin, which is what an unset setting has to mean -- see the comment
+    # on `console_allowed_origins`. Compared on the network location alone: the
+    # scheme differs between the tunnel (https) and a LAN or development
+    # listener (http), and it is the HOST that decides whose page this is.
+    host = websocket.headers.get("host")
+    return bool(host) and urlsplit(origin).netloc == host
+
+
+def _job_row(job_id: UUID, identity: auth.Caller):
     """The row both console ends need, scoped to what the caller may see.
 
     **`identity` has no default, and the two callers pass different things.**
@@ -211,25 +272,56 @@ async def _relay(websocket: WebSocket, job_id: UUID, side: console.Side):
 
 @browser_router.websocket("/{job_id}/console")
 async def browser_console(websocket: WebSocket, job_id: UUID):
-    """The operator's end. Authenticated by Cloudflare Access.
+    """The operator's end. Either credential, same precedence as everywhere.
 
-    `access_identity` is called directly rather than attached as a dependency,
-    because it raises `HTTPException` -- which has no meaning on a WebSocket
-    and would surface as a dropped connection with no reason. Calling it here
-    reuses the SAME verification (JWKS fetch, audience, issuer) and turns a
-    refusal into a close code a client can read. A second implementation of
-    Access verification is exactly what must not exist.
+    The verifiers are called directly rather than attached as dependencies,
+    because they raise `HTTPException` -- which has no meaning on a WebSocket
+    and would surface as a dropped connection with no reason. Calling them here
+    reuses the SAME verification and turns a refusal into a close code a client
+    can read. A second implementation of either check is exactly what must not
+    exist.
 
-    **The identity it returns is now used, not just demanded** (issue #40).
+    **A session cookie is read FIRST, and that is what makes the console
+    survive the cut-over.** This end used to read only `cf-access-jwt-assertion`
+    -- so with Access removed the identity was None, and since DRAFT-061 that no
+    longer means "see everything" but is refused outright by `visible_to`. The
+    console would have failed with a `ValueError` inside a socket handler, which
+    is the least debuggable shape a failure can take. Cookies ride the
+    handshake like any other header, so there is nothing special to arrange.
+
+    **The identity it returns is used, not just demanded** (issue #40).
     Verifying who the caller is and then opening a console on any job by id was
     authentication without authorization: a session here streams the framebuffer
     of a live malware VM and accepts input into it.
     """
+    # **Before authentication, not after.** A cross-site dial may carry a
+    # perfectly valid credential -- that is the whole of the attack -- so
+    # checking who the caller is first would answer the wrong question and then
+    # act on it. Refusing here also means a hostile page learns nothing about
+    # whether the job id it guessed exists.
+    if not _origin_permitted(websocket):
+        await websocket.close(POLICY, "origin not permitted")
+        return
+
     try:
-        identity = auth.access_identity(
-            websocket.headers.get("cf-access-jwt-assertion"))
+        # Mirrors `auth.caller_identity`: a session this platform issued wins
+        # over an Access assertion, and only a caller who produces NEITHER is
+        # turned away. Not `Depends(caller_identity)` for the reason above.
+        identity = auth.session_identity(websocket.cookies.get("sandbox_access"))
+        if identity is None:
+            access = auth.access_identity(
+                websocket.headers.get("cf-access-jwt-assertion"))
+            identity = auth.resolve_tenant(access)
     except HTTPException as exc:
         await websocket.close(POLICY, str(exc.detail))
+        return
+
+    if identity is None:
+        # Explicit, because the alternative is `visible_to` raising ValueError
+        # deep inside `_job_row`. Infrastructure does not reach this end at all
+        # -- the worker has its own route below, with its own credential -- so
+        # there is no `EVERYTHING` case to admit here.
+        await websocket.close(POLICY, "authentication required")
         return
 
     if not settings.console_enabled:
@@ -284,7 +376,7 @@ async def browser_console(websocket: WebSocket, job_id: UUID):
 async def worker_console(websocket: WebSocket, job_id: UUID):
     """Dom0's end. Authenticated by the worker token over the LAN.
 
-    Not `Depends(require_worker_token)`: that dependency reads an HTTP
+    Not `Depends(authenticated_worker)`: that dependency reads an HTTP
     Authorization header, and a browser's WebSocket API cannot set headers --
     but `sandboxd` is not a browser and does send them, so the token is read
     here directly from the handshake request. Doing it explicitly also keeps
@@ -295,18 +387,21 @@ async def worker_console(websocket: WebSocket, job_id: UUID):
         await websocket.close(POLICY, "the live console is disabled")
         return
 
-    token = websocket.headers.get("authorization", "")
-    expected = f"Bearer {settings.worker_token}"
-    # Constant-time: this is a bearer token on a route that reaches a malware
-    # VM's console, and `==` on secrets leaks length and prefix through timing.
-    import hmac
-    if not hmac.compare_digest(token, expected):
-        await websocket.close(POLICY, "bad worker token")
+    # Resolved to a worker id rather than compared against one shared secret.
+    # `Depends` cannot be used here -- it raises HTTPException, which has no
+    # meaning on a WebSocket -- so this calls the same lookup the HTTP routes
+    # use and turns a refusal into a close code a client can read.
+    worker_id = _worker_from_token(websocket.headers.get("authorization", ""))
+    if worker_id is None:
+        await websocket.close(POLICY, "bad worker credential")
         return
 
-    # None: the worker is not a tenant. See `_job_row`; the lease check below
-    # is what scopes this end.
-    row = _job_row(job_id, None)
+    # `EVERYTHING`, by name: the worker is infrastructure rather than a tenant
+    # and must be able to reach anyone's job. This used to be `None`, which
+    # meant the same thing by accident -- and meant it for every caller that
+    # failed to produce an identity, not just this one. The lease check below
+    # is what actually scopes this end.
+    row = _job_row(job_id, auth.EVERYTHING)
     if row is None or JobState(row[0]) not in RUNNING_STATES:
         # Same window as the browser end, and it has to be: sandboxd now dials
         # as soon as the clone exists rather than at the start of the trace, so
@@ -329,9 +424,14 @@ async def worker_console(websocket: WebSocket, job_id: UUID):
     # Not `Depends(auth.leased_job)` for the same reason the token is read by
     # hand here: that dependency raises `HTTPException`, which on a WebSocket
     # surfaces as a dropped connection with no reason. The CHECK is the same
-    # one -- lease_owner against X-Worker-Id -- expressed as a close code.
-    worker_id = websocket.headers.get("x-worker-id", "")
-    if not worker_id or row[2] != worker_id:
+    # one -- lease_owner against the id this credential resolves to --
+    # expressed as a close code.
+    # From the CREDENTIAL, not a header. The same change `authenticated_worker`
+    # makes on the HTTP routes: before, this compared `lease_owner` against
+    # whatever id the caller typed, so any token holder could attach to any
+    # running clone's console -- the most consequential instance of the gap,
+    # because the far end is an interactive channel into a live malware VM.
+    if row[2] != worker_id:
         # Deliberately the same message either way: a worker that guesses a job
         # id must not learn whether it exists, which is why `leased_job` returns
         # 404 rather than 403 for someone else's job.

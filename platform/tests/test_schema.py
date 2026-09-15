@@ -9,6 +9,7 @@ import re
 from pathlib import Path
 
 import pytest
+from conftest import DEFAULT_OWNER, identity_id
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 PIPELINE_DOC = REPO_ROOT / "docs" / "architecture" / "analysis-pipeline.md"
@@ -77,10 +78,9 @@ def test_claim_uses_the_partial_index_not_a_sequential_scan(conn):
         cur.execute("""
             INSERT INTO jobs (target_os, submitted_filename, required_mib, state,
                               owner)
-            SELECT 'ubuntu', 'bulk-' || g || '.bin', 2198, 'queued',
-                   'fixture-owner@example.test'
+            SELECT 'ubuntu', 'bulk-' || g || '.bin', 2198, 'queued', %s
               FROM generate_series(1, 5000) AS g
-        """)
+        """, (identity_id(cur, DEFAULT_OWNER),))
         cur.execute("ANALYZE jobs")
         cur.execute("""
             EXPLAIN SELECT id FROM jobs

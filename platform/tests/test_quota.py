@@ -22,13 +22,12 @@ from __future__ import annotations
 
 import pytest
 
-from conftest import DEFAULT_OWNER, enqueue
+from conftest import DEFAULT_OWNER, enqueue, owner_id
 
 SMALL_MIB = 2198
 FREE_MIB = 8192
 
 REGISTRATION = {
-    "worker_id": "test-worker",
     "total_mib": 12082,
     "total_vlans": 8,
     "total_slots": 2,
@@ -37,8 +36,22 @@ REGISTRATION = {
 
 
 def balance_of(conn, owner=DEFAULT_OWNER):
+    # Joined to `identities` rather than matching `tenants.owner` directly:
+    # that column is a tenant id since 0009 and tests name their people by
+    # address. Lookup only, never creating -- otherwise `is None` below would
+    # stop being able to mean "this tenant has no row yet".
+    #
+    # **Either column**, because since DRAFT-061 an address can be in either and
+    # which one depends on how the identity came to exist: `access_subject` for
+    # one a provider asserted (what `owner_id` writes, and what these tests
+    # make), `email` for one that signs in with a password. Matching only
+    # `email` reported every balance here as None -- read as "the tenant row was
+    # never created", which is a much more alarming bug than the one it was.
     row = conn.execute(
-        "SELECT balance_seconds FROM tenants WHERE owner = %s", (owner,)
+        "SELECT t.balance_seconds FROM tenants t"
+        "  JOIN identities i ON i.id = t.owner"
+        " WHERE lower(i.access_subject) = lower(%s)"
+        "    OR lower(i.email) = lower(%s)", (owner, owner)
     ).fetchone()
     return None if row is None else row[0]
 
@@ -54,8 +67,7 @@ def lease_one(client, worker_headers, conn):
     client.post("/api/v1/worker/register", headers=worker_headers,
                 json=REGISTRATION)
     job_id = enqueue(conn, "ubuntu", SMALL_MIB)
-    claimed = client.post("/api/v1/worker/claim", headers=worker_headers, json={
-        "worker_id": worker_headers["X-Worker-Id"], "free_mib": FREE_MIB,
+    claimed = client.post("/api/v1/worker/claim", headers=worker_headers, json={ "free_mib": FREE_MIB,
         "free_vlans": 6, "free_slots": 2,
     })
     assert claimed.json()["status"] == "leased", claimed.text
@@ -87,8 +99,7 @@ def test_the_clock_starts_at_the_claim_not_at_submission(client, conn,
 
     client.post("/api/v1/worker/register", headers=worker_headers,
                 json=REGISTRATION)
-    client.post("/api/v1/worker/claim", headers=worker_headers, json={
-        "worker_id": worker_headers["X-Worker-Id"], "free_mib": FREE_MIB,
+    client.post("/api/v1/worker/claim", headers=worker_headers, json={ "free_mib": FREE_MIB,
         "free_vlans": 6, "free_slots": 2,
     })
 
@@ -146,12 +157,12 @@ def test_a_job_that_never_had_a_clone_charges_nothing(client, conn):
     """
     conn.execute(
         "INSERT INTO tenants (owner) VALUES (%s) ON CONFLICT DO NOTHING",
-        (DEFAULT_OWNER,))
+        (owner_id(conn),))
     before = balance_of(conn)
     job_id = conn.execute(
         "INSERT INTO jobs (target_os, submitted_filename, state, owner)"
         " VALUES ('ubuntu', 'x.bin', 'received', %s) RETURNING id",
-        (DEFAULT_OWNER,),
+        (owner_id(conn),),
     ).fetchone()[0]
 
     conn.execute("UPDATE jobs SET state = 'rejected' WHERE id = %s", (job_id,))
@@ -242,14 +253,14 @@ def _startable(conn, started: bool):
     """
     conn.execute(
         "INSERT INTO tenants (owner) VALUES (%s) ON CONFLICT DO NOTHING",
-        (DEFAULT_OWNER,))
+        (owner_id(conn),))
     return conn.execute(
         "INSERT INTO jobs (target_os, submitted_filename, state, owner,"
         "                  started_at)"
         " VALUES ('ubuntu', 'x.bin', 'cleaning', %s,"
         "         CASE WHEN %s THEN now() - interval '90 seconds' END)"
         " RETURNING id",
-        (DEFAULT_OWNER, started),
+        (owner_id(conn), started),
     ).fetchone()[0]
 
 
@@ -306,13 +317,13 @@ def test_a_clock_that_ran_backwards_cannot_credit_a_tenant(conn):
 
     conn.execute(
         "INSERT INTO tenants (owner) VALUES (%s) ON CONFLICT DO NOTHING",
-        (DEFAULT_OWNER,))
+        (owner_id(conn),))
     job_id = conn.execute(
         "INSERT INTO jobs (target_os, submitted_filename, state, owner,"
         "                  started_at)"
         " VALUES ('ubuntu', 'x.bin', 'cleaning', %s,"
         "         now() + interval '90 seconds') RETURNING id",
-        (DEFAULT_OWNER,),
+        (owner_id(conn),),
     ).fetchone()[0]
     before = balance_of(conn)
 
@@ -349,7 +360,7 @@ def test_an_exhausted_tenant_is_refused_with_402(client, conn, access_token):
     """
     broke = "broke@example.test"
     conn.execute("INSERT INTO tenants (owner, balance_seconds) VALUES (%s, 0)",
-                 (broke,))
+                 (owner_id(conn, broke),))
 
     r = client.post("/api/v1/jobs", headers=access_token(broke),
                     json={"target_os": "ubuntu", "filename": "x.bin",
@@ -357,7 +368,7 @@ def test_an_exhausted_tenant_is_refused_with_402(client, conn, access_token):
 
     assert r.status_code == 402, r.text
     assert conn.execute("SELECT count(*) FROM jobs WHERE owner = %s",
-                        (broke,)).fetchone()[0] == 0
+                        (owner_id(conn, broke),)).fetchone()[0] == 0
 
 
 def test_a_negative_balance_is_refused_too(client, conn, access_token):
@@ -369,7 +380,7 @@ def test_a_negative_balance_is_refused_too(client, conn, access_token):
     """
     overdrawn = "overdrawn@example.test"
     conn.execute("INSERT INTO tenants (owner, balance_seconds)"
-                 " VALUES (%s, -120)", (overdrawn,))
+                 " VALUES (%s, -120)", (owner_id(conn, overdrawn),))
 
     r = client.post("/api/v1/jobs", headers=access_token(overdrawn),
                     json={"target_os": "ubuntu", "filename": "x.bin",
@@ -399,7 +410,7 @@ def test_the_balance_endpoint_creates_the_tenant_and_returns_the_row(
 
     # Idempotent: a second page load must not grant a second time.
     conn.execute("UPDATE tenants SET balance_seconds = 60 WHERE owner = %s",
-                 (newcomer,))
+                 (owner_id(conn, newcomer),))
     assert client.post("/api/v1/account/balance", headers=hdrs).json() == 60
 
 
@@ -414,9 +425,11 @@ def test_the_balance_is_never_cached(client, access_token):
 
 def test_the_balance_endpoint_refuses_a_caller_with_no_identity(client,
                                                                 no_identity):
-    """`tenants.owner` is the primary key, so a None would reach the database
-    as a constraint violation. 403 instead, from `auth.required_identity`."""
-    assert client.post("/api/v1/account/balance").status_code == 403
+    """401 since DRAFT-061: a caller with no credential is refused by
+    `auth.caller_identity` before the route runs, rather than reaching
+    `required_identity` with a None that `visible_to` would have read as
+    "see everything"."""
+    assert client.post("/api/v1/account/balance").status_code == 401
 
 
 # --- the two paths agree ----------------------------------------------------

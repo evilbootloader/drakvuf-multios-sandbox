@@ -1,13 +1,31 @@
 # Analysis pipeline architecture
 
-> Verified-vs-proposed distinction matters here, same as the checklists:
-> the `dirwatch.c` contract below is confirmed by direct source reading
-> (2026-08-07). The job/result state model below is **decided** as of
-> 2026-08-09 (issue #3 / DRAFT-008) and **implemented nowhere**. "Decided"
-> means downstream work builds on it instead of reinventing it; it does not
-> mean any script emits it today.
+> **2026-09-15 — the orchestrator this document describes was deleted.**
+> `dirwatch.c` and the five worker scripts it called are gone; `sandboxd`
+> replaced all of them. See `docs/architecture/automation-files.md` for the
+> file-by-file mapping.
+>
+> **Read it in two halves.** The *state model* from "Decided: OS-independent
+> job/result state model" onward is current and implemented — it is what the
+> platform's jobs table and `sandboxd`'s stage machine do. The *orchestrator
+> contract* before it is history: accurate as of 2026-08-07 by direct source
+> reading, and describing code no longer in this tree. Sections that have
+> been superseded say so in place.
+>
+> **If you are adding a guest OS, C1–C10 below is no longer the procedure.**
+> A new guest is a `TargetOs` member plus its entries in `sandboxd/guests.py`
+> (`PATHS`, `default_trace_options`, the argv builders) and
+> `sandboxd/stages.py` (`StageConfig.origins`, `profiles`,
+> `injection_pids`). There are no per-OS files to create. The *requirements*
+> C1–C10 encode are still the right ones — read them for what a new guest
+> must satisfy, not for where to put it.
 
-## Current orchestrator: `automation/dirwatch.c`
+> Verified-vs-proposed distinction matters here, same as the checklists:
+> the `dirwatch.c` contract below was confirmed by direct source reading
+> (2026-08-07). The job/result state model below was **decided** as of
+> 2026-08-09 (issue #3 / DRAFT-008) and is now implemented.
+
+## Superseded orchestrator: `automation/dirwatch.c` (deleted 2026-09-15)
 
 A modified copy of DRAKVUF's own `dirwatch` tool (upstream lives at
 `tklengyel/drakvuf:src/dirwatch/dirwatch.c` — see `upstream-drakvuf.md`).
@@ -516,6 +534,17 @@ convertible into a static CI check later (DRAFT-026a) without being one now.
 `pipeline-<os>.env`, `preconfig-<os>.sh`, `drakvuf-<os>.sh`,
 `run_analysis-<os>.sh`. The clone step is **not** among them — it is
 shared; see C2.
+
+> **SUPERSEDED 2026-09-15. C1 is now zero files.** Both amendments below
+> were applied, and then overtaken: all four per-OS file kinds were deleted
+> when `sandboxd` replaced the pipeline. A new guest OS is a `TargetOs`
+> member and a set of table entries in `sandboxd/guests.py` and
+> `sandboxd/stages.py` — Windows already has its rows there
+> (`_WINDOWS_PLUGINS`, `PATHS[TargetOs.WINDOWS]`, the `shellexec` branch),
+> with no execution evidence behind them. The principle C1 was defending
+> survives intact and is now enforced by the type system rather than by
+> review: **do not add an OS branch to shared code — add a value to the
+> per-OS table.**
 
 > **Pending amendment, 2026-08-21 (DRAFT-041).** C1 drops to **three**
 > per-OS files when `dirwatch` is retired: `run_analysis-<os>.sh` collapses
@@ -1162,6 +1191,11 @@ to avoid it.
 > `docs/architecture/platform.md`. The paragraph below is kept because its
 > four carried requirements are now `sandboxd`'s to satisfy.
 
+*(Everything from here to the end of this section is the pre-decision
+argument, kept because its four carried requirements are the reason
+`sandboxd` is shaped as it is. All four are now satisfied — see the notes
+after each.)*
+
 Not decided. Per project rules, do not rewrite merely because Python is
 easier — the interface/callers above must be fully documented first
 (DRAFT-010), and any replacement must preserve the same callback contract
@@ -1177,6 +1211,12 @@ lease that is shared between processes rather than a static per-process
 array. That last one is the weightiest: `slots_busy[128]` and
 `find_thread()` are the parts of this file that would not survive the
 change, and they are also what a rewrite would most obviously replace.
+
+> **All four landed.** The cancellation check is `cancel_requested` on the
+> heartbeat response; durable state is the platform's jobs table; the
+> startup sweep is `sandboxd/sweep.py`; and memory admission plus the VLAN
+> table is `sandboxd/resources.py`, which is exactly what replaced
+> `slots_busy[128]` and `find_thread()`.
 None of these is a reason on its own to rewrite, but a C-side
 implementation should be costed against all four rather than just the
 first.

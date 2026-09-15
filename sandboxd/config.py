@@ -20,9 +20,9 @@ them.
 
 ## This file feeds two things that are not Python
 
-`automation/platform.env` is sourced by `network-setup.sh`, `clone.pl` and the
-per-OS scripts, and `misc/*.cfg` are Xen configs. Neither can import Python, so
-both are **generated from the values below**:
+`automation/platform.env` is sourced by `network-setup.sh`, and `misc/*.cfg`
+are Xen configs. Neither can import Python, so both are **generated from the
+values below**:
 
     scripts/gen-xen-configs.py            # rewrite them
     scripts/gen-xen-configs.py --check    # exit 1 if either has drifted
@@ -235,39 +235,6 @@ IPTABLES_WAIT_SECONDS = 5
 #: convenience for getting a sample online.
 ALLOW_DIRECT = False
 
-#: Exits this host can route through, as `name -> (mode, interface, country)`.
-#:
-#: Empty until an exit exists. A `routed` entry must not be added before its
-#: kill-switch has been proven by packet capture -- DRAFT-057 makes that a
-#: precondition of the mode being usable, and declaring it here is what makes
-#: it selectable. The check is the operator's; the code cannot verify a capture.
-#:
-#: Peers are configuration, NEVER a submitter-supplied endpoint. A submitter
-#: naming a tunnel endpoint would be choosing where Dom0 sends traffic, which
-#: is a different feature with a different threat model.
-#:
-#: To offer Tor, install `automation/torrc` as `/etc/tor/torrc`, start tor, and
-#: add::
-#:
-#:     EXITS = {
-#:         "tor-default": {
-#:             "mode": "tor",
-#:             "caveats": ["tcp-only", "smtp-blocked-upstream",
-#:                         "smb-blocked-upstream"],
-#:         },
-#:     }
-#:
-#: **The caveats are not decoration.** They are what makes the report say "SMTP
-#: was blocked upstream" instead of showing nothing and letting a reader
-#: conclude the sample was quiet. Tor's default exit policy rejects 25 and 445
-#: among others, and it carries TCP only -- so a run that observed no UDP
-#: observed nothing about whether the sample uses UDP.
-#:
-#: `tor` is withheld automatically if nothing is listening on TOR_TRANS_PORT,
-#: so a declaration here is a statement of intent rather than a promise the
-#: daemon takes on trust.
-EXITS: dict[str, dict] = {}
-
 #: Tor's transparent-proxy ports, as `automation/torrc` configures them.
 #:
 #: **These two numbers appear in three places and all three must agree**:
@@ -332,7 +299,45 @@ FAKENET_PROXY_PORT = 38926
 #: 32768 for that reason.
 FAKENET_DNS_PORT = 5300
 
-EXITS = {
+#: Exits this host can route through, as `name -> {mode, interface, country,
+#: caveats}`. `egress.available_exits` reads this and nothing else; what it
+#: returns is what the platform offers a submitter, so an exit absent here is
+#: unselectable with no second switch to disagree.
+#:
+#: **There used to be two of these**: an empty one, declared earlier in the
+#: file under a comment saying "empty until an exit exists", and this one,
+#: which actually binds. The first was dead from the moment the second was
+#: written and it was the one a reader met first, so the file documented the
+#: opposite of its own state. One assignment, carrying all of the guidance,
+#: is what stops that recurring.
+#:
+#: **A `routed` entry must not be added before its kill-switch has been proven
+#: by packet capture.** DRAFT-057 makes that a precondition of the mode being
+#: usable, and declaring it here is what makes it selectable -- so adding the
+#: entry IS the claim that the capture was taken. The check is the operator's;
+#: no code here can verify a capture.
+#:
+#: Peers are configuration, NEVER a submitter-supplied endpoint. A submitter
+#: naming a tunnel endpoint would be choosing where Dom0 sends traffic, which
+#: is a different feature with a different threat model.
+#:
+#: **The caveats are not decoration.** They are what makes the report say "SMTP
+#: was blocked upstream" instead of showing nothing and letting a reader
+#: conclude the sample was quiet. Tor's default exit policy rejects 25 and 445
+#: among others, and it carries TCP only -- so a run that observed no UDP
+#: observed nothing about whether the sample uses UDP.
+#:
+#: A declaration here is a statement of intent rather than a promise the daemon
+#: takes on trust: `tor` is withheld automatically when nothing is listening on
+#: TOR_TRANS_PORT, `simulated` when nothing answers on FAKENET_PROXY_PORT, and
+#: `routed` when its interface has no tunnel. Offering a mode whose responder
+#: is down would produce an analysis that reports a sample which could not
+#: connect, which is the false negative this whole file exists to avoid.
+#:
+#: `tor-default` below needs `automation/torrc` installed as `/etc/tor/torrc`
+#: and tor started; until then the entry stays and the exit is simply not
+#: offered.
+EXITS: dict[str, dict] = {
     "tor-default": {
         "mode": "tor",
         "caveats": ["tcp-only", "smtp-blocked-upstream",

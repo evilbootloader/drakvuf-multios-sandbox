@@ -14,6 +14,17 @@
 # A suppression with no owner is not an exception, it is an untracked
 # defect. When an owning issue lands, delete its line.
 
+# --- What `automation/*.sh` now matches ---------------------------------
+#
+# **One file: `network-setup.sh`.** The shell/C launcher pipeline --
+# `cleanup.sh`, `tcpdump.sh`, `run_analysis-<os>.sh`, `drakvuf-<os>.sh`,
+# `preconfig-<os>.sh` -- was deleted on 2026-09-15, replaced by `sandboxd`.
+# `network-setup.sh` survives because `sandboxd/daemon.py` executes it at
+# every daemon start.
+#
+# So this baseline covers one script and the next one written, and the
+# second of those is the reason it still says anything at all.
+
 # --- Why `disable=` and not a severity floor ----------------------------
 #
 # The natural expression of this policy is `severity=warning`: every
@@ -29,7 +40,7 @@
 # wins, at a cost stated plainly below.
 #
 # Re-test `severity=` when shellcheck is upgraded. If it starts working it
-# is strictly better than the blanket disables here, because it keeps the
+# is strictly better than the blanket disable here, because it keeps the
 # checks live for code written after this baseline.
 
 # --- Dialect ------------------------------------------------------------
@@ -38,55 +49,50 @@
 # authority, so a new per-OS script cannot be silently checked as a dialect
 # it does not run under.
 #
-# The five DRAKVUF-derived worker scripts declare `#!/bin/sh` and are
-# checked as POSIX sh, which is what actually interprets them: `dirwatch`
-# spawns them via `g_spawn_command_line_sync()` and `/bin/sh` is `dash` on
-# the Dom0 host. `run_analysis-ubuntu.sh` declares `#!/bin/bash` and is
-# checked as bash, because it is this project's own launcher, invoked
-# directly by an operator rather than by `dirwatch`.
+# `network-setup.sh` declares `#!/bin/sh` and is checked as POSIX sh, which
+# is what actually interprets it: `/bin/sh` is `dash` on the Dom0 host, and
+# `sandboxd` spawns it by path with no shell in between. Write POSIX --
+# CLAUDE.md's `$0` versus `${BASH_SOURCE[0]}` rule is about this file.
 
 # --- Accepted findings --------------------------------------------------
 #
-# SC1091  Not following: pipeline-ubuntu.env was not specified as input.
-#         Correct behaviour, not a defect: the config is sourced at runtime
-#         from a path built at runtime. The `# shellcheck source=`
-#         directives in the scripts record where it lives.
+# SC1091  Not following: automation/platform.env was not specified as
+#         input. Correct behaviour, not a defect: `network-setup.sh:367`
+#         sources it from a path built at runtime from the script's own
+#         location, so the file is not on shellcheck's input list. The
+#         `# shellcheck source=` directive in the script records where it
+#         lives.
 #         Owner: none needed.
-#
-# SC2086  Unquoted expansions. Was 33 sites across cleanup.sh,
-#         drakvuf-ubuntu.sh, network-setup.sh, tcpdump.sh; now 9, all in
-#         cleanup.sh and the one `kill $TCPDUMPPID` in drakvuf-ubuntu.sh.
-#         Owner: DRAFT-011 alone.
-#         DRAFT-030 discharged its half on 2026-08-15: every site carrying
-#         the sample filename is quoted, because dirwatch now admits names
-#         containing spaces and a bare expansion split them. What remains
-#         is the `ps | grep` PID handling, which is the same code SC2009
-#         below is about -- one issue should fix both together.
-#         Still NOT a lint cleanup: changing expansion behaviour in
-#         scripts that run malware analysis as root is a behaviour change
-#         and goes through its own review.
-#
-# SC2009  `ps aux | grep` process discovery, 4 sites. Three are in shared
-#         cleanup.sh. The `"tcpdump -i xenbr1.$VLAN"` match is unanchored
-#         with `.` as a regex wildcard, so VLAN 1 also matches
-#         xenbr1.10-19 once there are more than 9 clones.
-#         Owner: DRAFT-011.
+#         Verify with `shellcheck --norc --exclude=SC1091 automation/*.sh`,
+#         which exits 0 -- this is the only finding in the tree.
+
+# --- Retired suppressions -----------------------------------------------
 #
 # SC2006  RETIRED 2026-08-11 by DRAFT-028. Its only site in the repository
 #         was network-setup.sh's `for i in \`seq 1 $1\``, replaced by a
-#         POSIX while-loop. The check is live again for every file.
-#         This is the mechanism working as intended: a suppression named
-#         its owning issue, that issue landed, and the line came out.
+#         POSIX while-loop.
 #
-# THE COST, stated because it is not obvious: the remaining two are
-# disabled repository-wide, so a genuinely dangerous new unquoted expansion
-# in `preconfig-android.sh` or a future `clone-windows.pl` wrapper will NOT
-# be caught until DRAFT-011 lands and these lines come out. That cost is
-# now larger, not smaller: the Android scripts are being written while the
-# check is off. Write them quoted and verify with
-# `shellcheck --norc automation/preconfig-android.sh`, which is clean for
-# network-setup.sh and must stay clean for anything new.
+# SC2086  RETIRED 2026-09-15. Unquoted expansions: 33 sites originally,
+#         down to 9 after DRAFT-030 quoted every site carrying the sample
+#         filename, and 0 now -- all nine lived in `cleanup.sh` and
+#         `drakvuf-ubuntu.sh`, which no longer exist.
 #
-# For reference, `shellcheck --norc automation/network-setup.sh` is clean
-# as of DRAFT-028 -- that file needs none of the exemptions below.
-disable=SC1091,SC2086,SC2009
+# SC2009  RETIRED 2026-09-15. `ps aux | grep` process discovery, 4 sites,
+#         three of them in `cleanup.sh`. Its worst instance was the
+#         `"tcpdump -i xenbr1.$VLAN"` match: unanchored, with `.` as a
+#         regex wildcard, so VLAN 1 also matched xenbr1.10-19 once there
+#         were more than 9 clones.
+#
+# **SC2086 and SC2009 were retired by DELETION, not by a fix**, and the
+# distinction matters. DRAFT-011 owned both and never landed; the files
+# carrying the findings went away instead. The defect itself was worth
+# keeping, and it was: `sandboxd/proc.py::iter_processes` reads
+# `/proc/<pid>/cmdline` and compares argv elements for equality precisely
+# so the xenbr1.1-matches-xenbr1.10 class of bug cannot recur. See that
+# module's docstring and `sandboxd/sweep.py::_kill_strays`.
+#
+# The upside is real: both checks are LIVE again for every file, so a new
+# `preconfig-windows.sh` gets caught where it would previously have been
+# waved through. Keep it that way -- if a new script needs one of these
+# disabled, that is a finding to fix, not a line to restore here.
+disable=SC1091

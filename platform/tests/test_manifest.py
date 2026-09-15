@@ -13,6 +13,7 @@ import json
 import uuid
 
 import pytest
+from conftest import owner_id
 
 from sandbox_platform import manifest as m
 
@@ -259,8 +260,8 @@ def _completed(conn, manifest: object) -> uuid.UUID:
     return conn.execute(
         "INSERT INTO jobs (target_os, submitted_filename, state, manifest, owner)"
         " VALUES ('ubuntu', 'x.bin', 'completed', %s,"
-        "         'fixture-owner@example.test') RETURNING id",
-        (json.dumps(manifest),),
+        "         %s) RETURNING id",
+        (json.dumps(manifest), owner_id(conn)),
     ).fetchone()[0]
 
 

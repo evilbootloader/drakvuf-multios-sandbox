@@ -103,6 +103,38 @@ ALLOW_PATHS = {
     "docs/runbooks/deploy-vlan-lease.md",
     "docs/runbooks/tune-nested-cpu.md",
 
+    # The shell/C launcher pipeline, removed 2026-09-15 once `sandboxd` had
+    # replaced all of it. Runbooks 01-15, the issue drafts and the reviews cite
+    # these paths as DATED EVIDENCE and are never rewritten, so the names have
+    # to keep resolving here. What replaced each one:
+    #
+    #   dirwatch.c, dirwatch_old.c  -> sandboxd/daemon.py (the watch loop and
+    #                                  the single-instance guard) and
+    #                                  sandboxd/stages.py (the phase sequence)
+    #   clone.pl                    -> sandboxd/clone.py
+    #   cleanup.sh                  -> sandboxd/proc.py + sandboxd/sweep.py
+    #   tcpdump.sh                  -> sandboxd/guests.py::argv_tcpdump
+    #   run_analysis-{ubuntu,android}.sh -> sandboxd/daemon.py
+    #   drakvuf-{ubuntu,android}.sh      -> sandboxd/guests.py
+    #   preconfig-{ubuntu,android}.sh    -> sandboxd/guests.py
+    #   pipeline-{ubuntu,android}.env    -> sandboxd/config.py + sandboxd/timing.py
+    #
+    # `docs/architecture/automation-files.md` holds the full mapping and the
+    # facts worth keeping from their comments.
+    "automation/dirwatch.c",
+    "automation/dirwatch_old.c",
+    "automation/clone.pl",
+    "automation/cleanup.sh",
+    "automation/tcpdump.sh",
+    "automation/run_analysis-ubuntu.sh",
+    "automation/run_analysis-android.sh",
+    "automation/drakvuf-ubuntu.sh",
+    "automation/drakvuf-android.sh",
+    "automation/preconfig-ubuntu.sh",
+    "automation/preconfig-android.sh",
+    "automation/pipeline-ubuntu.env",
+    "automation/pipeline-android.env",
+
     # Not built yet. Named by the Windows track, which is open.
     "profiles/windows.json",
     "misc/windows_sandbox.cfg",
@@ -132,14 +164,16 @@ def tracked_files() -> list[Path]:
 
 
 def suffix_resolve(ref: str, files: list[Path]) -> Path | None:
-    """`dirwatch.c` -> `automation/dirwatch.c`; `routers/worker.py` ->
-    `platform/sandbox_platform/routers/worker.py`.
+    """`network-setup.sh` -> `automation/network-setup.sh`;
+    `routers/worker.py` -> `platform/sandbox_platform/routers/worker.py`.
 
     **Partial paths are a deliberate convention here**, not sloppiness: the
     issue drafts and checklists say `preconfig-ubuntu.sh:206` because the
-    directory is obvious in context and the full path is noise. A checker that
+    directory was obvious in context and the full path was noise. A checker that
     rejected those produced 167 false positives on its first run and would have
-    been turned off within the day.
+    been turned off within the day. (That particular file is now deleted and its
+    bare name lands in the `skipped` bucket below -- which is the same outcome,
+    for the same reason.)
 
     Only a *unique* suffix match resolves. An ambiguous one is skipped rather
     than guessed -- checking the wrong file is worse than not checking, because

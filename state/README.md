@@ -15,22 +15,24 @@ fresh checkout has somewhere to put them.
 
 ## Who reads them
 
-`automation/clone.pl` derives the path from its own location and
-its `<origin domain>` argument:
+`sandboxd/stages.py` derives the path from the repository root and the
+origin domain (`StageConfig.saved_state`):
 
-```perl
-my $saved_state = "$FindBin::RealBin/../state/$origin.bak";
+```python
+return self.repo_root / "state" / f"{self.origin(os_)}.bak"
 ```
 
 That derivation is the point. Before issue #4 the origin was a parameter
 while the restore path was a hard-coded `/home/user/Documents/...`
 constant, so nothing stopped a clone from getting one domain's disk
 snapshot with another domain's memory image. Now the two names come from
-the same argument and cannot disagree.
+the same value and cannot disagree. The Perl clone builder that first
+derived it this way (via `FindBin`) was deleted 2026-09-15; the property
+was kept deliberately.
 
-`automation/run_analysis-ubuntu.sh` pre-flight checks the same path
-(via `SAVED_STATE` in `pipeline-ubuntu.env`) before starting `dirwatch`,
-so a missing image fails at launch rather than on the first sample.
+`sandboxd/clone.py` pre-checks the path before it creates anything, and
+names it in the error — everything checkable without creating state is
+checked first, so a missing image costs nothing and says what it is.
 
 ## Producing one
 
@@ -40,6 +42,9 @@ the full procedure — in outline, boot the template domain, bring it to
 the state every clone should start from (including the long-lived process
 whose PID becomes `INJECTION_PID`), then `xl save` it.
 
-Re-saving a template almost certainly changes that PID. Update
-`INJECTION_PID` in the matching `automation/pipeline-<os>.env` in the same
-change, or every subsequent injection attaches to nothing.
+Re-saving a template almost certainly changes that PID. Update the entry
+for that OS in `StageConfig.injection_pids` (`sandboxd/stages.py`) in the
+same change, or every subsequent injection attaches to nothing — **and it
+fails silently**, because `injector` attaches to whatever holds the PID.
+`docs/CURRENT-STATE.md` §2b lists the values that are valid only for the
+`.bak` they were read from.

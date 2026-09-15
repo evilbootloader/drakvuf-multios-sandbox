@@ -7,8 +7,8 @@ correctness lives in exactly where one condition sits, and that is not
 something an ORM would let anyone read.
 
 Every parameter is bound (%s), never formatted. Submitted filenames are
-attacker-controlled -- dirwatch's admission check rejects `/` and control
-characters and nothing else, so quotes, `$`, backticks and `;` all reach here.
+attacker-controlled -- admission rejects `/` and control characters and nothing
+else, deliberately, so quotes, `$`, backticks and `;` all reach here.
 """
 
 from __future__ import annotations
@@ -101,8 +101,9 @@ SELECT id AS blocking_job_id, required_mib AS need_mib
 #
 # One statement, terminal, nothing to tear down. This is the operation
 # DRAFT-040 recorded as UNEXPRESSIBLE rather than merely unimplemented: under
-# dirwatch a queued job is a file in a watch directory plus a worker spinning
-# inside an admission loop, with no id to name it by and no field to set.
+# the old watcher a queued job was a file in a watch directory plus a worker
+# spinning inside an admission loop, with no id to name it by and no field to
+# set.
 # --------------------------------------------------------------------------
 CANCEL_QUEUED = """
 UPDATE jobs
@@ -116,7 +117,7 @@ RETURNING id
 # CANCEL, while running.
 #
 # Request only. sandboxd sees cancel_requested in its next heartbeat RESPONSE
-# and tears down through cleanup.sh, passing through 'cleaning'. The heartbeat
+# and tears down through its own cleanup stage, passing through 'cleaning'. The heartbeat
 # is the only channel because Dom0 has no inbound listener and never will --
 # a push cancel would require one, which is the hardest constraint in
 # platform.md.

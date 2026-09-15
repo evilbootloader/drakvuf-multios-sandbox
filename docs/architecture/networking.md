@@ -7,9 +7,10 @@
 
 ## Current implementation: `automation/network-setup.sh`
 
-Provisions the isolated per-clone networking that `clone.pl` and
-`preconfig-ubuntu.sh` assume already exists. **Rewritten by DRAFT-028
-(2026-08-11)**; the shape below is current.
+Provisions the isolated per-clone networking that `sandboxd`'s clone and
+preconfig stages assume already exists. **Rewritten by DRAFT-028
+(2026-08-11)**; the shape below is current. `sandboxd` executes this script
+at every daemon start and is now its only caller.
 
 - `modprobe 8021q` — VLAN kernel module.
 - `echo 1 > /proc/sys/net/ipv4/ip_forward` — enables IP forwarding.
@@ -118,9 +119,10 @@ with nothing filtering it. `DRAKVUF_INPUT` would never see the packet.
 
 Measured on an analysis clone on 2026-08-11: IPv6 was unreachable
 (`::1 dev lo` the sole route, `ping6: Network is unreachable`) **only
-because `preconfig-ubuntu.sh`'s `ip addr flush dev eth0` had wiped the
+because the preconfig stage's `ip addr flush dev eth0` had wiped the
 link-local**. That is an accident of configuration order, not a control,
-and a sample can undo it.
+and a sample can undo it. Still an accident: `sandboxd/guests.py:424`
+issues the same flush, so the blanket v6 DROP remains the only control.
 
 Blanket DROP rather than mirroring the IPv4 rules: the guests have no IPv6
 uplink to preserve, and the v6 equivalents of the RFC1918 blocks
@@ -159,9 +161,10 @@ flushes rather than a hunt through chains other tools also write to.
 > re-verified correct on that date: 9 rules, correct order, terminal in both
 > directions.
 
-This is the source of the `172.16.<VLAN>.1` gateway value used by
-`preconfig-ubuntu.sh`, and of the `xenbr1.<vlan>` interface name
-`clone.pl` attaches clones to and `tcpdump.sh` captures on.
+This is the source of the `172.16.<VLAN>.1` gateway value `sandboxd`'s
+preconfig stage gives each clone, and of the `xenbr1.<vlan>` interface name
+`sandboxd/clone.py` attaches clones to and `guests.argv_tcpdump` captures
+on.
 
 **It does not create `xenbr1`, despite being the file named
 `network-setup.sh`.** It calls only `modprobe`, `ip` and `iptables`; the
@@ -193,8 +196,8 @@ VLAN sub-interfaces on a bridge that does not exist.
 
 ## Confirmed defect: guest DNS never resolved (fixed 2026-08-09)
 
-`preconfig-ubuntu.sh` wrote `nameserver 172.16.<vlan>.1` into the clone's
-`/etc/resolv.conf` — the clone's own gateway, which is a Dom0 address.
+The Ubuntu preconfig script wrote `nameserver 172.16.<vlan>.1` into the
+clone's `/etc/resolv.conf` — the clone's own gateway, a Dom0 address.
 **Nothing has ever listened on port 53 there.** `network-setup.sh` sets
 `ip_forward` and a `MASQUERADE` rule but starts no resolver and installs
 no DNAT, so a query to that address is delivered to Dom0's INPUT chain
@@ -207,8 +210,9 @@ cost is analysis fidelity, not containment: a sample that resolves a C2
 domain died at its first lookup, and the pcap recorded a few unanswered
 queries and nothing else.
 
-Since 2026-08-09 the resolver is `GUEST_NAMESERVER` in
-`automation/pipeline-<os>.env`, defaulting to `1.1.1.1`. That is
+Since 2026-08-09 the resolver is configurable per guest, defaulting to
+`1.1.1.1` — now `GuestPaths.nameserver` in `sandboxd/guests.py`, formerly
+`GUEST_NAMESERVER` in the per-OS env file. That is
 consistent with the posture the lab already had — `network-setup.sh:139`
 NATs every clone to the uplink, so clones already had unrestricted
 outbound IP access, and refusing only DNS was a broken resolver rather
@@ -220,7 +224,7 @@ than a control. It is **not** egress control.
 > containment was verified against an Android guest in DRAFT-013
 > (2026-08-14, `docs/runbooks/06-verify-android-isolation.md`).
 
-**It costs no visibility — on Ubuntu.** `tcpdump.sh` captures the clone's
+**It costs no visibility — on Ubuntu.** `sandboxd` captures the clone's
 entire `xenbr1.<vlan>` sub-interface and DNS is plaintext UDP/53 there, so
 every query and answer is in the per-sample pcap whichever resolver serves
 it.
@@ -250,8 +254,8 @@ plaintext 53 alone.
 resolves names normally, the pcap is written, and the analyst gets TLS to
 `1.1.1.1:853` where they expected the domains a sample looked up.
 
-**Mitigation today** is per-clone and belongs to the guest: `preconfig-android.sh`
-sets `private_dns_mode off` (DRAFT-016). The parity matrix in
+**Mitigation today** is per-clone and belongs to the guest: the Android
+preconfig path sets `private_dns_mode off` (DRAFT-016). The parity matrix in
 `docs/checklists/android.md` records it as a required step, not an optional
 one.
 
@@ -276,9 +280,9 @@ golden image: §1.4 of `docs/checklists/android.md` DNATs all in-guest DNS to
 `android_sandbox` rebuilt from it; `iptables -t nat -L OUTPUT` was empty on
 the new image and the DNAT was deliberately not re-applied. The template now
 carries **no resolver configuration at all**, which is the intended end
-state rather than a gap: per-clone resolver configuration belongs to
-`preconfig-android.sh` at analysis time, exactly as `preconfig-ubuntu.sh`
-applies `GUEST_NAMESERVER`. Baking a resolver into a saved image would put a
+state rather than a gap: per-clone resolver configuration belongs to the
+preconfig stage at analysis time, and applies to Android exactly as it does
+to Ubuntu. Baking a resolver into a saved image would put a
 containment-relevant value where no per-OS config could override it.
 DRAFT-016 owns writing that step.
 
@@ -375,7 +379,7 @@ complaint — so the blanket v6 DROP described above costs nothing on the OS
 most likely to object to it.
 
 One caveat worth carrying: a restored clone boots holding the **golden VM's**
-LAN identity until `preconfig-android.sh` runs, and spends its first seconds
+LAN identity until the preconfig stage runs, and spends its first seconds
 ARPing for a residential gateway on the analysis VLAN. Containment held —
 that traffic reached nothing — but it is noise in every Android pcap and a
 window in which the clone is not yet configured. Detail and evidence in the
@@ -418,9 +422,9 @@ sweep clears any **per-VLAN** rules a dead process left behind.
 The qualifier matters, and its absence was a real defect. The legacy
 `network-setup.sh <n> direct` path writes a *wildcard* pair — `-i xenbr1.+ -o
 xenbr0 -j ACCEPT` plus a matching `MASQUERADE` — that names no VLAN, so no
-per-VLAN delete could match it and nothing removed it. One
-`ALLOW_DIRECT=1 ./run_analysis-ubuntu.sh` therefore granted egress for the
-host's whole uptime, and every later job used it, including jobs recorded and
+per-VLAN delete could match it and nothing removed it. One `ALLOW_DIRECT=1`
+run of the old launcher therefore granted egress for the host's whole
+uptime, and every later job used it, including jobs recorded and
 reported as `offline` — which install no rules at all and so had nothing that
 could collide with the leftovers. Two things now remove it: the `offline`
 branch of `network-setup.sh` (by exact spec, never a flush, so live clones'

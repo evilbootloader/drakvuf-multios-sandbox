@@ -10,9 +10,10 @@ Design and threat model: docs/architecture/live-console.md
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 
 import pytest
-from conftest import WORKER_TOKEN
+from conftest import WORKER_TOKEN, owner_id
 
 from sandbox_platform.console import (
     AlreadyAttached, Registry, Session, Side, pump,
@@ -412,10 +413,10 @@ def executing_job(conn, owner: str):
         INSERT INTO jobs (target_os, submitted_filename, state, lease_owner,
                           lease_expires_at, owner)
         VALUES ('ubuntu', 'x.bin', 'executing', %s, now() + interval '2 min',
-                'fixture-owner@example.test')
+                %s)
         RETURNING id
         """,
-        (owner,),
+        (owner, owner_id(conn)),
     ).fetchone()[0]
 
 
@@ -440,13 +441,37 @@ def relayed(monkeypatch):
     return reached
 
 
-def dial(client, job_id, *, worker_id, token=WORKER_TOKEN):
+@pytest.fixture
+def worker_tokens(conn):
+    """Provision the two workers these tests dial as, with distinct tokens.
+
+    **The token is the identity now** (DRAFT-061), so "dial as dom0-2" is no
+    longer a header to set -- it is a different credential to hold. That is the
+    whole of the change these tests exist to exercise: before, one shared token
+    plus a chosen id let any worker attach to any other worker's live malware
+    console.
+    """
+    from sandbox_platform.credentials import hash_refresh_token
+
+    tokens = {"dom0-1": "token-dom0-1", "dom0-2": "token-dom0-2"}
+    for worker_id, token in tokens.items():
+        conn.execute(
+            """
+            INSERT INTO workers (worker_id, total_mib, total_vlans,
+                                 total_slots, token_hash)
+            VALUES (%s, 1, 1, 1, %s)
+            ON CONFLICT (worker_id) DO UPDATE SET token_hash = EXCLUDED.token_hash
+            """,
+            (worker_id, hash_refresh_token(token)),
+        )
+    return tokens
+
+
+def dial(client, job_id, *, token):
     """Returns the close code, or None if the socket was accepted."""
     from starlette.websockets import WebSocketDisconnect
 
     headers = {"Authorization": f"Bearer {token}"}
-    if worker_id is not None:
-        headers["X-Worker-Id"] = worker_id
     try:
         with client.websocket_connect(
                 f"/api/v1/worker/jobs/{job_id}/console", headers=headers):
@@ -455,37 +480,37 @@ def dial(client, job_id, *, worker_id, token=WORKER_TOKEN):
         return exc.code
 
 
-def test_another_workers_job_is_refused(client, conn, console_on, relayed):
+def test_another_workers_job_is_refused(client, conn, console_on, relayed, worker_tokens):
     """**The defect.** Any holder of the worker token -- a second registered
     analysis host, or a compromised Dom0 whose blast radius is supposed to be
     the jobs it is running -- could attach as the WORKER side of someone
     else's executing job and feed arbitrary RFB bytes to the operator."""
     job_id = executing_job(conn, owner="dom0-1")
 
-    assert dial(client, job_id, worker_id="dom0-2") == 1008
+    assert dial(client, job_id, token=worker_tokens["dom0-2"]) == 1008
     assert relayed == [], "refused before the socket was ever paired"
 
 
-def test_a_missing_worker_id_is_refused(client, conn, console_on, relayed):
+def test_a_missing_worker_id_is_refused(client, conn, console_on, relayed, worker_tokens):
     job_id = executing_job(conn, owner="dom0-1")
 
-    assert dial(client, job_id, worker_id=None) == 1008
+    assert dial(client, job_id, token="never-issued") == 1008
     assert relayed == []
 
 
 def test_a_bad_token_is_refused_before_the_lease_is_read(
-        client, conn, console_on, relayed):
+        client, conn, console_on, relayed, worker_tokens):
     job_id = executing_job(conn, owner="dom0-1")
 
-    assert dial(client, job_id, worker_id="dom0-1", token="wrong") == 1008
+    assert dial(client, job_id, token="wrong") == 1008
     assert relayed == []
 
 
-def test_the_leaseholder_is_admitted(client, conn, console_on, relayed):
+def test_the_leaseholder_is_admitted(client, conn, console_on, relayed, worker_tokens):
     """The check has to still let through the worker that holds the job."""
     job_id = executing_job(conn, owner="dom0-1")
 
-    dial(client, job_id, worker_id="dom0-1")
+    dial(client, job_id, token=worker_tokens["dom0-1"])
 
     assert relayed == [(str(job_id), Side.WORKER)]
 
@@ -509,19 +534,19 @@ def job_in(conn, state: str, owner: str = "dom0-1",
         VALUES ('ubuntu', 'x.bin', %s, %s, now() + interval '2 min', %s)
         RETURNING id
         """,
-        (state, owner, job_owner),
+        (state, owner, owner_id(conn, job_owner)),
     ).fetchone()[0]
 
 
 @pytest.mark.parametrize("state", sorted(s.value for s in RUNNING_STATES))
 def test_the_worker_may_dial_whenever_a_clone_exists(
-        client, conn, console_on, relayed, state):
+        client, conn, console_on, relayed, state, worker_tokens):
     """**`cloning` and `preparing` are the point.** sandboxd dials as soon as
     the clone exists, so a check that admitted only `executing` would reject
     its own relay for the whole of preconfig."""
     job_id = job_in(conn, state)
 
-    dial(client, job_id, worker_id="dom0-1")
+    dial(client, job_id, token=worker_tokens["dom0-1"])
 
     assert relayed == [(str(job_id), Side.WORKER)], f"refused in {state}"
 
@@ -529,7 +554,7 @@ def test_the_worker_may_dial_whenever_a_clone_exists(
 @pytest.mark.parametrize("state", ["received", "queued", "cleaning",
                                    "completed", "failed", "cancelled"])
 def test_the_worker_is_refused_when_no_clone_exists(
-        client, conn, console_on, relayed, state):
+        client, conn, console_on, relayed, state, worker_tokens):
     """Before the clone and after teardown there is no domain to bridge to.
 
     `cleaning` is in this list and not the one above: the worker still holds
@@ -539,8 +564,25 @@ def test_the_worker_is_refused_when_no_clone_exists(
     """
     job_id = job_in(conn, state)
 
-    assert dial(client, job_id, worker_id="dom0-1") == 1008
+    assert dial(client, job_id, token=worker_tokens["dom0-1"]) == 1008
     assert relayed == [], f"admitted in {state}"
+
+
+# The Origin a browser on this deployment would send. TestClient's base_url is
+# `http://testserver`, so this is same-origin with the handshake's own Host --
+# which is what `_origin_permitted` requires when CONSOLE_ALLOWED_ORIGINS is
+# unset. Written once because every browser-end dial needs it now.
+SAME_ORIGIN = {"origin": "http://testserver"}
+
+
+def browser_headers(access_token, email="analyst@example.test", **extra):
+    """Credential plus Origin: what a real browser handshake carries.
+
+    A dial missing either is refused, and the two refusals are different
+    findings -- so the helper supplies both and the tests that are ABOUT one of
+    them override it explicitly rather than relying on its absence.
+    """
+    return {**access_token(email), **SAME_ORIGIN, **extra}
 
 
 @pytest.mark.parametrize("state", sorted(s.value for s in RUNNING_STATES))
@@ -554,7 +596,7 @@ def test_the_browser_may_watch_whenever_a_clone_exists(
     try:
         with client.websocket_connect(
                 f"/api/v1/jobs/{job_id}/console",
-                headers=access_token("analyst@example.test")):
+                headers=browser_headers(access_token)):
             pass
     except WebSocketDisconnect as exc:  # pragma: no cover - a failure path
         pytest.fail(f"refused in {state}: {exc.reason}")
@@ -572,11 +614,113 @@ def test_the_browser_is_refused_when_no_clone_exists(
     with pytest.raises(WebSocketDisconnect) as exc:
         with client.websocket_connect(
                 f"/api/v1/jobs/{job_id}/console",
-                headers=access_token("analyst@example.test")) as ws:
+                headers=browser_headers(access_token)) as ws:
             ws.receive_text()
 
     assert "live clone" in exc.value.reason
     assert relayed == []
+
+
+# --- cross-site dialling (N-1) ----------------------------------------------
+#
+# The Same-Origin Policy does not apply to WebSockets, and neither half of the
+# CSRF defence on the JSON routes reaches one: there is no preflight on a
+# handshake, and the browser's WebSocket API cannot set a header. So a page on
+# any origin can dial this endpoint, and whether a credential rides along is
+# decided by cookie policy rather than by anything this application does.
+#
+# `sandbox_access` is SameSite=Lax and a handshake is not a top-level
+# navigation, so OUR session does not travel. The Access assertion is injected
+# by Cloudflare from a cookie whose SameSite is Cloudflare's to set -- which is
+# the credential these tests stand in for, and the reason the check is not
+# redundant with SameSite.
+
+
+def test_a_cross_site_dial_is_refused_before_the_credential_is_read(
+        client, conn, console_on, relayed, access_token):
+    """A VALID credential from a hostile origin. That is the whole attack: the
+    caller is who they say they are, and the page driving them is not."""
+    from starlette.websockets import WebSocketDisconnect
+
+    job_id = job_in(conn, "executing", job_owner="analyst@example.test")
+
+    with pytest.raises(WebSocketDisconnect) as exc:
+        with client.websocket_connect(
+                f"/api/v1/jobs/{job_id}/console",
+                headers=browser_headers(
+                    access_token, origin="https://evil.example")) as ws:
+            ws.receive_text()
+
+    assert exc.value.code == 1008
+    assert "origin" in exc.value.reason.lower()
+    # Never paired. A refusal that still attached would hand the hostile page a
+    # session slot and lock the real operator out of their own console.
+    assert relayed == []
+
+
+def test_a_handshake_with_no_origin_is_refused(
+        client, conn, console_on, relayed, access_token):
+    """Browsers always send one, so a handshake without it is not the browser
+    this endpoint serves. Dom0 has its own route, credential and lease check."""
+    from starlette.websockets import WebSocketDisconnect
+
+    job_id = job_in(conn, "executing", job_owner="analyst@example.test")
+
+    with pytest.raises(WebSocketDisconnect) as exc:
+        with client.websocket_connect(
+                f"/api/v1/jobs/{job_id}/console",
+                headers=access_token("analyst@example.test")) as ws:
+            ws.receive_text()
+
+    assert exc.value.code == 1008
+    assert relayed == []
+
+
+def test_the_origin_is_checked_before_the_job_is_looked_up(
+        client, conn, console_on, relayed, access_token):
+    """A hostile page must not learn whether a job id exists.
+
+    The refusal for a nonexistent job is byte-identical to the one above for a
+    real executing job, which is what makes the endpoint useless for probing.
+    """
+    from starlette.websockets import WebSocketDisconnect
+    import uuid as _uuid
+
+    with pytest.raises(WebSocketDisconnect) as exc:
+        with client.websocket_connect(
+                f"/api/v1/jobs/{_uuid.uuid4()}/console",
+                headers=browser_headers(
+                    access_token, origin="https://evil.example")) as ws:
+            ws.receive_text()
+
+    assert exc.value.code == 1008
+    assert "origin" in exc.value.reason.lower()
+
+
+def test_an_explicit_allowlist_admits_a_different_origin(
+        client, conn, console_on, relayed, access_token, monkeypatch):
+    """For a deployment whose browser origin differs from the Host this app
+    sees. Set deliberately; the default stays same-origin."""
+    from sandbox_platform.routers import console as console_router
+
+    monkeypatch.setattr(
+        console_router, "settings",
+        dataclasses.replace(console_router.settings,
+                            console_allowed_origins=("https://ops.example",)))
+
+    job_id = job_in(conn, "executing", job_owner="analyst@example.test")
+
+    from starlette.websockets import WebSocketDisconnect
+    try:
+        with client.websocket_connect(
+                f"/api/v1/jobs/{job_id}/console",
+                headers=browser_headers(
+                    access_token, origin="https://ops.example")):
+            pass
+    except WebSocketDisconnect as exc:  # pragma: no cover - a failure path
+        pytest.fail(f"allowlisted origin refused: {exc.reason}")
+
+    assert relayed == [(str(job_id), Side.BROWSER)]
 
 
 # --- the reaper must not be narrower than the window it reaps --------------

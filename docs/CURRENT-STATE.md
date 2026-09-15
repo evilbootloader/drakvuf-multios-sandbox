@@ -148,8 +148,8 @@ landed on 2026-08-29 — the templates went to `memory = 4096` (22.04's desktop
 idles near 2 GB and swapped continuously at 2048), and `misc/*_sandbox.cfg`
 went to `cpus = "12,14"`, the only two P-cores Dom0 does not hold.
 
-**After the 2026-08-31 repartition, once applied**, the CPU bound is gone and
-memory binds again:
+**After the 2026-08-31 repartition — applied 2026-09-12**, the CPU bound is
+gone and memory binds again:
 
     memory   32605 - 8192 Dom0 - 4096 platform -> 20317 / 4246 per clone = 4
     cpu      pinned to pCPUs 16-27             -> 1 vCPU per clone       = 12
@@ -197,8 +197,8 @@ started empty, and one server certificate was reissued from the workstation CA.
 | Fact | Value | Confirmed |
 |---|---|---|
 | Domain | Debian 13, **PVH**, `misc/platform.cfg` | 2026-08-28 |
-| Resources **as deployed** | **2048 MiB**, 2 vCPU, `cpus = "16-17"` (E-cores) | 2026-08-28 |
-| Resources **as committed, NOT YET APPLIED** | **4096 MiB**, 4 vCPU, `cpus = "28-31"`. Needs `xl shutdown platform && xl create misc/platform.cfg` — memory and vCPU count are boot-time properties, unlike affinity | 2026-08-31 |
+| Resources **as deployed** | **4096 MiB, 4 vCPU** — the committed figures, applied 2026-09-12 by the `xl shutdown platform && xl create misc/platform.cfg` the previous row asked for. Evidenced by `xl list`: `platform 10 4096 4 -b---- 8380.7` | 2026-09-12 |
+| CPU affinity | `cpus = "28-31"` in `misc/platform.cfg`. **Not evidenced by the line above** — `xl list` reports memory and vCPU *count* and says nothing about pinning. `xl vcpu-list platform` is what would confirm it | 2026-08-31 (committed) |
 | Address | `192.168.1.10` — deliberately unchanged, so `SANDBOXD_API`, `SANDBOXD_CONSOLE_API` and the mTLS certificates all still resolve | 2026-08-28 |
 | Boot | **direct kernel**, from `/var/lib/xen/platform/` on Dom0 | 2026-08-28 |
 | Disks | `vg-root/platform` 20 G root, `vg-root/platform_data` 256 G at `/srv/minio` | 2026-08-28 |
@@ -211,12 +211,17 @@ started empty, and one server certificate was reissued from the workstation CA.
 > pool permanently. That is why it was halved on 2026-08-28, and why raising it
 > costs concurrent analyses directly.
 >
-> **Raised back to 4096 on 2026-08-31, with the cost accepted rather than
-> overlooked:** at `4246` MiB per clone the free pool goes `22365 → 20317`,
-> which is **4 concurrent clones instead of 5**. Drop back to 2048 if a fifth
-> matters more. Note the arithmetic changed under this decision — when the
-> platform was halved, a clone cost `2198`, and at that size the same raise
+> **Raised back to 4096 on 2026-08-31 and APPLIED 2026-09-12, with the cost
+> accepted rather than overlooked:** at `4246` MiB per clone the free pool goes
+> `22365 → 20317`, which is **4 concurrent clones instead of 5**. That is no
+> longer a prediction — the host is running this way now. Drop back to 2048 if
+> a fifth matters more. Note the arithmetic changed under this decision — when
+> the platform was halved, a clone cost `2198`, and at that size the same raise
 > would have cost nothing.
+>
+> **`sandboxd` reads the real figure at runtime**, so nothing needs telling
+> about the change; what needed telling was this document, which carried the
+> pre-reboot state for twelve days.
 
 > **Direct kernel boot means Dom0 holds the kernel.** `apt upgrade` inside the
 > guest updates `/boot` and the modules but **not what Xen boots**, so the
@@ -305,7 +310,7 @@ accurate as dated evidence.
 | `nr_cpus 20`, or 12 | **24** online under `smt=0` — 8 P + 16 E |
 | Dom0 pCPUs **`0–5`** | **`0,2,4,6,8,10`** — the first six *online* pCPUs, and under `smt=0` those are the evens |
 | Thin pool `pve/data`; autoextend unset | **`vg-root/thinpool`**, 1.38 TiB, autoextend configured |
-| The platform is an unprivileged **LXC**, 4096 MiB | a Xen **PVH DomU**, 2048 MiB, `misc/platform.cfg` |
+| The platform is an unprivileged **LXC**, 4096 MiB | a Xen **PVH DomU**, `misc/platform.cfg`. The memory figure coincidentally matches again since 2026-09-12 — it was 2048 from the migration until then, so a runbook quoting 4096 is right about the number and wrong about everything else |
 | Dom0 at `192.168.1.10` | Dom0 is **`.6`**; `.10` is the platform DomU, deliberately kept |
 | `10-tune-nested-cpu.md`'s open question | **closed** by `12-baremetal-trial.md` Part H: placement moves latency, not throughput |
 
@@ -320,15 +325,16 @@ accurate as dated evidence.
 | `journalctl -u sandboxd` | — | **no systemd unit exists.** It runs in the foreground and logs to stderr |
 | `docs/android-drakvuf-automation-checklist.md` | older docs | split into `docs/checklists/{android,ubuntu,windows,platform}.md` |
 | `linux.cfg`, `linux_sandbox.cfg` | older docs | `misc/ubuntu.cfg`, `misc/ubuntu_sandbox.cfg` |
-| `clone-ubuntu.pl` | older docs | `automation/clone.pl`, shared by all three OS pipelines |
+| `clone-ubuntu.pl` | older docs | renamed to `automation/clone.pl` (DRAFT-015), then **deleted 2026-09-15** — see the launcher-pipeline row below |
 | unnumbered runbook filenames | pre-2026-08-27 links | now `NN-<name>.md`, numbered oldest to newest |
 | Injection PID `1415`, `1490` | `baremetal-trial.md` D5.4/D5.7, `09-verify-…` | **`1`** — the anchor is systemd. `nano` and `gedit` are both unschedulable without guest input, so neither can be injected into unattended |
 | Android injection PID `3163`, `3164`, `3174` | `docs/checklists/android.md` §1.4/§1.5 | **`3251`** — same `ping`-to-loopback anchor those PIDs refer to, re-read after a later re-save. Each value is valid only for the `.bak` it came from |
-| **"Android anchors on `init` / PID 1"** | `sandboxd/guests.py:439`, `automation/preconfig-android.sh:228`, `sandboxd/tests/test_guests.py:182`, and the *upper* half of `pipeline-android.env`'s anchor block | **Only Ubuntu does.** Android went to PID 1 on 2026-08-29 and **reverted on 2026-08-31**, because Android's `init` provides no runtime environment for `app_process64` and the APK path needs one. `pipeline-android.env:289` records the reversal and deliberately keeps the case *for* PID 1 above it, so text arguing for PID 1 there is history, not the current posture |
-| `CLONE_LV_SIZE`, "Clone LV size 64G / 32G" | `pipeline-*.env`, older docs | **retired 2026-08-29.** Clones are thin snapshots and inherit the golden LV's size — 1 T for Ubuntu, 128 G for Android. `-L` never sized the clone; it forced a *thick* snapshot whose exception store came from VG free space |
+| **"Android anchors on `init` / PID 1"** | `sandboxd/guests.py:439`, `sandboxd/tests/test_guests.py:182`, and older docs | **Only Ubuntu does.** Android went to PID 1 on 2026-08-29 and **reverted on 2026-08-31**, because Android's `init` provides no runtime environment for `app_process64` and the APK path needs one. The contradicting text lived in `automation/pipeline-android.env`, which was deleted 2026-09-15; the value now lives in `StageConfig.injection_pids` (`sandboxd/stages.py`) with nothing arguing against it. Do not put Android back on PID 1 |
+| `CLONE_LV_SIZE`, "Clone LV size 64G / 32G" | older docs (was `pipeline-*.env`, deleted) | **retired 2026-08-29.** Clones are thin snapshots and inherit the golden LV's size — 1 T for Ubuntu, 128 G for Android. `-L` never sized the clone; it forced a *thick* snapshot whose exception store came from VG free space |
 | `required_mib: 2198`, `memory = 2048` | `platform.md`, older runbooks | **4246** / `memory = 4096` for both templates as of 2026-08-29 |
 | **"the browser listener binds `127.0.0.1`"** | `platform-domu.md` §E4a, `16-deploy-…`, DRAFT-047 decision 3 | **Held 2026-09-06 → 2026-09-10, then reversed.** Back on `192.168.1.10:8000`, because `sandboxd` dials the browser listener for the console relay and loopback is unreachable across machines. `REQUIRE_ACCESS_JWT=1` is the gate today; the bind was defence in depth behind it. EVIDENCE E4a is real output of a real change and is kept — it is history, not the current posture. DRAFT-061 owns the fix |
-| **"the worker channel is LAN-only"** | `live-console.md` §4.4 (corrected 2026-09-10), general assumption | **False through the tunnel.** The `sandbox.evilbootloader.com` ingress has no path rule, so `/api/v1/worker/*` routes from the internet — verified 2026-09-10. Gated by Access and the worker token, **not** by a client certificate. Runbook 09 F12 wrote the fix on 2026-08-26 and it was never applied; `16-deploy-…` "Known gaps" carries it |
+| **"the worker channel is reachable through the tunnel"** (F12) | `09-verify-…` §F12, `live-console.md` §4.1c, `16-deploy-…` "Known gaps", DRAFT-061 context | **Closed 2026-09-10.** True from 2026-08-26, when the rule was written and not applied, until it was applied. `^/api/v1/worker(/\|$)` now matches `http_status:404` ahead of the API catch-all, so **the worker channel is LAN-only again** — reachable on `:8000` and `:8443` from the LAN, not through `sandbox.evilbootloader.com`. Verified past Access, not in front of it: an anonymous request is bounced by the edge and proves nothing either way. EVIDENCE F12 in `16-deploy-…`. The text describing it as open is dated evidence and is kept |
+| **The shell/C launcher pipeline** — `dirwatch.c`, `dirwatch_old.c`, `clone.pl`, `cleanup.sh`, `tcpdump.sh`, `run_analysis-{ubuntu,android}.sh`, `drakvuf-{ubuntu,android}.sh`, `preconfig-{ubuntu,android}.sh`, `pipeline-{ubuntu,android}.env` | runbooks 01–15, the issue drafts, the reviews, `project-assessment.md` | **All 13 deleted 2026-09-15** (4,795 lines) once `sandboxd` had replaced every one. Those documents are dated evidence and are **not** rewritten — read the filenames in them as history. `docs/architecture/automation-files.md` maps each file to its successor and carries the facts worth keeping; `scripts/check-refs.py`'s `ALLOW_PATHS` keeps the names resolving. `automation/` now holds only `network-setup.sh`, `platform.env` and the egress assets |
 | **"the console dial is mutual TLS"** | `live-console.md` §4.4 before 2026-09-10 | **Server-authenticated TLS plus the bearer worker token.** The console dials `:8000`, which has no `--ssl-ca-certs`; only `:8443` demands a client certificate. §4.1c always said so and §4.4 contradicted it for five weeks |
 
 ---
@@ -367,7 +373,6 @@ accurate as dated evidence.
 | Component | Command | Service |
 |---|---|---|
 | `sandboxd` | **source the env file first**, then `python -m sandboxd.daemon` in the foreground — see §1.2 for the exact Dom0 invocation. Exits immediately without `SANDBOXD_API`, `WORKER_TOKEN`, `SANDBOXD_TOTAL_MIB`. | unit: fakenet.service |
-| legacy pipeline | `run_analysis-android.sh`, `run_analysis-ubuntu.sh` | bash, invoked by an operator |
 
 ### Environment read by `sandboxd.daemon`
 
@@ -378,7 +383,7 @@ accurate as dated evidence.
 | | |
 |---|---|
 | sandboxd modules | 16 |
-| test files | 16 sandboxd, 17 platform |
+| test files | 16 sandboxd, 25 platform |
 | documents under `docs/` | 39 |
 
 <!-- END GENERATED -->

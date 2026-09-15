@@ -14,10 +14,10 @@ every CI job, at the cost of one deployment step.
 
 ## How the pipeline finds them
 
-`automation/pipeline-ubuntu.env` sets
-`KERNEL_PROFILE="$REPO_ROOT/profiles/linux.json"`, and the launcher passes
-it to `dirwatch` as the `<path to kernel json>` argument, which reaches
-`drakvuf` and `injector` as `-r`.
+`sandboxd/stages.py` maps each `TargetOs` to a profile path relative to
+the repository root (`StageConfig.profiles` — `profiles/linux.json` for
+Ubuntu, `profiles/android.json`, `profiles/windows.json`), and
+`sandboxd/guests.py` passes it to `drakvuf` and `injector` as `-r`.
 
 **`-r` is the only way the profile is ever resolved for an analysis run.**
 Clone domains are created with rewritten names (`<origin>-<vlan>-clone`)

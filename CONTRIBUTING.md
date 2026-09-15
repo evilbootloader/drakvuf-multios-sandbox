@@ -70,9 +70,11 @@ per-OS scripts included — follows the layout DRAFT-031 established, so the
 1. **Shebang on line 1.** Not below the licence header. A shebang the
    kernel cannot see is not a shebang; it only worked before because
    GLib's `g_spawn_*` falls back to `/bin/sh` on `ENOEXEC`.
-2. **`#!/bin/sh` for anything `dirwatch` invokes**, and write POSIX. These
-   run under `dash`. Reach for `#!/bin/bash` only for a script an operator
-   runs directly, as `run_analysis-ubuntu.sh` is.
+2. **`#!/bin/sh`, and write POSIX.** Scripts in `automation/` run under
+   `dash` on Dom0. `network-setup.sh` is the only one left and it is
+   spawned by `sandboxd` by path, with no shell in between. Reach for
+   `#!/bin/bash` only for a script an operator runs directly, and say why
+   in the file.
 3. **DRAKVUF licence header immediately below the shebang**, for files
    derived from upstream `tools/`. It is a licence obligation, not
    boilerplate — never delete, truncate, reword or relocate it. A file
@@ -272,10 +274,11 @@ These rules exist because each one has already been broken here. The
 specific defect, that defect was real and is in the history.
 
 1. **Comments answer *why*, not *what*.** If the sentence is the next line
-   of code translated into English, delete it. The block comments in
-   `dirwatch.c`'s `prepare()` — allocation ownership, partial-clone
-   cleanup, retry backoff — are the house standard. `network-setup.sh`'s
-   former "Enable IP forwarding" above `echo 1 > .../ip_forward` was the
+   of code translated into English, delete it. The module docstrings in
+   `sandboxd/` — `timing.py`'s inventory of what measured each wait,
+   `proc.py` on why `shell=False` is written out, `clone.py` on what the
+   port gained — are the house standard. `network-setup.sh`'s former
+   "Enable IP forwarding" above `echo 1 > .../ip_forward` was the
    anti-pattern.
 
 2. **A comment stating a guarantee must be true, or dated.** Comments
@@ -284,9 +287,11 @@ specific defect, that defect was real and is in the history.
    explicitly that they do not — `KNOWN GAP (DRAFT-NNN)`, never a bare
    assertion. When an implementation is removed or disabled, its rationale
    comment is rewritten in the same change. An orphaned rationale is worse
-   than no comment: `clone.pl` still asserts that only one clone
-   process may touch an origin VM at a time while its `flock` sits
-   commented out and `dirwatch` runs a thread pool.
+   than no comment. The worked example: the Perl clone builder asserted
+   that only one clone process could touch an origin VM at a time, while
+   its `flock` sat commented out and the watcher ran a thread pool. The
+   assertion outlived the mechanism by months. `sandboxd/clone.py` holds
+   the lock for real, and says which case it still guards.
 
 3. **Delete commented-out code; git has it.** One exception: a one- or
    two-line optional configuration **that carries a note saying what it is
@@ -318,24 +323,23 @@ specific defect, that defect was real and is in the history.
    is currently one in all of `automation/`.
 
 7. **Tag the OS scope of any comment about shared code.** A comment in
-   `dirwatch.c`, `network-setup.sh`, `cleanup.sh` or `tcpdump.sh`
-   describes behaviour for three pipelines. One in a `*-ubuntu.*` file is
-   a template about to be copied twice. Say which.
+   `network-setup.sh`, or in `sandboxd/clone.py`, `proc.py`, `sweep.py`,
+   `resources.py` or `stages.py`, describes behaviour for three guests. A
+   comment inside a `TargetOs`-selected branch of `sandboxd/guests.py`
+   describes one. Say which.
 
 Two things this policy deliberately does **not** ask for.
 
 It does not ask for *fewer* comments. The 2026-08-09 audit removed 14
 lines and added considerably more, because the repository's real problem
-was thin explanation, not excess. Four of the six scripts in
-`automation/` — `cleanup.sh`, `drakvuf-ubuntu.sh`, `preconfig-ubuntu.sh`
-and `tcpdump.sh` — still carry no explanatory comment at all beyond the
-DRAKVUF licence header. That is an open gap, not a style to copy when
-writing the Android and Windows equivalents.
+was thin explanation, not excess. That gap used to be measurable: four of
+the six scripts in `automation/` carried no explanatory comment at all
+beyond the DRAKVUF licence header. Those four were deleted on 2026-09-15
+with the rest of the launcher pipeline, and what replaced them explains
+itself — which is the standard, not an accident.
 
 And it does not ask for a zero-`TODO` repository. A `TODO` naming real,
-unscheduled work is worth more than its absence; `automation/` currently
-contains exactly one, and it should stay until the question it asks is
-answered.
+unscheduled work is worth more than its absence.
 
 ### What not to touch
 

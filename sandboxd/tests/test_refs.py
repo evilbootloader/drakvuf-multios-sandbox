@@ -53,5 +53,9 @@ def test_the_checker_actually_fails_on_a_bad_reference():
     assert "this-anchor-does-not-exist" not in slugs
 
     # And the file:line arm resolves a partial path the way the docs write it.
-    hit = module.suffix_resolve("dirwatch.c", module.tracked_files())
-    assert hit is not None and hit.name == "dirwatch.c"
+    # `network-setup.sh` rather than a bare `naming.py`: the target has to be a
+    # file that exists AND whose suffix is unique in the tree, and this one is
+    # both -- it is the last script `automation/` still holds, and `sandboxd`
+    # executes it at every daemon start.
+    hit = module.suffix_resolve("network-setup.sh", module.tracked_files())
+    assert hit is not None and hit.name == "network-setup.sh"

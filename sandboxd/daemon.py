@@ -1,7 +1,8 @@
 """The daemon: sweep, register, claim, run, release.
 
-Issue #41 (DRAFT-060). What `run_analysis-<os>.sh` + `dirwatch` do between
-them, as one process that owns every clone on this host.
+Issue #41 (DRAFT-060). What the `run_analysis-<os>.sh` launcher and the
+`dirwatch` watcher did between them, as one process that owns every clone on
+this host. Both were deleted 2026-09-15.
 
 ## The shape, and the invariant that holds it together
 
@@ -27,11 +28,13 @@ capacity that stale clones are still holding.
 
 ## Two orchestrators must never share a host
 
-`dirwatch` derives each clone's VLAN from a process-local slot index, so a
+`dirwatch` derived each clone's VLAN from a process-local slot index, so a
 second orchestrator allocates the same VLANs and shares gateway addresses and
-isolation rules "with no symptom but interference". The launchers already
-refuse to start when another `dirwatch` is running; this refuses to start when
-either is.
+isolation rules "with no symptom but interference". The launchers refused to
+start when another `dirwatch` was running; this refuses to start when either
+is. **The guard outlives the source**: `dirwatch` was a compiled binary, and one
+left installed on a Dom0 from before migration still allocates VLANs that way,
+so `refuse_if_another_orchestrator_runs` still looks for it.
 """
 
 from __future__ import annotations
@@ -130,7 +133,7 @@ class Settings:
                 f"clones; there is no safe default for it."
             )
 
-        # MAX_CLONES in run_analysis-<os>.sh, and it MUST match what
+        # MAX_CLONES as the old launcher set it, and it MUST match what
         # network-setup.sh provisioned: a VLAN with no xenbr1.<n> and no
         # gateway produces a clone that boots, gets an address nothing routes,
         # and reads as a sample that chose not to talk.
@@ -162,6 +165,11 @@ class Settings:
 
 def refuse_if_another_orchestrator_runs(lock_path: Path = LOCK_PATH):
     """Take the single-instance lock, and check for a running `dirwatch`.
+
+    **`dirwatch` is gone from this repository and the check is still correct.**
+    Its source was deleted 2026-09-15; the binary it built may still be
+    installed on a Dom0 that predates the migration, and running it alongside
+    `sandboxd` produces exactly the collision below.
 
     Both matter and for the same reason: two orchestrators on one host allocate
     the same VLANs from low numbers with no shared state, so they collide on
@@ -215,15 +223,18 @@ def provision_analysis_network(max_clones: int, script: Path = NETWORK_SETUP):
     """Create the VLAN interfaces, gateways and isolation chains clones need.
 
     **`sandboxd` used to skip this, and the symptom was a clean report.**
-    `run_analysis-<os>.sh:106,121` runs `network-setup.sh` before launching
+    The old `run_analysis-<os>.sh` ran `network-setup.sh` before launching
     `dirwatch`; `sandboxd` replaced the launcher but not that call, because #41
-    reasoned "the launcher still does it" -- which stops being true the moment
-    `sandboxd` runs instead of the launcher. Nothing else creates
-    `xenbr1.<n>`, the `172.16.<n>.1` gateways or the `DRAKVUF_*` chains, so a
-    clone booted, took an address nothing routed, and **read as a sample that
-    chose not to talk**. A false negative that looks exactly like a result is
-    the worst failure a sandbox has, and if a previous `dirwatch` era left the
-    interfaces behind it appears to work.
+    reasoned "the launcher still does it" -- which stopped being true the moment
+    `sandboxd` ran instead of the launcher, and is now moot because the launcher
+    no longer exists.
+
+    **This is now the only caller of `network-setup.sh` anywhere.** Nothing else
+    creates `xenbr1.<n>`, the `172.16.<n>.1` gateways or the `DRAKVUF_*` chains,
+    so without this call a clone boots, takes an address nothing routes, and
+    **reads as a sample that chose not to talk**. A false negative that looks
+    exactly like a result is the worst failure a sandbox has, and if a previous
+    `dirwatch` era left the interfaces behind it appears to work.
 
     **The argument is the point, more than the call.** `max_clones` sizes the
     worker pool and `network-setup.sh`'s argument sizes the VLAN pool; they have
@@ -254,7 +265,7 @@ def provision_analysis_network(max_clones: int, script: Path = NETWORK_SETUP):
         # **Refuse to start rather than continue.** A half-provisioned analysis
         # network is worse than none, because it looks like a working one:
         # clones run with no inter-clone isolation, no LAN block and no Dom0
-        # protection. `run_analysis-ubuntu.sh` takes the same position.
+        # protection. The launcher this replaced took the same position.
         raise NetworkSetupFailed(
             f"{script.name} failed (rc={result.returncode}"
             f"{', timed out' if result.timed_out else ''}). Refusing to start: "
@@ -427,7 +438,44 @@ class Daemon:
                 # The API layer already retried transport failures; reaching
                 # here means the platform refused the request itself, which
                 # repeating cannot fix.
+                #
+                # Kept ahead of the blanket clause below, and logged without a
+                # traceback, because this one is DIAGNOSED: the message names
+                # the path and the status, and a stack trace through
+                # `_post` would add nothing an operator can act on.
                 log.error("claim refused: %s", exc)
+                self._stopping.wait(IDLE_PAUSE)
+                continue
+            except Exception:  # noqa: BLE001 - a bad turn must not end the loop
+                # **One bad turn must not end the only claim thread.**
+                #
+                # Until this clause existed the loop survived `ProtocolError`
+                # and nothing else, while the call behind it has several other
+                # exits: `api.claim` indexes `target_os`, `required_mib`,
+                # `attempt`, `sample_url` and `lease_expires_at` straight out
+                # of the response, so a lease missing a field raises
+                # `KeyError`; `ResourceTable.acquire` raises `ValueError` when
+                # a job id is already held, which is what a replayed lease
+                # looks like from here. Either one ended the daemon.
+                #
+                # That is the expensive failure on this host. There is exactly
+                # one claim thread -- the module docstring makes "one claim
+                # thread acquires; worker threads only release" load-bearing --
+                # so losing it stops every queued analysis, and recovery is not
+                # a retry but a restart, whose first act is a sweep that
+                # destroys every clone it finds. `_work` one function down
+                # already takes this position for a worker ("a worker must not
+                # take the daemon down"), and the claim thread has the stronger
+                # claim on it, not a weaker one. Same shape as the platform's
+                # `maintenance._loop`: "Never let one bad pass kill the loop".
+                #
+                # `log.exception`, not `log.error`: nobody has decided what
+                # this failure means yet, so the traceback is the whole report.
+                # `BaseException` is deliberately NOT caught -- SIGINT must
+                # still unwind rather than be logged and retried five seconds
+                # later.
+                log.exception("the claim loop hit an unexpected error; "
+                              "pausing %.0fs and continuing", IDLE_PAUSE)
                 self._stopping.wait(IDLE_PAUSE)
                 continue
 
@@ -511,7 +559,7 @@ class Daemon:
             # AFTER teardown, never before: the vlan IS the clone name, so
             # releasing early lets the next job begin cloning
             # `<origin>-<vlan>-clone` while this domain is still being
-            # destroyed (dirwatch.c:697 records the same ordering).
+            # destroyed. The C watcher recorded the same ordering.
             if self._table is not None:
                 # **A dirty teardown does not get its VLAN back.**
                 #

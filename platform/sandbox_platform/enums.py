@@ -91,7 +91,7 @@ RUNNING_STATES = frozenset({
 # States in which the worker still OWNS the job and may report on it.
 #
 # Wider than RUNNING_STATES by exactly one: `cleaning`. The worker is what
-# runs cleanup.sh, so it holds the lease throughout -- and a job that reached
+# runs the cleanup stage, so it holds the lease throughout -- and a job that reached
 # `cleaning` still has to report where it ended up. Using RUNNING_STATES for
 # this would let a worker report `cleaning` and then be locked out of saying
 # `completed`, stranding every job one step from the end.

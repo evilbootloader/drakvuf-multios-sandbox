@@ -38,23 +38,34 @@ wherever it was invoked from. No error, no warning — it simply operated on the
 wrong tree.
 
 **Cause.** `${BASH_SOURCE[0]}` evaluates to **empty under `dash`**, and
-`automation/` scripts run under `dash`, not `bash`: `dirwatch` spawns them via
-`g_spawn_command_line_sync()` and `/bin/sh` is `dash` on Dom0. `SCRIPT_DIR` then
-became the empty string, which resolves to the current directory, and execution
-continued normally.
+`automation/` scripts run under `dash`, not `bash` — `/bin/sh` is `dash` on
+Dom0. `SCRIPT_DIR` then became the empty string, which resolves to the current
+directory, and execution continued normally.
 
 **Fix.** Use `$0`. Write POSIX. Check with `dash -n` **as well as** `bash -n` —
-`bash -n` alone parses the file happily. `run_analysis-ubuntu.sh` is the one
-genuine bash script and uses `$0` too, so the idiom stays uniform.
+`bash -n` alone parses the file happily.
+
+**Still live.** `network-setup.sh` is the only script left in `automation/` and
+this applies to it and to the next one written. Originally found when the C
+watcher spawned five worker scripts via `g_spawn_command_line_sync()`; those
+were deleted 2026-09-15, the trap was not.
 
 ### `shellcheck automation/*.sh` exits 0 on code with unquoted expansions
 
 **Symptom.** A clean shellcheck run on scripts that contain real SC2086 sites.
 
-**Cause.** `.shellcheckrc` disables `SC1091,SC2086,SC2009` **repository-wide**.
-That is a deliberate reviewed baseline (DRAFT-031), not an oversight — the bare
-command is what `CLAUDE.md`, `README.md` and `docs/workflow-ci.md` all tell you
-to run, and a gate that is red by default gets ignored.
+**Cause.** `.shellcheckrc` disabled `SC1091,SC2086,SC2009` **repository-wide**.
+That was a deliberate reviewed baseline (DRAFT-031), not an oversight — the
+bare command is what `CLAUDE.md`, `README.md` and `docs/workflow-ci.md` all
+tell you to run, and a gate that is red by default gets ignored.
+
+**Largely resolved 2026-09-15, and by deletion rather than by a fix.** Every
+SC2086 and SC2009 site lived in `cleanup.sh` and the per-OS trace scripts, which
+were deleted with the rest of the launcher pipeline, so both codes were removed
+from the baseline and are **live again for every file**. Only `SC1091` is still
+disabled, for a `source` path `network-setup.sh` builds at runtime — correct
+behaviour, not a finding. The general warning stands: read `.shellcheckrc`
+before taking a clean run as clean code.
 
 **Fix.** Read `.shellcheckrc` before reading a clean run as clean code. For new
 files, check with `shellcheck --norc <file>`, which applies no exemptions. The
@@ -192,6 +203,50 @@ pool. That is a design change and wants its own draft.
 *Cost when it bit: a stack trace on a pre-clone test, 2026-09-07, on a
 deployment where the console had already been silently broken for a day —
 neither §E4a nor `CURRENT-STATE.md` mentioned the console.*
+
+### `curl` from outside returns the expected status and proves nothing
+
+**Symptom.** You add or change a cloudflared ingress rule for
+`sandbox.evilbootloader.com`, verify it with an anonymous `curl` from the
+internet, and get the status you were hoping for. The rule looks confirmed.
+
+**Cause.** **Cloudflare Access enforces at the edge, before cloudflared is
+reached.** An unauthenticated request never touches your ingress rules at all —
+it gets a 302 to the Access login page, and `curl -si … | head -1` shows that
+302 whether the rule exists, is broken, or was never applied. Runbook 16's F12
+check was written as `curl -si …/api/v1/worker/claim # 404` and would have
+returned the same 302 before *and* after the fix.
+`08-deploy-platform-lxc.md:1886` had already recorded the caveat — "the 302
+only proves **Cloudflare** is doing its job" — against a different check.
+
+**Fix.** Verify from past Access, not in front of it: a browser holding a
+session, or its `CF_Authorization` cookie in `curl -b`. Then pick a path whose
+statuses discriminate. `/api/v1/worker/claim` is POST-only, so a **GET** gives
+three distinguishable answers — **404** the ingress rule answered, **405** the
+request reached FastAPI so the rule is not in force, **302** Access bounced it
+and the test says nothing. A check that returns the same value on success and
+failure is not a check.
+
+*Cost when it bit: caught before it bit, 2026-09-10, while filling EVIDENCE
+F12 — but the wrong command sat in two runbooks for fifteen days.*
+
+### `tunnel ingress rule` passes green against rules the tunnel is not serving
+
+**Symptom.** `cloudflared tunnel ingress rule <url>` matches exactly the rule
+you just added, `tunnel ingress validate` passes, and traffic still reaches the
+origin you thought you had blocked.
+
+**Cause.** Both subcommands read `/etc/cloudflared/config.yml` **from disk**.
+They report what the rules on the filesystem would do. The running daemon keeps
+the ingress it parsed at startup and picks up changes on SIGHUP, so an edit
+that was never reloaded leaves the two permanently disagreeing — with the
+diagnostic siding with the file.
+
+**Fix.** `systemctl reload cloudflared || systemctl restart cloudflared`, then
+verify through the live tunnel rather than against the config. Treat
+`ingress rule` as a syntax and ordering check — which it is good at, including
+telling you the matched rule's **0-based** index — and never as proof of what
+the tunnel is serving.
 
 ### The platform test suite destroyed job history
 
@@ -441,7 +496,7 @@ lvcreate -s -kn -n ubuntu-1-clone vg-root/ubuntu     # clear at creation
 lvchange -ay -K vg-root/ubuntu-1-clone               # or override at activation
 ```
 
-`clone.pl` uses `-kn`, on top of dropping `-L`.
+`sandboxd/clone.py::argv_lvcreate` uses `-kn`, on top of dropping `-L`.
 
 ### `grep /boot/grub/grub.cfg` says Permission denied
 
@@ -584,9 +639,9 @@ and then `xl destroy` **advances the disk while the `.bak` stays where it was**.
 That is exactly how D-1's corruption was produced.
 
 **Fix.** Use `misc/*_sandbox.cfg` **only for edits that end in `xl save`**, which
-is what re-pairs disk and memory. `clone.pl` never touches it — it rewrites the
-`disk=` line to point at the per-clone snapshot, and anything manual should do
-the same.
+is what re-pairs disk and memory. `sandboxd/clone.py::rewrite_config` never
+touches it — it rewrites the `disk=` line to point at the per-clone snapshot,
+and anything manual should do the same.
 
 | Operation | Config | Ends in |
 |---|---|---|
@@ -609,10 +664,11 @@ sudo lvs -o +data_percent vg-root/ubuntu_sandbox
 **Symptom.** Following "copy golden → apply preconfig → boot → save state" and
 getting a template with no injection anchor.
 
-**Cause.** `preconfig-ubuntu.sh` runs at **analysis** time against a **clone**,
+**Cause.** The preconfig stage runs at **analysis** time against a **clone**,
 and does two things: stages the sample with `injector -m writefile`, then sets
 that clone's VLAN address with `injector -m execproc`. **It never touches the
-template.**
+template.** (Was `preconfig-<os>.sh`; now `sandboxd/stages.py`'s preconfig
+phase, with the argv in `sandboxd/guests.py`. The trap is unchanged.)
 
 **Fix.** What actually makes a template is booting the disk, **starting an
 injection anchor**, and `xl save`. The anchor is the whole point — see the
@@ -732,8 +788,8 @@ per run with generated names. Only the tracked domains are configured.
 
 **Fix.** Pass the profile explicitly with `-j <profile.json>`. This is the same
 reason the pipeline passes `-r` to `drakvuf`/`injector` everywhere rather than
-relying on `libvmi.conf`, and it is why `pipeline-<os>.env` carries
-`KERNEL_PROFILE`.
+relying on `libvmi.conf`, and it is why `sandboxd/stages.py` carries a
+per-`TargetOs` profile path (`StageConfig.profiles`).
 
 ### `VMI_ERROR: JSON at /root/linux.json couldn't be opened!`
 
@@ -848,19 +904,23 @@ anyone repeating the procedure falls into it the same way.
 **Symptom.** An analysis completes, the clone booted and got an address, and the
 pcap is empty. It reads as a sample that did nothing interesting.
 
-**Cause. `sandboxd` does not create the network.** `run_analysis-<os>.sh:106,121`
-brings the bridge up and runs `network-setup.sh` before launching `dirwatch`.
-`sandboxd` replaces the launcher but **not** that call — #41 scoped it out on the
-reasoning that "the launcher still does it", which stops being true the moment
-you run `sandboxd` instead of the launcher. Nothing in `sandboxd` creates
-`xenbr1.<n>`, the `172.16.<n>.1` gateways, or the isolation chains.
+**Cause.** The old shell launcher brought the bridge up and ran
+`network-setup.sh` before launching the watcher. `sandboxd` replaced the
+launcher but, for a time, **not** that call — #41 scoped it out on the
+reasoning that "the launcher still does it", which stopped being true the
+moment `sandboxd` ran instead. Nothing else creates `xenbr1.<n>`, the
+`172.16.<n>.1` gateways, or the isolation chains.
 
 **This is a false negative wearing the clothes of a result** — the worst failure
 mode a sandbox has, because it produces a clean report.
 
-**Fix.** Bring up `xenbr1` and run `network-setup.sh` before starting
-`sandboxd`. **If a previous `dirwatch` era left the interfaces in place it
-appears to work**, which is exactly how it goes unnoticed.
+**Fixed in `sandboxd`.** `daemon.py::provision_analysis_network` runs
+`network-setup.sh` at every daemon start and refuses to start if it fails, so
+this cannot recur through the normal path. It is kept here because **if a
+previous `dirwatch` era left the interfaces in place it appears to work** — so
+a host with stale interfaces and a `sandboxd` that somehow skipped the call
+shows no symptom at all. Bring up `xenbr1` first; the script does not create
+the OVS bridge.
 
 **Related sizing trap:** `SANDBOXD_MAX_CLONES` and `network-setup.sh`'s argument
 size the same thing from two sides — the VLAN pool and the `xenbr1.<n>`
@@ -887,9 +947,9 @@ never gets checked and reports nothing.
 **Cause.** **`xl destroy` returns before the block device is released.** The
 domain is gone; the device-mapper node is not yet.
 
-**Fix.** Retry once. `clone.pl` waits for the domain to disappear before its own
-`lvremove` for this reason — if the retry is ever needed there, that wait is
-what regressed.
+**Fix.** Retry once. `sandboxd/clone.py` waits `DESTROY_SETTLE_SECONDS` (10,
+measured on Dom0 2026-08-14) before its own `lvremove` for this reason — if the
+retry is ever needed there, that wait is what regressed.
 
 ### `Invalid target name (too short)` after pasting a command from a script
 
@@ -908,23 +968,35 @@ a runbook is not a runnable command; this is why those blocks are marked.
 **Symptom.** One analysis behaves as though its preconfig and its trace step
 came from different commits — because they did.
 
-**Cause.** **`dirwatch` spawns the worker scripts per sample, re-reading them
-from disk each time.** A pull between the two hands that sample the old
+**Cause.** **The C watcher spawned the worker scripts per sample, re-reading
+them from disk each time.** A pull between the two handed that sample the old
 `preconfig-` and the new `drakvuf-`.
 
-**Fix.** Never pull while an analysis is in flight. Confirm the watch
-directories are empty and no `dirwatch` is running first.
+**Applied to the deleted pipeline only.** Those scripts went on 2026-09-15.
+`sandboxd` is one long-running process that imports its code once at startup,
+so a mid-run pull cannot split a single analysis across two commits — it has no
+effect until the daemon is restarted.
+
+**Still don't pull mid-run.** A restart is how the new code takes effect, and
+restarting with clones live is its own problem; `sandboxd`'s startup sweep is
+what reconciles that, not the pull.
 
 ### Two watchers interfered with each other with no error message
 
 **Symptom.** Clones colliding on VLANs, gateway addresses and isolation rules.
 No symptom but the interference itself.
 
-**Cause.** `dirwatch` derives each clone's VLAN from a **process-local**
-worker-slot index, so two watchers allocate the same VLANs independently.
+**Cause.** `dirwatch` derived each clone's VLAN from a **process-local**
+worker-slot index, so two watchers allocated the same VLANs independently.
 
-**Fix.** Both launchers refuse to start if another is running. A new per-OS
-launcher must carry the same guard — this is not optional.
+**Fix, and it is still live.** `sandboxd` allocates every VLAN from one
+in-process table (`sandboxd/resources.py`), so two `sandboxd` instances cannot
+arise — the single-instance lock refuses the second. And
+`daemon.py::refuse_if_another_orchestrator_runs` still refuses to start when it
+finds a running `dirwatch`: the source was deleted 2026-09-15, but it was a
+compiled binary and one left installed on a Dom0 from before the migration
+still allocates VLANs the old way. **Migration is a cutover, not
+coexistence.**
 
 ---
 
@@ -1338,8 +1410,8 @@ monkey_rc=134
 ```
 
 **Cause.** `app_process64` aborting before `main()` for want of the classpath
-import. `preconfig-android.sh` carries that import; `drakvuf-android.sh` omitted
-it.
+import. The Android preconfig script carried that import; the Android trace
+script omitted it.
 
 **Fix — and it is not "add the import".** With the import added `monkey` does
 work, but the `am` wrapper works with **no import at all**, and `monkey` is
@@ -1391,7 +1463,7 @@ moment it touches the tty, which is equally unschedulable.
 **Android could not stay on PID 1.** Android's init does not provide a runtime
 environment for `app_process64`, so the APK path had to build one — and the
 anchor moved back to a backgrounded `ping` against **127.0.0.1**, chosen so
-anchor traffic stays out of `tcpdump.sh`'s per-sample pcaps. `ping` is
+anchor traffic stays out of the per-sample pcap. `ping` is
 self-scheduling and single-threaded, which is what the constraint below asks
 for.
 
@@ -1399,10 +1471,13 @@ That reintroduces the two costs PID 1 had removed for Android: the PID must be
 **re-derived after every template re-save**, and it is a process a sample can
 see in `ps`.
 
-> **`automation/pipeline-android.env` sets `3251` while the comment block above
-> it still argues for PID 1 and says "Both OS families now anchor on their
-> init".** The value is right and the comment is stale — do not set Android to
-> PID 1 on the strength of it.
+> **Resolved by deletion, 2026-09-15.** The stale comment block lived in
+> `automation/pipeline-android.env`, which set `3251` while the text above it
+> still argued for PID 1 and claimed "Both OS families now anchor on their
+> init". That file is gone. The value now lives in
+> `StageConfig.injection_pids` (`sandboxd/stages.py`) with no contradicting
+> text beside it — but the underlying rule is unchanged: **do not put Android
+> back on PID 1.**
 
 **Two anchors failed before this, from opposite directions, and the second is
 the non-obvious one:**
@@ -1426,9 +1501,12 @@ what makes it work where a GUI does not.
 | **Stable across a template rebuild**, or re-derived every time | PID 1 is PID 1 in every image. Any other anchor must be re-read after each `xl save` |
 
 **The failure is silent and unbounded.** `injector` has no timeout and prints
-nothing while it waits, and `dirwatch`'s uncounted retry turns that into an
-endless clone/hang/kill loop. **A `vmi-process-list` match proves the task
-exists; it does not prove it ever runs.**
+nothing while it waits, and the old watcher's uncounted retry turned that into
+an endless clone/hang/kill loop. `sandboxd` bounds it — every phase has a
+wall-clock budget (`sandboxd/timing.py`) and a job that overruns is torn down
+and reported rather than retried forever — but the injection itself is still
+silent. **A `vmi-process-list` match proves the task exists; it does not prove
+it ever runs.**
 
 ### A stale `INJECTION_PID` after a template re-save
 
@@ -1442,8 +1520,10 @@ PID 1. Injecting into 1309 — a PID from a previous boot — gave exactly this
 signature on 2026-08-29.
 
 **Fix.** Re-read the anchor PID after every re-save and write it back to
-`pipeline-<os>.env`. **Ubuntu no longer needs this** because PID 1 is stable in
-every image; **Android does**, having moved back to a `ping` anchor.
+`StageConfig.injection_pids` in `sandboxd/stages.py` (was `INJECTION_PID` in
+`pipeline-<os>.env` until 2026-09-15). **Ubuntu no longer needs this** because
+PID 1 is stable in every image; **Android does**, having moved back to a `ping`
+anchor.
 
 **The template checksum goes stale with it.** After a rebuild, a `sha256`
 mismatch against a previously recorded baseline is the **expected** result, not
@@ -1534,11 +1614,13 @@ resolution *and* reachability where `getent hosts` proved only the former.
 **The cost, accepted 2026-08-29:** `execproc` inherits the anchor's credentials,
 so **Ubuntu samples now execute as root** and privilege-escalation behaviour is
 no longer observable. To get unprivileged samples back, drop privilege at exec
-in `drakvuf-ubuntu.sh` (`setpriv --reuid=$GUEST_USER`) and leave preconfig as
-root. Android pays nothing here — its anchor was already root.
+in the Ubuntu trace argv (`setpriv --reuid=<guest user>`, now
+`sandboxd/guests.py`) and leave preconfig as root. Android pays nothing here —
+its anchor was already root.
 
-*Sources: `automation/pipeline-ubuntu.env:185-205`,
-`automation/pipeline-android.env:240-287`.*
+*Sources: the anchor blocks in `automation/pipeline-ubuntu.env` and
+`automation/pipeline-android.env`, both deleted 2026-09-15. The surviving
+record is `sandboxd/guests.py` and this entry.*
 
 ### The injection anchor was the wrong process, and nothing warned
 
@@ -1551,7 +1633,8 @@ image; nothing recreates it on boot.
 
 **Fix.** Three properties, each of which has bitten this project: it must exist
 in the saved image, it must be **unambiguous**, and its user must be the user
-samples run as (`preconfig-ubuntu.sh` builds a `NETCFG` string using `sudo`).
+samples run as (the Ubuntu preconfig injection builds its network-configuration
+command with `sudo`).
 
 **Do not build anchor auto-discovery on a process-name grep.** A guest that
 happens to run a second `nano` gets the wrong process injected, and `injector`

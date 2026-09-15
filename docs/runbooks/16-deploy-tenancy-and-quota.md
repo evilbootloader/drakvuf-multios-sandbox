@@ -446,8 +446,9 @@ sudo systemctl start sandbox-api-browser sandbox-api
 
 ## Known gaps at deploy time
 
-- **F12 — the whole worker channel is reachable from the internet.** Confirmed
-  on this deployment, 2026-09-10:
+- **F12 — the whole worker channel was reachable from the internet. CLOSED
+  2026-09-10**, by the ingress rule below. Confirmed open on this deployment
+  earlier the same day:
 
   ```
   root@platform:~# cloudflared --config /etc/cloudflared/config.yml tunnel ingress rule \
@@ -458,15 +459,15 @@ sudo systemctl start sandbox-api-browser sandbox-api
       service: https://192.168.1.10:8000
   ```
 
-  The ingress has no path restriction, so `/api/v1/worker/*` — claim,
-  heartbeat, state, artifact tickets, and the console's worker end — routes
+  The ingress had no path restriction, so `/api/v1/worker/*` — claim,
+  heartbeat, state, artifact tickets, and the console's worker end — routed
   from the public hostname. Those routes carry `require_worker_token`, not the
-  Access dependency, so **the worker token alone is what stands between the
+  Access dependency, so **the worker token alone was what stood between the
   internet and the queue**, behind Access at the edge. The mTLS listener on
-  8443 additionally demands a client certificate; this path does not, which
-  makes it strictly the weaker of the two doors into the same app.
+  8443 additionally demands a client certificate; that path did not, which
+  made it strictly the weaker of the two doors into the same app.
 
-  **What it would let a token holder do:** claim other people's jobs, move them
+  **What it would have let a token holder do:** claim other people's jobs, move them
   through the state machine, upload artifacts against them, and attach to a
   running clone's console. Not read the database or enumerate MinIO — the
   worker channel is scoped by `lease_owner` — but enough to corrupt a run and
@@ -478,8 +479,8 @@ sudo systemctl start sandbox-api-browser sandbox-api
   theoretical. `docs/runbooks/09-verify-sandboxd-and-console.md` F12 wrote the
   rule in 2026-08-26 and nobody applied it.
 
-  **Candidate — apply on the platform DomU.** First match wins in cloudflared,
-  so a 404 ahead of the catch-all is the whole fix:
+  **Applied on the platform DomU, 2026-09-10.** First match wins in
+  cloudflared, so a 404 ahead of the catch-all is the whole fix:
 
   ```yaml
   ingress:
@@ -497,31 +498,64 @@ sudo systemctl start sandbox-api-browser sandbox-api
   ```
 
   ```bash
-  cloudflared --config /etc/cloudflared/config.yml tunnel ingress validate
   cloudflared --config /etc/cloudflared/config.yml tunnel ingress rule \
       https://sandbox.evilbootloader.com/api/v1/worker/claim     # -> http_status:404
   cloudflared --config /etc/cloudflared/config.yml tunnel ingress rule \
       https://sandbox.evilbootloader.com/api/v1/jobs/x/console   # -> 192.168.1.10:8000
+  cloudflared --config /etc/cloudflared/config.yml tunnel ingress rule \
+      https://sandbox.evilbootloader.com/analysis/probe          # -> 192.168.1.10:9000
   systemctl reload cloudflared || systemctl restart cloudflared
-
-  # From outside, and from Dom0 -- both must hold:
-  curl -si https://sandbox.evilbootloader.com/api/v1/worker/claim | head -1   # 404
   ```
 
   **The second `ingress rule` check is not optional.** The BROWSER's console
   socket is `/api/v1/jobs/{id}/console` and must still route; a regex that
-  caught it would take the console away from the very users it is for. Then
-  confirm a job still runs end to end — `sandboxd` polls `:8000` over the LAN
-  and is unaffected, but that is a claim worth testing rather than assuming.
+  caught it would take the console away from the very users it is for. The
+  third is the bucket: `^/analysis(/|$)` shares this hostname and must stay
+  ahead of the API catch-all, or browser uploads break with a 404 that reads
+  as MinIO's fault. Then confirm a job still runs end to end — `sandboxd` polls
+  `:8000` over the LAN and is unaffected, but that is a claim worth testing
+  rather than assuming.
+
+  **`tunnel ingress rule` reads the config file, not the running daemon.** It
+  reports what the rules on disk would do; the process keeps the ingress it
+  loaded at start and takes changes on SIGHUP. So all three checks pass green
+  while an unreloaded tunnel still forwards the worker paths, which is why the
+  reload and the live check below both belong in the evidence.
+
+  **Send a GET, and do not read a 404 as the only success.** `/api/v1/worker/claim`
+  is POST-only (`routers/worker.py`), which turns the live check into a
+  three-way discriminator that needs no worker token:
+
+  | | |
+  |---|---|
+  | **404** | cloudflared answered from the rule — the wanted result |
+  | **405** | the request reached FastAPI; the daemon has not loaded the new ingress |
+  | **302** | Access bounced it at the edge; inconclusive, retry with a credential |
+
+  The 302 case is why the earlier form of this check — an anonymous `curl`
+  expecting 404 — proved nothing: Access enforces before cloudflared is
+  reached, so that request was already being bounced *before* the rule existed.
+  `08-deploy-platform-lxc.md` recorded the same 302 and the same caveat. Use a
+  browser holding an Access session, or its `CF_Authorization` cookie:
+
+  ```bash
+  curl -si -b 'CF_Authorization=<cookie>' \
+      https://sandbox.evilbootloader.com/api/v1/worker/claim | head -1
+  ```
 
   ```
-  EVIDENCE F12                                                    ____-__-__
+  EVIDENCE F12                                                    2026-09-10
 
-  ingress rule /api/v1/worker/claim:      ______
-  ingress rule /api/v1/jobs/x/console:    ______
-  curl from outside:                      ______
-  a job still claims and completes:       ______
+  ingress rule /api/v1/worker/claim:      Matched rule #1, service: http_status:404
+  ingress rule /api/v1/jobs/x/console:    Matched rule #2, service: https://192.168.1.10:8000
+  ingress rule /analysis/probe:           Matched rule #0, service: https://192.168.1.10:9000
+  GET through the tunnel, past Access:    HTTP/2 404   (not 405, not 302)
+  a job still claims and completes:       yes, end to end
   ```
+
+  Rule numbering is **0-based**: `#0` is the bucket rule, `#1` the new 404,
+  `#2` the API catch-all. Worth knowing when reading the confirmation output
+  above, where `#1` was the API catch-all under the previous three-rule order.
 
 
 - **Decision 3 is no longer in force.** The browser listener was rebound from

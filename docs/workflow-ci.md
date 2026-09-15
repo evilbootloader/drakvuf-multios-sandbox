@@ -12,6 +12,17 @@
 > `PLAN → CREATE → TEST → DEPLOY` lifecycle, and
 > `docs/roadmap/project-roadmap.md`'s milestone sequencing.
 
+> **2026-09-15 — the Level 2 and 3 design below targets code that no longer
+> exists.** The shell/C launcher pipeline it proposes to build and drive
+> (`dirwatch.c`, `clone.pl`, the per-OS `preconfig-`/`drakvuf-`/`run_analysis-`
+> scripts) was deleted once `sandboxd` replaced it; see
+> `docs/architecture/automation-files.md`. **Level 1 is built and green** —
+> `.github/workflows/static-checks.yml` — and has been updated. Levels 2 and 3
+> are unbuilt and are kept as a design record, not a specification to follow:
+> the end-to-end proof they want is still wanted, but it should drive
+> `sandboxd` against a real Dom0, not a pipeline of shell callbacks. Read the
+> *goals* as current and the *mechanism* as superseded.
+
 ## Purpose
 
 Prove, on every pull request, that this repository's own code — the
@@ -47,7 +58,7 @@ feedback ahead of the heavy tier.
 - Exercise, per guest OS family, the full Linux-applicable DRAKVUF plugin
   set — both `ubuntu` and `android` are Linux-kernel guests, so both get
   the same plugin matrix (see "Plugin matrix" below), not just the four
-  plugins `drakvuf-ubuntu.sh` happens to use today.
+  plugins `sandboxd/guests.py` selects by default today.
 - Catch syntax/hygiene regressions cheaply before the expensive tier runs
   at all.
 - Never execute a real malware sample automatically, from a PR or
@@ -152,31 +163,42 @@ scripts are interpreted by `/bin/sh`.
 ```bash
 for f in automation/*.sh; do bash -n "$f"; dash -n "$f"; done
 shellcheck automation/*.sh          # bare: reads .shellcheckrc, exits 0
-perl -c automation/clone.pl
 
 # Anti-pattern checks, same acceptance gates docs/checklists/android.md
-# §6.1 already defines for the (not yet written) Android scripts, applied
-# here to the existing Ubuntu scripts too.
+# §6.1 defines.
 #
 # The <USER> guard excludes comment lines. The first implementation did
-# not, and failed immediately on drakvuf-ubuntu.sh:145 -- a comment
-# explaining issue #2, which necessarily quotes the placeholder it is
-# about. Requiring the first non-whitespace character to not be `#` keeps
-# the guard while allowing the history to be written down.
+# not, and failed immediately on a comment explaining issue #2, which
+# necessarily quotes the placeholder it is about. Requiring the first
+# non-whitespace character to not be `#` keeps the guard while allowing
+# the history to be written down.
 if grep -REn '^[[:space:]]*[^#[:space:]].*<USER>' automation/; then
     echo "FAIL: unsubstituted <USER> placeholder found in code"
     exit 1
 fi
 
-# Informational, not a gate: these sites exist and DRAFT-011 owns them.
-grep -Rns 'ps aux.*grep' automation/ || true
+# A GATE since 2026-09-15, not an inventory. Every site DRAFT-011 owned
+# was in cleanup.sh and the per-OS trace scripts, which are deleted, so
+# the count is zero and this can be red on a real regression.
+if grep -Rns 'ps aux.*grep' automation/; then
+    echo "FAIL: ps|grep process discovery in automation/"
+    exit 1
+fi
 ```
 
-`dirwatch.c` is **not** compiled at this tier — it `#include`s
-`<config.h>` and `../xen_helper/xen_helper.h` (`automation/dirwatch.c:118,120`)
-and only compiles inside a real DRAKVUF source tree, which needs Xen dev
-headers this tier deliberately doesn't have. That compile happens in
-Level 2.
+**`perl -c automation/clone.pl` was a step here and was removed
+2026-09-15** — there is no Perl left in this repository.
+
+The real coverage at this tier is now the two pytest jobs the workflow
+also runs: `sandboxd` (which needs no infrastructure, and which re-runs
+all three generators and the reference checker) and `platform` (Postgres
+and MinIO as service containers). Those are what actually exercise the
+pipeline's logic.
+
+*Superseded: this section used to explain that `dirwatch.c` was not
+compiled at this tier because it `#include`s `<config.h>` and
+`../xen_helper/xen_helper.h` and only builds inside a real DRAKVUF source
+tree. That file is deleted and nothing here compiles C.*
 
 The `<USER>` grep now **passes** on `master`: issue #2 was resolved on
 2026-08-08 by syncing `automation/` from the tested Dom0 host, so the
@@ -377,13 +399,13 @@ Each Level 2 job checks out the PR branch via `actions/checkout` into the
 runner's work directory inside the freshly-reset L1 VM.
 
 **Resolved 2026-08-09 (issue #4).** The checkout no longer has to sit at
-any particular path. Every script resolves its own location and derives
-repository-owned assets from it, so `actions/checkout`'s work directory
-works unchanged and the `$GITHUB_WORKSPACE` stopgap described here is no
-longer needed — jobs can invoke `automation/run_analysis-ubuntu.sh`
-directly instead of reconstructing the `dirwatch` command line. That was
-the point of standardizing on `/root/sandbox_project`: it is the
-documented location, not a required one.
+any particular path. Every repository-owned asset resolves from the
+invoking code's own location, so `actions/checkout`'s work directory works
+unchanged and the `$GITHUB_WORKSPACE` stopgap described here is no longer
+needed — a job starts `sandboxd` from the checkout rather than
+reconstructing anyone's command line. That was the point of standardizing
+on `/root/sandbox_project`: it is the documented location, not a required
+one.
 
 Two things a job must still stage into the checkout, because neither is
 git-tracked:
@@ -397,9 +419,9 @@ git-tracked:
   `state/<origin>.bak` inside the checkout rather than to
   `/home/user/Documents/`.
 
-Both paths come from `automation/pipeline-ubuntu.env`, so a job that
-needs to override them sets `KERNEL_PROFILE` / `SAVED_STATE` rather than
-patching scripts.
+Both paths are derived by `sandboxd/stages.py` from the repository root
+(`StageConfig.profiles` and `StageConfig.saved_state`), so a job overrides
+them by constructing a `StageConfig` rather than by patching anything.
 
 ## Test stages
 
@@ -506,8 +528,9 @@ trusting it in the pipeline test.
 
 #### `ubuntu-pipeline` sub-stage
 
-Invoke the existing per-script pipeline (`clone.pl` →
-`preconfig-ubuntu.sh` → `drakvuf-ubuntu.sh` → `cleanup.sh`) directly
+*(Superseded 2026-09-15: written when the pipeline was five shell
+callbacks. The equivalent today is to run `sandboxd` against a CI-scoped
+platform instance and submit the fixture through it.)* Invoke the pipeline
 against a CI-scoped fixture directory
 (`$GITHUB_WORKSPACE/.ci-fixtures/{incoming,processing,finished}`, never
 the real `/malware_incoming`/etc.) with one benign fixture (see "Test
@@ -518,9 +541,12 @@ the argument for the repo↔host checksum check above.
 
 #### `android-pipeline` sub-stage
 
-Same shape, but **blocked**: `clone-android.pl`, `preconfig-android.sh`,
-`drakvuf-android.sh` don't exist yet (DRAFT-015/016). This sub-stage is a
-placeholder in the design, not a runnable job, until those scripts exist.
+Same shape. **No longer blocked on the scripts existing** — that blocker
+(DRAFT-015/016) was cleared in 2026-08, and the Android path now lives in
+`sandboxd/guests.py` alongside Ubuntu's, selected by `TargetOs` rather
+than by a separate file. It remains a placeholder in the design because
+Level 2 itself is unbuilt, and because the reworked APK path has not run
+on Dom0 since the 2026-08-17 template re-save.
 
 ## Test assets
 
@@ -601,8 +627,9 @@ Primary cleanup mechanism is the snapshot revert between jobs — stronger
 than any in-job cleanup script, since it doesn't depend on the job having
 run cleanly enough to reach its own cleanup step, and it's what protects
 the golden VMs specifically (a job only ever touches its own cloned
-`_sandbox` LV). In-job cleanup (`cleanup.sh`, existing) still runs with
-`if: always()` as defense-in-depth within a single job's own steps.
+`_sandbox` LV). In-job cleanup — `sandboxd`'s own teardown stage, which
+runs on every path including cancellation, plus the startup sweep — is
+defense-in-depth within a single job's own steps.
 
 ## Failure recovery
 

@@ -111,8 +111,9 @@
 # fails with a clear message if it is missing.
 #
 # xenbr0 (uplink) and xenbr1 (analysis bridge) are project-wide fixed
-# names, hard-coded across clone.pl, preconfig-ubuntu.sh,
-# tcpdump.sh, all four misc/*.cfg and CLAUDE.md's naming tables.
+# names. They are set in sandboxd/config.py (ANALYSIS_BRIDGE, UPLINK_BRIDGE),
+# pushed into automation/platform.env and misc/*.cfg by
+# scripts/gen-xen-configs.py, and named in CLAUDE.md's tables.
 # Renaming them here alone is not enough.
 #
 # Shared by all three OS pipelines -- a defect here is a defect in the
@@ -175,8 +176,9 @@
 # section 6.
 #
 # Idempotent: the chains are flushed and rebuilt on every run, so repeated
-# invocations converge instead of appending. run_analysis-ubuntu.sh calls
-# this on every launch, and now aborts if it fails. An aborted run leaves
+# invocations converge instead of appending. sandboxd calls this at every
+# daemon start (daemon.py::provision_analysis_network) and refuses to start if
+# it fails -- it is the only caller left. An aborted run leaves
 # DRAKVUF_ISOLATION denying rather than empty; that is the on_exit trap
 # below, and it will cut the network of any clone already running.
 #
@@ -187,9 +189,13 @@
 #
 # Usage: ./network-setup.sh <number of clone slots> [default egress mode]
 #
-# The optional second argument exists for ONE caller: the legacy
-# dirwatch/run_analysis-<os>.sh path, which predates per-job egress and has
-# no way to ask for a mode. It takes `offline` (the default) or `direct`.
+# The optional second argument HAS NO CALLER IN THIS REPOSITORY as of
+# 2026-09-15. It existed for the shell launcher, which predated per-job egress
+# and had no way to ask for a mode; that launcher is deleted. sandboxd passes
+# the slot count only, so the mode always defaults to `offline`. The argument
+# is kept because an operator running this by hand still needs `direct` for
+# host-level triage -- see docs/runbooks/14-verify-routed-egress.md. It takes
+# `offline` (the default) or `direct`.
 #
 #   offline  no per-VLAN egress is installed, so clones have NO route out
 #            until sandboxd installs one, AND any wildcard left by a previous
@@ -200,9 +206,9 @@
 #
 #   direct   installs ONE wildcard rule restoring the pre-2026-08-31
 #            behaviour: every VLAN NATs out the uplink. This is the
-#            residential line. run_analysis-ubuntu.sh passes it only when
-#            ALLOW_DIRECT=1 is set, so it is opt-in per invocation and
-#            never reachable from the web UI.
+#            residential line. Only an operator on Dom0 can ask for it now,
+#            by passing it here by hand; it is never reachable from the web UI
+#            and sandboxd never passes it.
 #
 # The two are a PAIR: `direct` installs the wildcard and `offline` removes
 # it. Neither is idempotent alone, and the mode is a property of the host
@@ -302,7 +308,7 @@ case "$EGRESS_DEFAULT" in
     offline | direct) ;;
     *) fail "unknown egress mode: '$EGRESS_DEFAULT' (expected offline or direct).
   Per-job modes -- simulated, tor, routed -- are installed by sandboxd per
-  VLAN, not here. This argument only serves the legacy dirwatch path." ;;
+  VLAN, not here. This argument only serves a manual operator run." ;;
 esac
 
 # Upper bound comes from the addressing scheme, not from 802.1Q -- which
@@ -342,8 +348,9 @@ CLONES="$1"
 # Still true, and the reason this is only half a fix: xenbr1 remains a
 # literal in all four misc/*.cfg files. Those are Xen configs and cannot
 # source shell, so changing ANALYSIS_BRIDGE alone does not move a clone's
-# vif -- clone.pl rewrites that line at clone time regardless of what the
-# .cfg said, which is what makes the divergence harmless rather than fixed.
+# vif -- sandboxd/clone.py::rewrite_config rewrites that line at clone time
+# regardless of what the .cfg said, which is what makes the divergence
+# harmless rather than fixed.
 #
 # Sourced with $0, not ${BASH_SOURCE[0]}: this script runs under dash, and
 # the bash-only form evaluates empty WITHOUT failing, which in issue #4
@@ -443,7 +450,7 @@ iptables -t nat -C POSTROUTING -j "$NAT_CHAIN" 2>/dev/null ||
 # rebuilt, which is what makes re-running idempotent. Doing that here would
 # reach across an ownership boundary and cut the network of every clone
 # currently under analysis -- and re-running this script while clones are
-# live is normal: run_analysis-<os>.sh calls it on every launch.
+# live is normal: sandboxd calls it at every daemon start.
 #
 # `-N` on an existing chain is an error, so the `|| true` is what makes
 # "already there" the success it is. Nothing else in this section is
@@ -798,9 +805,11 @@ iptables -A "$INPUT_CHAIN" -i "$ANALYSIS_BRIDGE.+" -j DROP
 # link-local -- can reach Dom0 over v6 with nothing filtering it.
 #
 # Measured on the analysis clone 2026-08-11: IPv6 was unreachable only
-# because preconfig-ubuntu.sh's `ip addr flush dev eth0` had wiped the
+# because the preconfig step's `ip addr flush dev eth0` had wiped the
 # link-local, leaving `::1 dev lo` as the sole route. That is an accident
-# of the configuration order, not a control.
+# of the configuration order, not a control. Still an accident: sandboxd
+# issues the same flush (sandboxd/guests.py:424), so the accident survived
+# the port and this section is still the only thing making it a control.
 #
 # Blanket DROP rather than a mirror of the IPv4 rules. The guests have no
 # IPv6 uplink to preserve, and the v6 equivalents of the RFC1918 blocks
@@ -851,11 +860,12 @@ Install iptables' IPv6 support, or disable IPv6 with
   sysctl -w net.ipv6.conf.all.disable_ipv6=1"
 fi
 
-# --- Section 9: the legacy default egress mode --------------------------
+# --- Section 9: the host-wide default egress mode -----------------------
 #
-# For the dirwatch/run_analysis-<os>.sh path only. sandboxd passes no second
-# argument and installs its own per-VLAN rules instead, so this section is a
-# no-op under the orchestrator.
+# For a manual operator run only. sandboxd passes no second argument and
+# installs its own per-VLAN rules instead, so this section is a no-op under
+# the orchestrator -- which is every automated run, since the shell launcher
+# that used to pass `direct` was deleted 2026-09-15.
 
 if [ "$EGRESS_DEFAULT" = direct ]; then
     step="installing the legacy wildcard direct egress"
@@ -864,8 +874,8 @@ if [ "$EGRESS_DEFAULT" = direct ]; then
     # asked for: every VLAN, out the uplink, NATted. This is the residential
     # line, and it is what the evidenced Ubuntu pipeline was measured on --
     # which is the entire reason it is still reachable. It is opt-in per
-    # invocation (ALLOW_DIRECT=1 in run_analysis-ubuntu.sh) and the web UI
-    # can never select it.
+    # invocation -- an operator passing `direct` here by hand -- and the web
+    # UI can never select it.
     #
     # Written as a wildcard rather than a loop over VLANs to keep it one
     # rule whatever MAX_CLONES is, matching the rest of this chain -- and to
@@ -898,7 +908,7 @@ else
     # only per-VLAN specs -- `-i xenbr1.<n> -j DRAKVUF_EGRESS_V<n>` -- which
     # cannot match a wildcard, and sandboxd invokes this script with no second
     # argument, so it took this branch and did nothing. One
-    # `ALLOW_DIRECT=1 ./run_analysis-ubuntu.sh` therefore left both rules
+    # `direct` run therefore left both rules
     # standing for the rest of the host's uptime, and every later job --
     # including one submitted, recorded and REPORTED as `offline` -- NATted
     # out the uplink through them. `offline` installs no rules at all, so
@@ -954,7 +964,8 @@ if [ "$EGRESS_DEFAULT" = offline ]; then
         # which case the reader is in rather than implying something is broken.
         echo "network-setup.sh: no per-VLAN egress installed -- clones have NO route"
         echo "  out until an egress mode is applied. Expected under sandboxd, which"
-        echo "  installs one per job. If you are running dirwatch directly, pass"
-        echo "  'direct' as the second argument or clones will observe nothing."
+        echo "  installs one per job. If you are running this by hand without"
+        echo "  sandboxd, pass 'direct' as the second argument or clones will"
+        echo "  observe nothing."
     fi
 fi

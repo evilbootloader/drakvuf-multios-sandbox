@@ -40,7 +40,7 @@
         <a href="/ui/jobs?q={{ job.sha256 }}" title="{{ job.sha256 }}">{{ job.sha256[:12] }}…</a>
         {% else %}—{% endif %}
       </td>
-      <td>{{ job.owner or '—' }}</td>
+      <td>{{ job.owner_email or '—' }}</td>
       <td>{{ job.visibility.value }}</td>
     </tr>
   {% endfor %}

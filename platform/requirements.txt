@@ -1,3 +1,17 @@
+# Password hashing for the credentials this platform issues itself (DRAFT-061
+# decision 3). argon2id, and the parameters are NOT left to the library's
+# default: `config.Settings` derives them from `RFC_9106_LOW_MEMORY` -- 64 MiB,
+# t=3, p=4 -- and caps concurrent hashes, because each one holds its memory cost
+# for the whole hash and a burst of logins allocates all of them at once. That
+# is a memory bound a rate limiter cannot enforce; see `rate_limit.count` in
+# migration 0009.
+#
+# The module is `argon2`; `argon2-cffi` is only the distribution name.
+# `argon2-cffi-bindings` is pinned beside it deliberately rather than floated as
+# a transitive: it carries the compiled Argon2 reference implementation, so it
+# is the one to look at on a rebuild that behaves differently.
+argon2-cffi==25.1.0
+argon2-cffi-bindings==26.1.0
 boto3==1.43.78
 botocore==1.43.78
 fastapi==0.141.1
@@ -9,6 +23,12 @@ httpx==0.28.1
 # to introduce an npm dependency tree.
 jinja2==3.1.6
 pyjwt[crypto]==2.10.1
+# TOTP for the second factor (DRAFT-061 decision 3). Pure Python and offline:
+# no provider, no per-message cost, and nothing outbound on the login path.
+# Chosen over SMS-to-Telegram even though signup already proves a Telegram
+# account, because a messaging channel is a delivery mechanism someone else can
+# take over -- the Telegram link is a signup gate, not an authentication factor.
+pyotp==2.10.0
 psycopg==3.3.4
 psycopg-binary==3.3.4
 psycopg-pool==3.3.1

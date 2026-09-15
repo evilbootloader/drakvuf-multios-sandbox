@@ -306,16 +306,16 @@ class ConsoleSession:
         return f"{scheme}://{rest}/api/v1/worker/jobs/{self._job_id}/console"
 
     def headers(self) -> dict:
-        # The same worker token the rest of the channel uses. The relay does
-        # not get a credential of its own: it is the same door on the same
-        # LAN, already gated by the client certificate at the TLS layer.
+        # This worker's own credential, which the rest of the channel uses
+        # too. The relay does not get a separate one: it is the same door on
+        # the same LAN.
         #
-        # `X-Worker-Id` is the same header every other worker call sends, and
-        # the platform checks it against the job's `lease_owner` before pairing
-        # the socket. Without it the token alone would let any registered host
-        # attach to any other host's executing job.
-        return {"Authorization": f"Bearer {self._token}",
-                "X-Worker-Id": self._worker_id}
+        # **No `X-Worker-Id` since DRAFT-061.** The platform resolves the
+        # worker id from this token's hash, then checks it against the job's
+        # `lease_owner` before pairing the socket -- so what stops one host
+        # attaching to another host's executing job is now the credential
+        # itself rather than a header anyone could have typed.
+        return {"Authorization": f"Bearer {self._token}"}
 
     # -- running alongside a synchronous trace ------------------------------
 

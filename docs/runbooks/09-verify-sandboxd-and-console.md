@@ -1594,6 +1594,13 @@ SANDBOXD_CONSOLE_API=https://192.168.1.10:8000
 
 ### F12 — the worker channel is reachable through the tunnel
 
+> **APPLIED 2026-09-10**, fifteen days after this was written. The rule below
+> is now live on the platform DomU; evidence is EVIDENCE F12 in
+> `docs/runbooks/16-deploy-tenancy-and-quota.md`, which also corrects the
+> verification at the end of this section — an anonymous `curl` from outside
+> cannot prove the rule works, because Access bounces it before cloudflared is
+> reached. Everything below is the finding as it stood on 2026-08-26.
+
 Raised while reviewing F11: if `sandboxd` now dials the browser listener, what
 else can reach it there?
 

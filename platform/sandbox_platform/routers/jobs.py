@@ -26,12 +26,14 @@ from psycopg.rows import dict_row
 from pydantic import BaseModel, Field, model_validator
 
 from .. import auth
+from ..auth import Caller
 from .. import events
 from .. import jobs as dal
 from .. import manifest as manifest_schema
 from .. import objects
 from .. import packaging
 from ..config import settings
+from ..csrf import require_csrf_header
 from ..db import connection
 from ..enums import (
     TERMINAL_STATES,
@@ -46,10 +48,33 @@ import logging
 log = logging.getLogger(__name__)
 
 # The identity dependency is attached to the ROUTER, not to routes, so a
-# route added later cannot forget it. It is a no-op unless
-# REQUIRE_ACCESS_JWT is set for this listener -- see auth.access_identity.
+# route added later cannot forget it.
+#
+# **`caller_identity`, and it is no longer a no-op.** It used to be
+# `access_identity`, which returns None unless `REQUIRE_ACCESS_JWT` is set for
+# this listener -- so the gate did nothing at all on the certificate-gated one,
+# and on the browser one it refused anybody holding a session THIS platform
+# issued, because it only knows how to read a Cloudflare header. Now either
+# credential satisfies it and the refusal happens when neither does.
+#
+# **`require_csrf_header` sits beside the identity dependency, not instead of
+# it** (review finding M-7). `caller_identity` answers "who is calling"; this
+# answers "did our own page ask for it", and a cookie session satisfies the
+# first while saying nothing about the second.
+#
+# It is method-aware, which is what makes attaching it HERE safe: the two
+# `artifacts.zip` GET routes below are handed to the browser as ordinary links
+# by `_detail`, and a person clicking one cannot set a header. See `csrf.py`.
+#
+# **CSRF first, identity second, and the order is load-bearing.** FastAPI runs
+# router dependencies in sequence, so whichever is first decides what a refused
+# request is TOLD. With identity first, a cross-site page learns whether the
+# visitor is signed in -- 401 when they are not, 403 when they are -- which is
+# exactly the question the attacking page wants answered before it bothers. It
+# is also a wasted `resolve_tenant` round trip on a request already doomed.
 router = APIRouter(prefix="/api/v1/jobs", tags=["jobs"],
-                   dependencies=[Depends(auth.access_identity)])
+                   dependencies=[Depends(require_csrf_header),
+                                 Depends(auth.caller_identity)])
 
 
 # --- models ---------------------------------------------------------------
@@ -68,8 +93,9 @@ router = APIRouter(prefix="/api/v1/jobs", tags=["jobs"],
 # Bytes, not characters: pydantic's max_length counts characters, so the
 # previous `max_length=1024` admitted a multi-byte name that minted a key S3
 # cannot store -- the submitter got a 201 and a URL that could only ever fail.
-# `dirwatch.c`'s MAX_SAMPLE_NAME is 200; it is a buffer limit there, not this
-# constraint, so the numbers differ on purpose.
+# The C watcher that preceded sandboxd capped names at 200 (MAX_SAMPLE_NAME);
+# that was a fixed-buffer limit, not this constraint, so the numbers differ on
+# purpose.
 _MAX_SAMPLE_NAME = 512
 
 
@@ -134,10 +160,13 @@ def _reject_unsafe_filename(name: str, target: TargetOs | None = None) -> str:
     legal in POSIX APIs but the historic HFS separator, which Finder still
     renders as `/`.
 
-    This mirrors `sample_name_admissible()` in `automation/dirwatch.c:250`,
-    deliberately: the API is now the submission boundary that `dirwatch`'s
-    inotify watch used to be, and the two must not disagree about what a
-    sample may be called.
+    **One rule, three live copies, deliberately**: this, `sample_name_admissible`
+    in `sandboxd/naming.py`, and `reject_unsafe_name` in `manifest.py`. They must
+    not disagree about what a sample may be called, because each guards a
+    different consumer and only this one runs before the bytes are stored. The
+    rule began as `sample_name_admissible()` in the C watcher's inotify
+    admission check (DRAFT-030); this API is the submission boundary that watch
+    directory used to be.
 
     Three distinct things depend on it, and only the first is about this
     process:
@@ -150,11 +179,11 @@ def _reject_unsafe_filename(name: str, target: TargetOs | None = None) -> str:
       the object would land outside the prefix the whole model assumes.
       DRAFT-044 calls moving to real S3 "a configuration change, not a
       redesign", which is exactly why this cannot rest on the store.
-    - **The guest staging path.** `preconfig-*.sh` writes to
-      `$GUEST_STAGING_DIR/<submitted filename>` and `drakvuf-*.sh` executes it.
-      A `/` in the name moves that path.
+    - **The guest staging path.** `sandboxd` stages the sample at
+      `<staging dir>/<submitted filename>` inside the guest and executes it
+      there (`guests.GuestPaths`). A `/` in the name moves that path.
     - **Every log line and parser downstream.** A newline in a name forges log
-      entries, which is `dirwatch`'s stated reason for the same rule.
+      entries, which was the C watcher's stated reason for the same rule.
 
     Refused, never sanitised. The submitted name is part of what is being
     analysed -- DRAFT-030 -- so a rewritten name would analyse something the
@@ -258,6 +287,7 @@ class JobSummary(BaseModel):
     # either the caller, NULL, or the publisher of something public -- never
     # an arbitrary third party's address harvested from a listing.
     owner: str | None = None
+    owner_email: str | None = None
 
     # Decisions 5/6 of #40: private by default, published by the owner after the
     # fact. Read by `auth.visible_to`'s third arm; written only by the two
@@ -675,7 +705,7 @@ def _contradicts(detected: str, target: TargetOs) -> bool:
 # below, for the same reason.
 
 
-def _visible_or_404(conn, job_id: UUID, identity: str | None) -> None:
+def _visible_or_404(conn, job_id: UUID, identity: Caller) -> None:
     """Refuse unless this caller may see this job.
 
     For the routes that act rather than read -- cancel, console request, event
@@ -690,10 +720,69 @@ def _visible_or_404(conn, job_id: UUID, identity: str | None) -> None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "no such job")
 
 
-def _detail(conn, job_id: UUID, identity: str | None) -> JobDetail:
+def _redact_foreign_owner(job: JobSummary,
+                          identity: str | auth._Everything) -> None:
+    """Blank both identifying fields on a published job, for a stranger.
+
+    **Publishing the RESULT is not publishing the SUBMITTER** (#40, decision 6).
+    An analysis is shared; who ran it is not part of what is shared.
+
+    **Both fields, not just the address.** The comparison is on `owner` because
+    that is the tenant id on both sides -- but leaving the id in the response
+    would hand a reader a stable correlator: several public jobs carrying one id
+    say "same submitter" just as plainly as an address would. Opacity is not
+    anonymity, so the id is withheld from strangers too.
+
+    **`EVERYTHING` is exempt**, which is what this function was extracted to fix.
+    The sentinel is not a string and never compares equal to an owner, so the
+    `!=` was unconditionally true for it: Dom0 and the command-line tools read
+    `REDACTED` on exactly the PUBLIC jobs and the real owner on every other one,
+    while `auth.visible_to` hands them every row unscoped by design. Redacting
+    from a caller that is not a tenant protects nobody from anybody -- it hides
+    the submitter from the infrastructure running their sample.
+
+    `is`, not `==`: `auth._Everything` has `__slots__` and defines no `__eq__`,
+    and identity comparison is how the rest of this module tests for it --
+    `_publisher` below, `auth.required_identity` and `auth.visible_to`.
+
+    **One function because it is one rule.** `_detail` and `query_jobs` both
+    apply it, and a second copy is how the detail view and the listing come to
+    disagree about who a job belongs to -- the failure `_filters` refuses to
+    risk for the scope predicate, for the same reason.
+
+    Mutates in place: `JobDetail` extends `JobSummary`, so one signature covers
+    the detail view and every row of the listing.
+    """
+    if identity is auth.EVERYTHING:
+        return
+    if job.visibility == "public" and job.owner != identity:
+        job.owner = "REDACTED"
+        job.owner_email = "REDACTED"
+
+
+def _detail(conn, job_id: UUID, identity: Caller) -> JobDetail:
     scope, scope_params = auth.visible_to(identity)
     with conn.cursor(row_factory=dict_row) as cur:
-        cur.execute(f"SELECT * FROM jobs WHERE id = %s AND {scope}",
+        # Only the last fragment is a format string, and that is the point: the
+        # block comment above explains that interpolating `scope` is safe
+        # BECAUSE every other fragment is a literal this process wrote. Marking
+        # the literals as format strings too costs a reader exactly the
+        # distinction that argument rests on.
+        cur.execute("SELECT jobs.id, jobs.created_at, jobs.updated_at, jobs.target_os, jobs.submitted_filename,"
+            "      jobs.state, jobs.sha256, jobs.size_bytes, jobs.detected_type, jobs.queue_reason, "
+            "      jobs.failure_stage, jobs.failure_reason, jobs.attempt, jobs.cancel_requested, "
+            "      jobs.interacted, jobs.egress_mode, jobs.egress_exit, jobs.egress_applied, jobs.visibility, jobs.manifest, "
+            # COALESCE, because since DRAFT-061 an identity provisioned by
+            # `resolve_tenant` carries its address in `access_subject` and
+            # leaves `email` NULL -- the two keyspaces are separate so that a
+            # self-claimed address cannot be adopted by an Access assertion.
+            # Reading `email` alone showed every such owner as an em dash.
+            # Display only: nothing joins or scopes on this.
+            "      COALESCE(identities.email, identities.access_subject)"
+            "        AS owner_email, jobs.owner, jobs.queue_seq"
+            "      FROM jobs"
+            "      JOIN identities ON jobs.owner = identities.id"
+            f"      WHERE jobs.id = %s AND {scope}",
                     (job_id, *scope_params))
         row = cur.fetchone()
     if row is None:
@@ -743,14 +832,20 @@ def _detail(conn, job_id: UUID, identity: str | None) -> JobDetail:
             )
             reserved_ahead = cur.fetchone()[0]
 
-    job_detail =JobDetail(
+    job_detail = JobDetail(
         **{k: row[k] for k in (
             "id", "created_at", "updated_at", "target_os", "submitted_filename",
             "state", "sha256", "size_bytes", "detected_type", "queue_reason",
             "failure_stage", "failure_reason", "attempt", "cancel_requested",
-            "owner", "interacted",
+            "interacted",
             "egress_mode", "egress_exit", "egress_applied", "visibility",
         )},
+        # Not in the comprehension above, because this route reads `SELECT *`
+        # and cannot cast one column in SQL the way `list_jobs` does. Same
+        # reason as there: `jobs.owner` is `uuid` since 0009, and Pydantic
+        # refuses a `uuid.UUID` for a `str | None` field.
+        owner=str(row["owner"]) if row["owner"] is not None else None,
+        owner_email=str(row["owner_email"]) if row["owner_email"] is not None else None,
         manifest=row["manifest"] if isinstance(row["manifest"], dict) else None,
         artifacts=artifacts,
         manifest_error=parsed.error,
@@ -759,8 +854,7 @@ def _detail(conn, job_id: UUID, identity: str | None) -> JobDetail:
         artifacts_expired=expired,
     )
 
-    if job_detail.visibility == "public" and job_detail.owner != identity:
-        job_detail.owner = "REDACTED"
+    _redact_foreign_owner(job_detail, identity)
     return job_detail
 
 
@@ -870,8 +964,19 @@ def query_jobs(*, identity, state=None, target_os=None, sha256=None,
                                identity)
     params.extend([limit, offset])
     sql = (
-        "SELECT id, created_at, target_os, submitted_filename, state, sha256,"
-        "       size_bytes, owner, visibility FROM jobs"
+        # `owner::text`, because the column is `uuid` since 0009 while the API
+        # contract is a string -- Pydantic refuses a `uuid.UUID` for a
+        # `str | None` field, so an uncast column fails the whole list route
+        # with a ValidationError. It also has to stay a string for the
+        # REDACTED sentinel below to be assignable.
+        "SELECT jobs.id, jobs.created_at, jobs.target_os, jobs.submitted_filename, jobs.state, jobs.sha256,"
+        # COALESCE for the reason `_detail` gives: an Access-provisioned
+        # identity holds its address in `access_subject` and leaves `email`
+        # NULL. Display only; the scoping is on `jobs.owner`.
+        "       jobs.size_bytes, jobs.owner::text AS owner, jobs.visibility,"
+        "       COALESCE(identities.email, identities.access_subject)"
+        "         AS owner_email FROM jobs"
+        "       JOIN identities ON jobs.owner = identities.id"
         f" WHERE {' AND '.join(clauses)}"
         " ORDER BY created_at DESC LIMIT %s OFFSET %s"
     )
@@ -879,8 +984,10 @@ def query_jobs(*, identity, state=None, target_os=None, sha256=None,
         cur.execute(sql, params)
         job_summary_list = [ JobSummary(**row) for row in cur.fetchall() ]
         for job_summary in job_summary_list:
-            if job_summary.visibility == "public" and job_summary.owner  != identity:
-                job_summary.owner = "REDACTED"
+            # The same rule `_detail` applies, from the same function: both
+            # fields go, because the id is a cross-job correlator even though it
+            # discloses no address -- and infrastructure is exempt.
+            _redact_foreign_owner(job_summary, identity)
         return job_summary_list
 
 
@@ -929,7 +1036,7 @@ def get_job(job_id: Annotated[UUID, Path()],
 # `objects.chunks` are both generators, so an abandoned download stops pulling
 # from the store rather than running to completion.
 
-def _for_download(job_id: UUID, identity: str | None):
+def _for_download(job_id: UUID, identity: Caller):
     """The artifacts a download route may serve, or the reason it may not.
 
     410 rather than 404 for an expired job: the objects existed and the
@@ -967,7 +1074,7 @@ def _for_download(job_id: UUID, identity: str | None):
     if not artifacts:
         raise HTTPException(status.HTTP_404_NOT_FOUND,
                             "this run has no artifacts to download")
-    return artifacts, key_prefix 
+    return artifacts, key_prefix
 
 
 def _attachment(stem: str) -> dict[str, str]:
@@ -989,7 +1096,7 @@ def download_all_artifacts(job_id: Annotated[UUID, Path()],
                            identity: auth.Identity = None) -> StreamingResponse:
     """Every artifact of one run, in a single password-protected ZIP."""
     artifacts, key_prefix = _for_download(job_id, identity)
-    
+
     key = objects.result_prefix(job_id, key_prefix)
 
     return StreamingResponse(
@@ -1015,9 +1122,8 @@ def download_one_artifact(
     malware; resolving it to a manifest entry first means the only reachable
     objects are the ones this job actually declared.
     """
-    artifacts, key_prefix =  _for_download(job_id, identity) 
-    match  = next((a for a in artifacts if a.name == name),
-                 None)
+    artifacts, key_prefix = _for_download(job_id, identity)
+    match = next((a for a in artifacts if a.name == name), None)
     if match is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND,
                             "no such artifact for this job")
@@ -1036,8 +1142,8 @@ def cancel_job(job_id: Annotated[UUID, Path()],
     """Cancel, by whichever route the job's state allows.
 
     Before a clone exists this is one UPDATE and terminal -- the operation
-    DRAFT-040 recorded as unexpressible under dirwatch, where a queued job was
-    a file in a directory with no id to name it by. While running it is a
+    DRAFT-040 recorded as unexpressible under the old watcher, where a queued
+    job was a file in a directory with no id to name it by. While running it is a
     request the worker collects on its next heartbeat.
 
     **The scope is checked here rather than pushed into `dal.cancel`.** That
@@ -1125,7 +1231,7 @@ async def job_events(job_id: Annotated[UUID, Path()],
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
 
-def _publisher(identity: str | None) -> str:
+def _publisher(identity: Caller) -> str:
     """The person publishing, or a refusal. Publication needs a person.
 
     `access_identity` returns None only on the certificate-gated listener,
@@ -1138,7 +1244,11 @@ def _publisher(identity: str | None) -> str:
     fact about the LISTENER and not about a job. Answered before any id is
     looked up, so it reveals nothing about which ids exist.
     """
-    if identity is None:
+    # `EVERYTHING` too, which is what the certificate-gated listener produces
+    # since DRAFT-061 named it. Same argument as before, now with a value that
+    # says what it is: publication is a judgement about a result, `owner` is a
+    # column for a person, and infrastructure is neither.
+    if identity is None or identity is auth.EVERYTHING:
         raise HTTPException(
             status.HTTP_403_FORBIDDEN,
             "publication requires an authenticated browser session",

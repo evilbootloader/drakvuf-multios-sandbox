@@ -1,8 +1,7 @@
 """One analysis, start to finish.
 
-Issue #41 (DRAFT-060). The sequence `dirwatch.c:run_drakvuf` drives through
-five shell callbacks, as one function with the state reporting the platform
-expects.
+Issue #41 (DRAFT-060). The sequence the C watcher drove through five shell
+callbacks, as one function with the state reporting the platform expects.
 
 ## The shape the server enforces
 
@@ -192,9 +191,10 @@ class Config:
     results_dir: Path = config.RESULTS_DIR
     config_dir: Path = config.CONFIG_DIR
     repo_root: Path = config.DOM0_REPO_ROOT
-    # Per-host, like pipeline-android.env's ${APK_INSTALL_WAIT:-20}. Lowering
-    # one below what was measured is how a preconfig starts handing a
-    # still-running install to the trace.
+    # Per-host, as the Android env file's ${APK_INSTALL_WAIT:-20} already was.
+    # Lowering one below what was measured is how a preconfig starts handing a
+    # still-running install to the trace -- see `timing.py` for each number and
+    # what measured it.
     waits: timing.Waits = field(default_factory=timing.Waits)
     # Well inside LEASE_SECONDS=120, so two consecutive failures still leave
     # margin. Configurable because the lease TTL is, and because a fixed value
@@ -234,7 +234,8 @@ class Config:
     # a SIGTTIN-stopped background job are all not -- and it must be root.
     #
     # **Only Ubuntu anchors on PID 1.** systemd, so samples run as root; that
-    # cost is accepted in automation/pipeline-ubuntu.env.
+    # cost was accepted deliberately when the Ubuntu path was built, and is
+    # accepted still.
     #
     # Android went to PID 1 on 2026-08-29 and came back on 2026-08-31, because
     # Android's `init` does not provide a runtime environment for
@@ -242,7 +243,7 @@ class Config:
     # backgrounded `ping` against 127.0.0.1 -- self-scheduling, single-threaded,
     # and aimed at loopback so anchor traffic stays out of the per-sample pcap.
     # The full case, including the argument for PID 1 that it reversed, is in
-    # automation/pipeline-android.env.
+    # `docs/checklists/android.md` and `docs/TROUBLESHOOTING.md`.
     #
     # **The costs PID 1 removed are therefore live again for Android, and for
     # Windows, which is the same shape.** These PIDs are valid only for the
@@ -768,7 +769,7 @@ class Analysis:
         # is a deliberate act (SANDBOXD_CONSOLE_ENABLED).
         try:
             # **DRAKVUF does not create these, and says nothing when they are
-            # missing.** `drakvuf-ubuntu.sh:170` created both with a single
+            # missing.** The Ubuntu trace script created both with a single
             # `mkdir -p` and the port to this module dropped it, which was not
             # visible because the two plugins fail differently: `-D` ends up
             # created anyway, so `dump/` appears and looks like proof the
@@ -802,9 +803,10 @@ class Analysis:
             # omission -- it was one, found in review, which is why it is
             # spelled out.
             #
-            # dirwatch reads DRAKVUF's exit status and then ignores it
-            # (dirwatch.c:663 prints it; only `start->timer` decides), so
-            # failing here would diverge from the pipeline this must match.
+            # The C watcher read DRAKVUF's exit status and then ignored it --
+            # it printed the status, but only its own phase timer decided the
+            # outcome -- so failing here would diverge from the behaviour this
+            # was ported to match.
             # DRAKVUF also exits non-zero for reasons that are not analysis
             # failures -- a traced process ending oddly, for one.
             #
@@ -922,9 +924,9 @@ class Analysis:
 
         Runs on every path -- success, failure, cancellation -- because a clone
         left running is malware with NAT'd egress and nothing watching it. That
-        was a real defect in dirwatch before 2026-08-19: cleanup ran only in
-        the timeout branch, so a normal completion left its clone up until the
-        next sample happened to take the same VLAN slot.
+        was a real defect in the C watcher before 2026-08-19: cleanup ran only
+        in the timeout branch, so a normal completion left its clone up until
+        the next sample happened to take the same VLAN slot.
         """
         problems = []
 
@@ -1079,8 +1081,8 @@ def _phase_overran(phase: str, what: str, budget: float):
     """A phase deadline reached before its next command could start.
 
     Shaped as a `Completed` with `timed_out` set so it reads like every other
-    timeout the pipeline produces -- the caller is `dirwatch`'s phase guard in
-    a new form, and a phase that overruns tears the clone down and retries.
+    timeout the pipeline produces -- the caller is the C watcher's phase guard
+    in a new form, and a phase that overruns tears the clone down and retries.
     """
     from .proc import Completed
     return Completed(

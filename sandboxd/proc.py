@@ -12,15 +12,15 @@ Written out, not left to the default. The default is `False` and the behaviour
 would be identical; the point is that a reader auditing the security property
 greps for `shell=False` and finds code rather than a comment claiming it.
 
-The reason is not hygiene. The pipeline this replaces has been bitten three
+The reason is not hygiene. The shell/C pipeline this replaced was bitten three
 times by text becoming code -- DRAFT-030 (a sample named `a b.exe` split into
 two arguments), DRAFT-031 (a shebang below the licence header, so GLib fell
 back to /bin/sh for five root-run scripts), and the `sh -c '...' sh "$1"` idiom
-CLAUDE.md dedicates a section to. `clone.pl` still does it today: its `run()`
-joins argv with spaces and executes the result in backticks. DRAFT-052 and
-DRAFT-059 then want to add an operator-supplied entry point and run command,
-which is untrusted text entering an execution path one layer deeper than the
-bug DRAFT-030 fixed.
+CLAUDE.md dedicates a section to. Its Perl clone builder did it to the end: the
+`run()` helper joined argv with spaces and executed the result in backticks.
+DRAFT-052 and DRAFT-059 then want to add an operator-supplied entry point and
+run command, which is untrusted text entering an execution path one layer
+deeper than the bug DRAFT-030 fixed.
 
 An operator command is trusted to be GUEST-scoped, not benign: whoever can
 submit can already detonate malware of their choosing, so a hostile command in
@@ -35,12 +35,18 @@ everything that kills one kills the whole group.
 
 `drakvuf` and `injector` fork; killing the direct child can leave descendants
 running against a domain that is about to be destroyed. The pipeline this
-replaces could not do better -- `cleanup.sh` is a SIBLING process spawned with
-only `(domid, vlan)`, so `ps aux | grep injector` was its only way to find
-grandchildren it had no handle on. That grep also carries a live defect
-(DRAFT-011): `grep "tcpdump -i xenbr1.$VLAN"` treats `.` as a wildcard, so
-vlan 1 matches `xenbr1.10` through `xenbr1.19` once there are more than nine
-clones.
+replaced could not do better -- its cleanup script was a SIBLING process spawned
+with only `(domid, vlan)`, so `ps aux | grep injector` was its only way to find
+grandchildren it had no handle on.
+
+**That grep is why `iter_processes` exists, and the defect it carried is worth
+keeping in mind (DRAFT-011).** The pattern was `grep "tcpdump -i xenbr1.$VLAN"`:
+unanchored, and `.` is a regex wildcard, so vlan 1 also matched `xenbr1.10`
+through `xenbr1.19` once there were more than nine clones -- one job's cleanup
+killing another job's capture, with no error anywhere. So `iter_processes` reads
+`/proc/<pid>/cmdline` and compares argv ELEMENTS for equality: no pattern, no
+metacharacter, no substring. Anything that goes back to matching a rendered
+command line reintroduces this.
 
 sandboxd spawns `injector`, `drakvuf` and `tcpdump` itself, so it holds the
 handles and the grep disappears rather than being fixed.
@@ -55,8 +61,8 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-# cleanup.sh sends SIGINT, sleeps 5, then sends SIGKILL. Reproduced because the
-# interval is doing real work: DRAKVUF flushes and detaches its introspection
+# The old cleanup script sent SIGINT, slept 5, then sent SIGKILL. Reproduced
+# because the interval is doing real work: DRAKVUF flushes and detaches its introspection
 # state on SIGINT, and killing it outright can leave the domain with stealth
 # breakpoints still written into guest memory.
 DEFAULT_GRACE = 5.0

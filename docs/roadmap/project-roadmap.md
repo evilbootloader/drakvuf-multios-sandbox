@@ -21,9 +21,9 @@ with a web platform in its own PVH DomU alongside. All three OS targets are
 - **Ubuntu** — evidenced end to end, including through the platform. This is
   the protected path: do not change its behaviour without being asked.
 - **Android/BlissOS** — Phase 1 (golden→sandbox clone, injection anchor, saved
-  memory state) and the Phase 2 automation are both done:
-  `preconfig-android.sh`, `drakvuf-android.sh`, `run_analysis-android.sh` and a
-  shared `clone.pl`. **Both sample kinds are now evidenced through the
+  memory state) and the Phase 2 automation are both done, now in
+  `sandboxd/guests.py` selected by `TargetOs`. **Both sample kinds are now
+  evidenced through the
   platform** — native ELF, and APK install + `am start` (operator, 2026-08-29).
   That closes the last "implemented but never run" item on this track.
 - **Windows** — no execution evidence. The track is open and its design
@@ -60,11 +60,14 @@ much as `bash -n` here — the scripts execute under `dash` in production
 
 ## Current state (verified 2026-08-07, not assumed)
 
-**Ubuntu** — `automation/` (flat, no subfolders) contains
-`dirwatch.c, clone.pl, preconfig-ubuntu.sh, drakvuf-ubuntu.sh,
+**Ubuntu** — *(the file inventory below is 2026-08-07 and was superseded on
+2026-09-15: all of it except `network-setup.sh` was deleted when `sandboxd`
+replaced it — see `docs/architecture/automation-files.md`. The evidence
+claim that follows is unaffected.)* `automation/` (flat, no subfolders)
+contained `dirwatch.c, clone.pl, preconfig-ubuntu.sh, drakvuf-ubuntu.sh,
 cleanup.sh, tcpdump.sh, network-setup.sh, run_analysis-ubuntu.sh`.
 Architecture: `dirwatch.c` (GThreadPool + inotify, 15-arg CLI contract,
-60s/180s per-phase timeouts) calls
+60s/180s per-phase timeouts) called
 `clone.pl → preconfig-ubuntu.sh → drakvuf-ubuntu.sh → cleanup.sh`
 plus `tcpdump.sh` on a side thread. **"Ubuntu works" is now
 execution-evidenced** (2026-08-08, issue #2): a recorded Dom0 run shows
@@ -102,10 +105,14 @@ log are placeholder rows.
 **Windows** — a current target, with no execution evidence yet. No golden
 VM, no baseline selected, no scripts. What it does have is a fixed design
 contract rather than an open design space: issue #6's conformance checklist
-(C1–C10 in `docs/architecture/analysis-pipeline.md`) already settles the
-file set, delivery via `injector -m writefile`, the no-in-guest-collection
-rule, and `pipeline-windows.env`'s shape. `docs/checklists/windows.md`
-records those. **DRAFT-034 is the track head** and is drafted but not
+(C1–C10 in `docs/architecture/analysis-pipeline.md`) already settles
+delivery via `injector -m writefile`, the no-in-guest-collection rule, and
+what a per-guest configuration has to supply. **C1's "create four per-OS
+files" is superseded** — there are no per-OS files since 2026-09-15; a guest
+is a `TargetOs` member plus rows in `sandboxd/guests.py` and
+`sandboxd/stages.py`, and Windows already has skeleton rows with no
+execution evidence behind them. `docs/checklists/windows.md` records the
+requirements. **DRAFT-034 is the track head** and is drafted but not
 published.
 
 ## Ecosystem research — what to reuse vs. build
@@ -148,7 +155,8 @@ docs/
 │   └── platform.md
 ├── runbooks/                        # dated execution transcripts (append-only)
 └── workflow-ci.md                   # CI design (DRAFT-026a/b)
-automation/                          # Ubuntu automation scripts + pipeline-ubuntu.env
+automation/                          # network-setup.sh, platform.env, egress assets
+sandboxd/                            # the Dom0 orchestrator — this is the pipeline
 misc/                                # tracked Xen guest .cfg files
 profiles/                            # LibVMI/DRAKVUF kernel profiles — NOT git-tracked
 state/                               # xl save memory images — NOT git-tracked
@@ -224,7 +232,7 @@ state as of 2026-09-04 — `.github/issue-drafts/{completed,in-progress,todo}/DR
 | 7 | ~~`drakvuf-ubuntu.sh` has an apparent unsubstituted `<USER>` bug vs. working `preconfig-ubuntu.sh`~~ — resolved 2026-08-08 (issue #2): the deployed Dom0 copy is correctly substituted and samples execute; only this repo's copy carries the placeholder | None — closed. "Ubuntu works" is now execution-evidenced | DRAFT-007 complete; transcript in `docs/runbooks/01-verify-user-placeholder.md` |
 | 11 | ~~`automation/*` had drifted from the deployed Dom0 copies~~ — resolved 2026-08-08: `automation/` synced wholesale from the tested production host (`drakvuf-ubuntu.sh`, `network-setup.sh`, `dirwatch_old.c`; five other files were already byte-identical), and issue #1's host-side `linux_sandbox.cfg` → `ubuntu_sandbox.cfg` rename was completed | None — closed. Repo and host now agree everywhere | Recurrence prevention is the open part: nothing detects drift automatically (see DRAFT-026 CI) |
 | 8 | `lfreijo/drakvuf` `memdump` branch has no upstream PR/merge trail (single-maintainer fork) | Bus-factor risk for **Linux/Android** plugin support specifically. The Windows track leans on upstream `tklengyel/drakvuf` (~30 Windows-oriented plugins already present), so it is not exposed to this fork — the pinned commit is titled "Add **Linux** support for memdump, filetracer, fileextractor, and syscalls plugins" — ***narrowed 2026-08-24, see below*** | DRAFT-024, which must therefore pin **two** upstreams with different bus-factor profiles. Its priority should rise from P2: with engine work near-term (see the M9 note), a pinned revision is the baseline changes are diffed from, not just insurance |
-| 9 | Upstream `dirwatch.c` had a historical timeout/retry bug (issue #140) with the same retry-on-timeout shape this project's copy uses | Possible latent reliability bug | DRAFT-010 |
+| 9 | ~~Upstream `dirwatch.c` had a historical timeout/retry bug (issue #140) with the same retry-on-timeout shape this project's copy used~~ — **moot 2026-09-15**: this project's copy was deleted, and `sandboxd` fetches each sample from the object store per attempt rather than moving a file out of a watch folder, so a retry cannot lose its sample | None — closed by removal, never by test | DRAFT-010 is moot; see `docs/architecture/upstream-drakvuf.md` |
 | 10 | No secrets-management design exists yet | Relevant once CI/deployment automation appears (M6+) | Not urgent now |
 | 12 | **Nothing links a saved sandbox state to the golden image it came from.** `state/<domain>.bak` records no provenance, and no check compares the two | A golden-VM change silently invalidates the saved state, and the pipeline keeps restoring it. The injection PID is worse than the state itself: it is a property of the `.bak`, so a stale `INJECTION_PID` makes `injector` attach to whatever now holds that PID — or to nothing | **Realised, not hypothetical.** The golden `android` VM was reinstalled on 2026-08-11 (AND-001), invalidating `state/android_sandbox.bak` and anchor PID 5715; `docs/checklists/android.md` §1.5 recorded them as validated and nothing flagged the conflict. **Android side closed 2026-08-11** by [issue #7](https://github.com/evilbootloader/drakvuf-multios-sandbox/issues/7): template rebuilt, new state `1844fc0a…`, anchor PID 3163. That rebuild also found the recorded checksum already stale for a second, more ordinary reason — the template had been re-saved several times during testing and the checklist was never updated. Neither cause was detected by anything. The generic fix — recording golden-image identity alongside the saved state and checking it at restore — is **unowned** and applies to all three OS targets |
 | 13 | **The lab is operated personally, over a residential Internet line, and analysis clones have deliberate unrestricted NAT egress** (established 2026-08-12; the egress posture is DRAFT-028's, and intentional) | The binding constraint on live detonation is the ISP's acceptable-use terms, not Spanish criminal law — enforced without a prosecutor, court or complainant, by a party that already knows who the subscriber is. Realistic failure is an abuse report and disconnection of a household line. Personal operation also means civil negligence exposure (`Código Civil` art. 1902) has no corporate veil or institutional insurance behind it | **Costs nothing today — only benign fixtures have ever been detonated — and becomes real on the first non-benign run.** Owned by DRAFT-022, which now carries the entity/uplink facts and the provisional position ("not on this uplink"). The engineering half is the `offline` network mode: proposed in `docs/architecture/networking.md`, listed as undecided M2 design work, and **unowned**. It is small — `network-setup.sh` already isolates the posture in dedicated chains, so `offline` is the `DRAKVUF_NAT` `MASQUERADE` not being installed |
@@ -260,8 +268,11 @@ state as of 2026-09-04 — `.github/issue-drafts/{completed,in-progress,todo}/DR
    which stays rejected — the work itself changed. `sandboxd` takes jobs from
    a Postgres queue over an HTTPS API, holds a state machine, uploads to S3
    with retry, and cancels; `inotify` and a thread pool stop being the
-   problem. The callback contract to the five worker scripts is preserved, so
-   they do not change. See `docs/architecture/platform.md`.
+   problem. The callback contract to the five worker scripts was preserved
+   through the port so they did not have to change; once the port was
+   complete they were deleted (2026-09-15). See
+   `docs/architecture/platform.md` and
+   `docs/architecture/automation-files.md`.
 2. **Sample OS auto-detection contract** (libmagic/MIME + ELF/PE/APK
    parsing) — ambiguous cases (Android ELF vs. Linux ELF) need experiments
    before the classification contract is finalized (DRAFT-014).
@@ -305,11 +316,10 @@ CI pipeline definition; licensing and legal desk research.
 
 **Requires Xen Dom0 / L1** (must be presented for manual execution, per
 `CLAUDE.md`'s infra boundary rule): closing Android §1.3 isolation tests;
-Windows golden-VM creation; actual execution of
-`clone-android.pl`/`preconfig-android.sh`/`drakvuf-android.sh` against a
-real BlissOS clone; endurance/concurrency tests; any `dirwatch.c` behavior
-change; OVS/iptables isolation smoke tests; building upstream DRAKVUF from a
-pinned revision.
+Windows golden-VM creation; actual execution of the Android clone, preconfig
+and trace stages against a real BlissOS clone; endurance/concurrency tests;
+OVS/iptables isolation smoke tests; building upstream DRAKVUF from a pinned
+revision.
 
 **Requires L2 guest execution** (via `injector`, never directly runnable by
 Claude): Android process/package correlation, crash/tombstone collection;

@@ -949,7 +949,7 @@ def argv_revoke_blanket(
     once -- so no per-VLAN delete can ever match them and nothing removed them.
 
     The consequence was that `direct` was permanent rather than
-    per-invocation. One `ALLOW_DIRECT=1 ./run_analysis-ubuntu.sh` left both
+    per-invocation. One `ALLOW_DIRECT=1` run of the old launcher left both
     rules standing for the host's uptime, and every job afterwards egressed
     through them -- including jobs recorded and reported as `offline`, which
     install no rules and so had nothing that could notice.

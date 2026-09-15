@@ -21,7 +21,7 @@ ELF = b"\x7fELF" + b"\x00" * 60
 # different names and every claim succeeds while every later report 404s.
 WORKER = "test-worker"
 
-BASE = {"worker_id": WORKER, "total_mib": 8192, "total_vlans": 4,
+BASE = {"total_mib": 8192, "total_vlans": 4,
         "total_slots": 4,
         "pipelines": [{"os": "ubuntu", "required_mib": 2048}]}
 
@@ -228,8 +228,7 @@ def test_the_lease_carries_the_choice(client, worker_headers, put_object, conn):
     job = submit(client, egress_mode="tor").json()
     admit(client, put_object, job)
 
-    claim = client.post("/api/v1/worker/claim", headers=worker_headers, json={
-        "worker_id": WORKER, "free_mib": 8192, "free_vlans": 4,
+    claim = client.post("/api/v1/worker/claim", headers=worker_headers, json={ "free_mib": 8192, "free_vlans": 4,
         "free_slots": 4}).json()
     assert claim["status"] == "leased"
     assert claim["egress_mode"] == "tor"
@@ -248,8 +247,7 @@ def test_the_host_records_what_it_actually_applied(
     job = submit(client, egress_mode="simulated").json()
     job_id = job["job_id"]
     admit(client, put_object, job)
-    client.post("/api/v1/worker/claim", headers=worker_headers, json={
-        "worker_id": WORKER, "free_mib": 8192, "free_vlans": 4,
+    client.post("/api/v1/worker/claim", headers=worker_headers, json={ "free_mib": 8192, "free_vlans": 4,
         "free_slots": 4})
 
     # The host could not start its responder and fell back, honestly.

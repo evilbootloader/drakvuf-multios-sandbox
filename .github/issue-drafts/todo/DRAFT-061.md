@@ -7,7 +7,8 @@ which was deployed 2026-09-06 and reversed 2026-09-10.
 **Area:** core/platform, security
 **OS:** ALL
 **Milestone:** M1
-**Priority:** P1 for the whole; **F12 inside it is P0 and ships alone, first**
+**Priority:** P1 for the whole. **F12 was the P0 inside it and shipped alone on
+2026-09-10** — the remainder is P1 and no longer racing an open door.
 **Depends on:** #40 (closed). Replaces the identity half of #36 and touches
 `auth.py`, both systemd units, the cloudflared ingress, the TLS layer, and
 `tests/conftest.py`.
@@ -32,15 +33,16 @@ Not from the auth being weak. From there being two of it:
 
 The browser routers are reachable on 8443 with a certificate and no Access
 session — `visible_to` returns `TRUE` there and every job is readable. The
-worker routers are reachable on 8000 with a token and no certificate, **and
-through the tunnel from the internet** (F12). Neither is intended. Both follow
+worker routers are reachable on 8000 with a token and no certificate — and were
+reachable **through the tunnel from the internet** until F12 was closed on
+2026-09-10. Neither is intended. Both follow
 from serving one object twice, and the list of what it has cost is long enough
 to be the argument:
 
 | | |
 |---|---|
 | **F11** | the console dialled 8443, both ends landed in different registries, and the session hung with no error |
-| **F12** | `/api/v1/worker/*` routes from the public hostname — open today, see below |
+| **F12** | `/api/v1/worker/*` routed from the public hostname for fifteen days — closed 2026-09-10, see below |
 | **#40 decision 3** | its acceptance criterion had to be *restated* because a bind cannot make one app two |
 | **2026-09-10** | the loopback bind was reversed after four days, because `sandboxd` dials the browser listener for the console and loopback is unreachable across machines |
 
@@ -84,7 +86,7 @@ public IP. Only the Access *application* goes.
 | 3 | **We issue the JWTs.** Short-lived access token, refresh token, revocable |
 | 4 | **Workers present a JWT *and* their client certificate.** Two factors on the worker routes, not one |
 | 5 | **mTLS terminates in Caddy**, because uvicorn cannot hand the app a peer certificate |
-| 6 | **F12's ingress rule ships first, alone**, and depends on none of this |
+| 6 | **F12's ingress rule shipped first, alone**, depending on none of this — done 2026-09-10 |
 
 ## Decision 2 — beside `tenants`, not inside it
 
@@ -104,6 +106,50 @@ are about operations rather than taste:
 
 `tenants.owner` stays the identity everything else joins on, so `jobs.owner`,
 `key_prefix` and `visible_to` are all untouched.
+
+## Decision 2a — the address is not the join key, and signup is why
+
+Added after a security review of the implementation, 2026-09-13, before any of
+it was pushed. 0009 as first written gave `identities` one address column, and
+`resolve_tenant` resolved a Cloudflare Access assertion by looking it up:
+`WHERE lower(email) = lower(%s)`.
+
+**That made one user-writable column the join key for two independent
+issuers.** `/auth/signup` takes an address entirely on trust — a Telegram code
+proves control of a Telegram account and says nothing whatever about an
+address, and nothing in this platform ever sends to one. So claiming an address
+that no identity held yet meant the next Access assertion for it resolved to
+the *claimant's* row, with the claimant's password on it: that tenant's jobs,
+prepaid balance and object prefix, taken with one request and one `/start`.
+`service:<common_name>` — what `access_identity` reports for a service token —
+was claimable the same way and needed no victim address to guess at all.
+
+The fix is two disjoint keyspaces rather than a verification loop:
+
+    identities.email           the login address. Written by signup and
+                               create_user.py. Read by /auth/login and by the
+                               reset lookup. Never resolved against.
+    identities.access_subject  what an external provider asserts. Written only
+                               by resolve_tenant, and by create_user.py behind
+                               an explicit --access-subject. The only column
+                               resolution joins on.
+
+**An email server was considered and rejected.** Verifying the address would
+need either inbound mail — a public port, against "no public IP, no open ports,
+everything through the tunnel" — or an outbound relay, which is a new
+dependency, a new secret and a new outbound path from a DomU whose neighbour
+runs malware. It would also not have fixed the `service:` variant, which has no
+address to confirm. The column split holds without any of it.
+
+**The cost, stated plainly: one person can end up with two identities**, if they
+sign up here and also arrive through Access with the same address. This platform
+cannot know the two are the same human — believing it could is the hole above —
+so it declines to guess. `create_user.py --access-subject` is where an operator
+records that knowledge, and it is the only place the two keyspaces may
+deliberately be joined.
+
+Pinned by four tests in `tests/test_telegram.py`; the two that matter fail
+against the old lookup, which was checked rather than assumed.
 
 ## Decision 4/5 — the obstacle, and why the proxy is not optional
 
@@ -180,24 +226,41 @@ does JWKS fetch, `iss`/`aud` validation, key caching and a bounded refresh, with
 
 # Dependencies and ordering
 
-**F12 first, and it waits for nothing.** The `sandbox.evilbootloader.com`
-ingress has no path rule, so `/api/v1/worker/*` — claim, heartbeat, state,
-artifact tickets and the console's worker end — routes from the internet today,
-gated by Access and a static bearer token but not by a certificate. Verified
-2026-09-10:
+**F12 went first and waited for nothing. DONE 2026-09-10.** The
+`sandbox.evilbootloader.com` ingress had no path rule, so `/api/v1/worker/*` —
+claim, heartbeat, state, artifact tickets and the console's worker end — routed
+from the internet, gated by Access and a static bearer token but not by a
+certificate. Confirmed open and then closed the same day:
 
 ```
 Matched rule #1
     hostname: sandbox.evilbootloader.com
-    service: https://192.168.1.10:8000
+    path: ^/api/v1/worker(/|$)
+    service: http_status:404
 ```
 
 The rule was written in `docs/runbooks/09-verify-sandboxd-and-console.md` F12 on
-2026-08-26 and never applied. `docs/runbooks/16-deploy-tenancy-and-quota.md`
-"Known gaps" carries it with its verification commands.
+2026-08-26 and applied fifteen days later.
+`docs/runbooks/16-deploy-tenancy-and-quota.md` carries EVIDENCE F12: three
+`ingress rule` checks placing the 404 between the bucket rule and the API
+catch-all, a `HTTP/2 404` past Access through the live tunnel, and a job that
+still claims and completes over the LAN.
 
 **A recommendation with no evidence block is one nobody applied** — worth taking
 from this as a process lesson, not only as an exposure.
+
+Two things learned in the applying that the draft did not anticipate, both now
+in the runbook:
+
+- **`tunnel ingress rule` reads the config file, not the running daemon.** It
+  can pass green against an ingress the process has not loaded.
+- **An anonymous `curl` from outside cannot verify an ingress rule**, because
+  Access bounces it at the edge before cloudflared is reached — it returned the
+  same 302 before the rule existed. `/api/v1/worker/claim` is POST-only, so a
+  GET past Access discriminates cleanly: 404 is the rule, 405 is the origin,
+  302 is the edge.
+
+The rest of this draft is unblocked and none of it depends on F12.
 
 # TEST
 
@@ -221,13 +284,13 @@ compromise.
 
 | | Criterion |
 |---|---|
-| [ ] | `/api/v1/worker/*` returns 404 through the tunnel (**F12 — ships alone, first**) |
+| [x] | `/api/v1/worker/*` returns 404 through the tunnel (**F12 — shipped alone, 2026-09-10**) |
 | [ ] | One listener serves the whole app; 8443 and the second unit are gone |
 | [ ] | The verified-subject header is refused from any source but the proxy, asserted by test |
-| [ ] | Worker routes require JWT **and** certificate; either alone is refused |
-| [ ] | A human can sign up, log in, and see their balance without an operator touching a policy |
-| [ ] | Login is rate limited and accounts lock, with the edge no longer helping |
-| [ ] | `test_tenancy.py` and `test_quota.py` pass unchanged in intent |
+| [~] | Worker routes require a **per-worker credential** — **2026-09-13**. The certificate half was dropped with Caddy, so this is one factor rather than two; see the note below |
+| [x] | A human can sign up, log in, and see their balance without an operator touching a policy — **2026-09-13**, `test_a_session_reaches_the_rest_of_the_api` |
+| [x] | Login is rate limited and accounts lock — mechanism built and tested; **the edge is still in front**, so it has not yet run without help |
+| [x] | `test_tenancy.py` and `test_quota.py` pass unchanged in intent — the identity source changed, the scoping rules did not |
 | [ ] | A full analysis runs end to end, and a console session pairs |
 
 # Out of scope
@@ -248,12 +311,72 @@ compromise.
 - **The platform gains the ability to mint user identities**, which it does not
   have today. Keeping the CA off the machine (decision 4) is what stops that
   extending to worker identities.
+- **A self-service signup route can propose any identifier it likes**, so
+  nothing an external issuer resolves against may share a column with it. See
+  decision 2a: while `resolve_tenant` joined on the address, one signup took
+  over any Access identity that had not yet made its first request. The general
+  rule this is an instance of — *an identifier a stranger can propose is not an
+  identifier a verifier may trust* — applies again the moment SSO plugs into
+  the verification path, which "Out of scope" above anticipates.
 - **The console cannot be "simplified" onto a certificate-gated path.** Any
   design that puts the browser's socket where `visible_to` returns `TRUE` lets
   any authenticated user open any job's console.
 - **Loopback binding becomes coherent again** once there is one listener — but
   only if Dom0 reaches it another way. That is a decision this draft leaves
   open rather than assuming.
+
+# Cut-over — what it takes to stop depending on Cloudflare authentication
+
+Implemented 2026-09-13. **`REQUIRE_ACCESS_JWT=0` on the browser listener is the
+switch**, and it is genuinely a switch rather than a migration:
+`access_identity` returns None without even reading the header when that flag is
+off, so a forged `Cf-Access-Jwt-Assertion` is ignored rather than trusted, and
+`caller_identity` falls through to the session cookie. Flipping it back restores
+Access. **Keep `cloudflared` either way** — the tunnel is transport, not
+authentication, and removing it puts the platform on a public IP.
+
+Four things had to change first, and they were not equally severe:
+
+- **The console never read the session cookie** (`routers/console.py`). It took
+  only the Cloudflare header, so with Access gone the identity was None — which
+  since DRAFT-061 is refused by `visible_to` rather than read as "see
+  everything". It would have failed as a `ValueError` inside a socket handler.
+  This was the real blocker.
+- **`/ui/login` sat behind the gate it exists to get someone through.** It
+  carried `dependencies=[]` and a comment claiming that put it outside the
+  router's; FastAPI does not compose them that way. Harmless once
+  `REQUIRE_ACCESS_JWT` is off, fatal during the period when both credentials
+  are meant to work — which is the period the rollback plan below depends on.
+  It is on its own ungated router now.
+- **An unset `JWT_AUDIENCE` mints tokens that can never be verified.**
+  `jwt.encode` writes `aud: ""` and `jwt.decode` reports the claim as MISSING,
+  so the deployment would have signed people in and then treated every
+  subsequent request as anonymous, with nothing logging why. Refused at mint
+  time now. `JWT_SIGNING_KEY`, `JWT_ISSUER` and `JWT_AUDIENCE` all default to
+  empty and all three must be set.
+- **The router gates read `access_identity`, which cannot see a session.** Now
+  `caller_identity`. Worth correcting but NOT the blocker it first looked like:
+  every route on those routers already takes its own identity dependency, so at
+  `REQUIRE_ACCESS_JWT=0` the old gate was a no-op rather than a refusal — its
+  own comment said so. What the change buys is that the gate enforces again, so
+  a route added later without an identity parameter is not public by omission.
+
+Still outstanding, and not in this change:
+
+- **`submit.py` authenticates with `cf-access-token`.** The command-line tools
+  ride Access service tokens, so they need a credential of ours before Access
+  can be switched off for them. `required_identity` already anticipates this.
+- **MFA is opt-in.** Access OTP is a possession factor today; after the
+  cut-over an account with no TOTP enrolled is a password alone. If the
+  cut-over is to be a net gain rather than a wash, making TOTP mandatory —
+  at least for any identity with a balance — is a decision to take BEFORE.
+- **`TRUSTED_CLIENT_IP_HEADER=CF-Connecting-IP`** while the tunnel stays, or
+  every user shares one rate-limit bucket.
+
+Pinned by `tests/test_cutover.py`, which runs on `no_identity` — no Access
+override and no header, which is the post-cut-over deployment. The rest of the
+suite overrides `access_identity` and would pass against a platform that could
+not authenticate anybody by itself.
 
 # Recovery / rollback
 

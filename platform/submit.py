@@ -59,6 +59,19 @@ class Submitter:
                  access_token: str | None = None):
         self.api = api.rstrip("/")
         headers = {"cf-access-token": access_token} if access_token else {}
+        # **The CSRF header, even though this is not a browser.** The jobs
+        # router requires it on every unsafe method (see
+        # `sandbox_platform/csrf.py`), and that requirement is attached to the
+        # ROUTER so a route added later cannot forget it -- which means it
+        # applies to this client too. Sending it is a one-line cost here; the
+        # alternative is exempting a whole listener from the rule, which is the
+        # kind of carve-out that quietly becomes the way in.
+        #
+        # It asserts nothing about this caller. What it proves is that the
+        # request was composed deliberately rather than triggered by a page the
+        # caller happened to be visiting, and that is as true of a command-line
+        # tool as of the UI.
+        headers["X-Sandbox-Request"] = "1"
         self.http = httpx.Client(base_url=self.api, timeout=60.0,
                                  headers=headers,
                                  verify=ssl_context(cacert, client_cert))

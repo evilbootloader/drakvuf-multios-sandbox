@@ -2,13 +2,12 @@
 
 Issue #41 (DRAFT-060).
 
-Replaces `dirwatch.c`'s `slots_busy[128]` and `find_thread()`. That array is
-**process-local**, and the thread-slot index *is* the VLAN -- so two watchers
-allocate VLANs 1..N identically and share gateway addresses and isolation
-rules, "with no symptom but interference". One `dirwatch` per OS plus a guard
-refusing to start a second is the whole reason an Ubuntu and a Windows
-submission cannot be analysed in the same window today, on a host with capacity
-for both.
+Replaces the C watcher's `slots_busy[128]` array and `find_thread()`. That
+array was **process-local**, and the thread-slot index *was* the VLAN -- so two
+watchers allocated VLANs 1..N identically and shared gateway addresses and
+isolation rules, "with no symptom but interference". One `dirwatch` per OS plus
+a guard refusing to start a second is why an Ubuntu and a Windows submission
+could not be analysed in the same window, on a host with capacity for both.
 
 **One process owning every VLAN is what removes that**, and it is why
 DRAFT-036's host-global allocator was dropped rather than built: with a single
@@ -22,7 +21,7 @@ Not a slot index that happens to be numbered. VLAN `n` means:
     xenbr1.n          the sub-interface network-setup.sh created
     172.16.n.1        the gateway Dom0 holds on it
     172.16.n.2        the address preconfig gives the clone
-    <origin>-n-clone  the domain name clone.pl derives
+    <origin>-n-clone  the domain name `naming.clone_name` derives
 
 So a VLAN is **host-global and single-tenant across OS families**. Two clones
 cannot share one even if they are different guests, because they would share
@@ -129,9 +128,9 @@ class ResourceTable:
         # **Only VLANs network-setup.sh actually provisioned.** Handing out a
         # VLAN with no `xenbr1.<n>` and no gateway produces a clone that boots,
         # gets an address nothing routes, and looks like a sample that chose
-        # not to talk. run_analysis-*.sh warns that the two numbers must match;
-        # taking the range as input makes the mismatch impossible here rather
-        # than documented.
+        # not to talk. The old launcher could only WARN that the two numbers
+        # had to match; taking the range as input makes the mismatch impossible
+        # here rather than documented.
         self._all_vlans = tuple(vlan_list)
 
         # **Withheld until something confirms the VLAN is clean.** A fresh
@@ -142,7 +141,7 @@ class ResourceTable:
         #
         # Starting them all available makes `admit()` a no-op and hands the
         # next job a VLAN whose previous domain has not finished dying -- the
-        # same failure DRAFT-033 fixed inside clone.pl, where `xl restore`
+        # same failure DRAFT-033 fixed inside the Perl clone builder, where `xl restore`
         # landed on the PREVIOUS sample's snapshot. Cross-sample
         # contamination, not a crash, so nothing reports it.
         #
@@ -227,9 +226,9 @@ class ResourceTable:
         to remove. Deciding inside the lock closes that window; `withhold`
         stays for the sweep and for an operator, where nothing is racing.
 
-        `dirwatch.c:697` destroys the clone and only then calls
+        The C watcher destroyed the clone and only then called
         `release_thread()`, with the reason recorded in place: the slot index
-        *is* the VLAN and the clone name, so releasing first lets another job
+        *was* the VLAN and the clone name, so releasing first lets another job
         begin cloning `<origin>-<vlan>-clone` while this domain is still being
         destroyed. The same ordering holds here for the same reason, and it is
         the caller's to get right -- this method cannot tell whether the domain

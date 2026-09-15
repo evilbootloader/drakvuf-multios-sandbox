@@ -10,7 +10,8 @@ place to look rather than two.
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+import argon2
 
 
 def _int(name: str, default: int) -> int:
@@ -135,6 +136,37 @@ class Settings:
     # which is the latency floor of dialling out rather than listening.
     console_pair_timeout: int = _int("CONSOLE_PAIR_TIMEOUT", 90)
 
+    # **Which origins may open the operator's end of a console.** Empty means
+    # same-origin: the handshake's `Origin` must match its own `Host`.
+    #
+    # The Same-Origin Policy does not apply to WebSockets, so a page on any
+    # origin can open one to this endpoint and the browser will attach whatever
+    # cookies its SameSite rules permit. `routers/auth.py` defends the JSON
+    # routes with a required header, and records that this works because "a
+    # cross-site HTML form cannot set a request header" -- a browser WebSocket
+    # cannot set one either, so that defence does not reach here and `Origin`,
+    # which the browser sets and script cannot forge, is what is left.
+    #
+    # **What this adds over SameSite, stated precisely rather than overclaimed.**
+    # `sandbox_access` is SameSite=Lax, and a WebSocket handshake is not a
+    # top-level navigation, so a cross-site dial carries no session cookie of
+    # OURS. The exposure is the Access path: `Cf-Access-Jwt-Assertion` is
+    # injected by Cloudflare from its own `CF_Authorization` cookie, whose
+    # SameSite attribute is Cloudflare's to set and not ours to rely on. So this
+    # is defence in depth for the credential we do not control, on the one
+    # channel that streams a live malware VM's framebuffer and accepts input
+    # back into it.
+    #
+    # Same-origin by default rather than an allowlist that must be filled in:
+    # an unset value has to be SAFE here, because the alternative is a
+    # deployment that silently has no check. Set this only where the browser's
+    # origin legitimately differs from the Host this app sees.
+    console_allowed_origins: tuple[str, ...] = tuple(
+        o.strip().rstrip("/")
+        for o in os.environ.get("CONSOLE_ALLOWED_ORIGINS", "").split(",")
+        if o.strip()
+    )
+
     # --- admission --------------------------------------------------------
     #
     # Refused before a URL is issued, then re-checked against the object's
@@ -203,10 +235,15 @@ class Settings:
     # holds every credential on the platform.
     magic_bytes: int = _int("MAGIC_BYTES", 8192)
 
-    # --- worker channel ---------------------------------------------------
-    # The only credential Dom0 ever holds. Scoped to /api/v1/worker/* and, on
-    # job routes, to jobs that worker currently leases.
-    worker_token: str = os.environ.get("WORKER_TOKEN", "")
+    # **`WORKER_TOKEN` is gone from the platform** (DRAFT-061). The worker
+    # channel used one shared string plus an `X-Worker-Id` header that nothing
+    # bound to it, so any token holder could act as any worker -- KNOWN GAP
+    # (DRAFT-043/046). Credentials are per worker now, live in
+    # `workers.token_hash`, and are issued by `create_worker.py`; the id is
+    # looked up FROM the token, so there is no setting for it to be.
+    #
+    # sandboxd still reads a `WORKER_TOKEN` from its own environment -- that is
+    # now ITS credential rather than a secret both ends share.
 
     # A lease is bookkeeping, not a resource reservation. It expires so a
     # dead worker's jobs stop occupying the queue; it frees nothing on Dom0.
@@ -241,7 +278,24 @@ class Settings:
     # certificate at the TLS layer before any handler runs. Enforcing it on
     # both would lock out Dom0 and the command-line tools, which hold
     # certificates and not browser sessions.
-    require_access_jwt: bool = os.environ.get("REQUIRE_ACCESS_JWT", "") == "1"
+    #
+    # **`_bool`, not a hand-written `== "1"`.** This was the one boolean here
+    # parsed by hand, and it accepted the single spelling `1` -- so
+    # `REQUIRE_ACCESS_JWT=true`, which is exactly what works for
+    # `CONSOLE_ENABLED` and `REGISTRATION_OPEN`, left this False and Access
+    # verification off. That is the direction `_bool`'s docstring argues
+    # against, and with a stronger claim on the argument than `console_enabled`
+    # has: a false `console_enabled` keeps a capability shut, while a false
+    # `require_access_jwt` fails OPEN -- `auth.access_identity` returns None
+    # without ever reading the header, so the browser routes lose their
+    # identity rather than gain a closed door.
+    #
+    # `_bool` accepts `"1"`, so a deployment whose unit already sets
+    # `REQUIRE_ACCESS_JWT=1` parses identically before and after this change;
+    # only the other spellings changed meaning. tests/test_config.py asserts
+    # every bool field on this class goes through `_bool`, so the next one
+    # cannot be written by hand.
+    require_access_jwt: bool = _bool("REQUIRE_ACCESS_JWT", False)
 
     # e.g. https://yourteam.cloudflareaccess.com -- where the signing keys live.
     access_team_domain: str = os.environ.get("ACCESS_TEAM_DOMAIN", "").rstrip("/")
@@ -249,6 +303,159 @@ class Settings:
     # The Access application's AUD tag. Checked on every token: without it a
     # valid JWT for ANY application in the account would be accepted here.
     access_aud: str = os.environ.get("ACCESS_AUD", "")
+
+    # --- credentials this platform issues itself (DRAFT-061) --------------
+    #
+    # Empty is NOT a usable key: `jwt.encode(payload, "")` succeeds and
+    # `jwt.decode(token, "")` verifies it, so an unset value would mean tokens
+    # signed with the empty string that verify perfectly against themselves --
+    # anyone who guesses it is unset can mint any `sub` they like.
+    #
+    # Nothing here enforces that, deliberately. The refusal belongs at the use
+    # site, the way `authenticated_worker` refuses a credential that names no
+    # worker rather than waving it through: this module only reads the
+    # environment, and raising at import would take down a process that may
+    # never sign anything. It is `credentials._require_signing_key()`, called by
+    # BOTH `mint_access_token` and `decode_access_token` -- guarding only the
+    # minting side would leave a service that refuses to issue tokens and
+    # cheerfully accepts forged ones.
+    jwt_signing_key: str = os.environ.get("JWT_SIGNING_KEY", "")
+
+    # **Units in the name, on both sides.** These are two different scales for
+    # two different jobs, and the failure mode of getting them confused is
+    # silent: an operator setting ACCESS_TOKEN_TTL=3600 meaning seconds would
+    # have bought a 60-hour access token, and nothing would have said so.
+    # Renamed while nothing consumed them yet, which is the only cheap moment.
+    #
+    # Short access, long refresh, and that asymmetry is the whole design: the
+    # access token is checked by signature alone and CANNOT be withdrawn before
+    # it expires, so its lifetime is the window a stolen one stays useful. The
+    # refresh token is a database row, so it can be revoked the moment anything
+    # looks wrong -- which is what buys the access token the right to be
+    # cheap to check.
+    access_token_ttl_minutes: int = _int("ACCESS_TOKEN_TTL_MINUTES", 60)
+    refresh_token_ttl_days: int = _int("REFRESH_TOKEN_TTL_DAYS", 1)
+
+    # Telegram is the out-of-band channel for both signup verification and
+    # password reset (DRAFT-061 decisions 1 and 2), chosen over SMS because it
+    # needs no carrier, no per-message cost, and stores a numeric user id
+    # instead of a phone number -- a much smaller thing to hold, though still
+    # personal data and still in DRAFT-022 scope.
+    #
+    # **Outbound only, via getUpdates polling, never a webhook.** A webhook is
+    # an inbound HTTP endpoint, and this platform has none by design -- no
+    # public IP, no open ports, everything through the tunnel. Reaching
+    # api.telegram.org from the DomU is unevidenced so far and worth confirming
+    # before anything depends on it.
+    #
+    # Empty must be refused where the call is made, not here. See the note at
+    # `jwt_signing_key` above.
+    telegram_bot_token: str = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+
+    # **The bound a rate limiter cannot express.** Each argon2id hash holds its
+    # full memory cost for as long as it runs, so N requests arriving together
+    # allocate N x `argon_params.memory_cost` before any rate-limit window has
+    # closed. Limiting attempts per minute does nothing about attempts in the
+    # same millisecond; this is what does.
+    #
+    # 4 x 64 MiB = 256 MiB, against a 4096 MiB DomU (`CURRENT-STATE.md`, applied
+    # 2026-09-12) also running Postgres, MinIO, uvicorn and cloudflared. Raise
+    # it only alongside the host, and recompute the product -- the number that
+    # matters is `memory_cost x this`, never either alone.
+    max_concurrent_hashes: int = _int("MAX_CONCURRENT_HASHES", 4)
+
+    # argon2id at RFC 9106's LOW_MEMORY profile: m=64 MiB, t=3, p=4. The HIGH
+    # profile is m=2 GiB, which on this host is half the machine for one login.
+    #
+    # `p=4` matches the DomU's 4 vCPUs as of 2026-09-12; it was asking for four
+    # lanes on a two-vCPU host before that reboot.
+    #
+    # **`default_factory`, because a dataclass refuses an unhashable default**
+    # -- `Parameters.__hash__` is None, and assigning the profile directly
+    # raised at import, which took the sandboxd suite down with it since its
+    # tests import this module.
+    #
+    # The cost parameters are encoded into each hash string, so raising them
+    # later is a rehash-on-next-login rather than a migration. What this shape
+    # does NOT give is an environment override: changing m, t or p is a code
+    # change and a deploy, which is the one thing this module's header argues
+    # against. Worth revisiting the first time someone needs to raise the cost
+    # on a running host.
+    argon2_params: argon2.Parameters = field(
+        default_factory=lambda: argon2.profiles.RFC_9106_LOW_MEMORY
+    )
+
+    jwt_issuer: str = os.environ.get("JWT_ISSUER", "")
+    jwt_audience: str = os.environ.get("JWT_AUDIENCE", "")
+
+    # **OFF by default**, like `console_enabled` and for the same reason: a
+    # flag that opens a capability must not be opened by forgetting to set it.
+    # `_bool` fails closed on a typo, which is what makes that true in practice.
+    #
+    # What it gates is not "an account" but the OPENING GRANT -- `tenants`
+    # defaults to an hour of prepaid analysis seconds, so an open registration
+    # route is free malware-analysis compute for anyone who can make an email
+    # address and a Telegram account. Closed, the only way in is
+    # `create_user.py`, run by an operator.
+    #
+    # Closing it also stops `/start` creating identities, so the row growth that
+    # signup permits stops with it rather than continuing silently.
+    registration_open: bool = _bool("REGISTRATION_OPEN", False)
+
+    # **Does an unauthenticated caller on this listener mean infrastructure?**
+    #
+    # OFF by default, and that default is the security property. Until
+    # DRAFT-061 this was INFERRED from `REQUIRE_ACCESS_JWT` being unset:
+    # `visible_to(None)` returned `TRUE` and scoped nothing, on the reasoning
+    # that no Access token could only mean "arrived over the mTLS listener,
+    # already gated by a client certificate". That reasoning was sound and it
+    # was invisible -- one deployment mistake away from handing every job to
+    # anyone, with nothing in the schema or the code saying so.
+    #
+    # Naming it makes the dangerous state something an operator has to ASK for.
+    # Set it on a listener reachable only over the LAN behind a client
+    # certificate, and nowhere else. After the cut-over it should be set
+    # nowhere at all: the browser listener never wants it, and the worker
+    # channel authenticates per worker now rather than by being unauthenticated
+    # in a trusted place.
+    infrastructure_listener: bool = _bool("INFRASTRUCTURE_LISTENER", False)
+
+    # --- login throttling (DRAFT-061) -------------------------------------
+    #
+    # Two mechanisms, deliberately. The per-bucket window below is the DoS
+    # guard and runs before argon2; per-account lockout is the credential-
+    # stuffing guard and runs after the account is identified. Neither
+    # substitutes for the other: a window cannot stop a slow distributed
+    # attack, and lockout cannot stop a flood against addresses that do not
+    # exist.
+    attempts_per_window: int = _int("ATTEMPTS_PER_WINDOW", 5)
+    window_length_minutes: int = _int("WINDOW_LENGTH_MINUTES", 5)
+
+    lockout_threshold: int = _int("LOCKOUT_THRESHOLD", 5)
+    lockout_duration_minutes: int = _int("LOCKOUT_DURATION_MINUTES", 5)
+
+    # How long a failure counts against an account. Without decay a counter
+    # only ever rises, and an account locks on its fifth lifetime typo.
+    decay_window_minutes: int = _int("DECAY_WINDOW_MINUTES", 5)
+
+    # **Which header carries the real client address, or empty for none.**
+    #
+    # Empty means use the socket peer, which is correct in development and for
+    # any deployment where the app is reachable directly. In THIS deployment
+    # the peer is always cloudflared, so every user would share one bucket and
+    # the limit would be global rather than per-client.
+    #
+    # Set it to `CF-Connecting-IP` behind the tunnel, or `X-Forwarded-For`
+    # behind Caddy once DRAFT-061's proxy lands. **It is a trust boundary
+    # exactly like the verified-subject header**: whatever is named here must
+    # be set by the proxy unconditionally on every request, because anything a
+    # caller can set themselves turns the limiter into decoration -- rotate the
+    # header, reset the bucket.
+    #
+    # Defaulting to empty is the conservative direction: a misconfiguration
+    # makes the limit too coarse, never absent.
+    trusted_client_ip_header: str = os.environ.get("TRUSTED_CLIENT_IP_HEADER", "")
+
 
 
 settings = Settings()

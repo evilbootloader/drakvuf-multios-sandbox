@@ -2,7 +2,7 @@
 
 **These are the parity tests, done at the desk.** #41's acceptance criterion is
 that the same sample produces the same artifact set through `sandboxd` as
-through `dirwatch`. Every assertion here is against a literal from the shell
+through the C watcher. Every assertion here is against a literal from the shell
 scripts, cited by file and line, so a port that quietly drops a measured
 finding fails here rather than on Dom0 three weeks later.
 
@@ -57,7 +57,7 @@ def test_a_pe_is_a_pe(tmp_path):
 
 
 def test_an_apk_is_a_zip_containing_a_manifest(tmp_path):
-    """The structural test drakvuf-android.sh already uses. A ZIP alone is not
+    """The structural test the Android trace script used. A ZIP alone is not
     an APK, and `detected_type` is advisory -- this decides whether a file is
     installed or executed, so it rests on the bytes."""
     apk = tmp_path / "app.apk"
@@ -236,6 +236,33 @@ def test_the_network_script_is_a_single_argv_element(tmp_path):
     assert argv[-2] == "-f"
 
 
+def test_an_unknown_guest_gets_no_network_rather_than_none(tmp_path):
+    """The `if/elif/elif` had no `else`, so a fourth `TargetOs` returned None.
+
+    That None reached `proc._validate` as `ValueError: argv is empty` -- a
+    complaint about the runner, several steps from the cause, on the one path
+    whose real-world symptom is a clone that boots, takes an address nothing
+    routes, and reads as a sample that chose not to talk.
+
+    Same guard `default_trace_options` ends with, and asserted the same way:
+    the message must name the guest, because "argv is empty" names nothing.
+
+    Built with `dataclasses.replace` rather than through the `job()` helper
+    because that helper calls `default_trace_options`, which refuses an unknown
+    OS first -- the test would then pass without ever reaching this function.
+    """
+    import dataclasses
+
+    class _FakeOs:
+        def __str__(self):
+            return "plan9"
+
+    unknown = dataclasses.replace(job(tmp_path), target_os=_FakeOs())
+
+    with pytest.raises(NotImplementedError, match="plan9"):
+        G.argv_configure_network(unknown)
+
+
 # --- the APK path -----------------------------------------------------------
 
 def test_an_untrusted_filename_never_becomes_guest_shell_text(tmp_path):
@@ -261,7 +288,7 @@ def test_an_untrusted_filename_never_becomes_guest_shell_text(tmp_path):
 
 def test_the_install_is_not_traced(tmp_path):
     """`pm install` takes 3s untraced and does not finish in 120s under the
-    trace, and `-t` cannot be raised past dirwatch's 180s timer. Nothing is
+    trace, and `-t` could not be raised past the C watcher's 180s timer. Nothing is
     lost: an Android application cannot run its own code during installation."""
     j = job(tmp_path, TargetOs.ANDROID, SampleKind.APK)
 
@@ -377,7 +404,7 @@ def test_android_traces_with_both_flags(tmp_path):
 
 
 def test_the_apk_path_gets_the_longer_timeout(tmp_path):
-    """`-t 150`, not the ELF path's 120: dirwatch.c:653 arms a 180s timer over
+    """`-t 150`, not the ELF path's 120: the C watcher armed a 180s timer over
     this phase, so 150 leaves ~20s of headroom where 120 left 55s unused -- and
     a launch is heavier than an execve."""
     apk = G.argv_trace(job(tmp_path, TargetOs.ANDROID, SampleKind.APK),
@@ -389,7 +416,7 @@ def test_the_apk_path_gets_the_longer_timeout(tmp_path):
 
 
 def test_the_default_plugin_set_matches_the_scripts(tmp_path):
-    """drakvuf-ubuntu.sh:181 and drakvuf-android.sh:324."""
+    """The literals the per-OS trace scripts passed."""
     argv = G.argv_trace(job(tmp_path))
     got = [argv[i + 1] for i, a in enumerate(argv) if a == "-a"]
     assert got == ["syscalls", "filetracer", "fileextractor", "memdump"]
@@ -577,7 +604,7 @@ def test_a_per_job_plugin_selection_is_honoured_when_supplied(tmp_path):
 
 def test_supplied_options_do_not_change_ubuntu_defaults(tmp_path):
     """Behavioural parity is the acceptance criterion. A job that carries no
-    options must produce exactly what drakvuf-ubuntu.sh produces."""
+    options must produce exactly what the Ubuntu trace script produced."""
     argv = G.argv_trace(job(tmp_path))
 
     assert argv[:9] == [

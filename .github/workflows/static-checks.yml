@@ -5,14 +5,18 @@
 # against the .shellcheckrc baseline. Before that this workflow would have
 # been red on every run against unmodified working code.
 #
-# This tier runs with no privileged access and no Xen. It deliberately does
-# NOT compile dirwatch.c: that file #includes <config.h> and
-# ../xen_helper/xen_helper.h and only builds inside a real DRAKVUF source
-# tree with Xen dev headers. That compile is Level 2's job.
+# This tier runs with no privileged access and no Xen.
 #
-# It also cannot prove the automation scripts still *execute* correctly —
-# only that they parse. The Dom0 benign-analysis run remains the execution
-# evidence, and no CI tier substitutes for it.
+# **What it checks under automation/ is now one file.** The shell/C launcher
+# pipeline was deleted on 2026-09-15 and `sandboxd` replaced it, so
+# `automation/network-setup.sh` is the only script left — and the `sandboxd`
+# and `platform` jobs below are where the real coverage now lives. Two steps
+# went with the deletion: `perl -c automation/clone.pl`, and a `ps aux | grep`
+# inventory whose sites were all in `cleanup.sh`.
+#
+# It cannot prove `network-setup.sh` still *executes* correctly — only that it
+# parses. The Dom0 benign-analysis run remains the execution evidence, and no
+# CI tier substitutes for it.
 #
 # ---------------------------------------------------------------------------
 # ACTION VERSIONS AND THE RUNNER FLOOR
@@ -114,11 +118,13 @@ jobs:
           ls -l /bin/sh
 
       - name: Syntax — bash -n and dash -n
-        # dash -n is not redundant. The automation/ worker scripts declare
-        # #!/bin/sh and are interpreted by dash in production, so bash -n
-        # alone accepts bashisms that fail silently there rather than
-        # erroring — the defect issue #4 hit with ${BASH_SOURCE[0]}
-        # evaluating to empty and turning SCRIPT_DIR into $PWD.
+        # dash -n is not redundant. `network-setup.sh` declares #!/bin/sh and
+        # is interpreted by dash in production, so bash -n alone accepts
+        # bashisms that fail silently there rather than erroring — the defect
+        # issue #4 hit with ${BASH_SOURCE[0]} evaluating to empty and turning
+        # SCRIPT_DIR into $PWD. The loop stays a loop: it has to keep working
+        # for the next script written, which is the whole reason these gates
+        # are glob-driven rather than named.
         run: |
           rc=0
           for f in automation/*.sh; do
@@ -134,9 +140,6 @@ jobs:
         # a developer to run locally, and `severity=` in that file is
         # silently ignored by shellcheck 0.11.0 anyway.
         run: shellcheck automation/*.sh
-
-      - name: perl -c
-        run: perl -c automation/clone.pl
 
       - name: Shebang layout convention
         # CONTRIBUTING.md, "Script layout convention": line 1 is the
@@ -156,9 +159,11 @@ jobs:
 
       - name: Regression guard — no <USER> placeholder
         # Issue #2: automation/ had silently diverged from the deployed Dom0
-        # copies, and this repo's drakvuf-ubuntu.sh carried an unsubstituted
-        # <USER>. Resolved 2026-08-08 by syncing from the tested host. This
-        # guards against a half-substituted copy being committed again.
+        # copies, and the repo's Ubuntu trace script carried an unsubstituted
+        # <USER>. Resolved 2026-08-08 by syncing from the tested host. The
+        # script that carried it is gone, but the guard is not about that file
+        # — it scans all of automation/ and guards any future script against
+        # a half-substituted copy being committed.
         #
         # Note the inverted exit status: grep returns 0 when it FINDS
         # something, so the failure case is a match. Written as an explicit
@@ -166,9 +171,9 @@ jobs:
         # same defect the Android checklist's §6.1 gate carried.
         #
         # COMMENT LINES ARE EXCLUDED, and that is not a loophole. The first
-        # run of this workflow failed on drakvuf-ubuntu.sh:145 — a comment
-        # explaining what issue #2 found, which necessarily quotes the
-        # placeholder it is about. A guard that forbids describing a bug is
+        # run of this workflow failed on a comment in the Ubuntu trace script
+        # explaining what issue #2 found, which necessarily quoted the
+        # placeholder it was about. A guard that forbids describing a bug is
         # a guard against documentation, and `CLAUDE.md` requires exactly
         # that kind of "why" comment. The pattern below requires the first
         # non-whitespace character of the line to not be `#`, so a real
@@ -180,15 +185,26 @@ jobs:
           fi
           echo "OK: no <USER> placeholder outside comments"
 
-      - name: Inventory — ps|grep process discovery
-        # Informational, NOT a gate. These sites exist today and are owned
-        # by DRAFT-011; failing on them would make this workflow red on
-        # unmodified working code, which is the thing DRAFT-031 existed to
-        # prevent. Turn this into a gate when DRAFT-011 lands.
-        continue-on-error: true
+      - name: Gate — no ps|grep process discovery
+        # **Was informational, became a gate on 2026-09-15.** Every site it
+        # inventoried lived in `cleanup.sh` and the per-OS trace scripts, and
+        # those were deleted rather than fixed, so the count is now zero and a
+        # gate can no longer be red on unmodified working code — which is the
+        # only reason it was advisory before.
+        #
+        # Worth keeping rather than deleting: `ps aux | grep` is how DRAFT-011
+        # got its wildcard bug (`grep "tcpdump -i xenbr1.$VLAN"` also matching
+        # xenbr1.10-19), and `sandboxd/proc.py::iter_processes` exists to make
+        # that class of bug unrepresentable. A new shell script reintroducing
+        # the idiom should be caught here.
         run: |
-          echo "Known ps|grep sites (DRAFT-011 owns replacing these):"
-          grep -Rns 'ps aux.*grep' automation/ || echo "none found"
+          if grep -Rns 'ps aux.*grep' automation/; then
+            echo "FAIL: ps|grep process discovery in automation/."
+            echo "      Match argv elements for equality instead — see"
+            echo "      sandboxd/proc.py::iter_processes and DRAFT-011."
+            exit 1
+          fi
+          echo "OK: no ps|grep process discovery"
   # -------------------------------------------------------------------------
   # Secrets. Runs on every push and PR, and scans HISTORY as well as the tree.
   #

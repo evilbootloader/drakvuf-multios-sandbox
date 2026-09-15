@@ -32,20 +32,21 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-# `<origin>-<vlan>-clone`, fixed by clone.pl since the beginning and relied on
-# by cleanup.sh, network-setup.sh and the runbooks.
+# `<origin>-<vlan>-clone`. Fixed since the beginning by the launcher pipeline
+# that preceded sandboxd, and still relied on by network-setup.sh and every
+# runbook, so it is an interface rather than an internal choice.
 #
-# The origin group is deliberately the SAME character class clone.pl validates
-# its origin argument against ([A-Za-z0-9._-]), which means it can itself
-# contain '-'. So the vlan and the "-clone" suffix are anchored from the RIGHT
+# The origin group is deliberately the SAME character class the old launcher
+# validated its origin argument against ([A-Za-z0-9._-]), which means it can
+# itself contain '-'. So the vlan and the "-clone" suffix are anchored from the RIGHT
 # and the origin takes whatever is left: `a-b-3-clone` is origin `a-b`, vlan 3.
 # A greedy left-to-right parse would read the origin as `a` and the vlan as
 # `b`, fail the integer check, and silently decline to clean up a real clone.
 _CLONE = re.compile(r"\A(?P<origin>[A-Za-z0-9._-]+)-(?P<vlan>[0-9]+)-clone\Z")
 
 # 254 because the vlan is the third octet of <prefix>.<vlan>.0/24 -- above it
-# there is no gateway. network-setup.sh caps there and clone.pl validates it;
-# stated once here so the three cannot drift.
+# there is no gateway. network-setup.sh caps there too; stated once here so the
+# two cannot drift.
 MAX_VLAN = 254
 MIN_VLAN = 1
 
@@ -60,9 +61,9 @@ class CloneName:
 
 
 def clone_name(origin: str, vlan: int) -> str:
-    """The name clone.pl has always produced. One definition, used by both the
-    builder and the sweep, so a clone can never be created under a name the
-    sweep would not recognise as its own."""
+    """The name the pipeline has produced since the beginning. One definition,
+    used by both the builder and the sweep, so a clone can never be created
+    under a name the sweep would not recognise as its own."""
     if not re.fullmatch(r"[A-Za-z0-9._-]+", origin):
         raise ValueError(
             f"origin domain name may contain only [A-Za-z0-9._-], got {origin!r}"
@@ -130,10 +131,13 @@ def job_id_admissible(job_id: str) -> str:
 def sample_name_admissible(name: str) -> str:
     """One safe path component, or raise.
 
-    Mirrors `sample_name_admissible()` in `automation/dirwatch.c:250` and
-    `_reject_unsafe_filename` in the platform's `routers/jobs.py` -- three
-    copies of one rule, which is a real cost, but the alternative is a
-    root-owned `open()` whose only guard is on another machine.
+    One rule with three live copies: this, `_reject_unsafe_filename` in the
+    platform's `routers/jobs.py`, and `reject_unsafe_name` in the platform's
+    `manifest.py`. That duplication is a real cost, deliberately paid -- the
+    alternative is a root-owned `open()` on Dom0 whose only guard runs on
+    another machine. The rule predates all three: it began as
+    `sample_name_admissible()` in the C watcher that `sandboxd` replaced, added
+    there when DRAFT-030 closed the watch-folder boundary.
 
     **Deliberately no wider than a path check.** `"`, `$`, a backtick and `;`
     stay admissible: a sample really can be called `a$(id).exe` and byte-exact

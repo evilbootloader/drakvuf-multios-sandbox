@@ -19,6 +19,7 @@ import json
 import uuid
 
 import pytest
+from conftest import owner_id
 from markupsafe import escape
 
 # Exactly the names test_jobs_api.py admits at submission. Duplicated as a
@@ -46,10 +47,10 @@ def _job(conn, filename: str, *, state: str = "completed",
         """
         INSERT INTO jobs (target_os, submitted_filename, state, sha256,
                           size_bytes, detected_type, owner)
-        VALUES (%s, %s, %s, 'af9c4ea0', 19, 'ASCII text', 'fixture-owner@example.test')
+        VALUES (%s, %s, %s, 'af9c4ea0', 19, 'ASCII text', %s)
         RETURNING id
         """,
-        (target_os, filename, state),
+        (target_os, filename, state, owner_id(conn)),
     ).fetchone()[0]
 
 
@@ -514,7 +515,7 @@ def test_the_history_table_refreshes_while_a_job_can_still_change(client, conn):
     """
     conn.execute("INSERT INTO jobs (target_os, submitted_filename, state, owner)"
                  " VALUES ('ubuntu', 'running.bin', 'executing',"
-                 "         'fixture-owner@example.test')")
+                 "         %s)", (owner_id(conn),))
 
     body = client.get("/ui/jobs").text
 
@@ -529,7 +530,7 @@ def test_a_page_of_finished_jobs_does_not_poll(client, conn):
     completed work makes no requests at all."""
     conn.execute("INSERT INTO jobs (target_os, submitted_filename, state, owner)"
                  " VALUES ('ubuntu', 'done.bin', 'completed',"
-                 "         'fixture-owner@example.test')")
+                 "         %s)", (owner_id(conn),))
 
     assert 'data-live="0"' in client.get("/ui/jobs").text
 
@@ -543,7 +544,7 @@ def test_the_refresh_keeps_the_filters_and_the_page(client, conn):
     # correct behaviour and was the first version of this test's mistake.
     conn.execute("INSERT INTO jobs (target_os, submitted_filename, state, owner)"
                  " VALUES ('ubuntu', 'filtered.bin', 'completed',"
-                 "         'fixture-owner@example.test')")
+                 "         %s)", (owner_id(conn),))
 
     body = client.get("/ui/jobs",
                       params={"state": "completed", "target_os": "ubuntu",
@@ -564,7 +565,7 @@ def test_the_table_fragment_renders_the_same_rows_as_the_page(client, conn):
     the full page."""
     conn.execute("INSERT INTO jobs (target_os, submitted_filename, state, owner)"
                  " VALUES ('ubuntu', 'both.bin', 'executing',"
-                 "         'fixture-owner@example.test')")
+                 "         %s)", (owner_id(conn),))
 
     assert "both.bin" in client.get("/ui/jobs").text
     assert "both.bin" in client.get("/ui/jobs/table").text
@@ -636,10 +637,9 @@ def _with_artifacts(conn, names: list[str]) -> uuid.UUID:
     return conn.execute(
         """
         INSERT INTO jobs (target_os, submitted_filename, state, manifest, owner)
-        VALUES ('ubuntu', 'sample.bin', 'completed', %s,
-                'fixture-owner@example.test') RETURNING id
+        VALUES ('ubuntu', 'sample.bin', 'completed', %s, %s) RETURNING id
         """,
-        (json.dumps({"artifacts": names}),),
+        (json.dumps({"artifacts": names}), owner_id(conn)),
     ).fetchone()[0]
 
 
@@ -744,3 +744,48 @@ def test_a_run_that_genuinely_produced_nothing_still_says_so(client, conn):
 
     assert "produced no artifacts" in page
     assert "No manifest was recorded" not in page
+
+
+# --- the auth pages (DRAFT-061 decision 3) ----------------------------------
+
+
+def test_the_login_page_renders_without_a_session(client):
+    """It is the page someone reaches when they have none.
+
+    A login page behind an identity check is a door locked from the inside.
+    """
+    r = client.get("/ui/login")
+    assert r.status_code == 200
+    assert "Sign in" in r.text
+
+
+def test_the_account_page_renders(client):
+    assert client.get("/ui/account").status_code == 200
+
+
+@pytest.mark.parametrize("page", ["/ui/login", "/ui/account"])
+def test_the_auth_pages_contain_no_form_post(client, page):
+    """**The CSRF defence in `routers/auth.py` depends on this.**
+
+    Requiring a header is a complete defence only while the application has no
+    ordinary form POSTs: a cross-site form cannot set a header, and a
+    cross-site fetch that tries is stopped by the absent CORS middleware.
+    Adding `method="post"` to any form here would silently remove that property
+    for every route at once -- so it is asserted rather than remembered.
+    """
+    body = client.get(page).text
+    assert 'method="post"' not in body.lower()
+    assert 'method="POST"' not in body
+
+
+@pytest.mark.parametrize("page", ["/ui/login", "/ui/account"])
+def test_the_auth_pages_use_no_inline_script(client, page):
+    """A strict CSP should not need 'unsafe-inline'.
+
+    Every other page in this set keeps its JavaScript in a file; these two are
+    where a quick inline handler would be most tempting.
+    """
+    body = client.get(page).text
+    for fragment in body.split("<script")[1:]:
+        attrs = fragment.split(">")[0]
+        assert "src=" in attrs, f"inline <script> on {page}"

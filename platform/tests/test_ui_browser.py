@@ -29,6 +29,8 @@ import uuid
 from pathlib import Path
 
 import psycopg
+from conftest import owner_id
+from sandbox_platform.credentials import hash_refresh_token
 import pytest
 
 pytest.importorskip(
@@ -38,6 +40,10 @@ pytest.importorskip(
 
 PLATFORM_DIR = Path(__file__).resolve().parent.parent
 DSN = os.environ.get("TEST_DATABASE_URL", "postgresql:///sandbox_platform_test")
+
+# Must match the override in `_browser_app.py`: that process authenticates
+# as this address, so a job seeded for anyone else is invisible to it.
+BROWSER_OWNER = "fixture-owner@example.test"
 
 # Names that are ADMITTED at submission (test_jobs_api.py) and must render
 # inert. The unclosed tags are the interesting ones: they carry no `/`, so
@@ -116,13 +122,15 @@ def seed():
     def _seed(filename: str, *, target_os: str = "ubuntu",
               state: str = "completed") -> uuid.UUID:
         with psycopg.connect(DSN, autocommit=True) as c:
+            # Resolved rather than spelled out: `owner` is a tenant id since
+            # 0009, and this connection is the browser server's own -- the
+            # identity may not have been created by anything else yet.
             row = c.execute(
                 "INSERT INTO jobs (target_os, submitted_filename, state,"
                 "                  sha256, size_bytes, detected_type, owner)"
-                " VALUES (%s, %s, %s, 'af9c4ea0', 19, 'ASCII text',"
-                "         'fixture-owner@example.test')"
+                " VALUES (%s, %s, %s, 'af9c4ea0', 19, 'ASCII text', %s)"
                 " RETURNING id",
-                (target_os, filename, state),
+                (target_os, filename, state, owner_id(c, BROWSER_OWNER)),
             ).fetchone()[0]
         made.append(row)
         return row
@@ -345,10 +353,24 @@ def test_a_full_submission_reaches_the_job_view(strict_page, server):
     from a browser rather than from Python.
     """
     import httpx
+
+    # Provisioned first: the platform resolves the worker id from the token's
+    # hash (DRAFT-061), so a `register` with an unknown credential is a 401
+    # rather than a worker bringing itself into existence.
+    with psycopg.connect(DSN, autocommit=True) as c:
+        c.execute(
+            """
+            INSERT INTO workers (worker_id, total_mib, total_vlans,
+                                 total_slots, token_hash)
+            VALUES ('browser-worker', 1, 1, 1, %s)
+            ON CONFLICT (worker_id) DO UPDATE SET token_hash = EXCLUDED.token_hash
+            """,
+            (hash_refresh_token("browser-test"),),
+        )
+
     httpx.post(f"{server}/api/v1/worker/register",
-               headers={"Authorization": "Bearer browser-test",
-                        "X-Worker-Id": "browser-worker"},
-               json={"worker_id": "browser-worker", "total_mib": 12082,
+               headers={"Authorization": "Bearer browser-test"},
+               json={"total_mib": 12082,
                      "total_vlans": 8, "total_slots": 2,
                      "pipelines": [{"os": "ubuntu", "required_mib": 2198}]},
                timeout=10)

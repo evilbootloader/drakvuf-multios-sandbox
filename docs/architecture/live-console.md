@@ -401,16 +401,17 @@ the browser's: a browser cannot present a client certificate.
 `sandboxd` therefore dials `SANDBOXD_CONSOLE_API`, pointed at the browser
 listener, while the rest of the worker channel stays on the mTLS one.
 
-**That listener is the internet-facing one**, and the tunnel's ingress rule for
-`sandbox.evilbootloader.com` carries no path restriction — so `/api/v1/worker/*`
-is reachable through it, gated by the worker token at the application and by
-Access at the edge, but **not** by a client certificate the way 8443 is.
+**That listener is the internet-facing one**, and until 2026-09-10 the tunnel's
+ingress rule for `sandbox.evilbootloader.com` carried no path restriction — so
+`/api/v1/worker/*` was reachable through it, gated by the worker token at the
+application and by Access at the edge, but **not** by a client certificate the
+way 8443 is.
 
-This is pre-existing rather than introduced here: those routes have always been
-in the app served on 8000. What changes is that the console now depends on that
-listener, so the exposure is worth closing rather than tolerating.
+This was pre-existing rather than introduced here: those routes have always
+been in the app served on 8000. What changed is that the console now depends on
+that listener, so the exposure became worth closing rather than tolerating.
 
-**The fix belongs at the ingress, not in the code** — a path rule that 404s
+**The fix belonged at the ingress, not in the code** — a path rule that 404s
 `^/api/v1/worker(/|$)` at the edge, ahead of the catch-all. `sandboxd` reaches
 `192.168.1.10:8000` directly over the LAN and is unaffected; nothing on the
 internet needs those paths. The browser's own console socket is at
@@ -419,26 +420,17 @@ internet needs those paths. The browser's own console socket is at
 Recorded as F12 in `docs/runbooks/09-verify-sandboxd-and-console.md`, with the
 rule and its verification.
 
-> **CONFIRMED OPEN on the deployment, 2026-09-10.** The rule was written and
-> never applied:
+> **CLOSED on the deployment, 2026-09-10.** The rule was written on 2026-08-26
+> and applied on 2026-09-10, after being confirmed still open earlier the same
+> day. `/api/v1/worker/*` now matches a `http_status:404` rule ahead of the
+> API catch-all, verified past Access rather than in front of it — an
+> anonymous request never reached cloudflared to begin with. Evidence:
+> `docs/runbooks/16-deploy-tenancy-and-quota.md`, EVIDENCE F12.
 >
-> ```
-> root@platform:~# cloudflared --config /etc/cloudflared/config.yml tunnel ingress rule \
->     https://sandbox.evilbootloader.com/api/v1/worker/claim
-> Using rules from /etc/cloudflared/config.yml
-> Matched rule #1
->     hostname: sandbox.evilbootloader.com
->     service: https://192.168.1.10:8000
-> ```
->
-> So every worker route — claim, heartbeat, state, artifacts, and the console's
-> worker end — is reachable from the internet today, behind Access and the
-> worker token but **not** behind a client certificate. Two layers, where the
-> LAN door has three.
->
-> A "recommended" fix with no evidence block is one nobody applied. This is now
-> tracked as a known gap in the deploy runbook rather than as advice in a
-> design record.
+> **A "recommended" fix with no evidence block is one nobody applied** — that
+> is the lesson worth keeping from the fifteen days in between, and the reason
+> it moved to a known gap in the deploy runbook rather than staying as advice
+> in a design record.
 
 ### 4.2 What a compromised platform can reach
 
@@ -511,8 +503,9 @@ sandboxd ──> LAN, 192.168.1.10 ──> platform :8443   (mTLS + worker token
 Stating this precisely matters because the three are easy to blur into "the
 relay is authenticated", which would leave the reader unable to tell which
 failure removes which protection. Losing Access exposes the console to the
-internet; losing the worker token exposes it to the LAN — and to the internet
-too, for as long as F12 below is open. They are not the same incident.
+internet; losing the worker token exposes it to the LAN. Until F12 below was
+closed on 2026-09-10 it exposed it to the internet too. They are not the same
+incident.
 
 > **Scoped as of #40** (2026-09-05, in the repository — not yet deployed).
 > Both console routes now resolve the job through `auth.visible_to`: the

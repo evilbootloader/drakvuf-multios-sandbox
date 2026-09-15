@@ -389,6 +389,62 @@ def test_a_refused_claim_does_not_end_the_daemon(tmp_path):
     assert len(api.claims) >= 1
 
 
+def test_an_unexpected_claim_error_does_not_end_the_daemon(
+        tmp_path, monkeypatch, caplog):
+    """Found in review: the loop survived `ProtocolError` and nothing else.
+
+    The call behind it has several other exits. `api.claim` indexes
+    `body["target_os"]`, `body["required_mib"]`, `body["attempt"]`,
+    `body["sample_url"]` and `body["lease_expires_at"]` straight out of the
+    response, so a lease missing one raises `KeyError` -- modelled here --
+    and `ResourceTable.acquire` raises `ValueError` when a job id is already
+    held, which is what a replayed lease looks like from inside the loop.
+    Either one ended the daemon.
+
+    That is the expensive failure on this host: there is exactly ONE claim
+    thread, so losing it stops every queued analysis, and recovery is a restart
+    whose first act is a sweep that destroys every clone it finds. `_work`
+    already takes this position for a worker thread; the claim thread has the
+    stronger claim on it.
+
+    The assertion is not merely "run() returned" -- it is that the NEXT lease
+    still ran, because a loop that survives an error and claims nothing
+    afterwards is a daemon that is up and doing nothing.
+    """
+    class Bad(FakeApi):
+        def claim(self, *, free_mib, free_vlans, free_slots):
+            self.claims.append({"free_mib": free_mib, "free_vlans": free_vlans,
+                                "free_slots": free_slots})
+            if len(self.claims) == 1:
+                raise KeyError("target_os")
+            return self.queue.pop(0) if self.queue else Idle()
+
+    # The pause after a bad turn is 5s in production, which is right there and
+    # far too long here. `run` reads the module global per turn, so this
+    # reaches it.
+    monkeypatch.setattr(D, "IDLE_PAUSE", 0.01)
+
+    api = Bad(queue=[lease()])
+    d = daemon(tmp_path, api)
+    d.start()
+
+    stopper = threading.Timer(0.5, d.stop)
+    with caplog.at_level("ERROR"):
+        stopper.start()
+        d.run()          # returns rather than propagating the KeyError
+        stopper.cancel()
+
+    assert len(api.claims) >= 2, "the loop ended on the first bad claim"
+    assert [s for _, s in api.states][-1] == "completed", (
+        "the daemon survived but never ran the job behind the bad claim")
+
+    # A stack trace, not just a message: nobody has decided what this failure
+    # means yet, so the traceback is the whole report. The `ProtocolError`
+    # branch is the one that logs without one, because it arrives diagnosed.
+    assert any(r.exc_info for r in caplog.records), (
+        "the unexpected error was logged without a traceback")
+
+
 # --- the single-acquirer invariant -----------------------------------------
 
 def test_workers_release_and_only_the_loop_acquires(tmp_path):
@@ -409,7 +465,7 @@ def test_workers_release_and_only_the_loop_acquires(tmp_path):
 
 
 def test_several_analyses_run_concurrently(tmp_path):
-    """#41's headline capability: dirwatch takes one origin per invocation and
+    """#41's headline capability: dirwatch took one origin per invocation and
     two instances cannot coexist."""
     api = FakeApi(queue=[lease("u1", "ubuntu"), lease("a1", "android"),
                          lease("u2", "ubuntu")])

@@ -15,19 +15,21 @@ erased in the bare-metal migration; documents naming `pve1`, VM 101 or CT 102
 predate it. `docs/CURRENT-STATE.md` §2a lists what that invalidated.
 
 A sample is analysed under DRAKVUF inside a disposable clone of the guest for
-its target OS, and the clone is destroyed afterwards. **There are two ways in**,
-and they share the clone machinery rather than duplicating it:
+its target OS, and the clone is destroyed afterwards. **There is one way in:**
+a sample is uploaded through the web UI, queued in Postgres, and claimed by
+`sandboxd` on Dom0 over mutual TLS.
 
-| Path | How a sample arrives | Status |
-|---|---|---|
-| **The platform** | uploaded through the web UI, queued in Postgres, claimed by `sandboxd` on Dom0 over mutual TLS | the current path |
-| **The per-OS watcher** | dropped into `/malware_incoming/<os>/`, picked up by `dirwatch` | the original path, still present |
+The original path — dropping a file into `/malware_incoming/<os>/` for a per-OS
+`dirwatch` watcher to pick up — was **removed on 2026-09-15**, along with the
+shell and C pipeline behind it. See
+`docs/architecture/automation-files.md` for what each of those files did and
+what replaced it.
 
 ## The components
 
 | | |
 |---|---|
-| **`automation/`** | the analysis pipeline itself — clone, isolate, trace, collect, destroy. Driven either by `dirwatch` or by `sandboxd` |
+| **`automation/`** | host provisioning and deployment assets — `network-setup.sh` (the per-VLAN isolated networks), `platform.env`, and the egress configs. Not the pipeline; that is `sandboxd/` |
 | **`sandboxd/`** | the Dom0 orchestrator. Claims jobs from the platform, admits them against real host capacity, runs the pipeline, uploads artifacts, and reports state. Python; runs in the foreground with **no systemd unit** |
 | **`platform/`** | the web tier: FastAPI, Postgres job queue, MinIO object store, server-rendered UI, Cloudflare Access at the edge and an internal CA inward. Runs in its own PVH DomU and **never executes a sample** — that asymmetry is what the whole trust boundary rests on |
 
@@ -41,20 +43,24 @@ All three are current, at different stages:
 | Target | State |
 |---|---|
 | **Ubuntu** | Evidenced end to end, including through the platform |
-| **Android/BlissOS** | Automation complete (`preconfig-android.sh`, `drakvuf-android.sh`, `run_analysis-android.sh`, shared `clone.pl`). **Both sample kinds evidenced through the platform** — native ELF, and APK install + `am start` |
+| **Android/BlissOS** | Automation complete, in `sandboxd/guests.py`. **Both sample kinds evidenced through the platform** — native ELF, and APK install + `am start` |
 | **Windows** | Track open, design contract fixed (issue #6's C1–C10), no execution evidence yet |
 
 ## Running it
 
-The scripts resolve every repository-owned asset from their own location,
+Every repository-owned asset resolves from the invoking code's own location,
 so the checkout works at any path — the Dom0 checkout happens to be at
-`/root/drakvuf-multios-sandbox`, but nothing requires that. Configuration
-lives in one file per OS rather than in the scripts:
+`/root/drakvuf-multios-sandbox`, but nothing requires that.
 
-```bash
-$EDITOR automation/pipeline-ubuntu.env   # injection PID, clone count, guest user, ...
-sudo automation/run_analysis-ubuntu.sh
-```
+Analyses are submitted through the platform's web UI. On Dom0, `sandboxd` is
+started in the foreground with its environment file sourced first; it exits
+immediately without `SANDBOXD_API`, `WORKER_TOKEN` and `SANDBOXD_TOTAL_MIB`,
+because there is no safe default for how much memory a Dom0 may hand to clones.
+`docs/CURRENT-STATE.md` §1.2 has the exact invocation.
+
+Host configuration lives in `sandboxd/config.py`, which is the source of truth;
+`scripts/gen-xen-configs.py` pushes its values into `automation/platform.env`
+and `misc/*.cfg`, which cannot import Python.
 
 A fresh checkout also needs a LibVMI profile in `profiles/` and a saved
 guest state in `state/`; neither is git-tracked. See `profiles/README.md`,
@@ -62,15 +68,16 @@ guest state in `state/`; neither is git-tracked. See `profiles/README.md`,
 
 ## Repository layout
 
-- `automation/` — the analysis pipeline, shared across all three OS targets.
-  `dirwatch.c` (the watcher), `clone.pl` (shared), the per-OS
-  `preconfig-<os>.sh` / `drakvuf-<os>.sh` / `run_analysis-<os>.sh`, plus
-  `cleanup.sh`, `tcpdump.sh`, `network-setup.sh`. Configuration is
-  `pipeline-<os>.env` per target and `platform.env` host-global. See
+- `automation/` — host provisioning and deployment assets: `network-setup.sh`
+  (executed by `sandboxd` at every daemon start), host-global `platform.env`,
+  and the egress configs (`torrc`, `fakenet.*`, `drakvuf-egress.target`). The
+  shell and C pipeline that used to live here was deleted 2026-09-15 — see
+  `docs/architecture/automation-files.md`.
+- `sandboxd/` — the Dom0 orchestrator and its tests. **This is the analysis
+  pipeline**: clone, isolate, preconfigure, trace, collect, destroy, shared
+  across all three OS targets and driven by the platform's queue, with
+  host-global admission control instead of fixed clone slots. See
   `docs/architecture/analysis-pipeline.md`.
-- `sandboxd/` — the Dom0 orchestrator and its tests. Runs the same pipeline as
-  `dirwatch` but driven by the platform's queue, with host-global admission
-  control instead of fixed clone slots.
 - `platform/` — the FastAPI service, SQL migrations, MinIO provisioning, the
   server-rendered UI, and its tests. See `docs/architecture/platform.md`.
 - `misc/` — tracked Xen guest configs: `ubuntu.cfg` / `ubuntu_sandbox.cfg`,

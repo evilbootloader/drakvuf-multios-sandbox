@@ -271,12 +271,13 @@ def _kill_strays(runner, domains, bridge: str, report: SweepReport,
                  vlans=()) -> None:
     """`drakvuf`, `injector` and `tcpdump` left over from a dead sandboxd.
 
-    **Exact argv elements, never a regex.** `drakvuf-<os>.sh` finds its own
-    capture with `ps aux | grep "tcpdump -i xenbr1.$VLAN"`, where `.` is a
-    regex wildcard and the pattern is unanchored -- so sweeping VLAN 1 with
-    that would also kill the capture on `xenbr1.10` through `xenbr1.19`. It is
-    recorded as a KNOWN GAP (DRAFT-011) in the script; here it simply cannot
-    happen, because `xenbr1.1` and `xenbr1.10` are different strings.
+    **Exact argv elements, never a regex.** The shell pipeline this replaced
+    found its own capture with `ps aux | grep "tcpdump -i xenbr1.$VLAN"`, where
+    `.` is a regex wildcard and the pattern is unanchored -- so sweeping VLAN 1
+    with that would also kill the capture on `xenbr1.10` through `xenbr1.19`. It
+    was carried as a KNOWN GAP (DRAFT-011) for as long as those scripts existed;
+    here it simply cannot happen, because `xenbr1.1` and `xenbr1.10` are
+    different strings and nothing compares them as patterns.
 
     **The interfaces come from the PROVISIONED VLAN range, not from surviving
     domains**, and that is the whole point of `vlans`. A sandboxd that died

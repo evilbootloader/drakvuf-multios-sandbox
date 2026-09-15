@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% block title %}Sign in — DRAKVUF MultiOS Sandbox{% endblock %}
+{% block content %}
+
+{#
+  No `method` or `action`, and that is load-bearing rather than an oversight.
+
+  `routers/auth.py` defends CSRF by requiring a header, which works only
+  because this application has no ordinary form POSTs -- a cross-site form
+  cannot set a header, and a cross-site fetch that tries is stopped by the
+  absent CORS middleware. Adding `method="post"` here would quietly remove that
+  property for the whole application. `login.js` submits through fetch, the
+  same way `submit.js` does.
+#}
+<section class="panel">
+  <h2>Sign in</h2>
+
+  <form id="login-form">
+    <label for="email">Email</label>
+    <input type="email" id="email" name="email" autocomplete="username"
+           required maxlength="254">
+
+    <label for="password">Password</label>
+    <input type="password" id="password" name="password"
+           autocomplete="current-password" required maxlength="1024">
+
+    {# Hidden until the server says this account has one. Asking everybody for
+       a code they may not have is how people conclude the form is broken. #}
+    <div id="totp-row" hidden>
+      <label for="totp">Authenticator code</label>
+      <input type="text" id="totp" name="totp" inputmode="numeric"
+             autocomplete="one-time-code" maxlength="16">
+    </div>
+
+    <button type="submit">Sign in</button>
+  </form>
+
+  <div id="result"></div>
+
+  <p class="note">
+    No account? Message the Telegram bot with <code>/start</code> and it will
+    send you a signup code.
+  </p>
+</section>
+
+<script src="/ui/static/login.js?v={{ asset_version }}" defer></script>
+{% endblock %}

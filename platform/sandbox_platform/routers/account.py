@@ -15,15 +15,28 @@ import logging
 from fastapi import APIRouter, Depends, Response
 
 from .. import auth
+from ..csrf import require_csrf_header
 from ..db import connection
 
 log = logging.getLogger(__name__)
 
 # The identity dependency is attached to the ROUTER, not to routes, so a
-# route added later cannot forget it. It is a no-op unless
-# REQUIRE_ACCESS_JWT is set for this listener -- see auth.access_identity.
+# route added later cannot forget it. `caller_identity` since the cut-over --
+# see the longer note in `routers/jobs.py`, which this mirrors: the old gate
+# could only read a Cloudflare header, so it refused every session this
+# platform issued.
+# `require_csrf_header` alongside the identity dependency (review finding M-7).
+# `/balance` is a POST -- chosen for cache behaviour rather than because it
+# mutates, see below -- and `balance.js` was sending it with only an `Accept`
+# header, which is a CORS-simple request a cross-site page could issue. The
+# effect was small (it creates a tenant row on first contact) but the property
+# is one this application should hold uniformly rather than per call.
+# CSRF before identity, for the reason `routers/jobs.py` spells out: whichever
+# runs first decides what a refused request is told, and identity-first lets a
+# cross-site page read 401-vs-403 as "is this visitor signed in".
 router = APIRouter(prefix="/api/v1/account", tags=["account"],
-                   dependencies=[Depends(auth.access_identity)])
+                   dependencies=[Depends(require_csrf_header),
+                                 Depends(auth.caller_identity)])
 
 
 # POST, and not because the balance is a mutation the caller asked for -- it is

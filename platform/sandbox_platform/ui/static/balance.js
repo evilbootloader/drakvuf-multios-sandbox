@@ -21,9 +21,14 @@
         var slot = document.getElementById("balance");
         if (!slot) { return; }
 
+        // X-Sandbox-Request: with only `Accept` this was a CORS-simple request,
+        // so a cross-site page could issue it. See sandbox_platform/csrf.py.
         fetch("/api/v1/account/balance", {
             method: "POST",
-            headers: {"Accept": "application/json"},
+            headers: {
+                "Accept": "application/json",
+                "X-Sandbox-Request": "1"
+            },
         }).then(function (r) {
             if (!r.ok) { throw new Error("balance: HTTP " + r.status); }
             return r.json();

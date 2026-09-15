@@ -1,10 +1,13 @@
-"""Building one disposable clone. The port of `automation/clone.pl`.
+"""Building one disposable clone. The port of the Perl clone builder.
 
-Issue #41 (DRAFT-060).
+Issue #41 (DRAFT-060). The original was `automation/clone.pl`, deleted
+2026-09-15 along with the rest of the shell/C launcher pipeline; this module has
+been its only implementation since the port landed.
 
-#41 originally scoped `clone.pl` OUT -- "it is Perl on a fixed 3-argument
-contract, holds no OS-specific value, and works. Leave it." That was reversed
-on 2026-08-26, and the argument for reversing it is the issue's own thesis:
+#41 originally scoped the Perl OUT -- "it is on a fixed 3-argument contract,
+holds no OS-specific value, and works. Leave it." That was reversed on
+2026-08-26, and the argument for reversing it is the issue's own thesis. Its
+`run()` helper was:
 
     sub run {
         my ($what, @argv) = @_;
@@ -12,30 +15,31 @@ on 2026-08-26, and the argument for reversing it is the issue's own thesis:
         my $out = `$cmd 2>&1`;           # <- executed by a shell
     }
 
-`clone.pl` is the last shell-string builder in the pipeline. So are its
+That made it the last shell-string builder in the pipeline, as were its
 `which lvcreate`, `xl domid $clone` and `cat $config` backticks. Leaving it in
-place while #41 removes every other shell from Dom0 would leave the one
+place while #41 removed every other shell from Dom0 would have left the one
 component that runs `lvremove -f` on a device path built by interpolation.
 
-Three things come free with the port, all of them defects in how dirwatch used
-the script rather than in the script itself:
+Three things came free with the port, all of them defects in how the C watcher
+USED the script rather than in the script itself:
 
-  * **The exit status is read.** `dirwatch.c:369` passes NULL for `exit_rc`, so
-    clone.pl's carefully separated codes -- EXIT_PRECHECK, EXIT_LOCKED,
-    EXIT_LVM=5, EXIT_RESTORE=6 -- are computed and thrown away, and every
-    failure looks identical: no domain id on stdout. Here they become distinct
+  * **The exit status is read.** The watcher passed NULL for `exit_rc`, so the
+    script's carefully separated codes -- EXIT_PRECHECK, EXIT_LOCKED,
+    EXIT_LVM=5, EXIT_RESTORE=6 -- were computed and thrown away, and every
+    failure looked identical: no domain id on stdout. Here they become distinct
     reasons on the job row.
-  * **stdout stops being a protocol.** clone.pl must print the domain id and
-    nothing else, ever, because dirwatch parses whatever it prints as a domain
-    id -- which is why every diagnostic in it is carefully routed to stderr.
-  * **The lock stops being advisory-by-accident.** clone.pl proceeds without
-    the cross-process lock if `/run/lock` is unwritable, because refusing to
+  * **stdout stops being a protocol.** The script had to print the domain id and
+    nothing else, ever, because the watcher parsed whatever it printed as a
+    domain id -- which is why every diagnostic in it was routed to stderr.
+  * **The lock stops being advisory-by-accident.** The script proceeded without
+    the cross-process lock if `/run/lock` was unwritable, because refusing to
     work would be worse. One daemon owning every clone makes the in-process
     case structural, and the file lock stays only as the guard against a
-    concurrently-running dirwatch during migration.
+    concurrently-running `dirwatch` binary left on a Dom0 from before migration.
 
 Everything the script LEARNED is carried across with its reason. In particular
-the wait after `xl destroy`, which is not defensive coding: it was measured.
+the wait after `xl destroy`, which is not defensive coding: it was measured, and
+the measurement is recorded at `DESTROY_SETTLE_SECONDS` below.
 """
 
 from __future__ import annotations
@@ -54,15 +58,18 @@ from .proc import CommandError
 
 log = logging.getLogger("sandboxd.clone")
 
-# `xl destroy` returns before the block device is released -- measured on Dom0
-# 2026-08-14, where lvremove reported "Logical volume in use" and succeeded on
-# a retry (docs/runbooks/06-verify-android-isolation.md:965, annotated :996).
-# Waiting is what makes the lvremove that follows reliable.
+# **MEASURED, not chosen.** `xl destroy` returns before the block device is
+# released -- Dom0 2026-08-14, where `lvremove` immediately after it reported
+# "Logical volume in use" and succeeded on a retry
+# (docs/runbooks/06-verify-android-isolation.md:965, annotated :996). Waiting is
+# what makes the lvremove that follows reliable; the number came from the Perl
+# builder this module replaced and the runbook is now the primary record of it.
 DESTROY_SETTLE_SECONDS = 10
 
-# clone.pl retries the flock 30 times at 1s. Non-blocking with a bounded
-# retry, never a blocking LOCK_EX: nothing upstream imposes a timeout on the
-# clone step, so a blocking acquire would hang a worker with no way out.
+# The Perl builder retried the flock 30 times at 1s, and the shape is kept:
+# non-blocking with a bounded retry, never a blocking LOCK_EX: nothing upstream
+# imposes a timeout on the clone step, so a blocking acquire would hang a worker
+# with no way out.
 LOCK_RETRY_SECONDS = 30
 
 # Individual Dom0 commands. Generous, because the failure mode of a short
@@ -76,7 +83,8 @@ REQUIRED_TOOLS = ("lvcreate", "lvremove", "lvdisplay", "xl")
 class CloneError(RuntimeError):
     """Carries the stage that failed, so the job row can say which.
 
-    `stage` replaces clone.pl's exit codes, which dirwatch discarded.
+    `stage` replaces the Perl builder's exit codes, which the C watcher
+    discarded.
     """
 
     def __init__(self, stage: str, message: str, *hints: str):
@@ -167,7 +175,7 @@ def rewrite_config(text: str, spec: CloneSpec) -> str:
 # --- argv builders, also pure ----------------------------------------------
 #
 # Every Dom0 command in one place, as lists. Tested against the literal
-# commands clone.pl runs today, which is #41's parity criterion proved at the
+# commands the Perl builder ran, which is #41's parity criterion proved at the
 # desk rather than on the machine.
 
 def argv_lvdisplay(spec: CloneSpec, target: str) -> list[str]:
@@ -179,7 +187,7 @@ def argv_lvremove(spec: CloneSpec, target: str) -> list[str]:
 
 
 def argv_lvcreate(spec: CloneSpec) -> list[str]:
-    # A THIN snapshot: no -L, and -kn. Exactly as clone.pl emits it, and the
+    # A THIN snapshot: no -L, and -kn. Exactly as the Perl builder emitted it, and the
     # full rationale lives beside that call -- in short, -L would build a
     # thick copy-on-write snapshot even of a thin origin, reserving real VG
     # space per clone and capping concurrency, while -kn is required because
@@ -212,9 +220,9 @@ def _as_clone_error(stage: str):
 
     Every failure leaving this module is a `CloneError` carrying a stage, so a
     caller can put a real reason on the job row. `CommandError` alone would be
-    a regression dressed as a port: dirwatch.c:369 passes NULL for `exit_rc`,
-    which is exactly why every clone failure today is indistinguishable from
-    every other one.
+    a regression dressed as a port: the C watcher passed NULL for `exit_rc`,
+    which is exactly why every clone failure under the old launcher was
+    indistinguishable from every other one.
     """
     try:
         yield
@@ -251,7 +259,7 @@ class CloneBuilder:
     def build(self, spec: CloneSpec) -> Clone:
         """Precheck, snapshot, restore. Raises CloneError naming the stage.
 
-        Order is clone.pl's and is not arbitrary: everything that can be
+        Order is the Perl builder's and is not arbitrary: everything that can be
         checked without creating state is checked first, so a wrong origin or
         an unreadable saved image costs nothing and names itself instead of
         surfacing three steps later as an opaque lvcreate error about a device
@@ -291,7 +299,7 @@ class CloneBuilder:
                     )
             except Exception:
                 # A half-built clone must not survive to block the next run for
-                # this vlan: clone.pl's END block, made explicit.
+                # this vlan: the Perl builder's END block, made explicit.
                 #
                 # **The DOMAIN is destroyed first, and that ordering is the
                 # whole point.** Both failures reachable below this line -- the
@@ -342,10 +350,10 @@ class CloneBuilder:
         it outside the seam made this whole class untestable in a container
         that correctly has no `xl`.
 
-        No subshell either. clone.pl needs `2>/dev/null` on its `which` to
-        suppress two kinds of noise -- the shell's own "no lvcreate in ..." and
-        a "Can't exec which" warning when `which` itself is absent -- neither
-        of which can arise without a shell.
+        No subshell either. The Perl builder needed `2>/dev/null` on its
+        `which` to suppress two kinds of noise -- the shell's own "no lvcreate
+        in ..." and a "Can't exec which" warning when `which` itself is absent
+        -- neither of which can arise without a shell.
         """
         missing = [t for t in REQUIRED_TOOLS if self._run.which(t) is None]
         if missing:
@@ -378,7 +386,7 @@ class CloneBuilder:
             try:
                 fd = os.open(str(path), os.O_RDWR | os.O_CREAT, 0o600)
             except OSError as exc:
-                # clone.pl's judgement, kept: a read-only or absent /run/lock
+                # The Perl builder's judgement, kept: a read-only or absent /run/lock
                 # must not stop a clone. The lock guards a rare cross-process
                 # case and refusing to work without it is the worse failure.
                 print(f"sandboxd: cannot open {path} ({exc}); "
@@ -410,8 +418,8 @@ class CloneBuilder:
     def _domid(self, name: str) -> int | None:
         """The domain id, or None. Never a diagnostic mistaken for one.
 
-        clone.pl has to be careful here because dirwatch parses its stdout;
-        the check survives for a different reason. `xl restore` can exit 0 and
+        The Perl builder had to be careful here because the watcher parsed its
+        stdout; the check survives for a different reason. `xl restore` can exit 0 and
         still leave no usable domain, so a successful exit is not evidence that
         there is something to trace.
         """

@@ -21,7 +21,6 @@ SMALL_MIB = 2198
 FREE_MIB = 5082
 
 REGISTRATION = {
-    "worker_id": "test-worker",
     "total_mib": 12082,
     "total_vlans": 8,
     "total_slots": 2,
@@ -38,7 +37,6 @@ def claim(client, headers, free_mib=FREE_MIB):
         "/api/v1/worker/claim",
         headers=headers,
         json={
-            "worker_id": headers["X-Worker-Id"],
             "free_mib": free_mib,
             "free_vlans": 6,
             "free_slots": 2,
@@ -50,15 +48,24 @@ def claim(client, headers, free_mib=FREE_MIB):
 
 def test_worker_routes_require_a_token(client):
     r = client.post("/api/v1/worker/reconcile",
-                    json={"worker_id": "w", "live_job_ids": []})
+                    json={"live_job_ids": []})
     assert r.status_code == 401
 
 
-def test_a_wrong_token_is_forbidden(client):
-    r = client.post("/api/v1/worker/reconcile",
-                    headers={"Authorization": "Bearer nope"},
-                    json={"worker_id": "w", "live_job_ids": []})
-    assert r.status_code == 403
+def test_a_wrong_token_is_refused_the_same_way_as_a_missing_one(client):
+    """**401 for both, deliberately.**
+
+    It used to be 403 for a wrong token and 401 for none, which told a caller
+    holding a guessed value whether it was a real credential that lacked
+    permission or nothing at all. With per-worker tokens that distinction
+    would leak which tokens exist, so both answer the same.
+    """
+    missing = client.post("/api/v1/worker/reconcile", json={"live_job_ids": []})
+    wrong = client.post("/api/v1/worker/reconcile",
+                        headers={"Authorization": "Bearer nope"},
+                        json={"live_job_ids": []})
+
+    assert missing.status_code == wrong.status_code == 401
 
 
 def test_every_worker_route_is_authenticated(client):
@@ -136,12 +143,22 @@ def test_the_head_is_leased_once_it_fits(client, worker_headers, conn):
 
 # --- lease scoping --------------------------------------------------------
 
-def test_a_worker_cannot_touch_another_workers_job(client, worker_headers, conn):
+def test_a_worker_cannot_touch_another_workers_job(client, worker_headers,
+                                                   other_worker_headers, conn):
+    """**Impersonation now requires a second credential, which is the point.**
+
+    This test used to change an `X-Worker-Id` header while keeping the shared
+    token -- and it passed, because `lease_owner` was compared against whatever
+    the caller typed. That comparison was scoping, not authorization: it stopped
+    an honest worker making a mistake and stopped nothing else. Since DRAFT-061
+    the id comes from the credential, so the only way to be another worker is to
+    hold its token.
+    """
     enqueue(conn, "ubuntu", SMALL_MIB)
     job_id = claim(client, worker_headers, free_mib=FREE_MIB).json()["job_id"]
 
-    intruder = dict(worker_headers, **{"X-Worker-Id": "someone-else"})
-    r = client.post(f"/api/v1/worker/jobs/{job_id}/heartbeat", headers=intruder)
+    r = client.post(f"/api/v1/worker/jobs/{job_id}/heartbeat",
+                    headers=other_worker_headers)
 
     # 404, not 403: a worker guessing ids must not learn which exist.
     assert r.status_code == 404
@@ -153,11 +170,18 @@ def test_an_unknown_job_is_indistinguishable_from_someone_elses(client, worker_h
     assert r.status_code == 404
 
 
-def test_worker_id_header_is_required(client, conn):
+def test_an_unprovisioned_credential_is_refused(client, conn):
+    """The successor to "the X-Worker-Id header is required".
+
+    There is no id header to omit any more. What can go wrong instead is a
+    token that names no worker -- one that was never issued, or was rotated
+    away -- and that is a 401 rather than the 400 a missing header used to be:
+    it is a credential problem, not a client bug.
+    """
     enqueue(conn, "ubuntu", SMALL_MIB)
     r = client.post(f"/api/v1/worker/jobs/{uuid.uuid4()}/heartbeat",
-                    headers={"Authorization": f"Bearer {WORKER_TOKEN}"})
-    assert r.status_code == 400
+                    headers={"Authorization": "Bearer never-issued"})
+    assert r.status_code == 401
 
 
 # --- state transitions ----------------------------------------------------
@@ -281,7 +305,7 @@ def test_reconcile_interrupts_only_unlisted_jobs(client, worker_headers, conn):
     b = claim(client, worker_headers, free_mib=FREE_MIB).json()["job_id"]
 
     r = client.post("/api/v1/worker/reconcile", headers=worker_headers,
-                    json={"worker_id": "test-worker", "live_job_ids": [a]})
+                    json={"live_job_ids": [a]})
 
     assert r.json()["interrupted"] == [b]
     assert state_of(conn, uuid.UUID(a)) == "cloning"
@@ -458,6 +482,59 @@ def test_a_job_cannot_exceed_its_result_budget(client, worker_headers, conn):
     assert conn.execute(
         "SELECT results_bytes FROM jobs WHERE id = %s", (job_id,)
     ).fetchone()[0] == half, "a refused request must not be charged"
+
+
+def test_one_oversized_name_costs_the_job_nothing(client, worker_headers, conn):
+    """A 413 must not spend the budget it refused to serve.
+
+    The per-artifact ceiling used to be checked in the ticket-minting loop,
+    AFTER the budget UPDATE had committed -- so a request naming one oversized
+    file was charged for every name in it and then refused with no ticket
+    minted. Reproduced before the fix: results_bytes 0 -> 2147483659 across a
+    request that answered 413, out of a 4 GiB budget. Half a job's allowance
+    gone, and nothing reclaims it: the budget is never reset, because a job_id
+    is analysed once.
+
+    `_collect` asks for tickets 64 names at a time and `memdump` routinely
+    produces more than 64 files, so this is reachable by an ordinary run with
+    one large region in a late batch -- not only by a hostile worker.
+
+    Both halves are the regression: the row is untouched, and the job is still
+    usable afterwards rather than poisoned for the rest of its collection.
+    """
+    from sandbox_platform.config import settings
+
+    job_id = leased_and_cleaning(client, worker_headers, conn)
+
+    def results_bytes():
+        return conn.execute(
+            "SELECT results_bytes FROM jobs WHERE id = %s", (job_id,)
+        ).fetchone()[0]
+
+    before = results_bytes()
+
+    refused = client.post(
+        f"/api/v1/worker/jobs/{job_id}/artifacts", headers=worker_headers,
+        json={"artifacts": {
+            "trace.log": 1000,
+            "memdump/big.bin": settings.max_artifact_bytes + 1,
+            "capture.pcap": 10,
+        }})
+
+    assert refused.status_code == 413
+    # Named, so the worker learns WHICH file to stop offering. A bare "too
+    # large" would leave it retrying the whole batch.
+    assert "memdump/big.bin" in refused.json()["detail"]
+    assert results_bytes() == before, "a refused request must not be charged"
+
+    # The second half: the job still has its whole budget, so the artifacts
+    # that would have fitted still do.
+    ok = client.post(
+        f"/api/v1/worker/jobs/{job_id}/artifacts", headers=worker_headers,
+        json={"artifacts": {"trace.log": 1000, "capture.pcap": 10}})
+    assert ok.status_code == 200, ok.text[:200]
+    assert sorted(ok.json()) == ["capture.pcap", "trace.log"]
+    assert results_bytes() == before + 1010
 
 
 def test_the_budget_is_charged_across_requests(client, worker_headers, conn):

@@ -80,13 +80,44 @@ ASSET_VERSION = _asset_version()
 
 # Same dependency as the JSON routes, attached to the ROUTER rather than to
 # individual routes so a view added later cannot be public by omission.
+#
+# **`caller_identity`, not `access_identity`, since the cut-over.** The old gate
+# was the Cloudflare verifier, which refuses outright when `REQUIRE_ACCESS_JWT`
+# is set and no Access header is present -- so a caller holding a session this
+# platform issued was turned away here, before `caller_identity` could look at
+# their cookie. The session plumbing was real and unreachable. This gate accepts
+# either credential and refuses only when NEITHER produces an identity.
 router = APIRouter(prefix="/ui", tags=["ui"],
-                   dependencies=[Depends(auth.access_identity)])
+                   dependencies=[Depends(auth.caller_identity)])
+
+# **A second router, because `dependencies=[]` on a route does not remove the
+# router's.** That was the first attempt and it is simply not how FastAPI
+# composes them: router-level dependencies always run, so `/ui/login` sat behind
+# the very gate it exists to get someone through -- unreachable, with a comment
+# above it claiming the opposite. Measured, not assumed.
+#
+# Nothing here may read a job or name a tenant. Rendering the sign-in page is
+# not privileged: the form posts to `/api/v1/auth/login`, which is where
+# credentials are actually checked.
+public_router = APIRouter(prefix="/ui", tags=["ui"])
 
 
 def _render(request: Request, template: str, **ctx) -> HTMLResponse:
     ctx.setdefault("asset_version", ASSET_VERSION)
     return templates.TemplateResponse(request, template, ctx)
+
+
+@public_router.get("/login", response_class=HTMLResponse)
+def login_view(request: Request) -> HTMLResponse:
+    return _render(request, "login.html", view="login")
+
+
+@router.get("/account", response_class=HTMLResponse)
+def account_view(request: Request) -> HTMLResponse:
+    """Manage the second factor. What it shows is decided by `account.js`,
+    which asks the API rather than being told by this template -- so the page
+    cannot disagree with the database about whether MFA is on."""
+    return _render(request, "account.html", view="account")
 
 
 @router.get("", response_class=HTMLResponse)

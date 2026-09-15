@@ -4,8 +4,9 @@
 **`sandboxd/config.py` is the source of truth** — it is where an operator tunes
 this host. Two consumers cannot read it:
 
-* `automation/platform.env` is **sourced by shell** — `network-setup.sh`,
-  `clone.pl` and the per-OS scripts.
+* `automation/platform.env` is **sourced by shell** — by `network-setup.sh`,
+  which is the only script left in `automation/` and the only thing that
+  sources it.
 * `misc/*.cfg` are **Xen configs**, which are neither shell nor Python.
 
 So both are generated from it, and `sandboxd/tests/test_xen_configs.py` fails

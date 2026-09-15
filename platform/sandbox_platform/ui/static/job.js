@@ -104,16 +104,26 @@
     publishing = true;
     button.disabled = true;
 
-    // **`Content-Type: application/json` is load-bearing, not decoration.**
-    // The app installs no CORS middleware, so a request needing a preflight is
-    // one the browser will not send cross-origin. A form POST or a urlencoded
-    // body is a *simple* request: no preflight, so it WOULD be sent -- and
-    // Cloudflare injects the victim's Access assertion on the way through,
-    // because their session is valid. The JSON content type is the whole of
-    // what makes this route unreachable from another origin.
+    // **X-Sandbox-Request is what makes this unreachable from another origin**,
+    // and the server now requires it on every unsafe method.
+    //
+    // This comment used to credit `Content-Type: application/json` with that
+    // job, and for this one call it was true: the app installs no CORS
+    // middleware, so a request needing a preflight is one the browser will not
+    // send cross-origin, and a simple request WOULD be sent with Cloudflare
+    // injecting the victim's Access assertion on the way through. But it was a
+    // property of how this particular fetch happened to be written -- two other
+    // callers in this UI were sending simple requests to mutating routes at the
+    // same time. The rule lives in `sandbox_platform/csrf.py` now.
+    //
+    // The content type stays because the body genuinely is JSON, not because it
+    // is carrying the defence.
     fetch("/api/v1/jobs/" + encodeURIComponent(jobId) + "/" + action, {
       method: "POST",
-      headers: { "Content-Type": "application/json" }
+      headers: {
+        "Content-Type": "application/json",
+        "X-Sandbox-Request": "1"
+      }
     })
       .then(function (r) {
         if (r.ok) {

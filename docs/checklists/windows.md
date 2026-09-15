@@ -57,17 +57,21 @@
 | Windows baseline (version/build) | **Direction was Windows 11 first, Windows 10 as fallback** (2026-08-19). What is actually installed reads **64-bit Windows 10** (`windows_symbols.md`, 2026-09-01), so the fallback is what exists. Kernel PDB GUID `72c69e726c648bc18257af38fa78a2f21` |
 | VM lifecycle model | clone-per-run (current Ubuntu/Android model) — decided by elimination: snapshot-restore (DRAKVUF Sandbox's model) does not work in the nested Xen-inside-Proxmox setup this project used until 2026-08-28, since `xl save`/`xl restore` leaves the base and cloned disk images read-only. **Not re-tested on bare metal**; the decision stands on its own merits regardless — see roadmap "Architecture decisions needing experiments" |
 | Current phase | Phase 0 — golden VM installed 2026-08-21, `windows_sandbox.cfg` written 2026-09-01, kernel GUID read 2026-09-01, guest software largely installed (DRAFT-020). **No automation exists and no analysis has run** |
-| Current blocker | Whether `profiles/windows.json` was generated is unevidenced — the GUID and the `pdbconv.py` line exist, the output is untracked. Then the pipeline itself: no `preconfig-`, `drakvuf-` or `run_analysis-windows` script, and no `pipeline-windows.env` |
+| Current blocker | Whether `profiles/windows.json` was generated is unevidenced — the GUID and the `pdbconv.py` line exist, the output is untracked. Then the guest support itself: `sandboxd/guests.py` carries skeleton Windows rows (`_WINDOWS_PLUGINS`, `PATHS[TargetOs.WINDOWS]`, the `shellexec` branch) with **no execution evidence** behind any of them. *(Was "no `preconfig-`/`drakvuf-`/`run_analysis-windows` script and no `pipeline-windows.env`" — there are no per-OS script files any more; see `docs/architecture/automation-files.md`.)* |
 
 ### Concurrency constraint — read before running a Windows analysis
 
-**A Windows watcher must not share Dom0 with a running Ubuntu or Android
-watcher.** Two constraints stack, and the second is the dangerous one:
+**Read both, but only the second still binds.** Two constraints stacked
+here; the first was removed by the 2026-09-15 deletion and the second is the
+dangerous one and is still open:
 
-1. `dirwatch` derives each clone's VLAN from a process-local worker-slot
-   index, so two watchers collide on VLANs, gateway addresses and isolation
-   rules. Both existing launchers refuse to start if another is running; a
-   Windows launcher must carry the same guard.
+1. `dirwatch` derived each clone's VLAN from a process-local worker-slot
+   index, so two watchers collided on VLANs, gateway addresses and isolation
+   rules. **This constraint is gone as of 2026-09-15**: there are no
+   per-OS launchers, and one `sandboxd` allocates every VLAN from one
+   in-process table (`sandboxd/resources.py`), so a Windows job and an Ubuntu
+   job on the same host is exactly the case it was built for. The guard that
+   remains refuses to start alongside a leftover `dirwatch` binary.
 2. Even without the collision, admission is greedy, and greedy admission
    starves the largest clone. A Windows clone costs **6294 MiB** (`memory =
    6144` plus the per-host domain overhead) against Ubuntu's and Android's
@@ -87,12 +91,17 @@ Windows alone.
 
 ### Inherited contract (issue #6, 2026-08-10)
 
-The Windows pipeline is not designed from scratch. It must satisfy the
+The Windows guest is not designed from scratch. It must satisfy the
 conformance checklist **C1–C10** in
 `docs/architecture/analysis-pipeline.md`, "Shared and per-OS code
-boundary" — five files and no more, no forked copy of any shared script,
-and a `pipeline-windows.env` that defines the per-OS values without
-redefining the host-global ones.
+boundary" — no forked copy of any shared code, and per-OS values supplied
+as data rather than as branches.
+
+> **C1's file set is superseded (2026-09-15).** It asked for four per-OS
+> files; there are none. A guest is a `TargetOs` member plus its rows in
+> `sandboxd/guests.py` and `sandboxd/stages.py`. The rule C1 was defending
+> is unchanged and is what matters here: **do not add an OS branch to shared
+> code — add a value to the per-OS table.**
 
 Four consequences worth knowing before Phase 0 starts, because each closes
 off a design option that would otherwise look open:
@@ -207,9 +216,9 @@ printf "windows11 {\n\tvolatility_ist = \"/root/windows.json\";\n}" >> /etc/libv
 
 That conflicts with how this project resolves profiles. Clone domains have
 no `/etc/libvmi.conf` stanza — the `-r <path>` argument is the only way a
-profile is ever resolved here, which is why `pipeline-<os>.env` carries
-`KERNEL_PROFILE` and `dirwatch` passes it through to `drakvuf`/`injector`
-(`CLAUDE.md`, "Current implementation"). Following this project's
+profile is ever resolved here, which is why `sandboxd/stages.py` carries a
+per-`TargetOs` profile path (`StageConfig.profiles`) and `sandboxd/guests.py`
+passes it through to `drakvuf`/`injector`. Following this project's
 convention means placing the output at `profiles/windows.json` and passing
 it with `-r`, exactly as Ubuntu and Android do.
 

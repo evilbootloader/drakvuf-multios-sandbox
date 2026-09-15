@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import io
 import os
+import struct
 import zipfile
 
 import pytest
@@ -104,6 +105,133 @@ def test_names_are_written_as_utf8():
 
     assert archive.read("报告.log") == b"ok"
     assert archive.getinfo("报告.log").flag_bits & 0x800
+
+
+# --- the central directory -------------------------------------------------
+#
+# An archive only reaches a >4 GiB entry offset by actually containing 4 GiB,
+# which no test is going to stream. `_central_record` is pure and takes the
+# offset as an argument for exactly that reason, so the escape path is reachable
+# with a synthetic number. What these cannot cover is a real reader opening a
+# real oversized archive; the round-trip tests above do that for the common path.
+
+_CENTRAL_FIXED = 46  # bytes before the name: the record minus its variable tail
+
+
+def decoded_central(offset: int, name: str = "memdump/0x1000.dmp") -> dict:
+    """`_central_record` unpacked back into the fields this file asserts on."""
+    raw = packaging._central_record(
+        name, 0x0809, 0x4321, 0x5678, 0xDEADBEEF, 1234, 5678, offset)
+
+    (sig, _made_by, needed, _flags, _method, _time, _date, _crc,
+     _compressed, _uncompressed, name_len, extra_len, _comment_len, _disk,
+     _internal, _external, stored_offset) = struct.unpack(
+        "<IHHHHHHIIIHHHHHII", raw[:_CENTRAL_FIXED])
+
+    assert sig == packaging._SIG_CENTRAL
+    return {
+        "version_needed": needed,
+        "declared_extra_len": extra_len,
+        "stored_offset": stored_offset,
+        "name": raw[_CENTRAL_FIXED:_CENTRAL_FIXED + name_len],
+        "extra": raw[_CENTRAL_FIXED + name_len:],
+    }
+
+
+def test_an_ordinary_offset_carries_no_extra_field():
+    """The common case, pinned so the Zip64 path cannot regress it: a normal
+    archive is byte-for-byte what it was before any of this existed."""
+    record = decoded_central(0x1000)
+
+    assert record["stored_offset"] == 0x1000
+    assert record["version_needed"] == 20
+    assert record["declared_extra_len"] == 0
+    assert record["extra"] == b""
+    assert record["name"] == b"memdump/0x1000.dmp"
+
+
+def test_an_offset_past_4_gib_escapes_into_a_zip64_extra_field():
+    """The bug this replaces wrote the 0xFFFFFFFF escape with a hard-coded
+    extra-field length of 0, so a reader found the marker with nothing to
+    resolve it against and the whole central directory was unreadable."""
+    offset = 0x1_0000_0000 + 4242  # 4 GiB and change, never actually streamed
+
+    record = decoded_central(offset)
+
+    # The 32-bit field holds the escape, not a truncated offset.
+    assert record["stored_offset"] == 0xFFFFFFFF
+
+    # The declared length matches the bytes actually appended. This is the
+    # assertion the old code failed.
+    assert record["declared_extra_len"] == len(record["extra"])
+    assert record["declared_extra_len"] != 0
+
+    header_id, payload_len = struct.unpack("<HH", record["extra"][:4])
+    assert header_id == 0x0001
+    assert payload_len == len(record["extra"]) - 4
+
+    # Payload is the offset ALONE -- `_MAX_ENTRY` refuses any entry whose sizes
+    # would need escaping, so the two size fields that would otherwise precede
+    # it in the fixed order are absent.
+    assert payload_len == 8
+    assert struct.unpack("<Q", record["extra"][4:])[0] == offset
+
+    # A reader that cannot do Zip64 must be told to refuse rather than misparse.
+    assert record["version_needed"] == 45
+
+
+def test_the_escape_value_itself_is_escaped():
+    """0xFFFFFFFF is the marker, so an offset of exactly that cannot be written
+    literally -- a reader would look for the extra field either way."""
+    record = decoded_central(0xFFFFFFFF)
+
+    assert record["stored_offset"] == 0xFFFFFFFF
+    assert record["version_needed"] == 45
+    assert struct.unpack("<Q", record["extra"][4:])[0] == 0xFFFFFFFF
+
+
+@pytest.mark.parametrize("count, offset, size", [
+    (packaging._U16, 0x1000, 0x1000),          # exactly 65,535 entries
+    (2, packaging._U32, 0x1000),               # directory at exactly 4 GiB
+    (2, 0x1000, packaging._U32),               # directory exactly 4 GiB long
+])
+def test_a_value_sitting_on_its_escape_marker_forces_eocd64(count, offset, size):
+    """The archive-level twin of `test_the_escape_value_itself_is_escaped`.
+
+    The plain EOCD writes each of these through `min(value, escape)`, so a value
+    EQUAL to its marker is written as the marker. `>` would emit no EOCD64
+    record behind it and the directory would be unreadable -- the same defect
+    the per-entry extra field fixes, one level up.
+
+    `count` is the arm with no backstop: a 4 GiB directory implies some entry
+    was past 4 GiB and `forced` covers it, but 65,535 small entries reach the
+    count with every offset still inside 32 bits.
+    """
+    assert packaging._needs_eocd64(count, offset, size, forced=False)
+
+
+def test_ordinary_totals_need_no_eocd64():
+    """One below each marker, so the boundary is pinned from both sides."""
+    assert not packaging._needs_eocd64(
+        packaging._U16 - 1, packaging._U32 - 1, packaging._U32 - 1,
+        forced=False)
+
+
+def test_an_escaped_entry_forces_eocd64_on_its_own():
+    """`forced` is the entry-level decision arriving here, and is not a
+    threshold: an entry that escaped its offset needs these records too."""
+    assert packaging._needs_eocd64(1, 0, 0, forced=True)
+
+
+def test_real_archives_still_take_the_ordinary_path():
+    """Nothing a normal download produces should be emitting Zip64 per entry."""
+    blob = build({"trace.log": b"syscall openat\n" * 1000,
+                  "capture.pcap": os.urandom(2048)})
+
+    for info in opened(blob).infolist():
+        assert info.header_offset < 0xFFFFFFFF
+        assert info.extra == b""
+        assert info.extract_version == 20
 
 
 # --- the guard -------------------------------------------------------------

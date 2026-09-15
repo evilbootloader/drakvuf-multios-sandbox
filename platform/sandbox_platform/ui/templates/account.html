@@ -1,0 +1,86 @@
+{% extends "base.html" %}
+{% block title %}Account — DRAKVUF MultiOS Sandbox{% endblock %}
+{% block content %}
+
+<section class="panel">
+  <h2>Two-factor authentication</h2>
+
+  <p class="note">
+    An authenticator app, not a message. A messaging channel is a delivery
+    mechanism someone else can take over; the Telegram link is how this account
+    was created and how a password is reset, not a second factor.
+  </p>
+
+  <div id="totp-state"></div>
+
+  {# Populated by account.js after enrolment starts. The secret is rendered as
+     text rather than a QR image on purpose: generating one would mean either a
+     JavaScript dependency or sending the secret to an external service to be
+     drawn, and every authenticator accepts a typed key.
+
+     The key block is a SEPARATE element from the confirm form, because the two
+     are shown in different situations. Reloading this page with an enrolment
+     already in progress shows the form and not the key: the server will not
+     hand a stored secret out a second time -- `/totp/status` deliberately
+     returns none -- so the choice offered is to finish with the authenticator
+     that already has it, or press Start again, which mints a new one. #}
+  <div id="totp-enrol" hidden>
+    <div id="totp-secret-row" hidden>
+      <p>Add this key to your authenticator app:</p>
+      <p><code id="totp-secret"></code></p>
+      {# The otpauth:// link, for an authenticator on this same device where a
+         typed key is the worst of both worlds. `href` is set by account.js,
+         which checks the scheme first -- an attribute that decides what a
+         click executes must not inherit its safety from another file. #}
+      <p><a id="totp-uri" hidden>Open in an authenticator app</a></p>
+    </div>
+    <form id="totp-confirm-form">
+      <label for="confirm-code">Then enter the code it shows</label>
+      <input type="text" id="confirm-code" inputmode="numeric"
+             autocomplete="one-time-code" maxlength="16" required>
+      <button type="submit">Confirm</button>
+    </form>
+  </div>
+
+  {# Shown once, immediately after enabling or regenerating. There is no route
+     that can show them again -- only hashes are stored -- so the page says so
+     rather than letting someone assume they can come back for them. #}
+  <div id="recovery-box" hidden>
+    <h3>Recovery codes</h3>
+    <p class="note danger">
+      Save these now. Each works once, in place of an authenticator code, and
+      they cannot be shown again — only replaced.
+    </p>
+    <ul id="recovery-list"></ul>
+  </div>
+
+  <p id="recovery-remaining" class="note" hidden></p>
+
+  <form id="recovery-regen-form" hidden>
+    <label for="regen-password">Password</label>
+    <input type="password" id="regen-password" autocomplete="current-password"
+           maxlength="1024" required>
+    <button type="submit">Replace recovery codes</button>
+  </form>
+
+  <form id="totp-disable-form" hidden>
+    <label for="disable-password">Password</label>
+    <input type="password" id="disable-password"
+           autocomplete="current-password" maxlength="1024" required>
+    <button type="submit">Turn off</button>
+  </form>
+
+  {# **Pressing this is the only thing that mints a secret.** It starts hidden
+     because whether it should be offered at all depends on the account, which
+     only `/totp/status` knows -- account.js unhides it when the factor is off,
+     and relabels it "Start again" when an unconfirmed secret already exists.
+
+     It used to be hidden with no listener at all, while the page minted a
+     secret on load instead. #}
+  <button type="button" id="totp-start" hidden>Set up</button>
+
+  <div id="result"></div>
+</section>
+
+<script src="/ui/static/account.js?v={{ asset_version }}" defer></script>
+{% endblock %}

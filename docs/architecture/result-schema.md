@@ -6,33 +6,37 @@
 > now specifies the manifest and the capability envelope, and Sections 3 and 4
 > below are the specification rather than a list of open questions.
 >
-> Section 1 stays as written. It is source-verified behaviour of the Ubuntu
-> scripts **as they run on Dom0 today**, and remains true until `sandboxd`
-> replaces `dirwatch` — including its `KNOWN GAP` on MD5 keying, which is
-> still live in the running system.
+> **Section 1 is now history, and says so (2026-09-15).** It was
+> source-verified behaviour of the Ubuntu shell scripts as they ran on Dom0;
+> those scripts were deleted once `sandboxd` replaced them, and **the MD5
+> keying gap below closed with them**. It is kept because runbooks written
+> before that date show the `<md5>/` layout, and a reader meeting it needs to
+> know what it was and why it changed.
 >
-> Read Section 1 for what the pipeline does now, and Sections 3–4 for what the
-> platform specifies.
+> Read Sections 3–4 for what the platform specifies, which is what runs.
 
-## 1. Current, source-verified output locations (Ubuntu)
+## 1. Superseded: the MD5-keyed output layout (Ubuntu, until 2026-09-15)
 
-Per `automation/preconfig-ubuntu.sh` and `automation/drakvuf-ubuntu.sh`,
-each analysis writes into `$OUTPUTFOLDER/$MD5/` (MD5 of the sample, not
-SHA-256):
+The per-OS `preconfig-` and `drakvuf-` scripts wrote each analysis into
+`$OUTPUTFOLDER/$MD5/` (MD5 of the sample, not SHA-256):
 
 - `$OUTPUTFOLDER/$MD5/preconfig.log` — `injector` output from network setup
   + sample staging.
 - `$OUTPUTFOLDER/$MD5/drakvuf.log` — DRAKVUF's own stdout/stderr.
 - DRAKVUF's `-D $OUTPUTFOLDER/$MD5` output directory and `-o json` flag
   imply structured DRAKVUF event output lands there too, in JSON.
-- `automation/tcpdump.sh` writes `$OUTPUTFOLDER/$MD5/tcpdump.pcap` (per its
-  own argument contract; note `drakvuf-ubuntu.sh` kills tcpdump by
-  `ps aux | grep`, not by reading a PID file from this location — a
-  reliability gap noted in `docs/checklists/android.md` §2.10 and carried
-  into the Ubuntu modernization plan).
+- `tcpdump.sh` wrote `$OUTPUTFOLDER/$MD5/tcpdump.pcap` (per its own argument
+  contract; the trace script killed tcpdump by `ps aux | grep` rather than by
+  reading a PID file from this location — the reliability gap noted in
+  `docs/checklists/android.md` §2.10, and the reason
+  `sandboxd/proc.py::iter_processes` compares argv elements for equality).
 
-> **KNOWN GAP (DRAFT-041) — MD5 keying collides, and the fix was
-> deliberately declined on 2026-08-21.** Because the directory is named
+> **CLOSED 2026-09-15 — MD5 keying collided, and the fix was deliberately
+> declined on 2026-08-21 in favour of waiting for `sandboxd`.** The history
+> is kept because the reasoning is the reason the current layout is shaped as
+> it is; jump to the closing note below for the outcome.
+>
+> **KNOWN GAP (DRAFT-041), as it stood.** Because the directory is named
 > after the sample's *content* digest, two submissions of identical bytes
 > under different filenames write to the same place and overwrite each
 > other, and a trace-timeout retry re-enters with the same key and truncates
@@ -57,6 +61,14 @@ SHA-256):
 > But **nothing analysing samples uses it yet.** `dirwatch` still writes
 > `$OUTPUTFOLDER/$MD5/` on Dom0, so both collisions above are live in the
 > running system exactly as before. Only `sandboxd` closes this.
+>
+> **CLOSED 2026-09-15.** `sandboxd` is the only thing that analyses samples on
+> Dom0, and it writes per-job: `results/<job_id>/` in the object store, and
+> `job.result_dir` on disk during the run (`sandboxd/stages.py`). The scripts
+> that wrote `$OUTPUTFOLDER/$MD5/` were deleted the same day, so neither
+> collision is reachable. Per-job rather than content-keyed is deliberate and
+> not merely convenient: two submissions of identical bytes are two analyses
+> with two sets of evidence.
 >
 > DRAFT-044 claims this issue "closes the MD5-collision gap ... as F8". It
 > does not, and that sentence should be read as describing the object-store

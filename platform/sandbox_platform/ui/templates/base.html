@@ -23,6 +23,11 @@
 {# Deferred, unlike theme.js: nothing is laid out around it and a slow
    balance must not hold up the first paint. #}
 <script src="/ui/static/balance.js?v={{ asset_version }}" defer></script>
+{% if view != 'login' %}
+{# Not loaded on the sign-in page, which renders no sign-out control -- see
+   the masthead below. #}
+<script src="/ui/static/signout.js?v={{ asset_version }}" defer></script>
+{% endif %}
 </head>
 <body>
 
@@ -31,8 +36,21 @@
   <nav>
     <a href="/ui/submit" {% if view == 'submit' %}aria-current="page"{% endif %}>Submit</a>
     <a href="/ui/jobs" {% if view == 'jobs' %}aria-current="page"{% endif %}>History</a>
+    <a href="/ui/account" {% if view == 'account' %}aria-current="page"{% endif %}>Account</a>
     <a id="balance"></a>
     <button type="button" id="theme-toggle" title="Theme">auto</button>
+    {# **The only way out of a session.** `POST /api/v1/auth/logout` was
+       implemented and tested with nothing in the UI calling it, so a browser
+       that had signed in had no way to sign out at all.
+
+       Omitted on /ui/login, which extends this same template: a sign-out
+       control on the sign-in page is either a no-op or a reload, and reads as
+       broken either way. A button rather than a link because signing out is a
+       POST -- `signout.js` sends it with the X-Sandbox-Request header the auth
+       router requires, then navigates here. #}
+    {% if view != 'login' %}
+    <button type="button" id="sign-out" title="Sign out">Sign out</button>
+    {% endif %}
   </nav>
 </header>
 

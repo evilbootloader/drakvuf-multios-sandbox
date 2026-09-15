@@ -234,8 +234,10 @@ SELECT id, target_os, required_mib
 **Policy: strict head-of-line blocking.** A job at the head that does not fit
 blocks the queue until it does. The obvious objection is convoying — one
 Windows job stalling a queue of Ubuntu jobs — and the answer is that the wait
-is *bounded*: `dirwatch`'s successor keeps the 60 s preconfig and 180 s trace
-guards, so running clones release memory on a known ceiling rather than
+is *bounded*: `sandboxd` keeps the 60 s preconfig and 180 s trace guards it
+inherited from the C watcher — as configuration now, not compiled in
+(`sandboxd/timing.py`) — so running clones release memory on a known ceiling
+rather than
 never. Backfill (letting a small job run when it provably cannot delay the
 reserved job) needs per-OS runtime estimates the project does not have, and
 is deliberately deferred rather than approximated.
@@ -276,20 +278,27 @@ is a property of the machine even when the overhead is a property of Xen.
 
 ## Execution
 
-`sandboxd` downloads the sample from its presigned GET and drives the
-**unchanged** callback chain:
+`sandboxd` downloads the sample from its presigned GET and drives the same
+phase sequence, now in-process:
 
 ```text
-clone.pl → preconfig-<os>.sh → drakvuf-<os>.sh → cleanup.sh
-                                 (tcpdump.sh on a side thread)
+clone → preconfig → trace → collect → cleanup
+        (tcpdump spawned for the trace's lifetime)
 ```
 
-C9's arity and order are preserved exactly — `clone.pl` takes 3 arguments and
-prints a clone domain ID on success only; `preconfig-<os>.sh` and
-`drakvuf-<os>.sh` are passed 8 and read the first 7; diagnostics go to stderr.
-**No worker script changes**, and `platform.env` and `pipeline-<os>.env` stay
-as they are, still sourced on Dom0 and still `${NAME:-default}` so the
-environment wins.
+*Written when this was a chain of five shell callbacks that `sandboxd` would
+invoke unchanged (`clone.pl` → `preconfig-<os>.sh` → `drakvuf-<os>.sh` →
+`cleanup.sh`, with `tcpdump.sh` on a side thread), with C9's arity and order
+preserved exactly so no worker script had to change. That compatibility
+commitment was kept through the port and then retired: the scripts were
+deleted 2026-09-15, and the sequence lives in `sandboxd/stages.py` with the
+per-OS argv in `sandboxd/guests.py`. See
+`docs/architecture/automation-files.md`.*
+
+`automation/platform.env` stays as it is, still sourced on Dom0 by
+`network-setup.sh` and still `${NAME:-default}` so the environment wins. The
+per-OS `pipeline-<os>.env` files are gone; their values live in
+`sandboxd/config.py` and `sandboxd/timing.py`.
 
 This is the constraint that makes the change survivable. Replacing the
 process model *and* the callback contract in one step leaves no working state
@@ -380,8 +389,8 @@ Cancellation splits on whether a clone exists:
 - **`received` / `admitted` / `queued`** — a single `UPDATE` to `cancelled`.
   No clone was ever made, so there is nothing to tear down.
 - **`cloning` … `executing`** — set `cancel_requested`. The orchestrator sees
-  it in its next heartbeat response and tears down through `cleanup.sh`,
-  passing through `cleaning`.
+  it in its next heartbeat response and tears down through its own cleanup
+  stage, passing through `cleaning`.
 
 The first case is the acceptance test DRAFT-040 named, and it is worth being
 precise about why it was hard before: today a queued job is *a file in a watch
@@ -475,8 +484,8 @@ state; only the *bookkeeping* expires.
 
 ### Untrusted input
 
-`dirwatch`'s admission check rejects only `/` and control characters in a
-submitted filename, so `"`, `$`, a backtick and `;` are all admissible — and
+The admission check rejects only `/` and control characters in a submitted
+filename, so `"`, `$`, a backtick and `;` are all admissible — and
 all are live inside a double-quoted guest shell word. Two consequences:
 
 - **Everything `CLAUDE.md` says about never splicing an untrusted filename
@@ -724,18 +733,24 @@ implementation issues that follow:
   S3 calls, retry and backoff, a state machine and cancellation — libraries in
   Python, hand-written in C. `dirwatch`'s thread pool and `inotify` watcher
   are most of what is lost, and `inotify` stops being how jobs arrive.
-- **The five worker scripts are untouched.** C9 holds.
+- **The five worker scripts are untouched.** C9 holds. *(Held through the
+  port, then retired: all five were deleted 2026-09-15 and their behaviour
+  lives in `sandboxd/guests.py` and `sandboxd/stages.py`.)*
 - **`platform.env` and `pipeline-<os>.env` are untouched**, still sourced on
-  Dom0.
+  Dom0. *(`platform.env` still is, by `network-setup.sh`. The per-OS files
+  went with the scripts; their values are in `sandboxd/config.py` and
+  `sandboxd/timing.py`.)*
 - **`MAX_CLONES` and `WATCH_MODE`** need re-homing: under one orchestrator
   there is one pool and one loop, so a per-OS value for either has no
   referent. This is a C3→C4 migration and belongs to the implementation
   issue.
 - **The `argc != 15` CLI contract dies**, and with it the three
-  `run_analysis-<os>.sh` launchers collapse into one. Note that
+  `run_analysis-<os>.sh` launchers collapse into one. *(Done. Both the
+  contract and the launchers were deleted 2026-09-15.)* Note that
   `docs/drakvuf-on-xen-nested-within-proxmox.md:531` builds `dirwatch.c` by
   name; that file is an **imported source guide and is never edited in
-  place** — the discrepancy is recorded here instead.
+  place** — the discrepancy is recorded here instead, and is now permanent:
+  the file it names is no longer in this repository.
 - **The `vlan-lease` prototype is not inherited.** That branch added C-side
   memory admission and `flock` VLAN leases to `dirwatch.c` to make three
   watcher processes safe to run concurrently. This design has one orchestrator

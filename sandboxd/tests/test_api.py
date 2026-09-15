@@ -65,7 +65,9 @@ def test_the_registration_body_satisfies_the_server_model():
 
     parsed = RegisterRequest.model_validate(body)
 
-    assert parsed.worker_id == "dom0-1"
+    # No `worker_id` in the body since DRAFT-061: the platform derives it from
+    # the credential, so sending one would be a claim with nothing behind it.
+    assert not hasattr(parsed, "worker_id")
     assert {p.os.value: p.required_mib for p in parsed.pipelines} == {
         "ubuntu": 2198, "android": 2198, "windows": 6294}
 
@@ -78,6 +80,37 @@ def test_the_claim_body_satisfies_the_server_model():
 def test_the_reconcile_body_satisfies_the_server_model():
     body = api(ok({})).reconcile_body([])
     assert ReconcileRequest.model_validate(body).live_job_ids == []
+
+
+def test_no_request_body_carries_an_unbound_worker_id():
+    """DRAFT-061 removed the field; sandboxd kept sending it for a while.
+
+    **Asserted on the BODY, not on the parsed model**, and that distinction is
+    the whole reason this test exists. `RegisterRequest`, `ClaimRequest` and
+    `ReconcileRequest` do not set `extra="forbid"` (unlike `Manifest` and
+    `ArtifactEntry`), so pydantic drops an unexpected `worker_id` without
+    complaint -- every model-side assertion above passed while the client was
+    still putting an identity claim on the wire that nothing bound to the
+    credential carrying it.
+
+    `self.worker_id` is deliberately still populated: `stages._start_console`
+    passes it to the relay and the logs use it. What it may not do is travel
+    as a field the platform could be tempted to trust.
+    """
+    client = api(ok({}))
+    bodies = {
+        "register": client.register_body(total_mib=1, total_vlans=1,
+                                         total_slots=1, pipelines={}),
+        "claim": client.claim_body(free_mib=1, free_vlans=1, free_slots=1),
+        "reconcile": client.reconcile_body(["j1"]),
+    }
+
+    for name, body in bodies.items():
+        assert "worker_id" not in body, (
+            f"the {name} body still sends worker_id; the platform ignores it "
+            f"only because that model does not forbid extras")
+
+    assert client.worker_id == "dom0-1"
 
 
 def test_a_state_report_satisfies_the_server_model():
@@ -347,7 +380,9 @@ def test_the_worker_channel_does_carry_the_token():
     api(handler).claim(free_mib=1, free_vlans=1, free_slots=1)
 
     assert seen["headers"]["authorization"] == "Bearer tok"
-    assert seen["headers"]["x-worker-id"] == "dom0-1"
+    # And ONLY the credential. `X-Worker-Id` used to travel beside it, unbound
+    # to it, which is what let any token holder act as any worker.
+    assert "x-worker-id" not in seen["headers"]
 
 
 # --- the sample reaches disk ----------------------------------------------

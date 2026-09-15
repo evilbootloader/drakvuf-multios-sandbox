@@ -1,6 +1,6 @@
 """The resource table: issue #41 (DRAFT-060).
 
-What `dirwatch.c`'s `slots_busy[128]` could not be, because it was
+What the C watcher's `slots_busy[128]` could not be, because it was
 process-local and its index was the VLAN.
 """
 
@@ -60,10 +60,10 @@ def test_a_config_with_no_memory_line_is_refused(tmp_path):
         required_mib(cfg)
 
 
-# --- the capability dirwatch structurally cannot deliver -------------------
+# --- the capability the C watcher structurally could not deliver -----------
 
 def test_two_os_families_hold_vlans_at_the_same_time():
-    """The headline of #41. `dirwatch` takes one origin per invocation and two
+    """The headline of #41. `dirwatch` took one origin per invocation and two
     instances cannot run, because the slot array is process-local and the slot
     index IS the VLAN -- so an Ubuntu and a Windows submission cannot be
     analysed in the same window on a host with capacity for both."""
@@ -222,7 +222,7 @@ def test_a_job_cannot_hold_twice():
 def test_only_provisioned_vlans_are_handed_out():
     """Handing out a VLAN with no xenbr1.<n> and no gateway produces a clone
     that boots, gets an address nothing routes, and reads as a sample that
-    chose not to talk. run_analysis-*.sh warns the two numbers must match;
+    chose not to talk. The old launcher could only warn the two must match;
     taking the range as input makes the mismatch impossible."""
     t = table(vlans=[5, 6])
 

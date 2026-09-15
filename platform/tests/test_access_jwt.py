@@ -171,9 +171,9 @@ def test_owner_is_recorded_and_returned(client, issuer):
     assert created.status_code == 201
     job_id = created.json()["job_id"]
 
-    assert client.get(f"/api/v1/jobs/{job_id}", headers=hdrs).json()["owner"] \
+    assert client.get(f"/api/v1/jobs/{job_id}", headers=hdrs).json()["owner_email"] \
         == "analyst@example.test"
-    listed = {j["id"]: j["owner"]
+    listed = {j["id"]: j["owner_email"]
               for j in client.get("/api/v1/jobs", headers=hdrs).json()}
     assert listed[job_id] == "analyst@example.test"
 
@@ -186,25 +186,31 @@ def test_a_caller_with_no_identity_cannot_submit(client, no_identity):
     NOT NULL for traceability, so there is nothing to record and nothing to
     charge, and `auth.required_identity` says so.
 
-    **403, not 401.** The caller authenticated fine; on the deployment it holds
-    a client certificate. What it lacks is an identity work can be attributed
-    to, and reporting an authentication failure would send whoever hits this
-    looking for a broken token.
+    **401 since DRAFT-061, where it used to be 403.** The refusal moved earlier
+    and changed meaning with it. It used to say "you authenticated, but you have
+    no identity to attribute work to" -- which was right while an unauthenticated
+    caller could only be the certificate-gated listener. Now a caller with no
+    credential at all is refused by `caller_identity` before any route runs, and
+    that genuinely is an authentication failure.
 
-    Takes `no_identity` so `client` leaves the real dependency in place with
-    Access still OFF -- see that fixture. `issuer` would not do: it switches
-    Access on, and then a tokenless request is a 401 from the verifier rather
-    than the 403 this is about.
+    Takes `no_identity` so `client` leaves the real dependency in place. The
+    successor to the old reading is `infrastructure`, which is what the mTLS
+    listener now has to ask for by name.
     """
     created = client.post(
         "/api/v1/jobs",
         json={"target_os": "ubuntu", "filename": "y.bin", "size_bytes": 4},
     )
 
-    assert created.status_code == 403, created.text
+    assert created.status_code == 401, created.text
     # And no row: the refusal is before the INSERT, not a status painted over
     # a job that already exists.
-    assert client.get("/api/v1/jobs").json() == []
+    # The listing is refused too, and by the same dependency: with no
+    # credential there is no identity to scope a read to either. It used to
+    # return `[]` because `visible_to(None)` scoped nothing and the table
+    # happened to be empty -- which was the same code path that would have
+    # returned every job had it not been.
+    assert client.get("/api/v1/jobs").status_code == 401
 
 
 # --- the JWKS cache --------------------------------------------------------

@@ -225,7 +225,7 @@ def test_the_report_feeds_the_resource_table(tmp_path):
 # --- stray processes, and the DRAFT-011 defect ------------------------------
 
 def test_a_capture_on_a_different_vlan_is_not_killed(tmp_path, monkeypatch):
-    """The real fix for DRAFT-011. `grep "tcpdump -i xenbr1.$VLAN"` matches
+    """The real fix for DRAFT-011. `grep "tcpdump -i xenbr1.$VLAN"` matched
     xenbr1.10 through xenbr1.19 when sweeping VLAN 1, because `.` is a regex
     wildcard and the pattern is unanchored. Exact argv elements cannot."""
     killed = []

@@ -13,6 +13,20 @@
 > Commands labelled **Candidate** are proposed and unvalidated in this
 > environment, exactly as in `android.md`.
 
+> **2026-09-15 — the scripts this checklist inventories were deleted.**
+> `dirwatch.c`, `clone.pl`, `preconfig-ubuntu.sh`, `drakvuf-ubuntu.sh`,
+> `cleanup.sh`, `tcpdump.sh`, `run_analysis-ubuntu.sh` and
+> `pipeline-ubuntu.env` are gone; `sandboxd` replaced all of them. See
+> `docs/architecture/automation-files.md` for the file-by-file mapping.
+>
+> **What this changes and what it does not.** The dated execution evidence
+> below is unaffected — it records what happened on Dom0 on the date given,
+> and Ubuntu remains the evidenced path. What is affected is every
+> **present-tense** claim about a file existing or a command being runnable:
+> read those as "as of the date on the section". Open `- [ ]` items are
+> triaged in place below. Nothing here should be run against `automation/`
+> any more except `network-setup.sh`.
+
 ---
 
 ## Project status
@@ -40,10 +54,15 @@
 
 ---
 
-## Source-verified implementation inventory (2026-08-07)
+## Source-verified implementation inventory (2026-08-07) — files since deleted
 
 The following was confirmed by reading every file directly, not by testing
 execution. None of the checkboxes below represent execution evidence.
+
+> **Historical as of 2026-09-15.** Every `automation/` file ticked below
+> except `network-setup.sh` has been deleted. The inventory is kept because
+> it is the most compact description of what each one did, and because the
+> behaviour it describes is what `sandboxd` was ported to reproduce.
 
 - [x] `automation/dirwatch.c` exists — GThreadPool + inotify orchestrator,
   15-arg CLI contract, 60s preconfig timeout / 180s drakvuf-trace timeout,
@@ -146,22 +165,32 @@ Three things the same run surfaced that are **not** fixed:
 > now carries **Dom0 execution evidence** (2026-08-08, issue #2); the others
 > are still source-reading only.
 
-- [ ] **`preconfig-ubuntu.sh` runs at ~54 s against a 60 s guard** (measured
+- [x] **`preconfig-ubuntu.sh` runs at ~54 s against a 60 s guard** (measured
   on Dom0 2026-08-20). A 6 s margin on a two-injection script is thin, and
-  the failure mode is not a slow run but a `cleanup.sh` and a fresh clone
-  retry — which costs an LVM snapshot and an `xl restore` to recover four
-  seconds of drift. Raise the guard, or find what in the injection pair takes
-  the time. Cf. the standing preference for setting a resource guard above
-  the measured value and keeping both numbers in the comment.
+  the failure mode was not a slow run but a cleanup and a fresh clone retry
+  — which costs an LVM snapshot and an `xl restore` to recover four seconds
+  of drift.
+  **Closed by the port.** The 60 s guard was compiled into the C watcher.
+  `sandboxd` derives the preconfig budget from what the phase contains plus
+  `PRECONFIG_INJECTION_HEADROOM` (`sandboxd/timing.py::budgets`), floored at
+  the old 60, so the margin is no longer a fixed constant to be raised by
+  hand. **The 54 s measurement itself is not superseded** and is the number
+  any future tightening must be checked against.
 
 - [ ] **`xl destroy` on a clone whose DRAKVUF is still attached leaves a
   `(null) --p--d` zombie domain** (observed on Dom0 2026-08-20).
   Pre-existing behaviour, not introduced by any change in flight at the
-  time. `cleanup.sh` pauses and destroys the domain but does not wait for
-  the trace to detach first, so the domain lands in a state `xl list` shows
+  time. The cleanup script paused and destroyed the domain without waiting
+  for the trace to detach first, so the domain landed in a state `xl list` shows
   with a null name and a paused/dying flag pair. Not known to consume a VLAN
   or an LV, and not known to block a subsequent clone; recorded because it is
   visible in `xl list` and will otherwise be rediscovered as a mystery.
+  **Structural cause removed, not re-observed.** Cleanup was a sibling
+  process with no handle on the trace. In `sandboxd` the DRAKVUF child is
+  owned by the same process and is waited on before `_teardown` runs
+  (`sandboxd/stages.py`), so the destroy cannot overlap a live trace the way
+  it did. **This has not been re-checked on Dom0** — leave the box open until
+  someone looks at `xl list` after a real run.
 
 - [x] **Verify the `drakvuf-ubuntu.sh` `<USER>` bug — DONE 2026-08-08, and
   the premise was wrong.** Execution evidence from Dom0 (full transcript in

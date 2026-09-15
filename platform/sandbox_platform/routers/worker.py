@@ -29,7 +29,7 @@ from pydantic import BaseModel, Field, field_validator
 from .. import jobs as dal
 from .. import manifest as manifest_schema
 from .. import objects
-from ..auth import LeasedJob, require_worker_token
+from ..auth import LeasedJob, WorkerAuth, authenticated_worker
 from ..config import settings
 from ..db import connection
 from ..enums import TERMINAL_STATES, EgressMode, JobState, TargetOs
@@ -37,7 +37,7 @@ from ..enums import TERMINAL_STATES, EgressMode, JobState, TargetOs
 router = APIRouter(
     prefix="/api/v1/worker",
     tags=["worker"],
-    dependencies=[Depends(require_worker_token)],
+    dependencies=[Depends(authenticated_worker)],
 )
 
 
@@ -93,7 +93,11 @@ class EgressExit(BaseModel):
 
 
 class RegisterRequest(BaseModel):
-    worker_id: str = Field(min_length=1, max_length=64)
+    # **No `worker_id` field.** It used to be declared here and taken at face
+    # value, which is what let any holder of the shared token act as any
+    # worker. The id now comes from the credential (`WorkerAuth`), so there is
+    # nothing for a claim and a token to disagree about -- DRAFT-061, closing
+    # KNOWN GAP (DRAFT-043/046).
     total_mib: int = Field(gt=0)
     total_vlans: int = Field(gt=0)
     total_slots: int = Field(gt=0)
@@ -105,12 +109,20 @@ class RegisterRequest(BaseModel):
 
 
 class ReconcileRequest(BaseModel):
-    worker_id: str = Field(min_length=1, max_length=64)
+    # **No `worker_id` field.** It used to be declared here and taken at face
+    # value, which is what let any holder of the shared token act as any
+    # worker. The id now comes from the credential (`WorkerAuth`), so there is
+    # nothing for a claim and a token to disagree about -- DRAFT-061, closing
+    # KNOWN GAP (DRAFT-043/046).
     live_job_ids: list[UUID]
 
 
 class ClaimRequest(BaseModel):
-    worker_id: str = Field(min_length=1, max_length=64)
+    # **No `worker_id` field.** It used to be declared here and taken at face
+    # value, which is what let any holder of the shared token act as any
+    # worker. The id now comes from the credential (`WorkerAuth`), so there is
+    # nothing for a claim and a token to disagree about -- DRAFT-061, closing
+    # KNOWN GAP (DRAFT-043/046).
     free_mib: int = Field(ge=0)
     free_vlans: int = Field(ge=0)
     free_slots: int = Field(ge=0)
@@ -213,7 +225,7 @@ class CompleteRequest(BaseModel):
 # --- registration and recovery --------------------------------------------
 
 @router.post("/register", status_code=status.HTTP_204_NO_CONTENT)
-def register(req: RegisterRequest) -> None:
+def register(req: RegisterRequest, worker_id: WorkerAuth) -> None:
     """Record what this analysis host can afford.
 
     Upsert: a worker re-registers on every restart, and its capacity may have
@@ -225,7 +237,7 @@ def register(req: RegisterRequest) -> None:
     with connection() as conn:
         dal.register_worker(
             conn,
-            worker_id=req.worker_id,
+            worker_id=worker_id,
             total_mib=req.total_mib,
             total_vlans=req.total_vlans,
             total_slots=req.total_slots,
@@ -237,7 +249,8 @@ def register(req: RegisterRequest) -> None:
 
 
 @router.post("/reconcile")
-def reconcile(req: ReconcileRequest) -> dict[str, list[UUID]]:
+def reconcile(req: ReconcileRequest,
+              worker_id: WorkerAuth) -> dict[str, list[UUID]]:
     """Adopt a restarted worker's view of what is actually running.
 
     Sent before the first claim. Anything this worker holds a lease on but did
@@ -249,7 +262,7 @@ def reconcile(req: ReconcileRequest) -> dict[str, list[UUID]]:
     """
     with connection() as conn:
         interrupted = dal.reconcile(
-            conn, worker_id=req.worker_id, live_job_ids=req.live_job_ids
+            conn, worker_id=worker_id, live_job_ids=req.live_job_ids
         )
     return {"interrupted": interrupted}
 
@@ -257,7 +270,7 @@ def reconcile(req: ReconcileRequest) -> dict[str, list[UUID]]:
 # --- taking work ----------------------------------------------------------
 
 @router.post("/claim", response_model=LeaseResponse | ReservedResponse | IdleResponse)
-def claim(req: ClaimRequest):
+def claim(req: ClaimRequest, worker_id: WorkerAuth):
     """Take the head of the queue if it fits, otherwise reserve for it.
 
     Long-polling with a server-side budget rather than returning immediately.
@@ -283,7 +296,7 @@ def claim(req: ClaimRequest):
         with connection() as conn:
             last = dal.claim(
                 conn,
-                worker_id=req.worker_id,
+                worker_id=worker_id,
                 free_mib=req.free_mib,
                 lease_seconds=settings.lease_seconds,
             )
@@ -529,11 +542,39 @@ def artifact_urls(job: LeasedJob,
     let a compromised worker rewrite the whole result set, including other
     jobs' if the prefix were ever widened by accident.
     """
-    # Charge the whole request against the job's budget FIRST, in one
-    # statement, so two concurrent requests cannot both read the old total and
-    # both pass. A job is leased by one worker, so this is belt-and-braces
-    # rather than a live race -- but the alternative is a read-then-write that
-    # is wrong by construction.
+    # The per-artifact ceiling is decided FIRST, before anything is written,
+    # because it is a property of the REQUEST alone: no row, no other request
+    # and no accumulated total can change the answer, so it can be settled
+    # without touching the job at all.
+    #
+    # It used to run after the budget UPDATE below had committed, inside the
+    # minting loop -- which meant a request naming one oversized artifact was
+    # charged for every name in it and then refused with zero tickets minted.
+    # Reproduced against the test database: results_bytes 0 -> 2147483659 for a
+    # request that answered 413. The defaults make that sharp, since
+    # max_artifact_bytes is 2 GiB against a max_job_result_bytes of 4 GiB, so
+    # one refused request burned half the job's entire allowance for nothing
+    # and no path reclaims it. sandboxd/stages.py::_collect asks for tickets one
+    # TICKET_BATCH (64 names) at a time and `memdump` routinely produces more
+    # than 64 files, so a single oversized dump in a late batch could push the
+    # job past its cap and get artifacts refused that would otherwise have
+    # fitted.
+    #
+    # Names were validated by ArtifactRequest, which refuses anything that
+    # could leave this prefix -- see manifest.reject_unsafe_name.
+    for name, size in req.artifacts.items():
+        if size > settings.max_artifact_bytes:
+            raise HTTPException(
+                status.HTTP_413_CONTENT_TOO_LARGE,
+                f"artifact {name!r} exceeds the "
+                f"{settings.max_artifact_bytes} byte limit",
+            )
+
+    # Charge the whole request against the job's budget in one statement, so
+    # two concurrent requests cannot both read the old total and both pass. A
+    # job is leased by one worker, so this is belt-and-braces rather than a
+    # live race -- but the alternative is a read-then-write that is wrong by
+    # construction.
     #
     # Charged when the ticket is minted, not when bytes land, because the API
     # is not in the upload path -- the worker POSTs straight to MinIO. The
@@ -542,8 +583,12 @@ def artifact_urls(job: LeasedJob,
     #
     # So a ticket the worker never uses is still charged, and asking twice for
     # the same name charges twice. Both over-count rather than under-count,
-    # which is the safe direction. Never reset: a job_id is analysed once and a
-    # retry is a new job.
+    # which is the safe direction -- the worker HELD a capability for those
+    # bytes and could have spent it. That argument covers an unused ticket and
+    # covers nothing about a REFUSED request, which hands back no capability at
+    # all; a refusal must therefore cost the job nothing, which is why every
+    # check that can fail the request outright happens above this statement.
+    # Never reset: a job_id is analysed once and a retry is a new job.
     total = sum(req.artifacts.values())
     with connection() as conn:
         charged = conn.execute(
@@ -565,16 +610,17 @@ def artifact_urls(job: LeasedJob,
             f"budget; requested {total} more",
         )
 
+    # Nothing below here may fail the request: the budget has been charged, and
+    # a raise from this point would leave the charge standing with no ticket to
+    # show for it -- which is the defect this ordering exists to prevent. The
+    # loop only signs.
+    #
+    # `min` can no longer bind, since the ceiling above refused everything
+    # larger. It stays because it is what bounds the write capability actually
+    # handed out, and that bound should not depend on a check several
+    # statements away staying where it is.
     tickets: dict[str, ArtifactTicket] = {}
     for name, size in req.artifacts.items():
-        # Names were validated by ArtifactRequest, which refuses anything that
-        # could leave this prefix -- see manifest.reject_unsafe_name.
-        if size > settings.max_artifact_bytes:
-            raise HTTPException(
-                status.HTTP_413_CONTENT_TOO_LARGE,
-                f"artifact {name!r} exceeds the "
-                f"{settings.max_artifact_bytes} byte limit",
-            )
         ticket = objects.presigned_artifact_upload(
             f"{objects.result_prefix(job["id"], job["key_prefix"])}{name}",
             min(size, settings.max_artifact_bytes),

@@ -139,9 +139,23 @@
     });
 
     async function post(url, payload) {
-        var init = { method: "POST", credentials: "same-origin" };
+        /* X-Sandbox-Request on EVERY call, including the one with no body.
+         *
+         * `/uploaded` used to be sent with no headers at all, which makes it a
+         * CORS-*simple* request -- no preflight, so a cross-site page could
+         * issue it and the browser would attach whatever credential its cookie
+         * rules allowed. The JSON content type on the other call happened to
+         * force a preflight and happened to protect it; that is a property of
+         * one call rather than a rule, and `sandbox_platform/csrf.py` is where
+         * the rule now lives. The server requires this on every unsafe method.
+         */
+        var init = {
+            method: "POST",
+            credentials: "same-origin",
+            headers: { "X-Sandbox-Request": "1" }
+        };
         if (payload !== null) {
-            init.headers = { "Content-Type": "application/json" };
+            init.headers["Content-Type"] = "application/json";
             init.body = JSON.stringify(payload);
         }
         var r = await fetch(url, init);

@@ -40,10 +40,21 @@ Format notes, so the next reader does not have to re-derive them:
     data, which is what makes single-pass streaming possible at all. With that
     bit set, the encryption header's check byte comes from the high byte of the
     DOS mod time rather than of the CRC -- the CRC is not known yet.
-  - Zip64 appears only in the end-of-central-directory records, and only when
-    the archive actually needs it. A single entry over 4 GiB is refused instead
-    (`EntryTooLarge`); `max_artifact_bytes` defaults to 2 GiB, so that is a
-    guard against a reconfigured deployment rather than a routine path.
+  - Zip64 appears wherever the format forces it and nowhere else, which is two
+    places. The end-of-central-directory records get it when the archive as a
+    whole outgrows the 32-bit counts. A single central-directory record gets a
+    Zip64 extended-information extra field when THAT entry's local header sits
+    past 4 GiB: the 32-bit offset field can then only hold the escape value
+    0xFFFFFFFF, and the escape is meaningless unless the extra field carrying
+    the real offset is written beside it.
+  - A single entry over 4 GiB is refused instead of escaped
+    (`EntryTooLarge`), because the sizes live in the LOCAL header, which is
+    written before the bytes are read. `max_artifact_bytes` defaults to 2 GiB,
+    so that is a guard against a reconfigured deployment rather than a routine
+    path. The archive TOTAL is a different question and not guarded at all:
+    `max_job_result_bytes` defaults to exactly 4 GiB, so one full-run download
+    can reach the offsets that need escaping without anything being
+    misconfigured.
 """
 
 from __future__ import annotations
@@ -75,6 +86,14 @@ _SIG_CENTRAL = 0x02014B50
 _SIG_EOCD = 0x06054B50
 _SIG_EOCD64 = 0x06064B50
 _SIG_EOCD64_LOCATOR = 0x07064B50
+
+# Header id of the Zip64 extended-information extra field.
+_ZIP64_EXTRA_ID = 0x0001
+
+# "Version needed to extract" values: 2.0 for a deflated entry, 4.5 for one
+# that cannot be read without understanding Zip64.
+_VERSION_DEFLATE = 20
+_VERSION_ZIP64 = 45
 
 # 4 GiB - 16, the largest value the 32-bit size fields can carry with room to
 # spare. An entry above this would need zip64 in the local header, which cannot
@@ -144,6 +163,82 @@ def _dos_timestamp(when: datetime) -> tuple[int, int]:
     dos_time = (when.hour << 11) | (when.minute << 5) | (when.second // 2)
     dos_date = ((year - 1980) << 9) | (when.month << 5) | when.day
     return dos_time, dos_date
+
+
+def _offset_needs_zip64(offset: int) -> bool:
+    """Whether a local-header offset has to be escaped into a Zip64 field.
+
+    `>=`, not `>`: 0xFFFFFFFF IS the escape marker, so an offset of exactly
+    that value cannot be written literally either -- a reader would go looking
+    for the extra field regardless of which of the two we meant.
+    """
+    return offset >= _U32
+
+
+def _needs_eocd64(entry_count: int, directory_offset: int,
+                  directory_size: int, forced: bool) -> bool:
+    """Whether the archive needs the Zip64 end-of-directory records.
+
+    **`>=` on all three thresholds, which is the same off-by-one
+    `_offset_needs_zip64` records one level down.** The plain EOCD writes each
+    of these through `min(value, escape)`, so a value sitting EXACTLY on its
+    escape marker -- 0xFFFF entries, a 0xFFFFFFFF directory offset or size --
+    is written AS the marker whether or not it was meant as one. With `>` no
+    EOCD64 record is emitted behind it, so a reader resolves the escape against
+    nothing and the directory is unreadable: byte for byte the failure that
+    made an unescaped entry offset unreadable.
+
+    `forced` is the entry-level decision arriving here, and it is the only one
+    of the four that is not a threshold: an entry that escaped its own offset
+    needs these records too.
+
+    **`entry_count` is the arm with no backstop**, which is why this is worth a
+    predicate rather than an inline condition. A directory past 4 GiB implies
+    some entry was past 4 GiB, so `forced` usually rescues the two offset arms
+    in practice -- but 65,535 small entries reach the count with every offset
+    still comfortably inside 32 bits, and nothing else would notice.
+    """
+    return (forced
+            or entry_count >= _U16
+            or directory_offset >= _U32
+            or directory_size >= _U32)
+
+
+def _central_record(name: str, flags: int, dos_time: int, dos_date: int,
+                    crc: int, compressed: int, uncompressed: int,
+                    offset: int) -> bytes:
+    """One central-directory record, escaping the offset to Zip64 if it must.
+
+    An offset past 4 GiB does not fit the 32-bit field, so that field carries
+    the escape value 0xFFFFFFFF and the real number moves into a Zip64
+    extended-information extra field (header id 0x0001). The escape is only
+    meaningful WITH that field: a reader that finds 0xFFFFFFFF and no extra
+    field has nothing to resolve it against, and the directory is unreadable.
+
+    The extra field's payload holds only the values that were escaped, in the
+    order the format fixes -- uncompressed size, compressed size, local-header
+    offset, disk start -- with no room to say which of them are present. Here
+    that payload is the offset alone, eight bytes with nothing before it,
+    because `_MAX_ENTRY` refuses any entry whose sizes would need escaping and
+    the disk number is always zero. That is the whole reason it is this short.
+
+    Pure and offset-only, so the 4 GiB case is testable without writing 4 GiB.
+    """
+    raw_name = name.encode("utf-8")
+    if _offset_needs_zip64(offset):
+        extra = struct.pack("<HHQ", _ZIP64_EXTRA_ID, 8, offset)
+        version_needed = _VERSION_ZIP64
+        stored_offset = _U32
+    else:
+        extra = b""
+        version_needed = _VERSION_DEFLATE
+        stored_offset = offset
+
+    return struct.pack(
+        "<IHHHHHHIIIHHHHHII", _SIG_CENTRAL, _VERSION_DEFLATE, version_needed,
+        flags, _DEFLATED, dos_time, dos_date, crc, compressed, uncompressed,
+        len(raw_name), len(extra), 0, 0, 0, 0, stored_offset,
+    ) + raw_name + extra
 
 
 def stream(entries: Iterable[tuple[str, Iterable[bytes]]],
@@ -218,24 +313,22 @@ def stream(entries: Iterable[tuple[str, Iterable[bytes]]],
         yield descriptor
         offset += compressed + len(descriptor)
 
-        if entry_offset > _U32:
+        if _offset_needs_zip64(entry_offset):
             # The entry itself fits in 32 bits; where it SITS does not, which
-            # only the central directory has to express.
+            # only the central directory has to express -- `_central_record`
+            # escapes the offset into a Zip64 extra field, and the archive as a
+            # whole then needs the Zip64 end-of-directory records too.
             needs_zip64 = True
 
-        central.append(struct.pack(
-            "<IHHHHHHIIIHHHHHII", _SIG_CENTRAL, 20, 20, flags, _DEFLATED,
-            dos_time, dos_date, crc, compressed, uncompressed,
-            len(raw_name), 0, 0, 0, 0, 0,
-            min(entry_offset, _U32),
-        ) + raw_name)
+        central.append(_central_record(name, flags, dos_time, dos_date, crc,
+                                       compressed, uncompressed, entry_offset))
 
     directory_offset = offset
     directory = b"".join(central)
     yield directory
 
-    if (needs_zip64 or len(central) > _U16
-            or directory_offset > _U32 or len(directory) > _U32):
+    if _needs_eocd64(len(central), directory_offset, len(directory),
+                     needs_zip64):
         # 44 is the record's own size field: everything after it.
         yield struct.pack("<IQHHIIQQQQ", _SIG_EOCD64, 44, 45, 45, 0, 0,
                           len(central), len(central),

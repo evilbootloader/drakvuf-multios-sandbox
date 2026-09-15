@@ -12,7 +12,7 @@ import zipfile
 
 import pytest
 
-from conftest import WORKER_TOKEN, enqueue, state_of
+from conftest import WORKER_TOKEN, enqueue, owner_id, state_of
 
 WINDOWS_MIB = 6294
 SMALL_MIB = 2198
@@ -23,7 +23,6 @@ PE = b"MZ\x90\x00\x03" + b"\x00" * 60 + b"PE\x00\x00" + b"\x00" * 64
 ZIP = b"PK\x03\x04" + b"\x00" * 60
 
 REGISTRATION = {
-    "worker_id": "test-worker",
     "total_mib": 12082,
     "total_vlans": 8,
     "total_slots": 2,
@@ -187,8 +186,7 @@ def test_a_same_size_swap_after_admission_fails_the_job(registered, worker_heade
                       files={"file": ("sample.bin", evil)})
     assert swap.status_code == 204, "the size bound cannot catch a same-size swap"
 
-    claim = registered.post("/api/v1/worker/claim", headers=worker_headers, json={
-        "worker_id": "test-worker", "free_mib": 5082,
+    claim = registered.post("/api/v1/worker/claim", headers=worker_headers, json={ "free_mib": 5082,
         "free_vlans": 6, "free_slots": 2,
     }).json()
 
@@ -208,8 +206,7 @@ def test_an_unswapped_sample_is_leased_with_a_url(registered, worker_headers):
                files={"file": ("sample.bin", body)})
     registered.post(f"/api/v1/jobs/{created['job_id']}/uploaded")
 
-    claim = registered.post("/api/v1/worker/claim", headers=worker_headers, json={
-        "worker_id": "test-worker", "free_mib": 5082,
+    claim = registered.post("/api/v1/worker/claim", headers=worker_headers, json={ "free_mib": 5082,
         "free_vlans": 6, "free_slots": 2,
     }).json()
 
@@ -367,8 +364,7 @@ def test_cancel_before_a_clone_exists(registered, put_object, conn):
 
 def test_cancel_while_running_is_a_request(registered, worker_headers, put_object, conn):
     job_id, _ = upload_and_admit(registered, put_object)
-    registered.post("/api/v1/worker/claim", headers=worker_headers, json={
-        "worker_id": "test-worker", "free_mib": 5082,
+    registered.post("/api/v1/worker/claim", headers=worker_headers, json={ "free_mib": 5082,
         "free_vlans": 6, "free_slots": 2,
     })
     r = registered.post(f"/api/v1/jobs/{job_id}/cancel").json()
@@ -424,7 +420,7 @@ def test_hostile_filenames_round_trip_through_submission(registered, put_object,
 def test_a_filename_that_cannot_be_a_path_component_is_refused(client, name):
     """Refused at submission, before a row exists or a URL is signed.
 
-    Mirrors `sample_name_admissible()` in `automation/dirwatch.c:250` on
+    Mirrors `sample_name_admissible()` in `sandboxd/naming.py` on
     purpose -- the API is now the boundary that inotify watch used to be.
 
     Not a live escape today: MinIO refuses `..` components itself with
@@ -481,10 +477,10 @@ def _completed_with_artifacts(conn, age_days: int) -> uuid.UUID:
         INSERT INTO jobs (target_os, submitted_filename, state, manifest,
                           created_at, owner)
         VALUES ('ubuntu', 'x.bin', 'completed', '{"artifacts": ["trace.log"]}',
-                now() - %s::interval, 'fixture-owner@example.test')
+                now() - %s::interval, %s)
         RETURNING id
         """,
-        (f"{age_days} days",),
+        (f"{age_days} days", owner_id(conn)),
     ).fetchone()[0]
 
 
@@ -520,10 +516,9 @@ def _completed_with_objects(conn, put_object, files: dict[str, bytes]):
     job_id = conn.execute(
         """
         INSERT INTO jobs (target_os, submitted_filename, state, manifest, owner)
-        VALUES ('ubuntu', 'x.bin', 'completed', %s,
-                'fixture-owner@example.test') RETURNING id
+        VALUES ('ubuntu', 'x.bin', 'completed', %s, %s) RETURNING id
         """,
-        (names,),
+        (names, owner_id(conn)),
     ).fetchone()[0]
     for name, body in files.items():
         put_object(f"results/{job_id}/{name}", body)
@@ -610,7 +605,7 @@ def test_a_run_with_no_artifacts_has_nothing_to_download(client, conn):
     job_id = conn.execute(
         "INSERT INTO jobs (target_os, submitted_filename, state, manifest, owner) "
         "VALUES ('ubuntu', 'x.bin', 'completed', '{\"artifacts\": []}', "
-        "        'fixture-owner@example.test') RETURNING id"
+        "        %s) RETURNING id", (owner_id(conn),)
     ).fetchone()[0]
 
     assert client.get(f"/api/v1/jobs/{job_id}/artifacts.zip").status_code == 404
@@ -636,9 +631,10 @@ def test_an_artifact_name_is_url_encoded_into_the_link(client, conn):
         INSERT INTO jobs (target_os, submitted_filename, state, manifest, owner)
         VALUES ('ubuntu', 'x.bin', 'completed',
                 '{"artifacts": ["extracted/a b&c.exe"]}',
-                'fixture-owner@example.test')
+                %s)
         RETURNING id
-        """
+        """,
+        (owner_id(conn),),
     ).fetchone()[0]
 
     urls = client.get(f"/api/v1/jobs/{job_id}").json()["artifacts"]
@@ -759,7 +755,7 @@ def test_the_stream_opens_with_the_current_state(client, conn):
     job_id = conn.execute(
         "INSERT INTO jobs (target_os, submitted_filename, state, owner) "
         "VALUES ('ubuntu', 'x.bin', 'completed',"
-        "        'fixture-owner@example.test') RETURNING id"
+        "        %s) RETURNING id", (owner_id(conn),)
     ).fetchone()[0]
 
     frames = _stream_frames(client, job_id)
@@ -778,7 +774,7 @@ def test_the_stream_ends_at_a_terminal_state(client, conn):
     job_id = conn.execute(
         "INSERT INTO jobs (target_os, submitted_filename, state, owner) "
         "VALUES ('ubuntu', 'x.bin', 'failed',"
-        "        'fixture-owner@example.test') RETURNING id"
+        "        %s) RETURNING id", (owner_id(conn),)
     ).fetchone()[0]
 
     with client.stream("GET", f"/api/v1/jobs/{job_id}/events") as r:

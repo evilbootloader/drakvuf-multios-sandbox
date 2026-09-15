@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import io
 import json
+import re
 import zipfile
 
 import dataclasses
@@ -41,8 +42,8 @@ from uuid import UUID, uuid4
 import pytest
 from starlette.websockets import WebSocketDisconnect
 
-from conftest import enqueue
-from sandbox_platform import objects
+from conftest import enqueue, owner_id
+from sandbox_platform import auth, objects
 
 A = "analyst-a@example.test"
 B = "analyst-b@example.test"
@@ -90,8 +91,8 @@ def completed_with_artifacts(conn, put_object, owner, files, key_prefix="",
                           owner, key_prefix)
         VALUES (%s, 'ubuntu', 'x.bin', 'completed', %s, %s, %s) RETURNING id
         """,
-        (job_id or uuid4(), json.dumps({"artifacts": sorted(files)}), owner,
-         key_prefix),
+        (job_id or uuid4(), json.dumps({"artifacts": sorted(files)}),
+         owner_id(conn, owner), key_prefix),
     ).fetchone()[0]
     for name, body in files.items():
         # **Built literally, NOT through objects.result_prefix.** Using the
@@ -170,7 +171,7 @@ def _completed_job_of(conn, owner):
     return conn.execute(
         "INSERT INTO jobs (target_os, submitted_filename, state, owner) "
         "VALUES ('ubuntu', 'x.bin', 'completed', %s) RETURNING id",
-        (owner,),
+        (owner_id(conn, owner),),
     ).fetchone()[0]
 
 
@@ -298,6 +299,119 @@ def test_a_public_job_is_readable_by_anyone_in_full(client, conn, put_object,
     archive = zipfile.ZipFile(io.BytesIO(r.content))
     archive.setpassword(b"infected")
     assert archive.read("extracted/evil.exe") == payload
+
+
+# **Publishing the RESULT is not publishing the SUBMITTER.** Decision 6 shares
+# an analysis, and nothing in it says who ran it. Both identifying fields are
+# withheld from a reader who is not the owner -- the address because it names a
+# person, and the tenant id because several public jobs carrying one id say
+# "same submitter" just as plainly. Opacity is not anonymity.
+#
+# The owner's own view is the other half and needs its own test: a comparison
+# that got the types wrong would redact the address from everyone, including
+# the person whose address it is, and every stranger-side assertion would still
+# pass.
+#
+# Three readers, three tests, because the rule answers differently for each: a
+# stranger, the owner, and infrastructure -- which is not a tenant at all and is
+# exempt. Only the stranger case fails against a redaction that is too WIDE, and
+# it is the one case that passes against every version of this rule there is.
+
+def test_a_stranger_reading_a_public_job_gets_neither_identifying_field(
+        client, conn, put_object, as_a, as_b):
+    job_id = completed_with_artifacts(conn, put_object, A, {})
+    conn.execute("UPDATE jobs SET visibility = 'public' WHERE id = %s", (job_id,))
+
+    body = client.get(f"/api/v1/jobs/{job_id}", headers=as_b).json()
+
+    assert body["owner_email"] == "REDACTED"
+    assert body["owner"] == "REDACTED"
+    # Not merely absent from the two fields -- absent from the response.
+    assert A not in json.dumps(body)
+
+    # The listing is a separate code path and redacts separately.
+    row = next(j for j in client.get("/api/v1/jobs", headers=as_b).json()
+               if j["id"] == str(job_id))
+    assert row["owner_email"] == "REDACTED"
+    assert row["owner"] == "REDACTED"
+
+
+def test_the_owner_of_a_public_job_still_sees_their_own_address(
+        client, conn, put_object, as_a):
+    """The redaction must be about the READER, not about the row.
+
+    This is what fails if the comparison compares a tenant id to an address --
+    which it did, twice, while the identity column was being changed. Nothing on
+    the stranger side can catch it: over-redaction looks exactly like working
+    redaction from the outside.
+    """
+    job_id = completed_with_artifacts(conn, put_object, A, {})
+    conn.execute("UPDATE jobs SET visibility = 'public' WHERE id = %s", (job_id,))
+
+    body = client.get(f"/api/v1/jobs/{job_id}", headers=as_a).json()
+
+    assert body["owner_email"] == A
+    assert body["owner"] != "REDACTED"
+
+    row = next(j for j in client.get("/api/v1/jobs", headers=as_a).json()
+               if j["id"] == str(job_id))
+    assert row["owner_email"] == A
+
+
+def test_infrastructure_reads_the_real_owner_and_a_tenant_still_does_not(
+        client, conn, put_object, infrastructure):
+    """`auth.EVERYTHING` is exempt from the redaction; a tenant is not.
+
+    **The sentinel is not a string**, so `owner != identity` was true for it
+    however the row read -- and infrastructure got `REDACTED` on exactly the
+    PUBLIC jobs while reading the real owner on every private one it was handed.
+    That is backwards from what `auth.visible_to` does for the same caller: it
+    returns `TRUE` and scopes nothing, because Dom0 and the command-line tools
+    are the things that RUN these jobs. Withholding the submitter from them
+    protects nobody from anybody.
+
+    Cosmetic rather than a leak, which is why it survived: every assertion in
+    the two tests above passes against it.
+
+    Both halves on ONE listener, deliberately. The `infrastructure` fixture is
+    the mTLS configuration -- Access off, `INFRASTRUCTURE_LISTENER` set -- so a
+    caller with no credential resolves to `EVERYTHING`, and overriding
+    `access_identity` partway through turns the same client into an ordinary
+    authenticated tenant without changing anything else. One row, one
+    configuration, two readers: the difference asserted is the reader and
+    nothing else. (`client` clears the override in its teardown.)
+    """
+    from sandbox_platform.app import app
+
+    job_id = completed_with_artifacts(conn, put_object, A, {})
+    conn.execute("UPDATE jobs SET visibility = 'public' WHERE id = %s", (job_id,))
+
+    # No Cf-Access-Jwt-Assertion header at all, as on the mTLS listener.
+    body = client.get(f"/api/v1/jobs/{job_id}").json()
+    assert body["owner_email"] == A
+    assert body["owner"] != "REDACTED"
+
+    # The listing redacts on its own code path and has to be exempt on its own
+    # too -- one helper now, and this is what holds the two answers together.
+    row = next(j for j in client.get("/api/v1/jobs").json()
+               if j["id"] == str(job_id))
+    assert row["owner_email"] == A
+    assert row["owner"] != "REDACTED"
+
+    # Same listener, same row, an authenticated tenant who is not the owner:
+    # still redacted. Without this half the test passes against a redaction
+    # deleted outright.
+    app.dependency_overrides[auth.access_identity] = lambda: B
+
+    body = client.get(f"/api/v1/jobs/{job_id}").json()
+    assert body["owner_email"] == "REDACTED"
+    assert body["owner"] == "REDACTED"
+    assert A not in json.dumps(body)
+
+    row = next(j for j in client.get("/api/v1/jobs").json()
+               if j["id"] == str(job_id))
+    assert row["owner_email"] == "REDACTED"
+    assert row["owner"] == "REDACTED"
 
 
 # --- 7. publishing ----------------------------------------------------------
@@ -492,7 +606,7 @@ def test_an_ownerless_job_cannot_exist_at_all(conn):
         )
 
 
-def test_the_mtls_listener_cannot_publish(client, conn, no_identity):
+def test_the_mtls_listener_cannot_publish(client, conn, infrastructure):
     """403, and it never reaches the database.
 
     The certificate-gated listener authenticates a MACHINE -- Dom0 and the
@@ -504,9 +618,9 @@ def test_the_mtls_listener_cannot_publish(client, conn, no_identity):
     is a fact about the LISTENER and not about the job, so it discloses nothing
     about which ids exist.
 
-    `no_identity` rather than `access_token`, deliberately: this test needs
-    the settings a deployment gives the mTLS listener -- Access off, identity
-    None -- which the `client` fixture otherwise overrides away.
+    `infrastructure` rather than `access_token`, deliberately: this test needs
+    the settings a deployment gives the mTLS listener -- Access off, and
+    INFRASTRUCTURE_LISTENER set so an unauthenticated caller is EVERYTHING -- which the `client` fixture otherwise overrides away.
     """
     job_id = _completed_job_of(conn, A)
 
@@ -523,7 +637,8 @@ def test_the_mtls_listener_cannot_publish(client, conn, no_identity):
 # and the shared pool it described stopped being reachable --
 # `test_an_ownerless_job_cannot_exist_at_all` above is what it became.
 
-def test_the_mtls_listener_still_sees_everything(client, conn, no_identity):
+def test_the_mtls_listener_still_sees_everything(client, conn,
+                                                 infrastructure):
     """No token, no scope, and that is not the hole it looks like.
 
     `access_identity` returns None only where REQUIRE_ACCESS_JWT is unset,
@@ -532,14 +647,15 @@ def test_the_mtls_listener_still_sees_everything(client, conn, no_identity):
     unauthenticated over the browser one'. Dom0 and the command-line tools
     must not be locked out of a job a browser user submitted.
 
-    `no_identity` rather than `access_token`, deliberately: this test needs the
-    settings a deployment gives the mTLS listener -- Access off, identity None
+    `infrastructure` rather than `access_token`, deliberately: this test needs
+    the settings a deployment gives the mTLS listener -- Access off, and
+    INFRASTRUCTURE_LISTENER set so an unauthenticated caller is EVERYTHING
     -- which the `client` fixture otherwise overrides away.
     """
     job_id = conn.execute(
         "INSERT INTO jobs (target_os, submitted_filename, state, owner) "
         "VALUES ('ubuntu', 'browser.bin', 'received', %s) RETURNING id",
-        (A,),
+        (owner_id(conn, A),),
     ).fetchone()[0]
 
     # No Cf-Access-Jwt-Assertion header at all, as on the mTLS listener.
@@ -559,15 +675,14 @@ def test_a_worker_runs_a_job_it_does_not_own(client, conn, worker_headers):
     This job is owned by a browser user the worker has never heard of.
     """
     client.post("/api/v1/worker/register", headers=worker_headers, json={
-        "worker_id": worker_headers["X-Worker-Id"],
         "total_mib": 12082, "total_vlans": 8, "total_slots": 2,
         "pipelines": [{"os": "ubuntu", "required_mib": 2048}],
     })
     job_id = enqueue(conn, "ubuntu", 2048)
-    conn.execute("UPDATE jobs SET owner = %s WHERE id = %s", (A, job_id))
+    conn.execute("UPDATE jobs SET owner = %s WHERE id = %s",
+                 (owner_id(conn, A), job_id))
 
     claimed = client.post("/api/v1/worker/claim", headers=worker_headers, json={
-        "worker_id": worker_headers["X-Worker-Id"],
         "free_mib": 8192, "free_vlans": 6, "free_slots": 2,
     })
 
@@ -583,14 +698,13 @@ def test_a_worker_reports_progress_on_a_job_it_does_not_own(
     `auth.leased_job`, and owner-scoping any of them would strand the job
     mid-run rather than refusing it up front."""
     client.post("/api/v1/worker/register", headers=worker_headers, json={
-        "worker_id": worker_headers["X-Worker-Id"],
         "total_mib": 12082, "total_vlans": 8, "total_slots": 2,
         "pipelines": [{"os": "ubuntu", "required_mib": 2048}],
     })
     job_id = enqueue(conn, "ubuntu", 2048)
-    conn.execute("UPDATE jobs SET owner = %s WHERE id = %s", (A, job_id))
+    conn.execute("UPDATE jobs SET owner = %s WHERE id = %s",
+                 (owner_id(conn, A), job_id))
     client.post("/api/v1/worker/claim", headers=worker_headers, json={
-        "worker_id": worker_headers["X-Worker-Id"],
         "free_mib": 8192, "free_vlans": 6, "free_slots": 2,
     })
 
@@ -639,9 +753,12 @@ def test_b_cannot_open_a_console_socket_on_as_job(client, conn, monkeypatch,
     # in the wrong state -- which would make this test green against an
     # unscoped build. Checked: it is.
     with pytest.raises(WebSocketDisconnect) as exc:
+        # Origin alongside the credential: a browser sends both, and the
+        # handshake is refused without one. Same-origin here, so the only thing
+        # under test stays the TENANCY check rather than the origin check.
         with client.websocket_connect(
             f"/api/v1/jobs/{job_id}/console",
-            headers=as_b,
+            headers={**as_b, "origin": "http://testserver"},
         ) as ws:
             ws.receive_text()
 
@@ -663,7 +780,8 @@ def test_a_can_open_a_console_socket_on_their_own_job(client, conn, monkeypatch,
     conn.execute("UPDATE jobs SET state = 'executing' WHERE id = %s", (job_id,))
 
     with client.websocket_connect(f"/api/v1/jobs/{job_id}/console",
-                                  headers=as_a):
+                                  headers={**as_a,
+                                           "origin": "http://testserver"}):
         pass
 
 # --- 12. the per-user key prefix -------------------------------------------
@@ -782,7 +900,7 @@ def test_a_worker_reaches_a_sample_under_someone_elses_prefix(
         "INSERT INTO jobs (id, target_os, submitted_filename, required_mib,"
         "                  state, owner, key_prefix)"
         " VALUES (%s, 'ubuntu', 's.bin', 2048, 'queued', %s, %s)",
-        (job_id, A, prefix),
+        (job_id, owner_id(conn, A), prefix),
     )
 
     # Literal, for the reason `completed_with_artifacts` gives: the fixture must
@@ -796,12 +914,10 @@ def test_a_worker_reaches_a_sample_under_someone_elses_prefix(
                  (hashlib.md5(body).hexdigest(), job_id))
 
     client.post("/api/v1/worker/register", headers=worker_headers, json={
-        "worker_id": worker_headers["X-Worker-Id"],
         "total_mib": 12082, "total_vlans": 8, "total_slots": 2,
         "pipelines": [{"os": "ubuntu", "required_mib": 2048}],
     })
     claimed = client.post("/api/v1/worker/claim", headers=worker_headers, json={
-        "worker_id": worker_headers["X-Worker-Id"],
         "free_mib": 8192, "free_vlans": 6, "free_slots": 2,
     })
 
@@ -858,22 +974,33 @@ def test_the_longest_admissible_key_still_fits_s3(conn):
     conn.execute(
         "INSERT INTO jobs (target_os, submitted_filename, state, key_prefix,"
         "                  owner)"
-        " VALUES ('ubuntu', 'x.bin', 'received', %s, %s)", (prefix, owner))
+        " VALUES ('ubuntu', 'x.bin', 'received', %s, %s)",
+        (prefix, owner_id(conn, owner)))
 
 
-# --- 13. identities that cannot become a key --------------------------------
+# --- 13. an identity provider's value cannot reach an object key ------------
 #
-# The budget above holds only while the owner segment stays inside
-# `objects.MAX_OWNER`, and nothing upstream guarantees that: the value is the
-# Access JWT's `email` claim, which arrives from whatever identity provider
-# the deployment is wired to. `owner_prefix` is where that becomes the
-# platform's problem, and these are the two ways it can go wrong.
+# **This section was inverted by migration 0009, not merely updated.** It used
+# to assert that admission REFUSED an address too long or too separator-laden
+# to become a key prefix, because the prefix was built from the address itself
+# and `owner_prefix` was where an identity provider's value became this
+# platform's problem.
 #
-# Both must be refused BEFORE the INSERT. Failing later is not a smaller
-# version of the same thing -- an over-long key gets the submitter a 201 and
-# an upload URL that can only ever fail, and a separator gets them a 500 from
-# the 0008 CHECK. Neither tells them anything, and both leave the operator
-# reading MinIO errors to find out an address was too long.
+# Since 0009 the prefix is built from an opaque tenant id, so that class of
+# failure is structurally gone: `resolve_tenant` has already replaced the
+# address with a uuid before `create_job` runs, and a uuid is always 36 bytes
+# and never contains `/`. The prefix went from a 261-byte worst case to a fixed
+# 43.
+#
+# So the tests below now pin the PROPERTY that made the old guard unnecessary.
+# That is worth more than deleting them: the failure mode they guard against is
+# someone reintroducing an address-derived prefix, which would look like a
+# readability improvement and would silently restore every problem 0009 removed.
+#
+# `owner_prefix`'s own guards stay, and the last test here is what stops them
+# rotting -- they still bound any caller that passes something other than a
+# tenant id, and `MAX_OWNER` still has to accommodate the address-based
+# prefixes that pre-0009 rows really do carry.
 
 def _long_email(nbytes: int) -> str:
     """An address of exactly `nbytes`, shaped like a real one."""
@@ -883,59 +1010,93 @@ def _long_email(nbytes: int) -> str:
     return email
 
 
-def test_an_identity_too_long_for_a_key_is_refused_at_submission(
-        client, conn, access_token):
-    """One byte over the bound, and admission stops rather than minting a key.
+def test_an_oversized_identity_is_refused_before_it_is_stored(client, conn,
+                                                              access_token):
+    """Refused at the identity boundary, not at admission.
 
-    The failure this prevents is silent: `presigned_upload` signs whatever it
-    is given, MinIO rejects the key only when the bytes arrive, and by then
-    the submitter has had a 201 and the job row exists. So the assertion that
-    matters is the second one -- refused, and nothing written.
+    **The reason changed with 0009 even though the outcome did not.** This used
+    to be about the object key: the prefix was built from the address, so 255
+    bytes minted a key S3 could not store. The prefix holds a uuid now and that
+    failure is structurally gone -- `test_owner_prefix_still_refuses_what_it_...`
+    below covers what is left of it.
+
+    What justifies the bound today is weaker and still real: the address is
+    STORED and DISPLAYED, and it comes from whatever identity provider the
+    deployment is wired to, so an unbounded one would be rendered in the jobs
+    list. `auth.MAX_EMAIL_OCTETS` is where that is decided.
+
+    403 rather than 400: the caller authenticated fine and cannot shorten a
+    claim their IdP issued, so this is a fact about their identity rather than
+    about the request -- see `auth.required_identity` for the same reasoning.
+
+    Octets, not characters. A 111-character address of multi-byte codepoints is
+    206 bytes, and the second case is what stops the bound being reimplemented
+    with `len()`.
     """
-    over = access_token(_long_email(objects.MAX_OWNER + 1))
+    address = _long_email(auth.MAX_EMAIL_OCTETS + 1)
 
-    r = client.post("/api/v1/jobs", headers=over,
+    r = client.post("/api/v1/jobs", headers=access_token(address),
                     json={"target_os": "ubuntu", "filename": "s.bin",
                           "size_bytes": 4})
 
-    assert r.status_code == 400, r.text
-    assert str(objects.MAX_OWNER) in r.json()["detail"]
+    assert r.status_code == 403, r.text
+    assert str(auth.MAX_EMAIL_OCTETS) in r.json()["detail"]
+    # The address itself is logged, never returned: it is attacker-influenceable
+    # and the caller already knows it.
+    assert "aaaa" not in r.json()["detail"]
     assert conn.execute("SELECT count(*) FROM jobs").fetchone()[0] == 0
+    # Scoped to THIS address, not `count(*)`: `identities` is deliberately not
+    # in the `conn` fixture's TRUNCATE, so the table carries rows from earlier
+    # tests in the session and an empty-table assertion would be testing the
+    # fixture rather than the refusal.
+    assert conn.execute(
+        "SELECT count(*) FROM identities WHERE email = %s", (address,)
+    ).fetchone()[0] == 0
 
 
 def test_the_longest_real_address_is_still_admitted(client, conn, access_token):
-    """The guard must not have closed the door on RFC-legal addresses.
+    """The bound must not have closed the door on RFC-legal addresses.
 
-    `MAX_OWNER` is RFC 5321's limit exactly, so 254 bytes is a valid address
-    and has to work. Without this, `>=` in place of `>` -- or a bound picked
-    from the artifact arithmetic, which would be 72 -- passes every other test
-    in this section while locking out real users.
+    254 octets is a valid address and has to work. Without this, `>=` for `>` --
+    or a bound taken from the old key arithmetic, which would be 72 -- passes
+    every other test here while locking out real users.
     """
-    ok = access_token(_long_email(objects.MAX_OWNER))
+    ok = access_token(_long_email(auth.MAX_EMAIL_OCTETS))
 
     r = client.post("/api/v1/jobs", headers=ok,
                     json={"target_os": "ubuntu", "filename": "s.bin",
                           "size_bytes": 4})
 
     assert r.status_code == 201, r.text
-    prefix = conn.execute("SELECT key_prefix FROM jobs WHERE id = %s",
-                          (r.json()["job_id"],)).fetchone()[0]
-    assert len(prefix.encode()) == 261         # the worst case the budget assumes
 
 
-def test_an_identity_containing_a_separator_is_refused_at_submission(
+def test_the_bound_counts_octets_and_not_characters(client, conn, access_token):
+    """111 characters, 206 octets: admitted.
+
+    The mirror of the test above. A bound written as `len(address)` admits this
+    and also admits a 254-character address that is 1016 octets -- which is the
+    bug `jobs.py`'s `_MAX_SAMPLE_NAME` comment records having already shipped
+    once, in the sample-name path, for exactly this reason.
+    """
+    multibyte = "\u00e9" * 130 + "@" + "b" * 10 + ".test"
+    assert len(multibyte) < auth.MAX_EMAIL_OCTETS < len(multibyte.encode())
+
+    r = client.post("/api/v1/jobs", headers=access_token(multibyte),
+                    json={"target_os": "ubuntu", "filename": "s.bin",
+                          "size_bytes": 4})
+
+    assert r.status_code == 403, r.text
+
+
+def test_an_identity_containing_a_separator_cannot_reach_an_object_key(
         client, conn, access_token):
-    """A `/` in the claim would add a path segment to the prefix.
+    """A `/` in the claim no longer adds a path segment.
 
-    The 0008 CHECK refuses it too -- `^u/[^/]+/[0-9a-f]{3}/$` cannot match --
-    so this is about WHERE it is caught, not whether. Left to the constraint
-    it surfaces as an integrity error from inside the INSERT, which reaches
-    the submitter as a 500 and the operator as a stack trace.
-
-    With `raise_server_exceptions` on, TestClient re-raises the integrity
-    error rather than returning a 500, so removing the guard makes this fail
-    on the psycopg exception instead of on the status. Red either way; the
-    status assertion is what names the intent.
+    This was a 400 before 0009 and is a 201 now, for the same reason as above:
+    the character never reaches the prefix. The 0008 CHECK
+    (`^u/[^/]+/[0-9a-f]{3}/$`) is asserted here as well, because it is the
+    database's half of the same guarantee and it is what would fail loudly if
+    an address ever found its way back into the value.
     """
     weird = access_token("a/b@example.test")
 
@@ -943,5 +1104,27 @@ def test_an_identity_containing_a_separator_is_refused_at_submission(
                     json={"target_os": "ubuntu", "filename": "s.bin",
                           "size_bytes": 4})
 
-    assert r.status_code == 400, r.text
-    assert conn.execute("SELECT count(*) FROM jobs").fetchone()[0] == 0
+    assert r.status_code == 201, r.text
+    prefix = conn.execute("SELECT key_prefix FROM jobs WHERE id = %s",
+                          (r.json()["job_id"],)).fetchone()[0]
+    assert "/" not in prefix.removeprefix("u/").removesuffix("/")[:-4]
+    assert re.fullmatch(r"u/[^/]+/[0-9a-f]{3}/", prefix), prefix
+
+
+@pytest.mark.parametrize("bad, reason", [
+    (_long_email(objects.MAX_OWNER + 1), "over the"),
+    ("a/b@example.test", "path separator"),
+])
+def test_owner_prefix_still_refuses_what_it_always_did(bad, reason):
+    """The guards in `owner_prefix` are unreachable from a live identity, and
+    kept.
+
+    Tested directly rather than through the API, because no request can produce
+    these arguments any more -- which is exactly why they need a test of their
+    own. Two things still depend on them: `MAX_OWNER` has to keep bounding the
+    address-derived prefixes that pre-0009 rows genuinely carry, and any future
+    caller that passes something other than a tenant id gets a refusal rather
+    than a key S3 cannot store.
+    """
+    with pytest.raises(ValueError, match=reason):
+        objects.owner_prefix(uuid4(), bad)

@@ -1,11 +1,11 @@
 """Several analyses at once: issue #41 (DRAFT-060).
 
-**This is the capability `dirwatch` structurally cannot deliver, and nothing
+**This is the capability `dirwatch` structurally could not deliver, and nothing
 has ever demonstrated it.** `fake_worker.py` is `--once` oriented -- it claims
 a job, walks the state machine and exits -- so the protocol has only ever been
 exercised one job at a time. Concurrency is the whole reason #41 exists:
 
-    dirwatch takes one origin domain per invocation, so there is one instance
+    dirwatch took one origin domain per invocation, so there was one instance
     per OS; and two instances cannot run, because the thread-slot index IS the
     vlan and the slot array is process-local. Two watchers allocate the same
     vlans and share gateway addresses and isolation rules, with no symptom but
@@ -148,7 +148,7 @@ def claim_once(api: WorkerAPI, table: ResourceTable):
 
 def test_three_os_families_run_at_once():
     """An Ubuntu, an Android and a Windows analysis in flight simultaneously,
-    each on its own vlan. Under `dirwatch` this needs three watchers, and two
+    each on its own vlan. Under `dirwatch` this needed three watchers, and two
     watchers cannot coexist."""
     table = ResourceTable(total_mib=16384, vlans=range(1, 9), total_slots=4,
                           admitted=True)
@@ -296,7 +296,7 @@ def test_a_cancellation_reaches_one_job_and_not_the_others():
 
 
 def test_a_vlan_is_reusable_only_after_its_job_releases():
-    """The ordering dirwatch.c:697 records: the vlan IS the clone name, so
+    """The ordering the C watcher recorded: the vlan IS the clone name, so
     releasing before teardown lets the next job start cloning
     `<origin>-<vlan>-clone` while that domain is still being destroyed."""
     table = ResourceTable(total_mib=65536, vlans=[1, 2], total_slots=4,

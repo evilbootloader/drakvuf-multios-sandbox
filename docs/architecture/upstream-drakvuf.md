@@ -22,9 +22,12 @@ uses (see `analysis-pipeline.md`).
 (opened 2016, since closed upstream) describes a timeout-triggered clone
 retry failing to find its sample, because the sample was already moved out
 of the incoming folder on the first attempt. This project's `dirwatch.c`
-has the same retry-on-timeout structure (60s preconfig / 180s drakvuf
-timeouts), so it's plausible the same bug class applies — not yet checked
-(DRAFT-010).
+had the same retry-on-timeout structure (60s preconfig / 180s drakvuf
+timeouts), so it was plausible the same bug class applied — never checked
+(DRAFT-010), and now unreachable: this project's copy was deleted
+2026-09-15 and `sandboxd` fetches each sample from the object store per
+attempt rather than moving a file out of a watch folder, so a retry cannot
+lose its sample this way.
 
 **Plugins confirmed present in `src/plugins/`:** `filetracer`,
 `fileextractor`, `memdump`, `syscalls` (all four used by this project),
@@ -132,10 +135,11 @@ Two consequences that change technical statements rather than sequencing:
   justified as bus-factor insurance (roadmap risk #8) at P2. If engine code
   is about to be modified, a pinned revision becomes the baseline those
   changes are diffed from — a prerequisite, not a precaution.
-- **DRAFT-010's purpose changes.** Documenting `dirwatch.c`'s interface
-  becomes input to engine work rather than documentation for its own sake,
-  and its unresolved `dirwatch.c` / `dirwatch_old.c` authority question
-  stops being a tidy-up.
+- **DRAFT-010 is moot.** It wanted this project's `dirwatch.c` interface
+  documented, and its unresolved `dirwatch.c` / `dirwatch_old.c` authority
+  question settled. Both files were deleted 2026-09-15; the authority
+  question is answered by neither being authoritative. What survives of the
+  interface is recorded in `docs/architecture/automation-files.md`.
 
 Milestones are deliberately **not** renumbered here; the affected drafts
 propose their own resequencing.
