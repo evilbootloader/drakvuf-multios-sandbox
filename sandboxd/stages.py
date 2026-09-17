@@ -83,7 +83,7 @@ def _must_stay_inside(path: Path, root: Path, what: str) -> None:
 # DRAFT-018 bounds a manifest at 512 artifacts. `extracted/` is named after
 # files the SAMPLE wrote, so the real ceiling is however many it drops; hitting
 # the cap sets `truncated` rather than silently listing a prefix.
-MAX_ARTIFACTS = 512
+MAX_ARTIFACTS = 2048
 
 # **`ArtifactRequest.artifacts` on the platform is capped at 64 names, and that
 # cap is PER CALL rather than per job** -- routers/worker.py says so and invites
