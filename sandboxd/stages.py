@@ -537,7 +537,7 @@ class Analysis:
             applied["reason"] = fallback_reason
         return applied
 
-    def _trace_options(self, os_, kind, plugins) -> TraceOptions:
+    def _trace_options(self, os_, kind, plugins, timeout, disable_sysret) -> TraceOptions:
         """The measured defaults, unless the job or the host overrides them.
 
         Three layers, weakest first, and the order is the point:
@@ -568,6 +568,10 @@ class Analysis:
         options = guests.default_trace_options(os_, kind)
         if plugins:
             options = replace(options, plugins=tuple(plugins))
+        if timeout:
+            options = replace(options, timeout=timeout)
+        if isinstance(disable_sysret, bool):
+            options = replace(options, disable_sysret=disable_sysret)
         if self._cfg.plugins is None:
             return options
         return replace(options, plugins=tuple(self._cfg.plugins))
@@ -595,7 +599,7 @@ class Analysis:
             profile=self._cfg.profile(os_),
             injection_pid=self._cfg.injection_pids[os_],
             result_dir=job_dir,
-            options=self._trace_options(os_, kind, lease.plugins),
+            options=self._trace_options(os_, kind, lease.plugins, lease.timeout, lease.disable_sysret),
             kind=kind,
         )
 

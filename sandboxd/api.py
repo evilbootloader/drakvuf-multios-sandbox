@@ -79,6 +79,8 @@ class Lease:
     sha256: str | None
     lease_expires_at: str
     plugins: list[str]
+    timeout: int
+    disable_sysret: bool
     # Where this job's traffic may go (DRAFT-057). The NAME of an exit this
     # host declared, never an endpoint the submitter supplied.
     #
@@ -300,6 +302,18 @@ class WorkerAPI:
                 # Empty means the measured defaults -- `stages._trace_options`
                 # owns that reading.
                 plugins=body.get("plugins") or [],
+                # `.get(key, default)` and NOT `or`, because `0` and `False`
+                # are both values a submitter can hold. `or` read an unticked
+                # `disable_sysret` as "absent" and put the flag back on, so the
+                # box could not be unticked from the form at all. Only a
+                # platform too old to send the field takes the fallback.
+                #
+                # `timeout=0` carries the same "empty means the measured
+                # defaults" reading as `plugins` above -- it is what migration
+                # 0011 backfills onto rows queued before the column existed --
+                # so it has to reach `_trace_options` intact to mean that.
+                timeout=body.get("timeout", 180),
+                disable_sysret=body.get("disable_sysret", True),
             )
         if status == "reserved":
             return Reserved(blocking_job_id=str(body["blocking_job_id"]),

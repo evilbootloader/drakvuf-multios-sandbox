@@ -25,6 +25,8 @@ from fastapi.responses import StreamingResponse
 from psycopg.rows import dict_row
 from pydantic import BaseModel, Field, model_validator
 
+from dataclasses import field
+
 from .. import auth
 from ..auth import Caller
 from .. import events
@@ -212,7 +214,9 @@ class CreateJobRequest(BaseModel):
     target_os: TargetOs
     filename: str = Field(min_length=1, max_length=_MAX_SAMPLE_NAME)
     size_bytes: int = Field(gt=0)
-    plugins: list
+    plugins: list["str"]
+    timeout: int = Field(gt=0, lt=600)
+    disable_sysret: bool = True
 
     # The second untrusted routing input (DRAFT-057), validated at this same
     # boundary and for the same reasons. Two fields rather than one because
@@ -337,6 +341,7 @@ class JobDetail(JobSummary):
     cancel_requested: bool
     manifest: dict | None
     artifacts: dict[str, str] = {}
+    plugins: list[str]
 
     # Set when the manifest could not be read. The job still renders -- state,
     # timings and sample identity are all on the row and all still true -- and
@@ -516,6 +521,17 @@ def create_job(req: CreateJobRequest,
             f"available plugins for Ubuntu and Android are {plugins_linux}",
         )
 
+    if not isinstance(req.timeout, int) or int(req.timeout) > 600 or int(req.timeout) < 0:
+        raise HTTPException(
+            status.HTTP_406_NOT_ACCEPTABLE,
+            f"timeout goes from 0 to 600",
+        )
+    
+    if not isinstance(req.disable_sysret, bool):
+        raise HTTPException(
+            status.HTTP_406_NOT_ACCEPTABLE,
+            f"disable_sysret should be true or false only",
+        )
 
     # Generated here rather than by the column default, because `key_prefix`
     # contains a shard derived from the id and has to be a value in the same
@@ -539,13 +555,13 @@ def create_job(req: CreateJobRequest,
         cur.execute(
             """
             INSERT INTO jobs (id, target_os, submitted_filename, size_bytes,
-                              state, owner, egress_mode, egress_exit, plugins, key_prefix)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                              state, owner, egress_mode, egress_exit, plugins, timeout, disable_sysret, key_prefix)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             RETURNING id
             """,
             (job_id, req.target_os.value, req.filename, req.size_bytes,
              JobState.RECEIVED.value, owner, egress_mode, egress_exit, req.plugins,
-             key_prefix),
+             req.timeout, req.disable_sysret, key_prefix),
         )
         job_id = cur.fetchone()[0]
 
@@ -792,6 +808,7 @@ def _detail(conn, job_id: UUID, identity: Caller) -> JobDetail:
             "      jobs.state, jobs.sha256, jobs.size_bytes, jobs.detected_type, jobs.queue_reason, "
             "      jobs.failure_stage, jobs.failure_reason, jobs.attempt, jobs.cancel_requested, "
             "      jobs.interacted, jobs.egress_mode, jobs.egress_exit, jobs.egress_applied, jobs.visibility, jobs.manifest, "
+            "      jobs.plugins::text[], "
             # COALESCE, because since DRAFT-061 an identity provisioned by
             # `resolve_tenant` carries its address in `access_subject` and
             # leaves `email` NULL -- the two keyspaces are separate so that a
@@ -858,7 +875,7 @@ def _detail(conn, job_id: UUID, identity: Caller) -> JobDetail:
             "state", "sha256", "size_bytes", "detected_type", "queue_reason",
             "failure_stage", "failure_reason", "attempt", "cancel_requested",
             "interacted",
-            "egress_mode", "egress_exit", "egress_applied", "visibility",
+            "egress_mode", "egress_exit", "egress_applied", "visibility"
         )},
         # Not in the comprehension above, because this route reads `SELECT *`
         # and cannot cast one column in SQL the way `list_jobs` does. Same
@@ -867,6 +884,7 @@ def _detail(conn, job_id: UUID, identity: Caller) -> JobDetail:
         owner=str(row["owner"]) if row["owner"] is not None else None,
         owner_email=str(row["owner_email"]) if row["owner_email"] is not None else None,
         manifest=row["manifest"] if isinstance(row["manifest"], dict) else None,
+        plugins=row["plugins"] or [],
         artifacts=artifacts,
         manifest_error=parsed.error,
         manifest_legacy=parsed.legacy,

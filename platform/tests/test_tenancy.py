@@ -63,7 +63,7 @@ def submit(client, headers, filename="sample.bin"):
     """Create a job as whoever `headers` authenticates, and return its id."""
     r = client.post(
         "/api/v1/jobs",
-        json={"target_os": "ubuntu", "filename": filename, "size_bytes": 4, "plugins": ["syscalls"],},
+        json={"target_os": "ubuntu", "filename": filename, "size_bytes": 4, "plugins": ["syscalls"], "timeout": 180, "disable_sysret": True,},
         headers=headers,
     )
     assert r.status_code == 201, r.text
@@ -898,8 +898,8 @@ def test_a_worker_reaches_a_sample_under_someone_elses_prefix(
     prefix = objects.owner_prefix(job_id, A)
     conn.execute(
         "INSERT INTO jobs (id, target_os, submitted_filename, required_mib,"
-        "                  state, owner, key_prefix)"
-        " VALUES (%s, 'ubuntu', 's.bin', 2048, 'queued', %s, %s)",
+        "                  state, owner, key_prefix, timeout, disable_sysret)"
+        " VALUES (%s, 'ubuntu', 's.bin', 2048, 'queued', %s, %s, 180, true)",
         (job_id, owner_id(conn, A), prefix),
     )
 
@@ -1037,7 +1037,7 @@ def test_an_oversized_identity_is_refused_before_it_is_stored(client, conn,
 
     r = client.post("/api/v1/jobs", headers=access_token(address),
                     json={"target_os": "ubuntu", "filename": "s.bin",
-                          "size_bytes": 4, "plugins": ["syscalls"],})
+                          "size_bytes": 4, "plugins": ["syscalls"], "timeout": 180, "disable_sysret": True,})
 
     assert r.status_code == 403, r.text
     assert str(auth.MAX_EMAIL_OCTETS) in r.json()["detail"]
@@ -1065,7 +1065,7 @@ def test_the_longest_real_address_is_still_admitted(client, conn, access_token):
 
     r = client.post("/api/v1/jobs", headers=ok,
                     json={"target_os": "ubuntu", "filename": "s.bin",
-                          "size_bytes": 4, "plugins": ["syscalls"],})
+                          "size_bytes": 4, "plugins": ["syscalls"], "timeout": 180, "disable_sysret": True,})
 
     assert r.status_code == 201, r.text
 
@@ -1083,7 +1083,7 @@ def test_the_bound_counts_octets_and_not_characters(client, conn, access_token):
 
     r = client.post("/api/v1/jobs", headers=access_token(multibyte),
                     json={"target_os": "ubuntu", "filename": "s.bin",
-                          "size_bytes": 4, "plugins": ["syscalls"],})
+                          "size_bytes": 4, "plugins": ["syscalls"], "timeout": 180, "disable_sysret": True,})
 
     assert r.status_code == 403, r.text
 
@@ -1102,7 +1102,7 @@ def test_an_identity_containing_a_separator_cannot_reach_an_object_key(
 
     r = client.post("/api/v1/jobs", headers=weird,
                     json={"target_os": "ubuntu", "filename": "s.bin",
-                          "size_bytes": 4, "plugins": ["syscalls"],})
+                          "size_bytes": 4, "plugins": ["syscalls"], "timeout": 180, "disable_sysret": True,})
 
     assert r.status_code == 201, r.text
     prefix = conn.execute("SELECT key_prefix FROM jobs WHERE id = %s",

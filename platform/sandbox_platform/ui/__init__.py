@@ -178,16 +178,28 @@ def _budget(os_: TargetOs) -> dict:
     that syscall return values are lost. See `guests.default_trace_options`
     for the full trade and the condition it rests on.
 
-    **KNOWN GAP: this checkbox is decorative.** `disable_sysret` is not on the
-    jobs table, not in `jobs.py`, and not on `sandboxd.api.Lease`, so a
-    per-job tick or untick never reaches Dom0 in either direction --
-    `sandboxd/stages.py:339` takes the flag from `guests.default_trace_options`
-    and moves only the plugin list. Keeping this default aligned with that
-    function is therefore cosmetic honesty, not wiring; the wiring is its own
-    change.
+    **No longer decorative.** `disable_sysret` and `timeout` are columns on
+    the jobs table since migration 0011, ride `Lease`, and are overlaid onto
+    the guest defaults by `stages._trace_options`. So these are the values a
+    submitter who never opens the advanced disclosure actually sends, not a
+    cosmetic echo of `guests.default_trace_options`.
+
+    That makes any disagreement with `guests.default_trace_options`
+    load-bearing rather than untidy. Two remain:
+
+      `timeout`         120 is the measured default for Ubuntu, Windows and an
+                        Android ELF, but NOT for an Android APK, which gets
+                        150s there. The kind is read from the sample's bytes on
+                        the worker and cannot be known while this form renders,
+                        so a form-default APK traces 30s short of its measured
+                        budget. Returning 150 for Android would cover it, at
+                        the cost of 30 extra seconds on an Android ELF.
+      `disable_sysret`  unticked for Windows against True there, so a Windows
+                        submitter who leaves the form alone turns the flag off
+                        rather than inheriting the Candidate default.
     """
     return {
-        "timeout": 180,
+        "timeout": 150 if TargetOs.ANDROID else 120,
         "linux": os_ is not TargetOs.WINDOWS,
         "disable_sysret": os_ is not TargetOs.WINDOWS,
     }

@@ -165,7 +165,7 @@ def test_owner_is_recorded_and_returned(client, issuer):
 
     created = client.post(
         "/api/v1/jobs",
-        json={"target_os": "ubuntu", "filename": "x.bin", "size_bytes": 4, "plugins": ["syscalls"],},
+        json={"target_os": "ubuntu", "filename": "x.bin", "size_bytes": 4, "plugins": ["syscalls"], "timeout":180, "disable_sysret": True,},
         headers=hdrs,
     )
     assert created.status_code == 201

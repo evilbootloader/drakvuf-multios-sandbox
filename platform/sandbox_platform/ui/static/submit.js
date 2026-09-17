@@ -59,6 +59,8 @@
         var targetOs = form.querySelector('input[name="target_os"]:checked').value;
         var checked_plugins = Array();
         form.querySelectorAll('input[name="plugins"]:checked').forEach((element) => checked_plugins.push(element.value));
+        var timeout = form.querySelector('input[name="timeout"]').value;
+        var disable_sysret = form.querySelector('input[name="disable_sysret"]:checked') != null;
         if (!file) { say("Choose a file first.", true); return; }
 
         var button = form.querySelector('button[type="submit"]');
@@ -76,7 +78,9 @@
                 target_os: targetOs,
                 filename: file.name,
                 size_bytes: file.size,
-                plugins: checked_plugins
+                plugins: checked_plugins,
+                timeout: timeout,
+                disable_sysret: disable_sysret
             };
             if (egress) {
                 payload.egress_mode = egress.dataset.mode;

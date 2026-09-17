@@ -53,6 +53,8 @@ class Lease:
     # `guests.default_trace_options`". Running with no plugin at all produces a
     # trace containing nothing and still reports success.
     plugins: list[str] = field(default_factory=list)
+    timeout: int = 180
+    disable_sysret: bool = True
 
 
 @dataclass(frozen=True)
@@ -109,6 +111,8 @@ def claim(
                 # `or []`, so a pre-0010 row's NULL and a submitter who ticked
                 # nothing arrive as the same thing. Both mean "the defaults".
                 plugins=row["plugins"] or [],
+                timeout=row["timeout"],
+                disable_sysret=row["disable_sysret"]
             )
 
         # Zero rows is ambiguous -- empty queue, or head does not fit -- so

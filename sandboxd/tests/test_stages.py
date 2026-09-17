@@ -49,6 +49,8 @@ class FakeLease:
     sha256: str | None = digest(_ELF)
     lease_expires_at: str = "2026-08-26T10:00:00Z"
     plugins: list[str] = field(default_factory=lambda: ["syscalls", "filetracer", "fileextractor", "memdump"])
+    timeout: int = 120
+    disable_sysret: bool = True
 
 
 @dataclass

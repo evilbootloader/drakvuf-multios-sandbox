@@ -196,6 +196,8 @@ def test_a_tab_with_no_data_is_marked_as_such(client, conn):
 
     page = client.get(f"/ui/jobs/{job_id}").text
 
+    assert "syscall" in page
+
     behaviour = [ln for ln in page.splitlines() if ">Behaviour<" in ln][0]
     assert 'data-empty="1"' in behaviour or "data-empty" in page
     overview = [ln for ln in page.splitlines() if ">Overview<" in ln][0]

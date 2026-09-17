@@ -168,6 +168,8 @@ class LeaseResponse(BaseModel):
     # field as well keeps a worker running against an older platform working
     # rather than 422-ing on a field that deployment does not send yet.
     plugins: list[str] = []
+    timeout: int = 180
+    disable_sysret: bool = True
 
 
 class ReservedResponse(BaseModel):
@@ -370,6 +372,8 @@ def claim(req: ClaimRequest, worker_id: WorkerAuth):
                 egress_exit=last.egress_exit,
                 key_prefix=last.key_prefix,
                 plugins=last.plugins,
+                timeout=last.timeout,
+                disable_sysret=last.disable_sysret
             )
 
         if time.monotonic() >= deadline:

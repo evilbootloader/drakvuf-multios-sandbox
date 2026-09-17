@@ -346,7 +346,7 @@ def test_a_new_tenant_is_granted_a_balance_on_first_submission(client, conn,
 
     r = client.post("/api/v1/jobs", headers=access_token(newcomer),
                     json={"target_os": "ubuntu", "filename": "x.bin",
-                          "size_bytes": 4, "plugins":["syscalls"],})
+                          "size_bytes": 4, "plugins":["syscalls"], "timeout":180, "disable_sysret": True,})
 
     assert r.status_code == 201, r.text
     assert balance_of(conn, newcomer) == 3600
@@ -364,7 +364,7 @@ def test_an_exhausted_tenant_is_refused_with_402(client, conn, access_token):
 
     r = client.post("/api/v1/jobs", headers=access_token(broke),
                     json={"target_os": "ubuntu", "filename": "x.bin",
-                          "size_bytes": 4, "plugins":["syscalls"],})
+                          "size_bytes": 4, "plugins":["syscalls"], "timeout":180, "disable_sysret": True,})
 
     assert r.status_code == 402, r.text
     assert conn.execute("SELECT count(*) FROM jobs WHERE owner = %s",
@@ -384,7 +384,7 @@ def test_a_negative_balance_is_refused_too(client, conn, access_token):
 
     r = client.post("/api/v1/jobs", headers=access_token(overdrawn),
                     json={"target_os": "ubuntu", "filename": "x.bin",
-                          "size_bytes": 4, "plugins":["syscalls"],})
+                          "size_bytes": 4, "plugins":["syscalls"], "timeout":180, "disable_sysret": True,})
 
     assert r.status_code == 402, r.text
 

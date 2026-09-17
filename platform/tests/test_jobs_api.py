@@ -44,7 +44,7 @@ def registered(client, worker_headers):
 
 def submit(client, target_os="ubuntu", filename="sample.bin", size=len(ELF), plugins=["syscalls"]):
     r = client.post("/api/v1/jobs", json={
-        "target_os": target_os, "filename": filename, "size_bytes": size, "plugins":plugins,
+        "target_os": target_os, "filename": filename, "size_bytes": size, "plugins":plugins, "timeout":180, "disable_sysret": True,
     })
     assert r.status_code == 201, r.text
     return r.json()
@@ -65,7 +65,7 @@ def upload_and_admit(client, put_object, body=ELF, **kw):
 def test_target_os_is_closed_at_submission(client, bad):
     """Issue #3: the one untrusted routing input, validated in one place."""
     r = client.post("/api/v1/jobs", json={
-        "target_os": bad, "filename": "x.bin", "size_bytes": 10, "plugins":["syscalls"],
+        "target_os": bad, "filename": "x.bin", "size_bytes": 10, "plugins":["syscalls"], "timeout":180, "disable_sysret": True,
     })
     assert r.status_code == 422
 
@@ -119,7 +119,7 @@ def test_the_declared_size_binds_the_upload_policy(client):
 
     over = client.post("/api/v1/jobs", json={
         "target_os": "ubuntu", "filename": "big.bin",
-        "size_bytes": settings.max_sample_bytes + 1, "plugins":["syscalls"],
+        "size_bytes": settings.max_sample_bytes + 1, "plugins":["syscalls"], "timeout":180, "disable_sysret": True,
     })
     assert over.status_code == 413
 
@@ -307,7 +307,7 @@ def test_oversized_is_refused_before_a_url_is_issued(client):
 
     r = client.post("/api/v1/jobs", json={
         "target_os": "ubuntu", "filename": "big.bin",
-        "size_bytes": settings.max_sample_bytes + 1, "plugins":["syscalls"],
+        "size_bytes": settings.max_sample_bytes + 1, "plugins":["syscalls"], "timeout":180, "disable_sysret": True,
     })
     assert r.status_code == 413
 
@@ -430,7 +430,7 @@ def test_a_filename_that_cannot_be_a_path_component_is_refused(client, name):
     row behind that only the abandon sweep clears.
     """
     r = client.post("/api/v1/jobs", json={
-        "target_os": "ubuntu", "filename": name, "size_bytes": 4, "plugins":["syscalls"],
+        "target_os": "ubuntu", "filename": name, "size_bytes": 4, "plugins":["syscalls"], "timeout":180, "disable_sysret": True,
     })
     assert r.status_code == 422, (name, r.text[:200])
 
@@ -445,7 +445,7 @@ def test_a_refused_filename_leaves_no_job_row(client, conn):
     before = conn.execute("SELECT count(*) FROM jobs").fetchone()[0]
 
     client.post("/api/v1/jobs", json={
-        "target_os": "ubuntu", "filename": "../../etc/passwd", "size_bytes": 4, "plugins":["syscalls"],
+        "target_os": "ubuntu", "filename": "../../etc/passwd", "size_bytes": 4, "plugins":["syscalls"], "timeout":180, "disable_sysret": True,
     })
 
     assert conn.execute("SELECT count(*) FROM jobs").fetchone()[0] == before
@@ -688,7 +688,7 @@ def test_a_name_ntfs_refuses_is_refused_for_windows(client, name):
     console, so the sample never lands and it looks like a broken injector.
     """
     r = client.post("/api/v1/jobs", json={
-        "target_os": "windows", "filename": name, "size_bytes": 4, "plugins":["syscalls"],
+        "target_os": "windows", "filename": name, "size_bytes": 4, "plugins":["syscalls"], "timeout":180, "disable_sysret": True,
     })
     assert r.status_code == 422, (name, r.text[:200])
 
@@ -707,7 +707,7 @@ def test_the_same_names_are_legal_on_a_linux_guest(client, target, name):
     does not apply to that guest.
     """
     r = client.post("/api/v1/jobs", json={
-        "target_os": target, "filename": name, "size_bytes": 4, "plugins":["syscalls"],
+        "target_os": target, "filename": name, "size_bytes": 4, "plugins":["syscalls"], "timeout":180, "disable_sysret": True,
     })
     assert r.status_code == 201, (target, name, r.text[:200])
 
@@ -719,7 +719,7 @@ def test_windows_still_accepts_ordinary_names(client, name):
     `COM10` is not a device (only COM1-COM9 are), and `a.CON` has `CON` as an
     extension rather than as the stem."""
     r = client.post("/api/v1/jobs", json={
-        "target_os": "windows", "filename": name, "size_bytes": 4, "plugins": ["syscalls"],
+        "target_os": "windows", "filename": name, "size_bytes": 4, "plugins": ["syscalls"], "timeout":180, "disable_sysret": True,
     })
     assert r.status_code == 201, (name, r.text[:200])
 
@@ -784,7 +784,7 @@ def test_the_stream_ends_at_a_terminal_state(client, conn):
 
 def test_a_not_available_plugin_for_os_returns_406(client, conn):
     r = client.post("/api/v1/jobs", json={
-        "target_os": "ubuntu", "filename": "x.bin", "size_bytes": 10, "plugins":["tlsmon"],
+        "target_os": "ubuntu", "filename": "x.bin", "size_bytes": 10, "plugins":["tlsmon"], "timeout":180, "disable_sysret": True,
     })
     assert r.status_code == 406
 

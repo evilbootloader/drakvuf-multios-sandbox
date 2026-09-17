@@ -253,8 +253,8 @@ def enqueue(conn, target_os: str, required_mib: int, filename: str | None = None
         cur.execute(
             """
             INSERT INTO jobs (target_os, submitted_filename, required_mib, state,
-                              owner)
-            VALUES (%s, %s, %s, 'queued', %s)
+                              owner, timeout, disable_sysret)
+            VALUES (%s, %s, %s, 'queued', %s, 180, True)
             RETURNING id
             """,
             (target_os, name, required_mib, owner_id),
