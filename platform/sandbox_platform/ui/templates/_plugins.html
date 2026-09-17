@@ -53,7 +53,6 @@
     Timeout (seconds)
     <input type="number" name="timeout" value="{{ budget.timeout }}" min="10" max="600">
   </label>
-  {% if budget.linux %}
   <label>
     <input type="checkbox" name="disable_sysret" {% if budget.disable_sysret %}checked{% endif %}>
     <code>--disable-sysret</code> — faster, but loses syscall return values
@@ -65,5 +64,4 @@
     analysed. Turn it off when an analysis has to tell a successful open from
     a refused one.
   </p>
-  {% endif %}
 </fieldset>

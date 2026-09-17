@@ -250,7 +250,16 @@ class Config:
     # .bak they were read from and must be re-derived after every template
     # re-save; a stale one fails SILENTLY, because `injector` attaches to
     # whatever PID it is handed. Android has been 3163, 3164, 3174 and now
-    # 3251. Do not auto-discover either by process-name grep: Android runs two
+    # 3251.
+    #
+    # **Windows 4696 was recorded once, not three times.** Android's list above
+    # is what makes its current value trustworthy -- the anchor was confirmed
+    # stable across re-saves. DRAFT-034 asked for the same three-boot record on
+    # Windows and closed without it, so 4696 rests on the single job of
+    # 2026-09-05. Treat a Windows trace that produces nothing as a question
+    # about this number first.
+    #
+    # Do not auto-discover either by process-name grep: Android runs two
     # processes named `init`, and the anchor is deliberately unremarkable so
     # the string `drakvuf` appears nowhere a sample can read (issue #7).
     injection_pids: dict = field(default_factory=lambda: {
@@ -587,8 +596,9 @@ class Analysis:
             raise NotImplementedError(
                 f"no injection PID configured for {os_.value}: it is a "
                 f"property of that guest's saved memory image, and re-saving "
-                f"the template almost certainly changes it. DRAFT-034 owns the "
-                f"Windows guest."
+                f"the template almost certainly changes it. Re-derive it from "
+                f"the new .bak and set it in StageConfig.injection_pids -- "
+                f"see the anchor note there."
             )
 
         return Job(

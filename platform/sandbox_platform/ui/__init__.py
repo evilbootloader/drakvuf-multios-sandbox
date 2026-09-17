@@ -378,8 +378,6 @@ def _job_context(job_id: UUID, tab: str, identity) -> dict:
         # clicking reads as a broken page, and #38 ships with most of them
         # empty by design.
         "filled": _filled(job),
-        # Placeholder until DRAFT-052 records the real selection on the job.
-        "plugins": catalogue.defaults(job.target_os),
         # Rendered into data-terminal for job.js, which must know when to stop
         # listening. Passed from here rather than written as a literal in the
         # JS: two definitions of "terminal" would be free to drift, and the

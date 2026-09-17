@@ -678,13 +678,13 @@ It maps **headings, not content**: a fact stated in the middle of a section is n
 ## `docs/checklists/windows.md`
 
 - `docs/checklists/windows.md:1` — [Windows DRAKVUF Automated Analysis — Implementation Checklist and Command Log](checklists/windows.md#windows-drakvuf-automated-analysis--implementation-checklist-and-command-log)
-  - `docs/checklists/windows.md:47` — [Project status](checklists/windows.md#project-status)
-    - `docs/checklists/windows.md:62` — [Concurrency constraint — read before running a Windows analysis](checklists/windows.md#concurrency-constraint--read-before-running-a-windows-analysis)
-    - `docs/checklists/windows.md:92` — [Inherited contract (issue #6, 2026-08-10)](checklists/windows.md#inherited-contract-issue-6-2026-08-10)
-    - `docs/checklists/windows.md:135` — [Status legend](checklists/windows.md#status-legend)
-- `docs/checklists/windows.md:144` — [Phase 0 — Planning spike (M5)](checklists/windows.md#phase-0--planning-spike-m5)
-  - `docs/checklists/windows.md:169` — [§0.1 — Profile toolchain](checklists/windows.md#01--profile-toolchain)
-  - `docs/checklists/windows.md:236` — [§0.2 — Windows 11 install constraints on Xen](checklists/windows.md#02--windows-11-install-constraints-on-xen)
+  - `docs/checklists/windows.md:63` — [Project status](checklists/windows.md#project-status)
+    - `docs/checklists/windows.md:78` — [Concurrency constraint — read before running a Windows analysis](checklists/windows.md#concurrency-constraint--read-before-running-a-windows-analysis)
+    - `docs/checklists/windows.md:108` — [Inherited contract (issue #6, 2026-08-10)](checklists/windows.md#inherited-contract-issue-6-2026-08-10)
+    - `docs/checklists/windows.md:151` — [Status legend](checklists/windows.md#status-legend)
+- `docs/checklists/windows.md:160` — [Phase 0 — Planning spike (M5)](checklists/windows.md#phase-0--planning-spike-m5)
+  - `docs/checklists/windows.md:185` — [§0.1 — Profile toolchain](checklists/windows.md#01--profile-toolchain)
+  - `docs/checklists/windows.md:252` — [§0.2 — Windows 11 install constraints on Xen](checklists/windows.md#02--windows-11-install-constraints-on-xen)
 
 ## `docs/drakvuf-on-xen-nested-within-proxmox.md`
 

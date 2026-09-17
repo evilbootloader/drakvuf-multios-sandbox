@@ -18,13 +18,22 @@ actually left to do here?" a question you answered by opening files.
 
 | Directory | Rule | Count |
 |---|---|---|
-| `completed/` | its GitHub issue is **closed**, or the work landed without ever being published | 32 |
-| `in-progress/` | its issue is **open**, or the repository shows work started against it | 5 |
-| `todo/` | not published, and not started | 15 |
+| `completed/` | its GitHub issue is **closed**, the work landed without ever being published, **or its subject no longer exists** | 38 |
+| `in-progress/` | its issue is **open**, or the repository shows work started against it | 3 |
+| `todo/` | not published, and not started | 12 |
 
 **The issue's state is the signal, not the draft's prose.** A draft's own
 `Status:` line is written once and rots; `gh issue list` does not. Where the
 two disagree, GitHub wins and the file moves.
+
+**The third `completed/` clause was added 2026-09-17, for `DRAFT-010`**, whose
+subject — `automation/dirwatch.c` — was deleted on 2026-09-15. It is neither
+closed nor landed nor doable, and leaving it in `todo/` would have made "what
+is actually left to do here?" wrong by one file forever, which is the question
+this split exists to answer. Such a draft is marked **STALE** in its own
+`Status:` block, which says what outlived the deletion and what merely lapsed;
+it is kept rather than deleted because a draft can describe a thing that still
+runs somewhere even after its source is gone.
 
 **One deliberate exception, and the reason it is worth naming.** `DRAFT-020`
 is unpublished and sits in `in-progress/`, because the Windows guest build it

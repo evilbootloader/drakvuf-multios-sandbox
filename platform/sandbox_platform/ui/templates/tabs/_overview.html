@@ -8,7 +8,7 @@
 <dl class="dl">
   <dt>Detected type</dt><dd>{{ job.detected_type or 'not yet determined' }}</dd>
   <dt>Plugins</dt>
-  <dd class="mono">{{ plugins | join(' ') if plugins else 'pipeline defaults' }}</dd>
+  <dd class="mono">{{ job.plugins | join(' ') if job.plugins else 'pipeline defaults' }}</dd>
 
   {#
     Network egress (DRAFT-057), and it belongs on Overview rather than only on

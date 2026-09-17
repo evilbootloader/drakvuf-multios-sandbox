@@ -1,6 +1,29 @@
 # DRAFT-052: Per-job plugin selection and trace budget
 
-**Status:** Drafted 2026-08-25. Not published.
+**Status:** **Completed 2026-09-17**, never published. Landed across `a99a11d`
+("Enable plugin selection") and `15c4a20` ("Disable sysret and timeout now can
+be selected"). The objective is met: a submitter chooses plugins, timeout and
+`--disable-sysret` per job, and the selection reaches the DRAKVUF command line.
+**Closed with two criteria unmet, both recorded rather than resolved**, so
+nobody reads the close as meaning the acceptance list was ticked:
+
+* **`sandboxd` does not re-validate the selection.** Criterion 1 asked for a
+  closed per-OS set checked at the API **and** in the daemon; only the API half
+  exists (`routers/jobs.py:509-521`). `stages._trace_options` applies
+  `lease.plugins` verbatim and `guests.argv_trace` turns each element into
+  `-a <name>`, so a name injected past the API would reach the command line.
+  It arrives as argv and cannot become a separate argument, so this is not the
+  injection path the Security section worried about — the live cost is a trace
+  that completes with an observer silently missing, the same failure
+  `parse_plugins_override` warns about for `SANDBOXD_PLUGINS`. **Not carried by
+  any other draft.**
+* **The `-S` syscall filter was not built at all.** Five criteria rest on it
+  (filtering used, lists by subtraction, excluded set recorded and rendered,
+  lists generated from the `-r` profile, Android measured three ways), as do
+  the measured cost hints and the timed-out-plugin reporting. Every one needs
+  DRAFT-050's idle baseline, which has not run. **Reassigned to DRAFT-050**;
+  `guests.py:248` and `ideas.md:35` already point at it.
+
 **Area:** core/platform
 **OS:** ALL
 **Milestone:** M5
@@ -247,22 +270,30 @@ chooses.
 # Acceptance criteria
 
 - [ ] Selection validated against a closed per-OS set at the API **and** in
-      `sandboxd`.
-- [ ] Selection reaches the command line as argv elements.
-- [ ] Recorded on the job and shown on the report.
-- [ ] Absent selection is byte-identical to today's behaviour.
-- [ ] Timeout and `disable_sysret` selectable at submission only, with
-      measured cost hints; no mid-run adjustment is offered.
+      `sandboxd`. — **API half only** (`routers/jobs.py:509-521`); the daemon
+      applies what the lease carries. See Status.
+- [x] Selection reaches the command line as argv elements.
+      `guests.argv_trace` emits one `-a <name>` per selected plugin.
+- [x] Recorded on the job and shown on the report. `jobs.plugins` (migration
+      0010), rendered on the Overview tab.
+- [x] Absent selection is byte-identical to today's behaviour.
+      `stages._trace_options` reads an empty list as "the measured per-OS
+      defaults", never as "no plugins".
+- [x] Timeout and `disable_sysret` selectable at submission only; no mid-run
+      adjustment is offered. **Without** the measured cost hints — those are
+      DRAFT-050's numbers and the form ships with none.
 - [ ] A timed-out job reports which plugins produced complete output and
-      which did not.
+      which did not. — **DRAFT-050.**
 - [ ] Syscall filtering via `-S` is used, with lists built by subtraction
       from the complete per-guest set and every exclusion reasoned.
+      — **DRAFT-050.**
 - [ ] The excluded set is recorded on the job and rendered on the report.
+      — **DRAFT-050.**
 - [ ] Filter lists are GENERATED from the guest's own `-r` profile, so they
-      cannot drift from the kernel they describe.
+      cannot drift from the kernel they describe. — **DRAFT-050.**
 - [ ] Android measured with filter, without, and with `--disable-sysret`,
-      so the choice between them rests on numbers.
-- [ ] #38's red "takes no effect" notice removed.
+      so the choice between them rests on numbers. — **DRAFT-050.**
+- [x] #38's red "takes no effect" notice removed.
 
 # Evidence required
 

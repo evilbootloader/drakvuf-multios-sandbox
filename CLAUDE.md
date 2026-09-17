@@ -16,9 +16,11 @@ A watcher sees a sample, launches a disposable clone of the right OS, traces it
 under DRAKVUF, collects artifacts, destroys the clone.
 
 **All three OS targets are current.** Ubuntu is evidenced end to end; Android
-has an evidenced native-ELF path; Windows has a design contract and no
-execution evidence. Fix shared code once for three OS families, not for Ubuntu
-and then twice more by rediscovery.
+has an evidenced native-ELF path; Windows ran end to end once, operator-
+confirmed for 2026-09-05, with **no runbook and no per-plugin validation
+behind it** — the weakest of the three, and the one to re-confirm rather than
+assert. Fix shared code once for three OS families, not for Ubuntu and then
+twice more by rediscovery.
 
 ---
 

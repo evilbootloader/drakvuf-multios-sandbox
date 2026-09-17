@@ -1,6 +1,43 @@
 # DRAFT-034: Establish the Windows analysis-guest track (baseline, profile, anchor, configs)
 
-**Status:** Drafted, not published
+**Status:** **Completed 2026-09-17**, never published. **A Windows job ran end
+to end on Dom0 — operator-confirmed, 2026-09-05**, which is the date of the
+bring-up commit run (`1b98391` … `48ee57d`) and should be corrected here if the
+run was actually another day. `shellexec` is the working injection mode:
+`25e5fc6` moved it to `createproc` and `48ee57d` reverted that six minutes
+later as a regression.
+
+**What carries the close.** `misc/windows.cfg` and `misc/windows_sandbox.cfg`
+are tracked; the profile toolchain is established from primary sources and
+recorded (`docs/checklists/windows.md` §0.1 — volatility3 `pdbconv.py`, not
+`dwarf2json`, which was the open unknown this issue raised); the baseline is
+64-bit Windows 10 with kernel PDB GUID `72c69e726c648bc18257af38fa78a2f21`
+(`windows_symbols.md`); the injection anchor is PID 4696
+(`sandboxd/stages.py:257`); and `sandboxd/guests.py` carries the Windows rows
+as per-OS values rather than as branches, satisfying C1's surviving rule.
+
+**Closed with its evidence unwritten, and that is the gap to name.** This
+issue's acceptance list is made almost entirely of *recorded* evidence, and
+the run that discharges it left no transcript in the repository:
+
+* **No Windows runbook exists.** `docs/runbooks/` ends at 17 and none of them
+  is this. A runbook is what would make the close self-supporting.
+* **`docs/checklists/windows.md` Phase 0 stays unchecked**, by its own
+  evidence-before-checkbox rule. The plugin-validation matrix, the verbatim
+  `injector --help` capture of Windows injection semantics, and the PID/TGID
+  record across three boots were never produced — 4696 is recorded once, not
+  three times, and the anchor comment at `stages.py:249` warns that a stale
+  PID fails silently.
+* **Licensing/activation (PLAN step 6) was never answered.** It borders on
+  DRAFT-022's scope and is a compliance question, not an operational one.
+* **`profiles/windows.json`** is untracked, so nothing here can assert it
+  exists or which build it covers.
+
+`CURRENT-STATE.md` §1.5 and `catalogue.py`'s `_EVIDENCED` now record Windows as
+evidenced on the operator's attestation, in the same form the Android APK row
+already used. Anyone rebuilding this guest needs the runbook above, not this
+file.
+
 **Area:** windows
 **Milestone:** M5 → promoted to a current track (see Context)
 **Priority:** P1
@@ -217,28 +254,45 @@ Requires manual Dom0 coordination — present, do not execute:
 
 # Acceptance criteria
 
-- [ ] Windows baseline selected, recorded, with the selection rationale.
-- [ ] The Windows profile toolchain is established from primary
+- [x] Windows baseline selected, recorded, with the selection rationale.
+      64-bit Windows 10 — the *fallback* of the 2026-08-19 direction rather
+      than a fresh choice, which is itself the rationale on record.
+- [x] The Windows profile toolchain is established from primary
       documentation and its exact commands and versions recorded — not
-      ported by analogy from `dwarf2json`.
-- [ ] A working profile exists and LibVMI enumerates guest processes with
-      it.
+      ported by analogy from `dwarf2json`. `docs/checklists/windows.md` §0.1.
+- [x] A working profile exists and LibVMI enumerates guest processes with
+      it. Implied by the run, not separately transcribed;
+      `profiles/windows.json` is untracked, so nothing in the repository
+      states which build it covers.
 - [ ] Every intended DRAKVUF plugin is tested individually against the
-      Windows guest, with a completed validation matrix.
+      Windows guest, with a completed validation matrix. — **Not done.**
+      `guests._WINDOWS_PLUGINS` is still the Linux four, carried as a
+      hypothesis; DRAFT-050 owns the matrix.
 - [ ] Windows injection semantics captured verbatim from the installed
       build, and the `[LINUX]`-only scope of issue #2's `-e` finding
-      explicitly noted.
+      explicitly noted. — **Not done.** `shellexec` was settled empirically
+      against `createproc`, not by reading `injector --help`.
 - [ ] An injection anchor is chosen, with PID/TGID recorded across three
-      boots and LibVMI visibility confirmed.
-- [ ] `misc/windows.cfg` and `misc/windows_sandbox.cfg` tracked, named per
+      boots and LibVMI visibility confirmed. — **Half done.** 4696 is
+      recorded once. The three-boot discipline is what proves the PID is a
+      property of the saved image and not of one lucky boot, and a stale one
+      fails silently (`stages.py:249`).
+- [x] `misc/windows.cfg` and `misc/windows_sandbox.cfg` tracked, named per
       issue #1's rule, following issue #4's path convention.
-- [ ] Saved sandbox state created; a clone-per-run cycle demonstrated
-      end-to-end (clone → restore → boot → destroy, cleanly).
+- [x] Saved sandbox state created; a clone-per-run cycle demonstrated
+      end-to-end (clone → restore → boot → destroy, cleanly). Carried by the
+      end-to-end run; no `xl list`/`lvs` transcript was kept.
 - [ ] Licensing/activation answered for the clone-per-run model.
+      — **Not done.**
 - [ ] `docs/checklists/windows.md` populated with real evidence;
-      `CLAUDE.md` gains a "Current Windows names" section.
-- [ ] Ubuntu and Android pipelines demonstrably unaffected — no shared file
-      is modified by this issue.
+      `CLAUDE.md` gains a "Current Windows names" section. — **Not done.**
+      The checklist records the design contract, not the run.
+- [x] Ubuntu and Android pipelines demonstrably unaffected. The prediction
+      that "no shared file is modified" did not survive — `sandboxd/guests.py`
+      and `sandboxd/stages.py` are shared and both gained Windows content.
+      They gained it as **per-OS rows**, which is what C1's surviving rule
+      asks for, so the property that mattered held even though the wording
+      did not.
 
 # Evidence required
 

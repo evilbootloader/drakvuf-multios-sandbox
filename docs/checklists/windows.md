@@ -1,14 +1,30 @@
 # Windows DRAKVUF Automated Analysis — Implementation Checklist and Command Log
 
-> **Status: current target. The golden VM exists; no automation does.**
-> Windows is one of the project's three current OS targets alongside Ubuntu
-> and Android — not a deferred planning exercise.
+> **Status: current target. The pipeline has run end to end; this file does
+> not yet record how.** Windows is one of the project's three current OS
+> targets alongside Ubuntu and Android — not a deferred planning exercise.
+>
+> **Updated 2026-09-17 (DRAFT-034, closed).** The sentence above used to read
+> "the golden VM exists; no automation does", and both halves of that are now
+> out of date: `sandboxd` carries the Windows rows, and **a job ran through the
+> pipeline — operator-confirmed for 2026-09-05, with no transcript kept.**
+> `shellexec` is the working injection mode; `createproc` was tried in
+> `25e5fc6` and reverted six minutes later in `48ee57d`.
+>
+> **Every box below nevertheless stays unchecked, and that is not an
+> oversight.** This file's standard is `android.md`'s — a box is ticked by a
+> transcript, not by a report — and what closed DRAFT-034 was a report. The
+> specific things still missing are a Windows runbook, the per-plugin
+> validation matrix, a verbatim `injector --help` capture of Windows
+> injection semantics, the PID/TGID record across three boots (4696 is
+> recorded once), and an answer on licensing for clone-per-run. **Until the
+> matrix exists, "the job completed" is not "the four plugins produced
+> output"** — `syscalls` degrades to silence rather than to an error when the
+> symbol JSON is partial.
 >
 > **Operator-reported 2026-08-21, not yet backed by command output:**
 > the golden `windows` domain is installed as a Xen HVM, Microsoft Defender is
-> disabled, and the LV has been cloned to `windows_sandbox`. The boxes below
-> stay unchecked until that is evidenced the way `android.md` evidences its own
-> — a transcript, not a report.
+> disabled, and the LV has been cloned to `windows_sandbox`.
 >
 > **Corrected 2026-09-04.** This block previously said `misc/windows_sandbox.cfg`
 > did not exist and no PDB had been fetched. Both were overtaken by work on
@@ -56,8 +72,8 @@
 | Saved state | TBD |
 | Windows baseline (version/build) | **Direction was Windows 11 first, Windows 10 as fallback** (2026-08-19). What is actually installed reads **64-bit Windows 10** (`windows_symbols.md`, 2026-09-01), so the fallback is what exists. Kernel PDB GUID `72c69e726c648bc18257af38fa78a2f21` |
 | VM lifecycle model | clone-per-run (current Ubuntu/Android model) — decided by elimination: snapshot-restore (DRAKVUF Sandbox's model) does not work in the nested Xen-inside-Proxmox setup this project used until 2026-08-28, since `xl save`/`xl restore` leaves the base and cloned disk images read-only. **Not re-tested on bare metal**; the decision stands on its own merits regardless — see roadmap "Architecture decisions needing experiments" |
-| Current phase | Phase 0 — golden VM installed 2026-08-21, `windows_sandbox.cfg` written 2026-09-01, kernel GUID read 2026-09-01, guest software largely installed (DRAFT-020). **No automation exists and no analysis has run** |
-| Current blocker | Whether `profiles/windows.json` was generated is unevidenced — the GUID and the `pdbconv.py` line exist, the output is untracked. Then the guest support itself: `sandboxd/guests.py` carries skeleton Windows rows (`_WINDOWS_PLUGINS`, `PATHS[TargetOs.WINDOWS]`, the `shellexec` branch) with **no execution evidence** behind any of them. *(Was "no `preconfig-`/`drakvuf-`/`run_analysis-windows` script and no `pipeline-windows.env`" — there are no per-OS script files any more; see `docs/architecture/automation-files.md`.)* |
+| Current phase | Phase 0, **with the pipeline already working ahead of the paperwork.** Golden VM installed 2026-08-21, `windows_sandbox.cfg` written 2026-09-01, kernel GUID read 2026-09-01, guest software largely installed (DRAFT-020), `sandboxd` Windows rows landed and **one analysis run end to end 2026-09-05 (operator, no transcript)**. The phase stays 0 because phases here advance on recorded evidence, and none of that run was recorded |
+| Current blocker | **Writing down the run that already happened.** A Windows runbook, following `docs/runbooks/07-verify-android-mvp.md`'s shape, is what turns 2026-09-05 from a report into evidence and unblocks every box below. After it: the per-plugin validation matrix (DRAFT-050), the three-boot PID/TGID record for anchor 4696, and licensing for clone-per-run. `profiles/windows.json` must exist — the run needed it — but it is untracked, so nothing here can state which build it covers. *(This row previously read "no execution evidence"; that was true until 2026-09-05. The older note it carried — "no `preconfig-`/`drakvuf-`/`run_analysis-windows` script and no `pipeline-windows.env`" — refers to per-OS script files that no longer exist for any guest; see `docs/architecture/automation-files.md`.)* |
 
 ### Concurrency constraint — read before running a Windows analysis
 

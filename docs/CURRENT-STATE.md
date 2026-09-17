@@ -260,7 +260,7 @@ has neither.
 | Ubuntu pipeline | evidenced end to end | 2026-08-26 |
 | Android — native ELF path | evidenced end to end | 2026-08-17 |
 | Android — APK install + `am start` | **evidenced through the platform** — see the bare-metal table below | operator, 2026-08-29 |
-| Windows | design contract only, no execution evidence. Clean install plus Chrome and Office, Defender disabled; `windows_sandbox` LV created | — |
+| Windows | **evidenced end to end — operator, no transcript.** One job ran through the pipeline; `shellexec` is the working injection mode (`createproc` was tried and reverted as a regression). Clean install plus Chrome and Office, Defender disabled. **No runbook backs this**, and no per-plugin validation has been done — the job completing does not mean all four plugins produced output | operator, 2026-09-05 |
 | `sandboxd` | evidenced against real `xl`/`drakvuf` | 2026-08-26 |
 | Live console | evidenced; off by default on both sides | 2026-08-27 |
 | Artifact ZIP downloads | implemented + tested here, **never run on the deployment** | 2026-08-27 |

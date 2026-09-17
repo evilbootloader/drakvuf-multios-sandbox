@@ -15,9 +15,10 @@ rather than as a property of the guest.
 family.** `plugins.h` carries a single `VMI_OS_LINUX` flag, but Ubuntu and
 Android share only a kernel: Android's userspace is Bionic, ART and binder,
 so a plugin walking `task_struct` against BlissOS is not the same test as
-against Ubuntu, and either may fail where the other works. Windows has **no
-execution evidence in this project at all** -- `docs/checklists/windows.md`
-records an open track with a fixed design contract and nothing run.
+against Ubuntu, and either may fail where the other works. Windows joined the
+evidenced set on 2026-09-17, on one end-to-end job (operator-confirmed,
+2026-09-05, DRAFT-034) -- which is a thinner basis than Ubuntu's or Android's
+and is recorded as such at `_EVIDENCED`.
 
 So evidence is tracked as a set of guests, never as a property of the plugin.
 The per-guest validation matrix in `docs/checklists/android.md` §0.4 is the
@@ -47,11 +48,20 @@ class Support(StrEnum):
 
 # The guests each of the four current plugins has actually run against.
 #
-# Ubuntu and Android only. Both are evidenced end to end -- Ubuntu throughout,
-# Android on 2026-08-17 (`docs/runbooks/07-verify-android-mvp.md`). **Windows is
-# absent on purpose**: the pipeline would enable the same four, but nothing
-# has ever executed there, and a form that labelled them "proven" on Windows
-# would be inventing evidence.
+# Ubuntu and Android are evidenced end to end -- Ubuntu throughout, Android on
+# 2026-08-17 (`docs/runbooks/07-verify-android-mvp.md`).
+#
+# **Windows was added 2026-09-17 on a weaker basis than the other two, and the
+# difference is worth knowing before trusting the badge.** It rests on one
+# end-to-end job, operator-confirmed for 2026-09-05 (DRAFT-034), with no
+# runbook behind it -- where the other two point at dated transcripts. What
+# that job proves is that the pipeline COMPLETES on Windows with these four
+# enabled. It does not prove each one produced output: nobody has run the
+# per-plugin validation matrix against a Windows guest, and `syscalls` in
+# particular degrades to silence rather than to an error when the symbol JSON
+# is partial (`sandboxd/guests.py`). DRAFT-050 owns that matrix for all 45
+# plugins against all three guests, and it is what would put Windows on the
+# same footing rather than merely in the same set.
 _EVIDENCED = frozenset({TargetOs.UBUNTU, TargetOs.ANDROID, TargetOs.WINDOWS})
 
 
@@ -140,9 +150,11 @@ def for_os(os_: TargetOs) -> list[tuple[Plugin, Support]]:
     return rated
 
 
-def defaults(os_: TargetOs) -> list[str]:
-    return [p.name for p in PLUGINS
-            if p.default and p.support(os_) is not Support.UNSUPPORTED]
+# `defaults(os_)` was removed 2026-09-17 with DRAFT-052. It existed to tell a
+# report page which plugins a job PROBABLY ran, back when the selection was not
+# recorded; the job now carries its own `plugins`, so the guess had exactly one
+# caller and that caller was the placeholder. The checkbox defaults on the
+# submit form come from `Plugin.default` directly.
 
 
 # --- tabs ------------------------------------------------------------------

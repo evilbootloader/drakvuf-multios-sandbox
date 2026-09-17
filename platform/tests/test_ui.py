@@ -156,20 +156,29 @@ def test_a_tab_that_cannot_apply_falls_back_rather_than_404s(client, conn):
 
 
 # --- the catalogue does not invent evidence --------------------------------
-"""
-def test_windows_claims_nothing_is_proven(client):
-    """"""Windows has no execution evidence in this project at all.
 
-    The four default plugins are what the pipeline WOULD enable there, which
-    is a plan and not a record. Labelling them 'proven' on the submit form
-    would be inventing evidence -- the exact failure this project's
-    Candidate/evidenced discipline exists to prevent.
-    """"""
+
+def test_windows_claims_the_same_four(client):
+    """Windows joined the evidenced set on 2026-09-17 (DRAFT-034).
+
+    This test used to be `test_windows_claims_nothing_is_proven` and asserted
+    the exact opposite. It was commented out -- as a string literal, which is
+    why it stopped running rather than started failing -- when Windows went
+    into `catalogue._EVIDENCED`, and is restored here pointing the other way.
+
+    **What it pins is that the form agrees with `_EVIDENCED`, not that the
+    evidence is good.** It rests on one operator-confirmed run with no
+    transcript and no per-plugin validation; `catalogue.py` says so at the
+    set itself. If that attestation is ever withdrawn, this test and the set
+    move back together.
+    """
     page = client.get("/ui/plugins/windows").text
 
-    assert "proven" not in page
-    assert "candidate" in page
-"""
+    assert page.count("proven") == 4
+    # The Linux-only plugins are named as unavailable rather than hidden, the
+    # mirror of what `test_ubuntu_and_android_claim_the_same_four` checks.
+    assert "ebpfmon" in page and "ptracemon" in page
+
 
 def test_ubuntu_and_android_claim_the_same_four(client):
     """Both are Linux-kernel guests and both are evidenced end to end."""
@@ -196,12 +205,40 @@ def test_a_tab_with_no_data_is_marked_as_such(client, conn):
 
     page = client.get(f"/ui/jobs/{job_id}").text
 
-    assert "syscall" in page
+    # This job selected nothing, so Overview says so rather than listing the
+    # four the pipeline will probably choose. It asserted `"syscall" in page`
+    # until 2026-09-17, back when the page rendered `catalogue.defaults()` as
+    # a stand-in for a selection nothing recorded -- a guess that read on the
+    # page as a fact about the run. DRAFT-052 records the real one.
+    assert "pipeline defaults" in page
 
     behaviour = [ln for ln in page.splitlines() if ">Behaviour<" in ln][0]
     assert 'data-empty="1"' in behaviour or "data-empty" in page
     overview = [ln for ln in page.splitlines() if ">Overview<" in ln][0]
     assert "data-empty" not in overview
+
+
+def test_a_recorded_selection_is_shown_on_the_report(client, conn):
+    """DRAFT-052's "recorded on the job and shown on the report".
+
+    The criterion had no test: the page rendered `catalogue.defaults()` for
+    every job, so it showed the same four whether or not the run used them,
+    and any test would have passed against the guess. A report that cannot
+    say what produced it is the thing this pins -- a trace with `procmon` and
+    one without are different observations of the same sample.
+    """
+    job_id = _job(conn, "x.bin")
+    conn.execute("UPDATE jobs SET plugins = %s WHERE id = %s",
+                 (["syscalls", "procmon"], job_id))
+
+    page = client.get(f"/ui/jobs/{job_id}").text
+
+    assert "syscalls" in page and "procmon" in page
+    # Not the placeholder wording: this job made a choice.
+    assert "pipeline defaults" not in page
+    # `memdump` is a default and was NOT selected, so it must not appear --
+    # the failure the old placeholder had by construction.
+    assert "memdump" not in page
 
 
 def test_the_history_hash_says_it_is_truncated(client, conn):

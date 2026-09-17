@@ -1,6 +1,32 @@
 # DRAFT-010: Document `dirwatch.c`'s interface and resolve the two-source ambiguity
 
-**Status:** Drafted, not published
+**Status:** **STALE 2026-09-17. Never published, and now unexecutable — do not
+work from it.** Its entire subject was deleted on 2026-09-15: `automation/`
+holds `network-setup.sh` and the egress assets and nothing else, and neither
+`dirwatch.c` nor `dirwatch_old.c` survives. `sandboxd` is the orchestrator
+(DRAFT-060 / issue #41), and `docs/architecture/automation-files.md` records
+what replaced each deleted file.
+
+**Kept rather than deleted, because three of its findings outlived the file.**
+Each was resolved elsewhere; none needs redoing here:
+
+* **The worker-slot leak** — the retry path that skipped `worker_finished:` —
+  cannot recur. `sandboxd` holds no thread-slot table; `sandboxd/resources.py`
+  allocates from one in-process table and releases on every exit path.
+* **The VLAN-from-worker-slot derivation** this file documents is exactly the
+  hazard `CLAUDE.md` still warns about, and it is why `sandboxd` refuses to
+  start alongside a leftover `dirwatch` binary. **A compiled copy on an old
+  Dom0 still allocates VLANs that way** — this file is the best surviving
+  description of what that binary does.
+* **The C-vs-Python question** was answered as Python, by DRAFT-040 and then
+  by #41 shipping it.
+
+What did *not* get resolved and simply lapsed: whether the 519-line version at
+`2514168` is pristine upstream `tklengyel/drakvuf`, and whether a tracked
+upstream baseline is worth keeping. Both are now archaeology. The unquoted
+filename reaching `g_spawn_command_line_sync()` was DRAFT-030's throughout and
+went with the file.
+
 **Area:** core (shared orchestrator — Ubuntu, Android and Windows)
 **Milestone:** M0
 **Priority:** P1 — raised from the title-index entry's implicit low
