@@ -194,11 +194,11 @@ def test_an_anonymous_caller_is_refused(client, no_identity, path):
     cut-over that made sessions work and left this open would have replaced an
     edge that authenticated with nothing at all.
     """
-    assert client.get(path).status_code == 401
+    assert client.get(path, follow_redirects=False).status_code == 303
 
 
 def test_an_anonymous_caller_cannot_post_a_balance(client, no_identity):
-    assert client.post("/api/v1/account/balance").status_code == 401
+    assert client.post("/api/v1/account/balance", follow_redirects=False).status_code == 303
 
 
 def test_a_forged_session_cookie_is_refused(client, no_identity):
@@ -209,8 +209,8 @@ def test_a_forged_session_cookie_is_refused(client, no_identity):
     safe only because `caller_identity` then refuses. This is that pairing.
     """
     r = client.get("/api/v1/jobs",
-                   cookies={"sandbox_access": "not.a.token"})
-    assert r.status_code == 401
+                   cookies={"sandbox_access": "not.a.token"}, follow_redirects=False)
+    assert r.status_code == 303
 
 
 def test_a_session_signed_with_another_key_is_refused(client, no_identity,
@@ -226,7 +226,7 @@ def test_a_session_signed_with_another_key_is_refused(client, no_identity,
                             jwt_issuer="sandbox.evilbootloader.com",
                             jwt_audience="sandbox-platform"),
     )
-    assert client.get("/api/v1/jobs", cookies=cookies).status_code == 401
+    assert client.get("/api/v1/jobs", cookies=cookies, follow_redirects=False).status_code == 303
 
 
 # --- the console, which read only the Cloudflare header ----------------------

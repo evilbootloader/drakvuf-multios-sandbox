@@ -346,7 +346,7 @@ def test_a_new_tenant_is_granted_a_balance_on_first_submission(client, conn,
 
     r = client.post("/api/v1/jobs", headers=access_token(newcomer),
                     json={"target_os": "ubuntu", "filename": "x.bin",
-                          "size_bytes": 4})
+                          "size_bytes": 4, "plugins":["syscalls"],})
 
     assert r.status_code == 201, r.text
     assert balance_of(conn, newcomer) == 3600
@@ -364,7 +364,7 @@ def test_an_exhausted_tenant_is_refused_with_402(client, conn, access_token):
 
     r = client.post("/api/v1/jobs", headers=access_token(broke),
                     json={"target_os": "ubuntu", "filename": "x.bin",
-                          "size_bytes": 4})
+                          "size_bytes": 4, "plugins":["syscalls"],})
 
     assert r.status_code == 402, r.text
     assert conn.execute("SELECT count(*) FROM jobs WHERE owner = %s",
@@ -384,7 +384,7 @@ def test_a_negative_balance_is_refused_too(client, conn, access_token):
 
     r = client.post("/api/v1/jobs", headers=access_token(overdrawn),
                     json={"target_os": "ubuntu", "filename": "x.bin",
-                          "size_bytes": 4})
+                          "size_bytes": 4, "plugins":["syscalls"],})
 
     assert r.status_code == 402, r.text
 
@@ -429,7 +429,7 @@ def test_the_balance_endpoint_refuses_a_caller_with_no_identity(client,
     `auth.caller_identity` before the route runs, rather than reaching
     `required_identity` with a None that `visible_to` would have read as
     "see everything"."""
-    assert client.post("/api/v1/account/balance").status_code == 401
+    assert client.post("/api/v1/account/balance", follow_redirects=False).status_code == 303
 
 
 # --- the two paths agree ----------------------------------------------------

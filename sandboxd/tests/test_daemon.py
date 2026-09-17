@@ -103,7 +103,7 @@ def lease(job_id="j1", os_="ubuntu", mib=2198) -> Lease:
     return Lease(job_id=job_id, target_os=os_, submitted_filename="s.bin",
                  required_mib=mib, attempt=1, sample_url="https://minio/s",
                  sha256=hashlib.sha256(SAMPLE).hexdigest(),
-                 lease_expires_at="2026-08-26T10:00:00Z")
+                 lease_expires_at="2026-08-26T10:00:00Z", plugins=["syscalls", "filetracer", "fileextractor", "memdump"])
 
 
 def settings(tmp_path, **kw) -> D.Settings:

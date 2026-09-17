@@ -16,11 +16,11 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
 from sandboxd import timing as T  # noqa: E402
-from sandboxd.guests import SampleKind, TargetOs, default_trace_options  # noqa: E402
+from sandboxd.guests import SampleKind, TargetOs, TraceOptions  # noqa: E402
 
 
 def budgets(os_, kind):
-    return T.budgets(os_, kind, default_trace_options(os_, kind).timeout)
+    return T.budgets(os_, kind, TraceOptions(plugins=tuple(["syscalls"]), timeout=150 if kind is SampleKind.APK else 120, fast_singlestep=True, disable_sysret=True,).timeout)
 
 
 # --- the deliberate waits fit inside their phase ---------------------------
@@ -79,7 +79,7 @@ def test_the_trace_budget_covers_drakvufs_own_timeout():
     for os_, kind in [(TargetOs.UBUNTU, SampleKind.ELF),
                       (TargetOs.ANDROID, SampleKind.ELF),
                       (TargetOs.ANDROID, SampleKind.APK)]:
-        t = default_trace_options(os_, kind).timeout
+        t = TraceOptions(plugins=set(["syscalls"]), timeout=150 if kind is SampleKind.APK else 120, fast_singlestep=True, disable_sysret=True,).timeout
         assert budgets(os_, kind).trace > t
 
 

@@ -387,6 +387,6 @@ accurate as dated evidence.
 |---|---|
 | sandboxd modules | 16 |
 | test files | 16 sandboxd, 25 platform |
-| documents under `docs/` | 40 |
+| documents under `docs/` | 41 |
 
 <!-- END GENERATED -->

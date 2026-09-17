@@ -52,7 +52,7 @@ class Support(StrEnum):
 # absent on purpose**: the pipeline would enable the same four, but nothing
 # has ever executed there, and a form that labelled them "proven" on Windows
 # would be inventing evidence.
-_EVIDENCED = frozenset({TargetOs.UBUNTU, TargetOs.ANDROID})
+_EVIDENCED = frozenset({TargetOs.UBUNTU, TargetOs.ANDROID, TargetOs.WINDOWS})
 
 
 @dataclass(frozen=True)

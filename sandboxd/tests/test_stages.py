@@ -48,6 +48,7 @@ class FakeLease:
     sample_url: str = "https://minio/sample"
     sha256: str | None = digest(_ELF)
     lease_expires_at: str = "2026-08-26T10:00:00Z"
+    plugins: list[str] = field(default_factory=lambda: ["syscalls", "filetracer", "fileextractor", "memdump"])
 
 
 @dataclass
@@ -151,7 +152,7 @@ def config(tmp_path) -> S.Config:
     repo = tmp_path / "repo"
     (repo / "misc").mkdir(parents=True)
     (repo / "state").mkdir(parents=True)
-    for os_ in ("ubuntu", "android"):
+    for os_ in ("ubuntu", "android", "windows"):
         src = ROOT / "misc" / f"{os_}_sandbox.cfg"
         (repo / "misc" / f"{os_}_sandbox.cfg").write_text(src.read_text())
         (repo / "state" / f"{os_}_sandbox.bak").write_bytes(b"saved")
@@ -592,6 +593,7 @@ def test_an_unimplemented_interaction_mode_fails_loudly(tmp_path):
     S.guests.default_trace_options = lambda os_, kind: TraceOptions(
         plugins=("syscalls",), timeout=120,
         interaction=Interaction.AUTOMATIC)
+
     try:
         outcome = a.run(FakeLease(), 3)
     finally:
@@ -938,7 +940,6 @@ def test_no_override_leaves_the_measured_default_set(tmp_path):
 
     argv = [c for c in r.calls if c.argv[0] == "drakvuf"][0].argv
     plugins = [argv[i + 1] for i, a in enumerate(argv) if a == "-a"]
-
     assert plugins == ["syscalls", "filetracer", "fileextractor", "memdump"]
 
 

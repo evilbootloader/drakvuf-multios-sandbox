@@ -169,6 +169,7 @@ def test_a_lease_carries_everything_the_run_needs():
         "target_os": "ubuntu", "submitted_filename": "a b.exe",
         "required_mib": 2198, "attempt": 1, "sample_url": "https://s3/x",
         "sha256": "b" * 64, "lease_expires_at": "2026-08-26T10:00:00Z",
+        "plugins": ["syscalls"],
     }
     got = api(ok(payload)).claim(free_mib=8192, free_vlans=4, free_slots=2)
 
@@ -185,6 +186,7 @@ def _leased(**over) -> dict:
         "target_os": "ubuntu", "submitted_filename": "a b.exe",
         "required_mib": 2198, "attempt": 1, "sample_url": "https://s3/x",
         "sha256": "b" * 64, "lease_expires_at": "2026-08-26T10:00:00Z",
+        "plugins":["syscalls"],
     }
     payload.update(over)
     return payload

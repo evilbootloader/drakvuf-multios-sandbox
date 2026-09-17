@@ -71,8 +71,16 @@ UPDATE jobs
           LIMIT 1
        )
    AND required_mib <= %(free_mib)s
+-- `plugins::text[]` is NOT decoration. `plugins` is a custom enum array
+-- (migration 0010) and psycopg has no adapter registered for it, so selecting
+-- it bare hands back the raw Postgres literal as a STRING -- '{syscalls,
+-- memdump}' -- which `LeaseResponse.plugins` then refuses as not-a-list. The
+-- cast lands on text[], whose OID psycopg decodes natively into list[str].
+-- Registering a type adapter would work too; a cast at the one site that reads
+-- the column is less machinery. NULL survives the cast as None.
 RETURNING id, target_os, sha256, submitted_filename, required_mib,
-          lease_expires_at, attempt, egress_mode, egress_exit, key_prefix
+          lease_expires_at, attempt, egress_mode, egress_exit, key_prefix,
+          plugins::text[]
 """
 
 # --------------------------------------------------------------------------

@@ -78,6 +78,7 @@ class Lease:
     sample_url: str
     sha256: str | None
     lease_expires_at: str
+    plugins: list[str]
     # Where this job's traffic may go (DRAFT-057). The NAME of an exit this
     # host declared, never an endpoint the submitter supplied.
     #
@@ -294,6 +295,11 @@ class WorkerAPI:
                 # exception that strands the job.
                 egress_exit=body.get("egress_exit"),
                 egress_mode=body.get("egress_mode"),
+                # Same `.get`, same reason, and `or []` on top because the
+                # platform sends null for a job queued before migration 0010.
+                # Empty means the measured defaults -- `stages._trace_options`
+                # owns that reading.
+                plugins=body.get("plugins") or [],
             )
         if status == "reserved":
             return Reserved(blocking_job_id=str(body["blocking_job_id"]),

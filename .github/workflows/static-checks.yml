@@ -349,13 +349,26 @@ jobs:
         #
         # Pinned, not `:latest`. This job asserts behaviour about signature
         # scoping; an image that moves under it turns a real regression and an
-        # upstream change into the same red X.
+        # upstream change into the same red X. That pin turned out to matter far
+        # more than hygiene: RELEASE.2025-09-07T16-13-09Z is the **last** MinIO
+        # release with published binaries at all. The next one,
+        # RELEASE.2025-10-15T17-29-55Z, ships zero assets.
+        #
+        # **quay.io, not Docker Hub, since 2026-09-16.** MinIO deleted
+        # `minio/minio` (and `minio/mc`) from Docker Hub between 2026-09-07 and
+        # 2026-09-15; the other 20 repositories in that namespace are still
+        # there, so it was a targeted removal and not an outage. Every run in
+        # between failed here with `pull access denied ... repository does not
+        # exist or may require 'docker login'`, which reads as a credentials
+        # problem and is not one. quay.io is MinIO's other official registry and
+        # serves this exact release anonymously.
+        # See docs/TROUBLESHOOTING.md, "pull access denied for minio/minio".
         run: |
           docker run -d --name minio -p 9000:9000 \
             -e MINIO_ROOT_USER=devroot \
             -e MINIO_ROOT_PASSWORD=devrootpass \
             -e MINIO_SITE_REGION=eu-central-1 \
-            minio/minio:RELEASE.2025-09-07T16-13-09Z server /data
+            quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z server /data
           for _ in $(seq 1 30); do
             if curl -sf http://localhost:9000/minio/health/live >/dev/null; then
               echo "minio healthy"; exit 0

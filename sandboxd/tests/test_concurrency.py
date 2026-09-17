@@ -120,7 +120,7 @@ def job(target_os: str, mib: int) -> dict:
     return {"job_id": str(uuid.uuid4()), "target_os": target_os,
             "submitted_filename": f"{target_os}-sample.bin",
             "required_mib": mib, "attempt": 1, "sha256": "c" * 64,
-            "sample_url": "https://minio/sample"}
+            "sample_url": "https://minio/sample", "plugins": ["syscalls"],}
 
 
 def wire(platform: Platform, table: ResourceTable):

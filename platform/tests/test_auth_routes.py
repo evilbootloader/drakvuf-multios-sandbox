@@ -409,7 +409,7 @@ def test_a_session_reaches_the_rest_of_the_api(conn, account):
     # artifact download links working -- see `sandbox_platform/csrf.py`.
     with TestClient(app, base_url="https://testserver",
                     headers=CSRF) as https:
-        assert https.post("/api/v1/account/balance").status_code == 401
+        assert https.post("/api/v1/account/balance", follow_redirects=False).status_code == 303 # Redirected to login
 
         assert https.post("/api/v1/auth/login",
                           json={"email": email,
@@ -422,7 +422,7 @@ def test_a_session_reaches_the_rest_of_the_api(conn, account):
         assert https.get("/api/v1/jobs").status_code == 200
 
         https.post("/api/v1/auth/logout")
-        assert https.post("/api/v1/account/balance").status_code == 401
+        assert https.post("/api/v1/account/balance", follow_redirects=False).status_code == 303
 
 
 def test_an_unauthenticated_read_is_refused_rather_than_unscoped(client,
@@ -436,7 +436,7 @@ def test_an_unauthenticated_read_is_refused_rather_than_unscoped(client,
 
     An anonymous caller is now refused before any predicate is built.
     """
-    assert client.get("/api/v1/jobs").status_code == 401
+    assert client.get("/api/v1/jobs", follow_redirects=False).status_code == 303
 
 
 def test_the_unscoped_read_now_requires_asking_for_it(conn):

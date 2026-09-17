@@ -85,9 +85,20 @@ if curl -fsS -o /dev/null -m 2 "http://127.0.0.1:9000/minio/health/live" 2>/dev/
     say "minio         already up on 127.0.0.1:9000"
     minio_ok=1
 elif [ -z "$MINIO_BIN" ]; then
+    # **dl.min.io is gone -- every path under it answers 410, 2026-09-16.** The
+    # hint printed here used to fetch linux-amd64/minio from there. GitHub's
+    # release assets still serve the pinned build, and that is now the only
+    # source: MinIO deleted `minio/minio` from Docker Hub in the same week, and
+    # the release AFTER this one ships no binaries at all. The version is
+    # spelled out rather than tracking a moving `latest` because it must match
+    # the pin in .github/workflows/static-checks.yml -- a developer whose MinIO
+    # differs from CI's gets failures nobody can reproduce.
+    MINIO_REL="RELEASE.2025-09-07T16-13-09Z"
     say "minio         NOT INSTALLED -- tests needing object storage will fail"
+    # One line, however long. A URL wrapped with a backslash rejoins with the
+    # next line's indentation still in it, so the paste fetches nothing.
     say "              curl -fsSLo ~/.local/bin/minio \\"
-    say "                https://dl.min.io/server/minio/release/linux-amd64/minio"
+    say "                https://github.com/minio/minio/releases/download/$MINIO_REL/minio.linux-amd64.$MINIO_REL"
     say "              chmod +x ~/.local/bin/minio"
 else
     say "minio         starting on 127.0.0.1:9000 (log: $MINIO_LOG)"

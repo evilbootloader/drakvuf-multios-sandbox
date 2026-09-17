@@ -98,3 +98,5 @@ __pycache__/
 # clone, and a repository going public publishes its history too.
 private/*
 !private/README.md
+
+samples/*

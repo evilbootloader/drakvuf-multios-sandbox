@@ -165,7 +165,7 @@ def test_owner_is_recorded_and_returned(client, issuer):
 
     created = client.post(
         "/api/v1/jobs",
-        json={"target_os": "ubuntu", "filename": "x.bin", "size_bytes": 4},
+        json={"target_os": "ubuntu", "filename": "x.bin", "size_bytes": 4, "plugins": ["syscalls"],},
         headers=hdrs,
     )
     assert created.status_code == 201
@@ -199,18 +199,20 @@ def test_a_caller_with_no_identity_cannot_submit(client, no_identity):
     """
     created = client.post(
         "/api/v1/jobs",
-        json={"target_os": "ubuntu", "filename": "y.bin", "size_bytes": 4},
+        json={"target_os": "ubuntu", "filename": "y.bin", "size_bytes": 4, "plugins": ["syscalls"],},
+        follow_redirects=False
     )
 
-    assert created.status_code == 401, created.text
-    # And no row: the refusal is before the INSERT, not a status painted over
-    # a job that already exists.
-    # The listing is refused too, and by the same dependency: with no
-    # credential there is no identity to scope a read to either. It used to
-    # return `[]` because `visible_to(None)` scoped nothing and the table
-    # happened to be empty -- which was the same code path that would have
-    # returned every job had it not been.
-    assert client.get("/api/v1/jobs").status_code == 401
+    assert created.status_code == 303
+    assert created.headers["location"] == "/ui/login"
+
+    listed = client.get(
+        "/api/v1/jobs",
+        follow_redirects=False,
+    )
+
+    assert listed.status_code == 303
+    assert listed.headers["location"] == "/ui/login"
 
 
 # --- the JWKS cache --------------------------------------------------------

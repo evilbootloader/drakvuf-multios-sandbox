@@ -140,9 +140,11 @@ destructive anywhere else.
 
 `shellcheck` exits 0 as of DRAFT-031 (2026-08-11) — run it bare, without a
 severity flag, since it reads `.shellcheckrc` automatically and that is the
-command CI runs. The baseline disables four codes repository-wide, each
-recorded in `.shellcheckrc` with the issue that owns removing it, so a clean
-run does not mean the scripts are free of findings. Read that file first.
+command CI runs. The baseline disables **one** code (SC1091) over one file,
+recorded in `.shellcheckrc` with the issue that owns removing it. SC2086 and
+SC2009 were retired on 2026-09-15 with the scripts that carried their findings,
+so both are live again — read that file before reading a clean run as clean
+code.
 
 `dash -n` matters as much as `bash -n`: the worker scripts declare
 `#!/bin/sh` and are interpreted by `dash` in production, so `bash -n` alone

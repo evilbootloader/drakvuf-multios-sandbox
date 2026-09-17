@@ -35,7 +35,7 @@ def register(client, headers, exits):
 
 def submit(client, **kw):
     body = {"target_os": "ubuntu", "filename": "sample.bin",
-            "size_bytes": len(ELF), **kw}
+            "size_bytes": len(ELF), **kw, "plugins":["syscalls"]}
     return client.post("/api/v1/jobs", json=body)
 
 

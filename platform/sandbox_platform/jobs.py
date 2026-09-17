@@ -6,7 +6,7 @@ The correctness lives in queries.py, where it can be read as SQL.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Literal
 from uuid import UUID
@@ -43,6 +43,16 @@ class Lease:
     # refuses instead, which is the loud outcome.
     egress_mode: str = "offline"
     egress_exit: str | None = None
+    # The plugin selection made at submission (DRAFT-052). Snapshotted onto the
+    # row for the same reason as egress: the catalogue may change while a job
+    # sits in the queue, and the job should run what it was admitted with.
+    #
+    # **Empty means "the measured defaults", never "no plugins".** A row queued
+    # before migration 0010 has NULL here, which `claim` renders as `[]`;
+    # `stages._trace_options` reads either as "fall back to
+    # `guests.default_trace_options`". Running with no plugin at all produces a
+    # trace containing nothing and still reports success.
+    plugins: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -96,6 +106,9 @@ def claim(
                 egress_mode=row["egress_mode"],
                 egress_exit=row["egress_exit"],
                 key_prefix=row["key_prefix"],
+                # `or []`, so a pre-0010 row's NULL and a submitter who ticked
+                # nothing arrive as the same thing. Both mean "the defaults".
+                plugins=row["plugins"] or [],
             )
 
         # Zero rows is ambiguous -- empty queue, or head does not fit -- so

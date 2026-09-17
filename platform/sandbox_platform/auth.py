@@ -584,9 +584,8 @@ def caller_identity(
     if settings.infrastructure_listener:
         return EVERYTHING
     raise HTTPException(
-        status.HTTP_401_UNAUTHORIZED,
-        "authentication required",
-        headers={"WWW-Authenticate": "Bearer"},
+        status_code=status.HTTP_303_SEE_OTHER,
+        headers={"Location": "/ui/login"},
     )
 
 

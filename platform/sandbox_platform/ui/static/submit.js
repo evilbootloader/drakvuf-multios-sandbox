@@ -57,6 +57,8 @@
 
         var file = form.querySelector('input[type="file"]').files[0];
         var targetOs = form.querySelector('input[name="target_os"]:checked').value;
+        var checked_plugins = Array();
+        form.querySelectorAll('input[name="plugins"]:checked').forEach((element) => checked_plugins.push(element.value));
         if (!file) { say("Choose a file first.", true); return; }
 
         var button = form.querySelector('button[type="submit"]');
@@ -73,7 +75,8 @@
             var payload = {
                 target_os: targetOs,
                 filename: file.name,
-                size_bytes: file.size
+                size_bytes: file.size,
+                plugins: checked_plugins
             };
             if (egress) {
                 payload.egress_mode = egress.dataset.mode;

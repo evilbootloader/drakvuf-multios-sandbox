@@ -125,6 +125,48 @@ first place. See `platform/minio/provision.sh` and runbook `08` §2351.
 *Cost when it bit: a false alarm on a `sandboxd` change that touched no platform
 code, 2026-08-26.*
 
+### `pull access denied for minio/minio` — CI's platform job dies before pytest
+
+**Symptom.** The `platform` job fails at **Start MinIO** with exit code 125 and
+runs in ~48s instead of ~2m. `static`, `secrets` and `sandboxd` are all green.
+
+```
+Unable to find image 'minio/minio:RELEASE.2025-09-07T16-13-09Z' locally
+docker: Error response from daemon: pull access denied for minio/minio,
+repository does not exist or may require 'docker login'
+```
+
+**Cause.** **MinIO deleted `minio/minio` from Docker Hub**, between the last
+green run on 2026-09-07 and the first red one on 2026-09-15. Nothing in this
+repository changed — the image pin has one commit in its whole history.
+
+That message is the generic response to any 401 and would read identically for
+a rate limit or an expired login, so diagnose it against the registry rather
+than from the text: `hub.docker.com/v2/repositories/minio/minio` answers
+`object not found` for the **repository**, not the tag, and `minio/mc` is gone
+the same way — while the other 20 repositories in the `minio` namespace are
+untouched. A targeted removal, not an outage and not your credentials.
+
+**Fix.** quay.io is MinIO's other official registry and serves the same release
+anonymously. One line in `.github/workflows/static-checks.yml`:
+
+```yaml
+quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z server /data
+```
+
+**`dl.min.io` went with it — every path answers 410.** That was the download
+`scripts/dev-services.sh` printed when MinIO was missing, so a rebuilt
+development container was given an install command that could not work. It now
+points at GitHub's release assets for the same pinned build.
+
+**Do not "fix" this by bumping to a newer release.**
+`RELEASE.2025-09-07T16-13-09Z` is the last MinIO release with published
+binaries at all; `RELEASE.2025-10-15T17-29-55Z` ships zero assets. Keep CI and
+`dev-services.sh` on the same version — a developer whose MinIO differs from
+CI's gets failures nobody else can reproduce.
+
+*Cost when it bit: three red runs on 2026-09-15, one of them on `master`.*
+
 ### `Recv failure: Connection reset by peer` from 8443
 
 **Symptom.** `curl --cacert ca.crt https://192.168.1.10:8443/healthz` fails with

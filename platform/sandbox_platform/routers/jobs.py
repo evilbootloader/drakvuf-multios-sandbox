@@ -44,6 +44,8 @@ from ..enums import (
     Visibility,
 )
 
+from ..catalogue import PLUGINS
+
 import logging
 log = logging.getLogger(__name__)
 
@@ -210,6 +212,7 @@ class CreateJobRequest(BaseModel):
     target_os: TargetOs
     filename: str = Field(min_length=1, max_length=_MAX_SAMPLE_NAME)
     size_bytes: int = Field(gt=0)
+    plugins: list
 
     # The second untrusted routing input (DRAFT-057), validated at this same
     # boundary and for the same reasons. Two fields rather than one because
@@ -497,6 +500,23 @@ def create_job(req: CreateJobRequest,
             f"sample exceeds the {settings.max_sample_bytes} byte limit",
         )
 
+    if req.target_os.value == TargetOs.WINDOWS:
+        plugins_windows = [plugin.name for plugin in PLUGINS if plugin.windows]
+        if not set(req.plugins).issubset(plugins_windows):
+            raise HTTPException(
+            status.HTTP_406_NOT_ACCEPTABLE,
+            f"available plugins for Windows are {plugins_windows}",
+        )
+
+    elif req.target_os.value in (TargetOs.UBUNTU,TargetOs.ANDROID) :
+        plugins_linux = [plugin.name for plugin in PLUGINS if plugin.linux]
+        if not set(req.plugins).issubset(plugins_linux):
+            raise HTTPException(
+            status.HTTP_406_NOT_ACCEPTABLE,
+            f"available plugins for Ubuntu and Android are {plugins_linux}",
+        )
+
+
     # Generated here rather than by the column default, because `key_prefix`
     # contains a shard derived from the id and has to be a value in the same
     # INSERT -- see migration 0008.
@@ -519,12 +539,12 @@ def create_job(req: CreateJobRequest,
         cur.execute(
             """
             INSERT INTO jobs (id, target_os, submitted_filename, size_bytes,
-                              state, owner, egress_mode, egress_exit, key_prefix)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                              state, owner, egress_mode, egress_exit, plugins, key_prefix)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             RETURNING id
             """,
             (job_id, req.target_os.value, req.filename, req.size_bytes,
-             JobState.RECEIVED.value, owner, egress_mode, egress_exit,
+             JobState.RECEIVED.value, owner, egress_mode, egress_exit, req.plugins,
              key_prefix),
         )
         job_id = cur.fetchone()[0]

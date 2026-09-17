@@ -52,6 +52,7 @@ Its derived half is generated: `scripts/gen-current-state.py`, enforced by
 | Dated execution evidence | `docs/runbooks/NN-*.md`, numbered oldest to newest |
 | Dated project reviews | `docs/reviews/` |
 | Full contribution lifecycle | `CONTRIBUTING.md` |
+| **Making a change, end to end** | **`docs/DEVELOPING.md`** — the commands, in order, from edit to deployed on both hosts |
 
 **`docs/` is 43k lines across 30 documents**, and the four largest are over
 1,000 lines each. `docs/INDEX.md` exists so that finding the right section costs

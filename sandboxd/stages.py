@@ -43,7 +43,7 @@ from pathlib import Path
 from . import config, egress, guests, timing, vnc
 from .clone import CloneBuilder, CloneError, CloneSpec
 from .egress import EgressUnavailable, Exit
-from .guests import Interaction, Job, SampleKind, TargetOs
+from .guests import Interaction, Job, SampleKind, TargetOs, TraceOptions
 from .proc import CommandError
 
 # Well inside LEASE_SECONDS=120: twelve beats per lease, so a run of failures
@@ -322,6 +322,7 @@ class Analysis:
         console = None
         outcome = Outcome(state="failed")
 
+
         with Heartbeat(self._api, lease.job_id,
                        self._cfg.heartbeat_interval) as beat:
             try:
@@ -536,20 +537,37 @@ class Analysis:
             applied["reason"] = fallback_reason
         return applied
 
-    def _trace_options(self, os_, kind) -> guests.TraceOptions:
-        """The measured defaults, unless this host is being measured.
+    def _trace_options(self, os_, kind, plugins) -> TraceOptions:
+        """The measured defaults, unless the job or the host overrides them.
 
-        The override is applied HERE rather than inside
+        Three layers, weakest first, and the order is the point:
+
+        1. `guests.default_trace_options(os_, kind)` -- the measured per-OS
+           package. It decides the timeout, `-F`, `--disable-sysret` and the
+           interaction mode, and NONE of those move below. Only the plugin
+           list does.
+        2. The job's own selection (DRAFT-052), when it made one.
+        3. `SANDBOXD_PLUGINS`, which is a measurement tool and therefore has
+           the last word -- see `guests.parse_plugins_override`.
+
+        **An empty selection means "the defaults", not "no plugins".** A job
+        queued before migration 0010 has `plugins = NULL`, and the lease
+        renders that as `[]`; so does a submitter who ticked nothing. Reading
+        either as a literal empty set would run DRAKVUF with no `-a` at all,
+        which completes normally and produces a trace containing nothing --
+        the silent absence of evidence `parse_plugins_override` warns about
+        for the same reason.
+
+        The host override is applied HERE rather than inside
         `guests.default_trace_options` so that function stays pure and keeps
         answering one question: what do the shell scripts do for this guest.
         Mixing a host's environment into it would make the answer depend on
         where it was asked, and #41's acceptance criterion is that the port
         produces the same argv the scripts do.
-
-        Everything else in the options -- the timeout, `-F`, `--disable-sysret`
-        -- is left exactly as the defaults set it. Only the plugin list moves.
         """
         options = guests.default_trace_options(os_, kind)
+        if plugins:
+            options = replace(options, plugins=tuple(plugins))
         if self._cfg.plugins is None:
             return options
         return replace(options, plugins=tuple(self._cfg.plugins))
@@ -568,6 +586,7 @@ class Analysis:
                 f"the template almost certainly changes it. DRAFT-034 owns the "
                 f"Windows guest."
             )
+
         return Job(
             job_id=lease.job_id, target_os=os_,
             submitted_filename=lease.submitted_filename,
@@ -576,7 +595,7 @@ class Analysis:
             profile=self._cfg.profile(os_),
             injection_pid=self._cfg.injection_pids[os_],
             result_dir=job_dir,
-            options=self._trace_options(os_, kind),
+            options=self._trace_options(os_, kind, lease.plugins),
             kind=kind,
         )
 
@@ -1024,6 +1043,7 @@ class Analysis:
             extra["failure_stage"] = outcome.failure_stage
         if outcome.failure_reason:
             extra["failure_reason"] = outcome.failure_reason
+
         # **`completed` is reported BY `/complete`, never by `/state`.**
         #
         # `/complete` requires the job to be `cleaning` and sets `completed`

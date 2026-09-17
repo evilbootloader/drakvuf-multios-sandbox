@@ -126,6 +126,12 @@ class TraceOptions:
 # Identical; kept per-OS rather than shared because the plugin matrix is per-guest
 # (`drakvuf_plugin_os_support` in plugins.h) and a shared tuple would invite a
 # Windows-only plugin into a Linux list.
+#
+# **Still load-bearing after DRAFT-052.** A job now carries its own selection
+# (`Lease.plugins`), but these remain what a job that selected nothing gets --
+# a row queued before migration 0010, or a submitter who ticked no boxes. See
+# `stages._trace_options`, which overlays the selection onto these rather than
+# replacing them.
 _LINUX_PLUGINS = ("syscalls", "filetracer", "fileextractor", "memdump")
 
 _WINDOWS_PLUGINS = ("syscalls", "filetracer", "fileextractor", "memdump")

@@ -154,6 +154,21 @@ class LeaseResponse(BaseModel):
     egress_exit: str | None = None
     key_prefix: str
 
+    # The plugin selection this job was admitted with (DRAFT-052), validated
+    # against the per-OS catalogue at `create_job` and stored as a Postgres
+    # enum array -- so by the time it reaches here it cannot be a name the
+    # catalogue does not contain. `list[str]` rather than a list of enum
+    # members because sandboxd has its own catalogue and should not need this
+    # one's; the names are the contract between them.
+    #
+    # **`[]` means "the measured per-OS defaults", never "run no plugins".**
+    # A job queued before migration 0010 has NULL on the row, and a submitter
+    # may tick nothing; both arrive here empty and `stages._trace_options`
+    # falls back to `guests.default_trace_options` for both. Defaulting the
+    # field as well keeps a worker running against an older platform working
+    # rather than 422-ing on a field that deployment does not send yet.
+    plugins: list[str] = []
+
 
 class ReservedResponse(BaseModel):
     """Not an error. A job too large for the caller's current free memory is
@@ -354,6 +369,7 @@ def claim(req: ClaimRequest, worker_id: WorkerAuth):
                 egress_mode=EgressMode(last.egress_mode),
                 egress_exit=last.egress_exit,
                 key_prefix=last.key_prefix,
+                plugins=last.plugins,
             )
 
         if time.monotonic() >= deadline:
