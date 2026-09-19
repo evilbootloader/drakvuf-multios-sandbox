@@ -33,6 +33,10 @@
 
     --gap: 1rem;
     --radius: 3px;
+
+    /* The page's side gutter, shared by the masthead and <main> so their
+     * left edges line up. Never below 1rem: a phone needs the margin. */
+    --gutter: clamp(1rem, 2.5vw, 2.5rem);
 }
 
 /* The light palette, defined once and applied from two places: when the
@@ -87,14 +91,18 @@ a { color: var(--fg); text-decoration-color: var(--fg-faint); }
 a:hover { text-decoration-color: var(--red); }
 
 code, .mono, pre { font-family: var(--mono); font-size: 0.9em; }
+/* Timestamps, sizes and PIDs sit in columns; digits of equal width keep
+ * them aligned down the column rather than jittering by the widths of 1 and 8. */
+.mono, td, .count, .exit { font-variant-numeric: tabular-nums; }
 
 /* --- chrome ------------------------------------------------------------ */
 
 .masthead {
     display: flex;
+    flex-wrap: wrap;
     align-items: baseline;
-    gap: var(--gap);
-    padding: 0.85rem 1.25rem;
+    gap: 0.5rem var(--gap);
+    padding: 0.85rem var(--gutter);
     background: var(--bg-raised);
     border-bottom: 1px solid var(--line);
 }
@@ -103,9 +111,12 @@ code, .mono, pre { font-family: var(--mono); font-size: 0.9em; }
     font-size: 0.95rem;
     font-weight: 600;
     letter-spacing: 0.02em;
+    /* One line, always. Left free to wrap, a 412px phone broke the name
+     * over three lines beside the nav; now the nav drops below it instead. */
+    white-space: nowrap;
 }
 .masthead h1 .mark { color: var(--red); }
-.masthead nav { display: flex; gap: 1rem; margin-left: auto; }
+.masthead nav { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.5rem 1rem; margin-left: auto; }
 .masthead nav a { color: var(--fg-muted); text-decoration: none; font-size: 0.9rem; }
 .masthead nav a:hover, .masthead nav a[aria-current="page"] { color: var(--fg); }
 
@@ -126,12 +137,18 @@ code, .mono, pre { font-family: var(--mono); font-size: 0.9em; }
 }
 #theme-toggle:hover { color: var(--fg); border-color: var(--fg-faint); }
 
-main { max-width: 76rem; margin: 0 auto; padding: 1.5rem 1.25rem 4rem; }
+/* Sized for a 1920px screen, which is where this console is read. It was
+ * 76rem, a measure chosen for prose, and at 1920px a third of the screen sat
+ * empty either side of tables, trees and logs -- content that is scanned,
+ * not read, and only gets better with room. What IS prose (`.note`, `.empty`)
+ * is capped on its own below, so a sentence never runs the full width. */
+main { max-width: 112rem; margin: 0 auto; padding: 1.5rem var(--gutter) 4rem; }
 
-/* The submit view is a form, not a table, so it does not want the full
- * measure. Centred rather than left-aligned inside it -- at 2560px a 34rem
- * form pinned to the left edge reads as a rendering fault. */
-.narrow { max-width: 48rem; margin-inline: auto; }
+/* The submit, sign-in and account views are forms, not tables, so they do
+ * not want the full measure. Centred rather than left-aligned inside it --
+ * at 2560px a 34rem form pinned to the left edge reads as a rendering
+ * fault. */
+.narrow, .panel { max-width: 48rem; margin-inline: auto; }
 
 h2 { font-size: 1.05rem; font-weight: 600; margin: 0 0 0.75rem; }
 
@@ -172,6 +189,10 @@ h2 { font-size: 1.05rem; font-weight: 600; margin: 0 0 0.75rem; }
     padding: 0.4rem 0 0.4rem 0.75rem;
     color: var(--fg-muted);
     font-size: 0.9rem;
+    /* Prose. With <main> sized for tables, a sentence left to fill it runs
+     * 250 characters at 1920px; capped where it stays readable. Only block
+     * notes -- the inline `span.note` inside a <dd> is unaffected. */
+    max-width: 100ch;
 }
 .note.danger { border-left-color: var(--red); color: var(--fg); }
 
@@ -185,7 +206,9 @@ h2 { font-size: 1.05rem; font-weight: 600; margin: 0 0 0.75rem; }
     margin: 0 0 1.25rem;
     max-width: 100%;
 }
-.filters label { display: flex; flex-direction: column; gap: 0.25rem; margin: 0; }
+/* `max-width: 100%` because a flex item is otherwise as wide as its content,
+ * and the 34rem search field below made its label wider than a phone. */
+.filters label { display: flex; flex-direction: column; gap: 0.25rem; margin: 0; min-width: 0; max-width: 100%; }
 .filters label span {
     color: var(--fg-faint);
     font-size: 0.72rem;
@@ -239,6 +262,13 @@ tr:hover td { background: var(--bg-raised); }
 
 .sample-banner { margin: 0 0 1rem; }
 .sample-banner .mono { color: var(--fg-faint); word-break: break-all; }
+
+/* The one column with unbounded content takes the table's slack (the <th>
+ * carries the class; a column is as wide as its header says). The others
+ * then sit at their content width, next to each other, instead of being
+ * spread evenly across a 1792px table. */
+table.rows th.wide { width: 45%; }
+th, td.mono { white-space: nowrap; }
 
 /* Every row opens a report, so the whole row reacts rather than only the one
  * cell that happens to hold a link. */
@@ -308,6 +338,7 @@ table.rows tr:hover td a { text-decoration: underline; text-decoration-color: va
     padding: 1.5rem;
     color: var(--fg-muted);
     font-size: 0.9rem;
+    max-width: 100ch; /* prose; see .note */
 }
 .empty strong { color: var(--fg); font-weight: 600; }
 
@@ -341,9 +372,35 @@ details.advanced > summary {
 }
 details.advanced > summary:hover { color: var(--fg); }
 
-.dl { display: grid; grid-template-columns: max-content 1fr; gap: 0.35rem 1rem; font-size: 0.9rem; }
+/* `minmax(0, 1fr)`, not `1fr`: a grid track's minimum is its content's
+ * min-content width, and a 64-character digest with no break opportunity
+ * made the value column wider than a phone, so the whole page scrolled
+ * sideways. Zero lets the track shrink and `overflow-wrap` breaks the digest. */
+.dl { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 0.35rem 1rem; font-size: 0.9rem; }
 .dl dt { color: var(--fg-faint); }
-.dl dd { margin: 0; }
+.dl dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+
+/* The job's facts (_job_status.html): label over value, as many to a line
+ * as fit. The same label style as the filter form's, so the two read as one
+ * vocabulary. */
+.facts {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.9rem 2.25rem;
+    margin: 0 0 1.25rem;
+    font-size: 0.9rem;
+}
+.facts > div { display: flex; flex-direction: column; gap: 0.2rem; min-width: 0; max-width: 100%; }
+.facts dt {
+    color: var(--fg-faint);
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+.facts dd { margin: 0; overflow-wrap: anywhere; }
+/* The controls beside the visibility value: on the value's baseline, and not
+ * taller than the row they sit in. */
+.facts dd button { padding: 0.15rem 0.6rem; font-size: 0.82rem; vertical-align: baseline; }
 /* --- the live console (DRAFT-056) ------------------------------------- */
 /*
    Above the tab bar and full width: it is the one thing on this page an
@@ -437,7 +494,9 @@ a.proc:hover { border-color: var(--fg-faint); }
 .ptree .cmd {
     color: var(--fg-muted);
     display: inline-block;
-    max-width: 44ch;
+    /* Never wider than the node's own line: four levels deep on a phone,
+     * 44ch alone ran past the viewport and the whole page scrolled sideways. */
+    max-width: min(44ch, 100%);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -448,15 +507,22 @@ a.proc:hover { border-color: var(--fg-faint); }
 .ptree li:target > details > summary,
 .ptree li:target > .leaf { background: var(--red-wash); border-radius: var(--radius); }
 
-/* The process diagram: inline SVG, laid out by report.py. */
+/* The process diagram: inline SVG, laid out by report.py. The box scrolls,
+ * and pan.js turns a mouse drag into that scroll -- so the cursor says
+ * "grab", and nothing in it is selectable, because a drag across SVG text
+ * would otherwise highlight every label it passed. */
 .pdiagram-wrap {
     overflow: auto;
-    max-height: 30rem;
+    max-height: min(30rem, 60vh);
     margin: 0 0 1rem;
     border: 1px solid var(--line);
     border-radius: var(--radius);
     background: var(--bg-raised);
+    cursor: grab;
+    user-select: none;
+    -webkit-user-select: none;
 }
+.pdiagram-wrap.dragging, .pdiagram-wrap.dragging * { cursor: grabbing; }
 svg.pdiagram { display: block; }
 svg.pdiagram path { fill: none; stroke: var(--line); stroke-width: 1.5; }
 svg.pdiagram .pnode rect { fill: var(--bg-inset); stroke: var(--line); }
@@ -490,6 +556,39 @@ table.rows tr[data-autostart] td:first-child { border-left: 2px solid var(--red)
 .process h2 .small { font-size: 0.8rem; font-weight: 400; margin-left: 0.5rem; text-decoration: none; }
 .small { font-size: 0.82rem; }
 
+/* The tree beside the panel (tabs/_behaviour.html). Stacked by default;
+ * two columns from 90rem, which is where a tree line -- name, PID, a 48ch
+ * command line, "logs" -- and a log line both still fit. */
+.split { display: grid; grid-template-columns: minmax(0, 1fr); gap: 1.5rem; }
+.split-tree { min-width: 0; }
+@media (min-width: 90rem) {
+    .split { grid-template-columns: minmax(0, 2fr) minmax(0, 3fr); align-items: start; }
+    /* Stuck to the viewport while the tree scrolls under it, and never
+     * taller than the viewport: the lines box below takes whatever height is
+     * left (flex, min-height 0) so it is the ONE thing that scrolls. The
+     * panel itself scrolls only if the facts above the lines are taller than
+     * a screen, which a command line can manage.
+     *
+     * `align-items: start` on the grid is what lets sticky work: stretched
+     * to the row's height, the panel would have nowhere to stick. */
+    .split .process-panel {
+        position: sticky;
+        top: 1rem;
+        scroll-margin-top: 1rem;
+        max-height: calc(100vh - 2rem);
+        display: flex;
+        flex-direction: column;
+        overflow: auto;
+        margin-top: 0;
+        padding: 0 0 0 1.5rem;
+        border-top: 0;
+        border-left: 1px solid var(--line);
+    }
+    .split .process { display: flex; flex-direction: column; min-height: 0; }
+    .split .loglines.log-box { flex: 1 1 auto; min-height: 14rem; max-height: none; }
+    .split .ptree .cmd { max-width: min(48ch, 100%); }
+}
+
 .plugins { display: flex; flex-wrap: wrap; gap: 0.25rem; margin-bottom: 0.75rem; }
 .plugins a {
     font: 0.82rem/1.6 var(--mono);
@@ -506,20 +605,34 @@ table.rows tr[data-autostart] td:first-child { border-left: 2px solid var(--red)
 .logfilter select { max-width: 24rem; }
 
 /* Raw JSON events, one per line, the sample's text. Wrapped so a long
- * argument never widens the page; isolated for the same reason .filename is. */
-pre.log {
-    margin: 0;
-    padding: 0.6rem 0.75rem;
+ * argument never widens the page; isolated for the same reason .filename is.
+ *
+ * The BOX is `.loglines`, not the <pre>. Each press of "more" appends
+ * another <pre> (tabs/_process_lines.html), and when every <pre> carried
+ * its own border and its own scrollbar the second page looked like a second
+ * log, with the tail of the first hidden inside the first box's scroll.
+ * One border and one scrollbar on the wrapper, which is never swapped, and
+ * the pages inside are plain text that runs on. */
+.loglines.log-box {
     border: 1px solid var(--line);
     border-radius: var(--radius);
     background: var(--bg-raised);
+    padding: 0.6rem 0.75rem;
+    max-height: max(24rem, 70vh);
+    overflow-y: auto;
+}
+pre.log {
+    margin: 0;
     font-size: 0.78rem;
     line-height: 1.5;
     white-space: pre-wrap;
     overflow-wrap: anywhere;
     unicode-bidi: isolate;
-    max-height: 36rem;
-    overflow-y: auto;
 }
-pre.log + pre.log { border-top: 0; border-top-left-radius: 0; border-top-right-radius: 0; margin-top: -1px; }
-button.more { margin: 0.5rem 0 0; font-size: 0.85rem; }
+/* Sits at the end of the lines, inside the box, and is replaced by the next
+ * page in place: the reader scrolls to the bottom, presses it, and the log
+ * simply continues. Full width so it reads as "the log goes on", not as a
+ * form control. */
+.loglines button.more { display: block; width: 100%; margin: 0.5rem 0 0; font-size: 0.82rem; text-align: left; color: var(--fg-muted); }
+.loglines button.more:hover { color: var(--fg); }
+.loglines .note, .loglines .dim.small { margin: 0.5rem 0 0; }

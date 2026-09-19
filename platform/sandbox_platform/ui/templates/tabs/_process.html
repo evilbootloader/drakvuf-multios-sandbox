@@ -74,7 +74,17 @@
   <noscript><button type="submit">Apply</button></noscript>
 </form>
 
-<div class="loglines" id="loglines-{{ seqid }}">
+{#
+  THIS is the box the reader sees, not each <pre> inside it. "more" swaps
+  itself for the next page's <pre> plus a fresh button, so a log that has
+  been paged three times is three <pre> elements in a row -- and when each
+  one was its own bordered, scrolling box, the second page looked like a
+  second, separate log. The border and the scrollbar live here, where they
+  survive every swap, and the pages inside are borderless so they read as
+  one continuous log. `log-box` only when there is something to box: an
+  empty state carries its own dashed border.
+#}
+<div class="loglines{% if page and page.lines %} log-box{% endif %}" id="loglines-{{ seqid }}">
 {% include "tabs/_process_lines.html" %}
 </div>
 {% endif %}

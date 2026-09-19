@@ -2,7 +2,9 @@
   One page of a process's lines, plus the control that fetches the next.
   Rendered inside _process.html and again, alone, for each "more" -- the
   button replaces itself with the next page, so earlier lines stay on the
-  page and the log reads top to bottom.
+  page and the log reads top to bottom. The <pre> here is deliberately not a
+  box of its own: `.loglines` around it is (see _process.html), so every
+  page fetched lands inside the same border and the same scrollbar.
 
   Each line is one JSON event exactly as DRAKVUF wrote it, as text. It is
   the sample's text and is escaped like any other.

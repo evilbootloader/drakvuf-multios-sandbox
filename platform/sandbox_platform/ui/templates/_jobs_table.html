@@ -18,7 +18,10 @@
 <table class="rows">
   <thead>
     <tr>
-      <th>Submitted</th><th>Target</th><th>Filename</th>
+      {# `wide` hands this column the table's slack: every other column has
+         content of a known width, and spreading a 1792px-wide table evenly
+         over seven of them put a row's state half a screen from its name. #}
+      <th>Submitted</th><th>Target</th><th class="wide">Filename</th>
       <th>State</th><th>SHA-256</th><th>Owner</th><th>Visibility</th>
     </tr>
   </thead>

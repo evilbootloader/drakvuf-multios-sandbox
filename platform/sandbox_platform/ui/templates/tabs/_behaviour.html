@@ -37,17 +37,23 @@
 {{ diagram(lineage, "every process in the trace") }}
 {% endif %}
 
-{{ tree(report.tree) }}
-
 {#
-  Filled by a node's "logs" link: the process's facts and its lines from the
-  per-plugin logs (tabs/_process.html). Empty until asked, and outside the
-  tree so it survives collapsing.
+  The tree and the panel a node's "logs" link fills, side by side on a wide
+  screen and stacked on a narrow one (app.css, `.split`). Side by side is
+  the point of the page at 1920px: the question is "what did THIS process
+  do", and answering it below a 146-node tree meant scrolling down to read
+  and back up to pick the next one. The panel is outside the tree so it
+  survives collapsing, and its contents come from tabs/_process.html.
 #}
+<div class="split">
+<div class="split-tree">
+{{ tree(report.tree) }}
+</div>
 <section id="process-panel" class="process-panel">
   <p class="dim small">Pick a process — <em>logs</em> beside a node shows what
     it did, plugin by plugin, out of the run's logs.</p>
 </section>
+</div>
 {% else %}
 <div class="empty"><strong>No processes in the report.</strong>
   <code>procmon</code> was not among this run's plugins, or wrote nothing.</div>

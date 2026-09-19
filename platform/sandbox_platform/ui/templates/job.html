@@ -17,5 +17,9 @@
 </div>
 
 <script src="/ui/static/job.js?v={{ asset_version }}" defer></script>
+{# Drag-to-pan for the Behaviour tab's diagrams. Here rather than in the
+   tab's fragment: it is swapped on every tab click, and a script that ships
+   with the fragment would register its listeners again each time. #}
+<script src="/ui/static/pan.js?v={{ asset_version }}" defer></script>
 
 {% endblock %}
