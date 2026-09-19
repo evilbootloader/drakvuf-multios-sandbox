@@ -10,8 +10,10 @@
 #
 # Deliberately short. `sandboxd` runs on the machine that traces malware as
 # root, so every dependency is attack surface reachable from a compromised
-# guest by way of the platform's responses. Both below are load-bearing; there
-# is no third.
+# guest by way of the platform's responses. The two below are the worker
+# channel and the console; everything under "Postprocessing" is the cost of
+# analysing traces on Dom0 rather than after upload, and is the one place this
+# file stopped being short.
 
 # The worker channel: claim, heartbeat, upload, all over mutual TLS.
 # Pinned to the same version platform/requirements.txt pins, because the two
@@ -27,12 +29,72 @@ httpx==0.28.1
 # framebuffer bytes out of the machine running malware.
 #
 # **The pin is a Dom0 constraint, not a preference.** Newer releases require a
-# Python this Dom0 does not have; see docs/CURRENT-STATE.md 1.2, where the
-# interpreter version is still UNCONFIRMED after the move to noble. If a
-# `pip install` here reports `from versions: none`, read
-# docs/TROUBLESHOOTING.md before loosening it -- that message means the index
-# returned nothing, not that the pin is wrong.
+# Python this Dom0 does not have -- 3.12.3, confirmed 2026-09-18, see
+# docs/CURRENT-STATE.md 1.2. If a `pip install` here reports
+# `from versions: none`, read docs/TROUBLESHOOTING.md before loosening it --
+# that message means the index returned nothing, not that the pin is wrong.
 websockets==16.1.1
+
+# --- Postprocessing (sandboxd/postprocessing/, Windows traces only) ----------
+#
+# Ported from drakvuf-sandbox's `drakrun/analyzer/postprocessing` in September
+# 2026. These run inside the daemon, after the trace and before upload, over
+# logs whose contents the sample influenced. **Read that sentence again before
+# adding to this list**: it is parsing attacker-influenced input, as root, on
+# the hypervisor host. `analyze_memdumps` stays False for the same reason --
+# it would hand malware memory dumps to vivisect's emulator in this process.
+#
+# Versions are what `pip freeze` reported in the development container on
+# 2026-09-18, which runs Python 3.14. That the set also resolves for Dom0's
+# 3.12 was checked the same day without installing anything:
+#
+#     pip download --only-binary=:all: --python-version 3.12 \
+#         --implementation cp --abi cp312 --platform manylinux2014_x86_64 \
+#         --platform any -d /tmp/w -r sandboxd/requirements.txt
+#
+# 59 wheels, none missing. Re-run it when a pin changes; the container's
+# interpreter is two minor versions ahead and a wheel that exists for 3.14 is
+# not evidence of one for 3.12.
+
+# capa, for the ATT&CK/MBC mapping in ttps.json. **Two versions ahead of the
+# `flare-capa==7.4.0` the upstream code was written against**, and the API
+# moved: `find_capabilities` returns a `Capabilities` dataclass here where
+# 7.x returned a tuple, so capa_processor.py must read `.matches`. The rules
+# checkout under sandboxd/postprocessing/data/capa-rules must be the tag that
+# matches this version (v9.4.0); a rules tree from another major version fails
+# to load with a schema error, not a version message. This one line is most of
+# the list above's growth: it brings vivisect, pefile, dnfile, protobuf, rich
+# and the IDA-integration packages with it -- ~50 packages for one import.
+#
+# **vivisect needs no line of its own.** It is a core dependency of flare-capa
+# (not an extra), so this pin installs it -- 1.3.2 in the development
+# container, 2026-09-19 -- and it is what `analyze_memdumps=True` runs over
+# the sample's memory dumps (capa_processor.static_capa_analysis, BACKEND_VIV).
+# `python -c "import vivisect, viv_utils"` in the Dom0 venv is the check that
+# the pass has what it imports; a missing module there is an incomplete
+# install, not a pin to add.
+flare-capa==9.4.0
+
+# Splitting Windows command lines the way CreateProcess does, for the
+# `args` field of process_tree.json.
+mslex==1.3.0
+
+# The `log_index` format (indexer.py). The consumer is drakvuf-sandbox's web
+# API, which this platform does not have; the index is produced for the day it
+# does.
+msgpack==1.2.2
+
+# Parsing the per-plugin logs. A plain-`json` fallback would work; this is a
+# speed choice inherited from upstream, kept because syscall.log runs to
+# millions of lines.
+orjson==3.12.0
+
+# PostprocessingConfig in plugins/plugin_base.py. `pydantic` itself is already
+# a transitive dependency of capa; pinned here explicitly, to the same version
+# platform/requirements.txt pins, because plugin_base.py imports it directly.
+pydantic==2.13.4
+pydantic_core==2.46.4
+pydantic-settings==2.15.0
 
 # --- Running the tests -----------------------------------------------------
 #

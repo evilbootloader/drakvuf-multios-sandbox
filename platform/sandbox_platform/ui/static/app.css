@@ -372,3 +372,154 @@ details.advanced > summary:hover { color: var(--fg); }
 /* The border tracks the session so the state is visible without reading. */
 .console[data-state="connected"] { border-color: var(--red); }
 .console[data-state="closed"] { border-color: var(--line); opacity: 0.7; }
+
+/* --- the report tabs ---------------------------------------------------- */
+/*
+   Everything below renders sample-influenced text: process names, command
+   lines, paths, URLs. The same rule as `.filename` applies -- isolated,
+   breakable, never allowed to reflow the page -- and nothing here is a live
+   link to anything the sample named.
+*/
+
+/* A process reference, `Notepad.exe (7208)`, linking into the tree. */
+.proc {
+    display: inline-block;
+    font: 0.82rem/1.5 var(--mono);
+    padding: 0 0.4rem;
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    background: var(--bg-inset);
+    text-decoration: none;
+    white-space: nowrap;
+    unicode-bidi: isolate;
+    max-width: 24rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    vertical-align: bottom;
+}
+a.proc:hover { border-color: var(--fg-faint); }
+.proc.dim { color: var(--fg-faint); }
+
+/* ATT&CK and MBC identifiers beside a technique. */
+.tag {
+    display: inline-block;
+    font: 500 0.74rem/1.6 var(--mono);
+    padding: 0 0.4rem;
+    margin: 0.15rem 0.15rem 0 0;
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    color: var(--fg-muted);
+}
+.tag[data-kind="attck"] { border-color: var(--red-dim); }
+.tag[data-kind="verb"] { color: var(--fg); background: var(--bg-inset); }
+
+.count { font: 500 0.75rem/1.6 var(--mono); color: var(--fg-faint); margin-left: 0.35rem; }
+.note-inline { font-weight: 400; font-size: 0.85rem; color: var(--fg-muted); }
+.exit { font: 500 0.75rem/1.6 var(--mono); color: var(--fg-muted); }
+.exit.error { color: var(--red); }
+
+.ttps, .requests { list-style: none; margin: 0; padding: 0; }
+.ttps li, .requests li { padding: 0.5rem 0; border-bottom: 1px solid var(--line-soft); }
+.dl.small { font-size: 0.82rem; margin-top: 0.3rem; }
+
+/* The process tree as a list: <details> per parent, no script. */
+.ptree, .ptree ul { list-style: none; margin: 0; padding: 0; }
+.ptree ul { padding-left: 1.25rem; border-left: 1px solid var(--line-soft); margin-left: 0.4rem; }
+.ptree li { margin: 0.1rem 0; font-size: 0.9rem; }
+.ptree summary { cursor: pointer; }
+.ptree summary:hover { color: var(--fg); }
+.ptree .leaf { padding-left: 1.05rem; }
+.ptree .pname { font-family: var(--mono); unicode-bidi: isolate; }
+.ptree li[data-sample] > details > summary .pname,
+.ptree li[data-sample] > .leaf .pname { color: var(--red); font-weight: 600; }
+.ptree li[data-exited] > details > summary .pname,
+.ptree li[data-exited] > .leaf .pname { color: var(--fg-muted); }
+.ptree .cmd {
+    color: var(--fg-muted);
+    display: inline-block;
+    max-width: 44ch;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    vertical-align: bottom;
+    unicode-bidi: isolate;
+}
+/* The node a badge or a diagram box jumped to. */
+.ptree li:target > details > summary,
+.ptree li:target > .leaf { background: var(--red-wash); border-radius: var(--radius); }
+
+/* The process diagram: inline SVG, laid out by report.py. */
+.pdiagram-wrap {
+    overflow: auto;
+    max-height: 30rem;
+    margin: 0 0 1rem;
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    background: var(--bg-raised);
+}
+svg.pdiagram { display: block; }
+svg.pdiagram path { fill: none; stroke: var(--line); stroke-width: 1.5; }
+svg.pdiagram .pnode rect { fill: var(--bg-inset); stroke: var(--line); }
+svg.pdiagram .pnode text { font: 11px var(--mono); fill: var(--fg); }
+svg.pdiagram .pnode .pid { fill: var(--fg-faint); }
+svg.pdiagram .pnode[data-exited] rect { stroke-dasharray: 3 2; }
+svg.pdiagram .pnode[data-exited] text { fill: var(--fg-muted); }
+svg.pdiagram .pnode[data-sample] rect { stroke: var(--red); stroke-width: 1.5; }
+svg.pdiagram .pnode[data-sample] text { fill: var(--fg); }
+svg.pdiagram a:hover rect { stroke: var(--fg-faint); fill: var(--bg-raised); }
+/* Registry value data: a hex dump can be 512 characters; box it. */
+td.data { max-width: 26rem; }
+/* Registry rows under an autostart location, in the full tables too. */
+table.rows tr[data-autostart] td:first-child { border-left: 2px solid var(--red); }
+
+/* --- the per-process panel ------------------------------------------------ */
+.ptree a.logs {
+    font-size: 0.75rem;
+    color: var(--fg-faint);
+    text-decoration: none;
+    margin-left: 0.4rem;
+    border: 1px solid transparent;
+    border-radius: var(--radius);
+    padding: 0 0.3rem;
+}
+.ptree li:hover > details > summary a.logs,
+.ptree li:hover > .leaf a.logs { color: var(--fg-muted); border-color: var(--line); }
+.ptree a.logs:hover { color: var(--fg); border-color: var(--fg-faint); }
+
+.process-panel { margin-top: 1.5rem; padding-top: 1rem; border-top: 1px solid var(--line); }
+.process h2 .small { font-size: 0.8rem; font-weight: 400; margin-left: 0.5rem; text-decoration: none; }
+.small { font-size: 0.82rem; }
+
+.plugins { display: flex; flex-wrap: wrap; gap: 0.25rem; margin-bottom: 0.75rem; }
+.plugins a {
+    font: 0.82rem/1.6 var(--mono);
+    padding: 0 0.5rem;
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    text-decoration: none;
+    color: var(--fg-muted);
+}
+.plugins a:hover { color: var(--fg); border-color: var(--fg-faint); }
+.plugins a[aria-selected="true"] { color: var(--fg); border-color: var(--red); }
+
+.logfilter { margin-bottom: 0.5rem; align-items: center; }
+.logfilter select { max-width: 24rem; }
+
+/* Raw JSON events, one per line, the sample's text. Wrapped so a long
+ * argument never widens the page; isolated for the same reason .filename is. */
+pre.log {
+    margin: 0;
+    padding: 0.6rem 0.75rem;
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    background: var(--bg-raised);
+    font-size: 0.78rem;
+    line-height: 1.5;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    unicode-bidi: isolate;
+    max-height: 36rem;
+    overflow-y: auto;
+}
+pre.log + pre.log { border-top: 0; border-top-left-radius: 0; border-top-right-radius: 0; margin-top: -1px; }
+button.more { margin: 0.5rem 0 0; font-size: 0.85rem; }

@@ -1,0 +1,112 @@
+{% from "tabs/_report_macros.html" import procs, unreadable with context %}
+{#
+  Registry WRITES, from regmon via get_registry_info.py: values set, keys
+  created, keys and values deleted, each attributed to the processes that did
+  it. Reads are not in the report -- they are the bulk of regmon.log and say
+  what was looked at, not what was changed.
+
+  Key paths and value data are the sample's text. `.filename` isolates them
+  like any other path; value data is a string or a hex dump and is shown as
+  regmon rendered it, cut at 512 characters by the plugin.
+#}
+{% if report_error %}
+  {{ unreadable() }}
+{% elif not report %}
+  {% include "tabs/_pending.html" %}
+{% elif not report.registry_count %}
+<div class="empty">
+  <strong>The report records no registry writes.</strong>
+  <code>regmon</code> was not among this run's plugins, or nothing set,
+  created or deleted a key while the trace ran. Reads are not reported.
+</div>
+{% else %}
+
+{% set autostart = report.registry_autostart %}
+{% if autostart %}
+<h2>Autostart locations <span class="count">{{ autostart | length }}</span></h2>
+<p class="note danger">
+  Writes under keys that survive a reboot or a logon — Run, Winlogon,
+  Services, Image File Execution Options and the like. The guest's own
+  services write here too, so this is where to look, not a verdict.
+</p>
+<div class="scroll-x"><table class="rows">
+  <thead><tr><th>Key</th><th>Value</th><th>Data</th><th>By</th></tr></thead>
+  <tbody>
+  {% for r in autostart %}
+    <tr>
+      <td class="filename">{{ r.key }}</td>
+      <td class="filename">{{ r.value_name if r.value_name is defined and r.value_name is not none else '' }}</td>
+      <td class="filename data">{{ r.value if r.value is defined and r.value is not none else '' }}</td>
+      <td>{{ procs(r.process_seqids) }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table></div>
+{% endif %}
+
+<h2 {% if autostart %}style="margin-top:1.5rem"{% endif %}>Values set
+  <span class="count">{{ report.registry_set_values | length }}</span></h2>
+{% if report.registry_set_values %}
+<div class="scroll-x"><table class="rows">
+  <thead><tr><th>Key</th><th>Value</th><th>Data</th><th>By</th></tr></thead>
+  <tbody>
+  {% for r in report.registry_set_values %}
+    <tr{% if r.autostart %} data-autostart="1"{% endif %}>
+      <td class="filename">{{ r.key }}</td>
+      <td class="filename">{{ r.value_name if r.value_name is not none else '(Default)' }}</td>
+      <td class="filename data">{{ r.value if r.value is not none else '' }}</td>
+      <td>{{ procs(r.process_seqids) }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table></div>
+{% else %}
+<p class="dim">None recorded.</p>
+{% endif %}
+
+<h2 style="margin-top:1.5rem">Keys created
+  <span class="count">{{ report.registry_created_keys | length }}</span></h2>
+<p class="dim"><code>NtCreateKey</code> opens a key and creates it if absent; regmon does not say which happened.</p>
+{% if report.registry_created_keys %}
+<div class="scroll-x"><table class="rows">
+  <thead><tr><th>Key</th><th>By</th></tr></thead>
+  <tbody>
+  {% for r in report.registry_created_keys %}
+    <tr{% if r.autostart %} data-autostart="1"{% endif %}>
+      <td class="filename">{{ r.key }}</td>
+      <td>{{ procs(r.process_seqids) }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table></div>
+{% else %}
+<p class="dim">None recorded.</p>
+{% endif %}
+
+<h2 style="margin-top:1.5rem">Deleted
+  <span class="count">{{ (report.registry_deleted_keys | length) + (report.registry_deleted_values | length) }}</span></h2>
+{% if report.registry_deleted_keys or report.registry_deleted_values %}
+<div class="scroll-x"><table class="rows">
+  <thead><tr><th>Key</th><th>Value</th><th>By</th></tr></thead>
+  <tbody>
+  {% for r in report.registry_deleted_keys %}
+    <tr>
+      <td class="filename">{{ r.key }}</td>
+      <td class="dim">whole key</td>
+      <td>{{ procs(r.process_seqids) }}</td>
+    </tr>
+  {% endfor %}
+  {% for r in report.registry_deleted_values %}
+    <tr>
+      <td class="filename">{{ r.key }}</td>
+      <td class="filename">{{ r.value_name if r.value_name is not none else '(Default)' }}</td>
+      <td>{{ procs(r.process_seqids) }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table></div>
+{% else %}
+<p class="dim">None recorded.</p>
+{% endif %}
+
+{% endif %}

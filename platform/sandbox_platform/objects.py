@@ -293,6 +293,30 @@ def _chunks(key: str, chunk_size: int = 1 << 20) -> Iterator[bytes]:
     yield from _body_chunks(_get(key), chunk_size)
 
 
+def range_bytes(key: str, start: int, end: int) -> bytes:
+    """Bytes [start, end) of one object, or b"" when start is past its end.
+
+    For the per-process log viewer, which reads the slices `log_index` names
+    out of a per-plugin log that can be over a gigabyte -- so it never reads
+    the object whole. An HTTP range is inclusive at both ends; the caller's
+    is half-open, like every offset the indexer wrote. S3 answers a start
+    past the object with 416, which is "nothing there" rather than a fault.
+    """
+    if end <= start:
+        return b""
+    from botocore.exceptions import ClientError
+    try:
+        response = _client(Audience.WORKER).get_object(
+            Bucket=settings.s3_bucket, Key=key,
+            Range=f"bytes={start}-{end - 1}",
+        )
+    except ClientError as exc:
+        if exc.response.get("Error", {}).get("Code") == "InvalidRange":
+            return b""
+        raise
+    return b"".join(_body_chunks(response))
+
+
 def inspect(key: str, head_limit: int | None = None) -> ObjectFacts:
     """Hash a sample and capture its header, without storing it anywhere.
 

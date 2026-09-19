@@ -1,0 +1,105 @@
+from ..paths import DUMPS_DIR, DUMPS_ZIP, IPT_DIR, IPT_ZIP, TRACE_LOG
+from .build_process_tree import build_process_tree
+from .capa_plugin.capa_processor import capa_analysis
+from .compress_ipt import compress_ipt
+#from .generate_html_report import generate_html_report
+from .generate_report import generate_report
+from .generate_wireshark_key_file import generate_wireshark_key_file
+from .get_http_info import get_http_info
+from .get_modified_files_info import get_modified_files_info
+from .get_registry_info import get_registry_info
+from .get_socket_info import get_socket_info
+from .get_ttps_info import get_ttps_info
+from .gzip_syscalls import gzip_syscalls
+from .index_logs import index_logs
+#from .karton_integration import analyze_in_karton
+from .plugin_base import PostprocessPlugin
+from .process_dumps import process_dumps
+from .screenshot_metadata import screenshot_metadata
+from .split_drakvuf_log import split_drakvuf_log
+
+POSTPROCESS_PLUGINS = [
+    PostprocessPlugin(
+        function=split_drakvuf_log, requires=[TRACE_LOG], generates=[]
+    ),
+    PostprocessPlugin(
+        function=generate_wireshark_key_file,
+        requires=["tlsmon.log"],
+        generates=["wireshark_key_file.txt"],
+    ),
+    PostprocessPlugin(
+        function=build_process_tree,
+        requires=["procmon.log"],
+        generates=[],  # Always regenerate
+    ),
+    # Before capa_analysis, not after it as upstream orders them: with
+    # analyze_memdumps on, capa's static pass reads DUMPS_ZIP, which this is
+    # what produces. Upstream never hit that because it ships the option off.
+    PostprocessPlugin(
+        function=process_dumps,
+        requires=[DUMPS_DIR, "memdump.log", "process_tree.json"],
+        generates=[DUMPS_ZIP],
+    ),
+    # inject.log is the `"Plugin": "inject"` line of the trace, split out
+    # above -- DRAKVUF's own -i/-e launch, whose InjectedPid is the sample's
+    # process. preconfig.log is the injector's writefile step and names no
+    # process (INJECTED_PID:0).
+    PostprocessPlugin(
+        function=capa_analysis,
+        requires=[
+            "process_tree.json",
+            "inject.log",
+        ],
+        generates=["ttps.json"],
+    ),
+#    PostprocessPlugin(
+#        function=screenshot_metadata,
+#        requires=["screenshots.json"],
+#        generates=[],
+#    ),
+    # Gated on the directory, which exists only for a job that selected the
+    # `ipt` plugin (`stages._trace` creates it, `argv_trace` passes it as
+    # `--ipt-dir`); every other job skips this.
+    PostprocessPlugin(function=compress_ipt, requires=[IPT_DIR], generates=[IPT_ZIP]),
+    PostprocessPlugin(
+        function=gzip_syscalls,
+        requires=["syscall.log"],
+        generates=["syscall.log.gz", "sysret.log.gz"],
+    ),
+    PostprocessPlugin(
+        function=get_http_info,
+        requires=["process_tree.json", "apimon.log"],
+        generates=[],
+    ),
+    PostprocessPlugin(
+        function=get_modified_files_info,
+        requires=["process_tree.json", "filetracer.log"],
+        generates=[],
+    ),
+    PostprocessPlugin(
+        function=get_socket_info,
+        requires=["process_tree.json", "socketmon.log"],
+        generates=[],
+    ),
+    PostprocessPlugin(
+        function=get_registry_info,
+        requires=["process_tree.json", "regmon.log"],
+        generates=[],
+    ),
+    PostprocessPlugin(
+        function=get_ttps_info,
+        requires=["process_tree.json", "ttps.json"],
+        generates=[],
+    ),
+    # After every plugin that calls update_report and before index_logs,
+    # which adds nothing to it. Always regenerated: the report is a function
+    # of the files above it, and a stale one would describe a different run.
+    PostprocessPlugin(
+        function=generate_report,
+        requires=[],
+        generates=[],
+    ),
+    PostprocessPlugin(
+        function=index_logs, requires=["process_tree.json"], generates=["log_index"]
+    ),
+]

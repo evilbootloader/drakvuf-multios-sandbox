@@ -44,6 +44,8 @@ from starlette.requests import Request
 
 from .. import auth, catalogue, egress
 from .. import jobs as dal
+from .. import logview
+from .. import report as report_store
 from ..config import settings
 from ..db import connection
 from ..enums import RUNNING_STATES, TERMINAL_STATES, EgressMode, JobState, TargetOs
@@ -351,15 +353,29 @@ def jobs_view(request: Request,
 
 
 def _tab_body(slug: str) -> str:
+    # The report-driven tabs render their own pending state when there is no
+    # report, so they are always their own template; Static still has no
+    # source and falls through.
     return {
         "overview": "tabs/_overview.html",
         "artifacts": "tabs/_artifacts.html",
+        "behaviour": "tabs/_behaviour.html",
+        "network": "tabs/_network.html",
+        "memory": "tabs/_memory.html",
+        "registry": "tabs/_registry.html",
     }.get(slug, "tabs/_pending.html")
 
 
 def _job_context(job_id: UUID, tab: str, identity) -> dict:
     with connection() as conn:
         job = _detail(conn, job_id, identity)
+        key_prefix = _key_prefix(conn, job_id)
+
+    # The behavioural report, when the run uploaded one. Read here, once per
+    # request, for whichever tab is rendering: Overview needs it for startup
+    # and techniques, the tab bar needs it to know which tabs are filled.
+    loaded = report_store.for_job(job.id, job.manifest, key_prefix,
+                                  expired=job.artifacts_expired)
 
     tabs = catalogue.tabs_for(job.target_os)
     slugs = {t.slug for t in tabs}
@@ -377,7 +393,12 @@ def _job_context(job_id: UUID, tab: str, identity) -> dict:
         # scaffold is legible AS a scaffold: an empty tab you only discover by
         # clicking reads as a broken page, and #38 ships with most of them
         # empty by design.
-        "filled": _filled(job),
+        "filled": _filled(job, loaded),
+        # The report itself, or the sentence for why there is none. Both are
+        # read by every tab template; `report` is None for the ordinary case
+        # of a run that uploaded no report.json.
+        "report": loaded.report,
+        "report_error": loaded.error,
         # Rendered into data-terminal for job.js, which must know when to stop
         # listening. Passed from here rather than written as a literal in the
         # JS: two definitions of "terminal" would be free to drift, and the
@@ -396,11 +417,30 @@ def _job_context(job_id: UUID, tab: str, identity) -> dict:
     }
 
 
-def _filled(job) -> set[str]:
+def _key_prefix(conn, job_id: UUID) -> str:
+    """Where this job's objects live. Read AFTER `_detail`, which has just
+    enforced the tenancy scope and 404'd otherwise, so this needs no scope of
+    its own. Not on JobDetail: that is the API's response model, and the
+    prefix is a storage detail nothing outside this process should learn."""
+    return conn.execute(
+        "SELECT key_prefix FROM jobs WHERE id = %s", (job_id,)
+    ).fetchone()[0]
+
+
+def _filled(job, loaded: report_store.Loaded) -> set[str]:
     """Tabs with content today. Everything else is waiting on its own issue."""
     filled = {"overview"}
     if job.artifacts or job.manifest:
         filled.add("artifacts")
+    if loaded.report is not None:
+        # Behaviour, Network and Memory, as the report's own contents decide:
+        # a Windows run without socketmon has a report and no Network data
+        # from inside the guest.
+        filled |= loaded.report.filled_tabs()
+    # The capture is network data whether or not the guest attributed any:
+    # tcpdump runs on every trace, outside DRAKVUF, and the tab links to it.
+    if "capture.pcap" in job.artifacts or "wireshark_key_file.txt" in job.artifacts:
+        filled.add("network")
     return filled
 
 
@@ -451,3 +491,49 @@ def job_tabs(request: Request,
     """
     ctx = _job_context(job_id, tab, identity)
     return _render(request, "_job_tabs.html", **ctx)
+
+
+@router.get("/jobs/{job_id}/process/{seqid}", response_class=HTMLResponse)
+def process_view(request: Request,
+                 job_id: UUID = PathParam(),
+                 seqid: int = PathParam(ge=0, le=10_000_000),
+                 plugin: str = Query("", max_length=64, pattern=r"^[a-z0-9_]*$"),
+                 method: str = Query("", max_length=256),
+                 skip: int = Query(0, ge=0, le=1 << 40),
+                 part: str = Query("panel", pattern=r"^(panel|lines)$"),
+                 identity: auth.Identity = None) -> HTMLResponse:
+    """One process of one run: its facts from the report, and its lines from
+    the per-plugin logs, a page at a time -- the Behaviour tab's panel.
+
+    `seqid`, not PID: the report's own process identity, which a reused PID
+    cannot confuse (see report.py). `part=lines` returns only the next page
+    of lines, for the "more" button to append; everything else returns the
+    whole panel. Nothing here is a tab: the URL is fetched into the panel by
+    htmx and works as a plain page without it.
+    """
+    with connection() as conn:
+        job = _detail(conn, job_id, identity)
+        key_prefix = _key_prefix(conn, job_id)
+    loaded = report_store.for_job(job.id, job.manifest, key_prefix,
+                                  expired=job.artifacts_expired)
+    process = loaded.report.by_seqid.get(seqid) if loaded.report else None
+    if process is None:
+        raise HTTPException(404, "no such process in this run's report")
+
+    available = logview.for_job(job.id, job.manifest, key_prefix,
+                                expired=job.artifacts_expired)
+    plugins = available.plugins_for(seqid)
+    selected = plugin if plugin in plugins else (plugins[0] if plugins else "")
+    entry = available.index.entry(seqid, selected) if selected else None
+    methods = list(entry.values) if entry else []
+    if method and method not in methods:
+        method = ""
+    page = logview.page(available, seqid, selected, method or None, skip) \
+        if selected else None
+
+    ctx = dict(job=job, report=loaded.report, process=process, seqid=seqid,
+               plugins=plugins, compressed=available.compressed_for(seqid),
+               selected=selected, methods=sorted(methods), method=method,
+               page=page, page_bytes=logview.PAGE_BYTES)
+    template = "tabs/_process_lines.html" if part == "lines" else "tabs/_process.html"
+    return _render(request, template, **ctx)

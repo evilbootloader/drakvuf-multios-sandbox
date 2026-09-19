@@ -1,0 +1,82 @@
+{% from "tabs/_report_macros.html" import proc with context %}
+{#
+  One process: the Behaviour tab's panel, fetched into #process-panel by
+  htmx from a "logs" link on a tree node, or served as a page of its own.
+
+  Two sources. The facts at the top are the report's (report.json). The
+  lines below are read out of `<plugin>.log` in the store through the byte
+  ranges `log_index` names for this process -- see logview.py -- so a click
+  costs one page of lines, not the log.
+
+  Every line is the sample's text and is rendered inside <pre> through
+  autoescape. Long lines wrap; nothing is a link.
+#}
+<section class="process" id="process-{{ seqid }}">
+<h2>{{ proc(seqid) }}
+  <a class="dim small" href="#proc-{{ seqid }}" title="back to the tree">↑ tree</a></h2>
+<dl class="dl">
+  <dt>Image</dt><dd class="filename">{{ process.name }}</dd>
+  {% if process.command_line %}<dt>Command line</dt><dd class="filename">{{ process.command_line }}</dd>{% endif %}
+  <dt>PID</dt><dd class="mono">{{ process.pid }}
+    {% if process.parent_seqid is not none %}<span class="dim">child of</span> {{ proc(process.parent_seqid) }}{% endif %}</dd>
+  <dt>Lifetime</dt>
+  <dd>
+    {% if process.started_at %}started at t+{{ '%.3f' | format(process.started_at) }}s{% else %}already running when the trace began{% endif %}
+    {%- if process.exited_at is not none %}, exited at t+{{ '%.3f' | format(process.exited_at) }}s{% elif process.exit_code is none %}, still running when it ended{% endif %}
+    {%- if process.exit_code_str %} · <span class="exit{% if process.exited_with_error %} error{% endif %}">{{ process.exit_code_str }}</span>
+      <span class="dim mono">0x{{ '%08x' | format(process.exit_code) }}</span>{% endif %}
+    {%- if process.killed_by is not none %} · killed by {{ proc(process.killed_by) }}{% endif %}
+  </dd>
+</dl>
+
+{% if not plugins %}
+<div class="empty" style="margin-top:1rem">
+  <strong>No log lines indexed for this process.</strong>
+  Either no plugin recorded an event from it, or this run has no
+  <code>log_index</code> (runs before postprocessing shipped).
+</div>
+{% endif %}
+
+<nav class="plugins" style="margin-top:1rem">
+  {% for p in plugins %}
+  <a href="/ui/jobs/{{ job.id }}/process/{{ seqid }}?plugin={{ p }}"
+     hx-get="/ui/jobs/{{ job.id }}/process/{{ seqid }}?plugin={{ p }}"
+     hx-target="#process-panel" hx-swap="innerHTML"
+     {% if p == selected %}aria-selected="true"{% endif %}>{{ p }}</a>
+  {% endfor %}
+  {% for p in compressed %}
+  {# Gzipped by postprocessing to fit the result budget, before the indexer
+     ran, so there is no per-process view of it: a download of the whole
+     log, every process's lines together. #}
+  <a class="dim" href="{{ job.artifacts.get(p ~ '.log.gz', '#') }}" rel="noopener nofollow"
+     title="{{ p }}.log is stored compressed and unindexed; download the whole of it">{{ p }} ↓</a>
+  {% endfor %}
+</nav>
+{% if plugins %}
+
+{% if selected %}
+<form class="filters logfilter"
+      hx-get="/ui/jobs/{{ job.id }}/process/{{ seqid }}"
+      hx-target="#process-panel" hx-swap="innerHTML" hx-trigger="change">
+  <input type="hidden" name="plugin" value="{{ selected }}">
+  <label><span>Method</span>
+    <select name="method">
+      <option value="">all{% if methods %} ({{ methods | length }}){% endif %}</option>
+      {% for m in methods %}
+      <option value="{{ m }}"{% if m == method %} selected{% endif %}>{{ m }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  {% if page %}
+  <span class="dim small">{{ '{:,}'.format(page.total_bytes) }} bytes of {{ selected }}.log
+    {% if method %}for {{ method }}{% endif %}</span>
+  {% endif %}
+  <noscript><button type="submit">Apply</button></noscript>
+</form>
+
+<div class="loglines" id="loglines-{{ seqid }}">
+{% include "tabs/_process_lines.html" %}
+</div>
+{% endif %}
+{% endif %}
+</section>

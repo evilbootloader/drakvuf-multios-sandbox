@@ -172,18 +172,20 @@ class Settings:
     # Refused before a URL is issued, then re-checked against the object's
     # real size -- a client's declared size is a claim, not a fact.
     #
-    # At 512 MiB the binding constraint on the browser path is NOT this value:
+    # At 1 GiB the binding constraint on the browser path is NOT this value:
     # Cloudflare caps request bodies (100 MB on current free plans), and the
     # upload goes through the tunnel. A sample between that cap and this one
     # fails at Cloudflare with their error page rather than here with
     # `rejected_size`, so the message the submitter sees will not mention this
     # setting. Dom0-side submission and LAN uploads are unaffected.
     #
-    # Kept at 512 MiB deliberately: lowering it to match the tunnel would also
+    # Kept well above the tunnel deliberately: lowering it to match would also
     # reject samples the lab can already analyse -- CLAUDE.md records
     # `injector` round-tripping 12 MB byte-exact, and APKs go well beyond
-    # that.
-    max_sample_bytes: int = _int("MAX_SAMPLE_BYTES", 512 * 1024 * 1024)
+    # that. 512 MiB until 2026-09-19, raised to 1 GiB by the operator; on
+    # 2026-09-18 it briefly read 2 MiB, the three limits in this section
+    # having been rotated by hand, which would have refused the 12 MB sample.
+    max_sample_bytes: int = _int("MAX_SAMPLE_BYTES", 1024 * 1024 * 1024)
 
     # Ceiling on a SINGLE uploaded artifact, bound into the presigned POST
     # policy the same way max_sample_bytes is (issue #37).

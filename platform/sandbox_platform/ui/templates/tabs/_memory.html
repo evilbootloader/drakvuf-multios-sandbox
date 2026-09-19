@@ -1,0 +1,60 @@
+{% from "tabs/_report_macros.html" import proc, unreadable with context %}
+{#
+  memdump's output, as report.json describes it: one group per process, each
+  dump with the reason DRAKVUF took it, the region and its size. The bytes are
+  in dumps.zip on the Artifacts tab (process_dumps packs the directory after
+  dropping System's dumps and anything outside the configured size band).
+
+  `filename` is the dump's name INSIDE the zip. It is shown, never linked or
+  joined into a path here -- one download per run, not one per dump.
+#}
+{% if report_error %}
+  {{ unreadable() }}
+{% elif not report %}
+  {% include "tabs/_pending.html" %}
+{% elif not report.memdumps %}
+<div class="empty">
+  <strong>No memory dumps in the report.</strong>
+  <code>memdump</code> was not among this run's plugins, or every dump it took
+  was filtered out — System's are, and so is anything under 512 bytes or over
+  the configured single-dump size.
+</div>
+{% else %}
+
+<p class="note">
+  {{ report.dump_count }} dump{{ 's' if report.dump_count != 1 }} across
+  {{ report.memdumps | length }} process{{ 'es' if report.memdumps | length != 1 }}.
+  {% if 'dumps.zip' in job.artifacts %}
+  The bytes are in <a href="{{ job.artifacts['dumps.zip'] }}" rel="noopener nofollow">dumps.zip</a>
+  (password <code>infected</code>, like every artifact here).
+  {% else %}
+  <code>dumps.zip</code> is not among this run's artifacts.
+  {% endif %}
+  Static capa results per dump, where a dump was a recognisable executable, are
+  under <code>dumps_ttp/</code> on the Artifacts tab.
+</p>
+
+{% for group in report.memdumps %}
+<h2 style="margin-top:1.25rem">{{ proc(group.process_seqid) }}
+  <span class="count">{{ group.dumps | length }}</span></h2>
+<div class="scroll-x"><table class="rows">
+  <thead><tr><th>#</th>{% if group.process_seqid is none %}<th>PID</th>{% endif %}<th>Reason</th><th>Method</th><th>Address</th><th>Size</th><th>Written into</th><th>File in dumps.zip</th></tr></thead>
+  <tbody>
+  {% for d in group.dumps %}
+    <tr>
+      <td class="dim">{{ d.index if d.index is not none else '' }}</td>
+      {# The tree never saw this process; its PID is all the report has. #}
+      {% if group.process_seqid is none %}<td class="mono">{{ d.pid if d.pid is not none else '' }}</td>{% endif %}
+      <td>{{ d.dump_reason }}</td>
+      <td class="mono">{{ d.method }}</td>
+      <td class="mono">{{ d.address }}</td>
+      <td class="mono">{{ d.size if d.size is not none else '' }}</td>
+      <td>{% if d.target_pid is not none %}{{ proc(d.target_process) }} <span class="dim mono">@ {{ d.target_addr }}</span>{% endif %}</td>
+      <td class="filename">{{ d.filename }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table></div>
+{% endfor %}
+
+{% endif %}

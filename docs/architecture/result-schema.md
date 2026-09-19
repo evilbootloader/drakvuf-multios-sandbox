@@ -131,20 +131,79 @@ place to be wrong.
 
 ### 4.1 Layout
 
+Amended 2026-09-19, when the postprocessing phase (`sandboxd/postprocessing/`,
+ported from drakvuf-sandbox) started running between the trace and the
+upload. The names are defined once, in `sandboxd/postprocessing/paths.py`,
+and `argv_trace`, `stages.py` and the plugins all import them.
+
 ```text
 results/<job_id>/
-  trace.log            DRAKVUF's JSONL event stream        reserved
+  <plugin>.log         DRAKVUF's JSONL event stream, one   reserved namespace
+                       file per plugin (syscall.log,
+                       procmon.log, inject.log, ...)
+  parse_errors.log     lines of the stream that were not   reserved
+                       JSON, verbatim
+  syscall.log.gz       syscall.log, gzipped by             reserved
+  sysret.log.gz        postprocessing (the .log is gone)
+  trace.stderr         DRAKVUF's stderr                    reserved
   preconfig.log        injector output                     reserved
   capture.pcap         tcpdump                             reserved, may be 0 bytes
   manifest.json        the document below                  reserved
+  report.json          the behavioural report the UI      reserved
+                       renders (generate_report.py)
+  process_tree.json    from procmon.log (Windows)          reserved
+  ttps.json            capa, ATT&CK/MBC per process        reserved
+  dumps_ttp/…          capa, per memory dump               prefix
+  wireshark_key_file.txt  from tlsmon.log                  reserved
+  log_index            per-process offsets into the logs   reserved
   <capability>.json    one per capability                  reserved namespace
-  memdump/…            plugin output                       prefix
-  extracted/…          files the SAMPLE wrote              prefix, untrusted names
+  dumps.zip            memdump's output, packed            reserved
+  dumps/…              memdump's output, raw -- present    prefix
+                       only when nothing packed it
+  ipt.zip              the ipt plugin's output, packed     reserved
+  ipt/…                (compress_ipt); the same pair as    prefix -- only for a
+                       dumps.zip and dumps/                job that chose `ipt`
+  extracted/…          files the SAMPLE wrote (-D)         prefix, untrusted names
   screenshots/…        DRAFT-054                           prefix
 ```
 
+**`trace.log` is written and then replaced.** `stages._trace` writes
+DRAKVUF's stdout to it; `split_drakvuf_log` turns it into one `<plugin>.log`
+per DRAKVUF plugin plus `parse_errors.log`, which together are the raw stream
+byte for byte, and removes it. It is never in the manifest: `stages._collect`
+skips the name whether or not the split removed the file, so a split that
+failed part-way uploads the logs it wrote and leaves the raw stream in the job
+directory on Dom0 rather than beside them. Until 2026-09-19 this
+section reserved it as an uploaded artifact, and `test_stages.py` asserted so;
+keeping both copies would double a trace that on its own exceeds the per-job
+result budget (a Windows trace measured 1.2 GB, of which `syscall.log` was
+1.22 GB before gzip and 50 MB after).
+
+**`report.json` is what the job page renders.** `platform/sandbox_platform/report.py`
+reads it back — bounded, lenient about unknown keys, never raising into a
+page — and the Overview, Behaviour, Network and Memory tabs are drawn from
+it. Its writer is `sandboxd/postprocessing/plugins/generate_report.py`;
+`schema_version` is the contract between the two.
+
+**`dumps/` and `dumps.zip` are the same evidence in two states.**
+`process_dumps` packs the directory into the zip and removes the directory; it
+needs `process_tree.json`, which needs `procmon`, which no non-Windows job runs
+today, so for those jobs the raw directory is what uploads. `stages._collect`
+excludes the directory only when the zip is beside it — an unconditional
+exclusion would have dropped every memory dump of every Ubuntu job with nothing
+in the manifest to say so.
+
+**`ipt/` and `ipt.zip` follow the same rule, for a job that selected `ipt`.**
+`argv_trace` passes `--ipt-dir <result_dir>/ipt --ipt-trace-user` beside
+`-a ipt` (both from `drakvuf --help`, operator-confirmed 2026-09-19; ring > 0
+only, since the sample's code is what the trace is for) and `stages._trace`
+creates the directory on the same condition, so a job without the plugin has
+no `ipt.zip` rather than an empty one. `compress_ipt` packs it. **Candidate**:
+no job has run with `ipt` selected on this Dom0 yet, so the layout DRAKVUF
+writes under `ipt/` is not recorded here.
+
 **Reserved means a worker may not use the name for anything else**, so a
-reader can trust that `trace.log` is a trace.
+reader can trust that `procmon.log` is procmon's output.
 
 **`extracted/` is the one prefix whose leaf names are chosen by the sample.**
 Called out in the layout rather than left to be rediscovered in code: those

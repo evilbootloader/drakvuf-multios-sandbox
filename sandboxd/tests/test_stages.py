@@ -217,15 +217,97 @@ def test_the_clone_domain_and_vlan_are_reported(tmp_path):
 
 
 def test_the_manifest_is_the_draft_018_shape(tmp_path):
-    outcome, api = run(tmp_path)
+    """The trace is uploaded SPLIT, one `<plugin>.log` per DRAKVUF plugin,
+    and `trace.log` itself is not in the manifest.
+
+    Amended 2026-09-19 (result-schema.md 4.1): until then this asserted
+    `trace.log` was present, and passed only because the split read a
+    filename nothing wrote. The raw stream is the per-plugin logs plus
+    parse_errors.log, byte for byte; keeping both would double a trace that
+    on its own exceeds the per-job result budget."""
+    r = runner_ready()
+    r.script(("drakvuf",), stdout=(
+        '{"Plugin": "inject", "Method": "ExecProc", "Status": "Success", '
+        '"ProcessName": "/tmp/sample.bin", "Arguments": "", '
+        '"InjectedPid": 1688, "InjectedTid": 1688}\n'
+        '{"Plugin":"filetracer","PID":1688,"EventUID":"0x1","Method":"openat"}\n'))
+    outcome, api = run(tmp_path, runner=r)
 
     manifest = api.completed[0]
     assert manifest["schema_version"] == 1
     names = {a["name"] for a in manifest["artifacts"]}
-    assert S.TRACE_LOG in names
+    assert S.TRACE_LOG not in names
+    assert {"inject.log", "filetracer.log", S.TRACE_STDERR} <= names
     for entry in manifest["artifacts"]:
         assert len(entry["sha256"]) == 64
         assert entry["size_bytes"] >= 0
+
+
+def test_raw_dumps_upload_unless_process_dumps_packed_them(tmp_path):
+    """`dumps/` is excluded from the upload only beside a `dumps.zip`.
+
+    process_dumps needs a process tree, which needs procmon, which no
+    non-Windows job runs -- so for those the raw directory is all there is.
+    The first version of the exclusion was unconditional (2026-09-18), and
+    every memory dump of every Ubuntu job would have vanished from the
+    manifest with nothing to say so."""
+    from sandboxd.postprocessing.paths import DUMPS_DIR, DUMPS_ZIP
+    cfg = config(tmp_path)
+    job_dir = tmp_path / "results" / "job"
+    (job_dir / DUMPS_DIR).mkdir(parents=True)
+    (job_dir / DUMPS_DIR / "0x0001.dmp").write_bytes(b"\xde\xad")
+
+    api = FakeApi()
+    S.Analysis(api, runner_ready(), cfg)._collect(FakeLease(), job_dir)
+    assert api.uploaded == [f"{DUMPS_DIR}/0x0001.dmp"]
+
+    (job_dir / DUMPS_ZIP).write_bytes(b"PK")
+    api = FakeApi()
+    S.Analysis(api, runner_ready(), cfg)._collect(FakeLease(), job_dir)
+    assert api.uploaded == [DUMPS_ZIP]
+
+
+def test_the_raw_trace_never_uploads_even_when_the_split_left_it(tmp_path):
+    """The per-plugin logs are the stream; `trace.log` is what they were
+    split from. `split_drakvuf_log` removes it on success, and `_collect`
+    skips it regardless -- a failed split must not turn the largest file of
+    the job into an upload beside the partial logs it did write. It stays in
+    the job directory on Dom0, which nothing removes."""
+    cfg = config(tmp_path)
+    job_dir = tmp_path / "results" / "job"
+    job_dir.mkdir(parents=True)
+    (job_dir / S.TRACE_LOG).write_text('{"Plugin":"syscall"}\n' * 100)
+    (job_dir / "syscall.log").write_text('{"Plugin":"syscall"}\n')
+    (job_dir / S.TRACE_STDERR).write_text("")
+
+    api = FakeApi()
+    S.Analysis(api, runner_ready(), cfg)._collect(FakeLease(), job_dir)
+    assert api.uploaded == ["syscall.log", S.TRACE_STDERR]
+    assert (job_dir / S.TRACE_LOG).exists(), "skipped from the upload, not deleted"
+
+
+def test_raw_ipt_uploads_unless_compress_ipt_packed_it(tmp_path):
+    """The same rule for the other packed pair, `ipt/` and `ipt.zip`."""
+    from sandboxd.postprocessing.paths import DUMPS_ZIP, IPT_DIR, IPT_ZIP
+    cfg = config(tmp_path)
+    job_dir = tmp_path / "results" / "job"
+    (job_dir / IPT_DIR).mkdir(parents=True)
+    (job_dir / IPT_DIR / "trace.bin").write_bytes(b"\x02\x02")
+
+    api = FakeApi()
+    S.Analysis(api, runner_ready(), cfg)._collect(FakeLease(), job_dir)
+    assert api.uploaded == [f"{IPT_DIR}/trace.bin"]
+
+    # One pair's zip says nothing about the other's directory.
+    (job_dir / DUMPS_ZIP).write_bytes(b"PK")
+    api = FakeApi()
+    S.Analysis(api, runner_ready(), cfg)._collect(FakeLease(), job_dir)
+    assert api.uploaded == [DUMPS_ZIP, f"{IPT_DIR}/trace.bin"]
+
+    (job_dir / IPT_ZIP).write_bytes(b"PK")
+    api = FakeApi()
+    S.Analysis(api, runner_ready(), cfg)._collect(FakeLease(), job_dir)
+    assert api.uploaded == [DUMPS_ZIP, IPT_ZIP]
 
 
 def test_the_trace_streams_are_never_merged(tmp_path):
@@ -268,6 +350,30 @@ def test_both_plugin_output_directories_exist_before_drakvuf_runs(tmp_path):
         "--memdump-dir was passed a path that does not exist; memdump writes "
         "nothing and the trace still reports success"
     )
+
+
+def test_the_ipt_directory_exists_only_for_a_job_that_chose_ipt(tmp_path):
+    """The third output directory, on the same footing as the two above --
+    and absent otherwise: compress_ipt runs whenever it exists, and an empty
+    `ipt.zip` in every manifest would say IPT ran when it did not."""
+    from sandboxd.postprocessing.paths import IPT_DIR, IPT_ZIP
+    without = tmp_path / "without"
+    r = runner_ready()
+    run(without, runner=r, plugins=("syscalls",))
+    argv = [c for c in r.calls if c.argv[0] == "drakvuf"][0].argv
+    assert "--ipt-dir" not in argv
+    assert not any(p.name in (IPT_DIR, IPT_ZIP) for p in without.rglob("*"))
+
+    r = runner_ready()
+    _, api = run(tmp_path / "with", runner=r, plugins=("syscalls", "ipt"))
+    argv = [c for c in r.calls if c.argv[0] == "drakvuf"][0].argv
+    ipt = Path(argv[argv.index("--ipt-dir") + 1])
+    assert ipt.name == IPT_DIR
+    # Created before DRAKVUF ran, and packed after: the manifest carries the
+    # zip, not the directory.
+    names = {a["name"] for a in api.completed[0]["artifacts"]}
+    assert IPT_ZIP in names
+    assert not any(n.startswith(IPT_DIR + "/") for n in names)
 
 
 def test_the_capture_runs_alongside_the_trace_and_is_stopped(tmp_path):
@@ -863,10 +969,11 @@ def test_tickets_are_requested_in_batches_the_server_will_accept(tmp_path):
     successful analysis was discarded, artifacts and all, and `memdump` alone
     routinely produces more than 64 files.
     """
+    from sandboxd.postprocessing.paths import DUMPS_DIR
     job_dir = tmp_path / "results" / "job"
-    (job_dir / "memdump").mkdir(parents=True)
+    (job_dir / DUMPS_DIR).mkdir(parents=True)
     for i in range(150):
-        (job_dir / "memdump" / f"0x{i:04x}.dmp").write_bytes(b"\xde\xad" * 8)
+        (job_dir / DUMPS_DIR / f"0x{i:04x}.dmp").write_bytes(b"\xde\xad" * 8)
 
     api = FakeApi()
     outcome = S.Analysis(api, runner_ready(), config(tmp_path))._collect(

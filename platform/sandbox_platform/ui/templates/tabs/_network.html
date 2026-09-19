@@ -1,0 +1,106 @@
+{% from "tabs/_report_macros.html" import procs, unreadable with context %}
+{#
+  Two sources, deliberately kept apart on the page. The pcap is captured on
+  every run outside the guest (tcpdump on the clone's VLAN) and is the ground
+  truth; the sections below it come from report.json and are what the guest
+  saw from the inside -- socketmon for connections and DNS, apimon for
+  WinINet/WinHTTP calls -- attributed to processes. Either can exist without
+  the other.
+
+  Nothing here is a link. A URL the sample asked for is evidence, and an
+  analyst's browser following it is the last thing this page should invite.
+#}
+
+{% if 'capture.pcap' in job.artifacts or 'wireshark_key_file.txt' in job.artifacts %}
+<p class="note">
+  {% if 'capture.pcap' in job.artifacts %}
+  <a href="{{ job.artifacts['capture.pcap'] }}" rel="noopener nofollow">capture.pcap</a>
+  is the traffic on the clone's VLAN for the whole trace.
+  {% endif %}
+  {% if 'wireshark_key_file.txt' in job.artifacts %}
+  <a href="{{ job.artifacts['wireshark_key_file.txt'] }}" rel="noopener nofollow">wireshark_key_file.txt</a>
+  holds the TLS session keys <code>tlsmon</code> captured — load it as Wireshark's
+  (Pre)-Master-Secret log to read the HTTPS inside it.
+  {% endif %}
+</p>
+{% endif %}
+
+{% if report_error %}
+  {{ unreadable() }}
+{% elif not report %}
+  {% include "tabs/_pending.html" %}
+{% elif not (report.dns_queries or report.connections or report.http_requests or report.cracked_urls) %}
+<div class="empty">
+  <strong>The report attributes no network activity to any process.</strong>
+  Connections and DNS come from <code>socketmon</code>, HTTP requests from
+  <code>apimon</code>; neither was among this run's plugins, or the sample made
+  no such call. The capture above is unaffected.
+</div>
+{% else %}
+
+{% if report.dns_queries %}
+<h2>DNS queries <span class="count">{{ report.dns_queries | length }}</span></h2>
+<div class="scroll-x"><table class="rows">
+  <thead><tr><th>Name</th><th>By</th></tr></thead>
+  <tbody>
+  {% for q in report.dns_queries %}
+    <tr><td class="filename">{{ q.domain }}</td><td>{{ procs(q.process_seqids) }}</td></tr>
+  {% endfor %}
+  </tbody>
+</table></div>
+{% endif %}
+
+{% if report.connections %}
+<h2 style="margin-top:1.5rem">Connections <span class="count">{{ report.connections | length }}</span></h2>
+<div class="scroll-x"><table class="rows">
+  <thead><tr><th>Proto</th><th>Remote</th><th>Service</th><th>Local</th><th>By</th></tr></thead>
+  <tbody>
+  {% for c in report.connections %}
+    <tr>
+      <td class="mono">{{ c.protocol }}</td>
+      <td class="mono">{{ c.remote_ip }}{% if c.remote_port is not none %}:{{ c.remote_port }}{% endif %}</td>
+      <td class="dim">{{ c.service or '' }}</td>
+      <td class="mono dim">{{ c.local_ip }}{% if c.local_port is not none %}:{{ c.local_port }}{% endif %}</td>
+      <td>{{ procs(c.process_seqids) }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table></div>
+{% endif %}
+
+{% if report.http_requests %}
+<h2 style="margin-top:1.5rem">HTTP requests <span class="count">{{ report.http_requests | length }}</span></h2>
+<ul class="requests">
+  {% for r in report.http_requests %}
+  <li>
+    <div>
+      <span class="tag" data-kind="verb">{{ r.verb or 'unknown' }}</span>
+      <span class="filename">{% if r.server_name %}{{ r.server_name }}{% if r.server_port %}:{{ r.server_port }}{% endif %}{% endif %}{{ r.path or '' }}</span>
+      {% if r.process_seqid is not none %}{{ procs([r.process_seqid]) }}{% endif %}
+    </div>
+    <dl class="dl small">
+      {% if r.user_agent %}<dt>User-Agent</dt><dd class="filename">{{ r.user_agent }}</dd>{% endif %}
+      {% if r.referer %}<dt>Referer</dt><dd class="filename">{{ r.referer }}</dd>{% endif %}
+      {% if r.proxy %}<dt>Proxy</dt><dd class="filename">{{ r.proxy }}</dd>{% endif %}
+      {% if r.username or r.password %}<dt>Credentials</dt><dd class="filename">{{ r.username or '' }}{% if r.password %}:{{ r.password }}{% endif %}</dd>{% endif %}
+      {% for h in r.extra_headers %}<dt>Header</dt><dd class="filename">{{ h }}</dd>{% endfor %}
+    </dl>
+  </li>
+  {% endfor %}
+</ul>
+{% endif %}
+
+{% if report.cracked_urls %}
+<h2 style="margin-top:1.5rem">URLs parsed <span class="count">{{ report.cracked_urls | length }}</span></h2>
+<p class="dim">Passed to <code>InternetCrackUrl</code> / <code>InternetCreateUrl</code>: what the sample handled, not necessarily what it fetched.</p>
+<div class="scroll-x"><table class="rows">
+  <thead><tr><th>URL</th><th>By</th></tr></thead>
+  <tbody>
+  {% for u in report.cracked_urls %}
+    <tr><td class="filename">{{ u.url }}</td><td>{{ procs(u.process_seqids) }}</td></tr>
+  {% endfor %}
+  </tbody>
+</table></div>
+{% endif %}
+
+{% endif %}

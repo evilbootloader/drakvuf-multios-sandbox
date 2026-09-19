@@ -52,7 +52,14 @@ from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
 
+from .postprocessing.paths import DUMPS_DIR, EXTRACTED_DIR, IPT_DIR
+
 log = logging.getLogger("sandboxd.guests")
+
+# The one plugin whose selection changes the argv beyond `-a`: it needs a
+# directory (`--ipt-dir`) and a ring to trace. The name is DRAKVUF's, as the
+# platform's catalogue spells it (`catalogue.PLUGINS`).
+IPT_PLUGIN = "ipt"
 
 
 class TargetOs(str, Enum):
@@ -625,8 +632,12 @@ def argv_trace(job: Job, component: str | None = None) -> list[str]:
     """
     mode = "shellexec" if job.target_os == TargetOs.WINDOWS else "execproc"
 
+    # `-s`: "Hide Hypervisor bits and signature in CPUID" (`drakvuf --help`,
+    # operator-confirmed 2026-09-19). The cheapest evasion a sample tries is
+    # a CPUID for the hypervisor-present bit; `cpuidmon` records the check,
+    # this makes the answer the one bare metal gives. Every OS, every trace.
     argv = [
-        "drakvuf", "-r", str(job.profile), "-d", str(job.domid),
+        "drakvuf", "-r", str(job.profile), "-s", "-d", str(job.domid),
         "-i", str(job.injection_pid), "-m", mode,
     ]
 
@@ -646,8 +657,22 @@ def argv_trace(job: Job, component: str | None = None) -> list[str]:
     argv += ["-o", "json", "-t", str(job.options.timeout)]
     for plugin in job.options.plugins:
         argv += ["-a", plugin]
-    argv += ["-D", str(job.result_dir / "dump"),
-             "--memdump-dir", str(job.result_dir / "memdump")]
+    # The names are the postprocessing package's, not literals: process_dumps
+    # reads DUMPS_DIR, and when these were spelled here by hand (2026-09-18)
+    # `--memdump-dir` said `memdumps/` while the plugin read `dumps/`.
+    argv += ["-D", str(job.result_dir / EXTRACTED_DIR),
+             "--memdump-dir", str(job.result_dir / DUMPS_DIR)]
+    if IPT_PLUGIN in job.options.plugins:
+        # From `drakvuf --help` (operator-confirmed 2026-09-19):
+        #   --ipt-dir <directory>   Where to store data recorded with Intel
+        #                           Processor Trace
+        #   --ipt-trace-os          Enable IPT tracing in ring 0
+        #   --ipt-trace-user        Enable IPT tracing in ring > 0
+        # Ring > 0 only: the sample's own code is what the trace is for, and
+        # ring 0 would record the whole kernel under it. Only when the plugin
+        # was selected -- an `--ipt-dir` with no `-a ipt` is a directory
+        # nothing writes and compress_ipt would pack empty.
+        argv += ["--ipt-dir", str(job.result_dir / IPT_DIR), "--ipt-trace-user"]
     return argv
 
 

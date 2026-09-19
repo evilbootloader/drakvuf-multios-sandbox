@@ -61,8 +61,86 @@
   {% endif %}
 </dl>
 
+{% from "tabs/_report_macros.html" import proc, procs, tags, unreadable with context %}
+
+{% if report_error %}
+<div style="margin-top:1rem">{{ unreadable() }}</div>
+{% elif report %}
+
+{#
+  How the sample was started, and how that process ended. `startup.process`
+  is a seqid into the tree; `startup.pid` is DRAKVUF's own record of what it
+  injected, kept even when the tree never saw that PID.
+#}
+<h2 style="margin-top:1.5rem">Startup</h2>
+<dl class="dl">
+  <dt>Injection</dt>
+  <dd>
+    {% if report.startup.status == 'Success' %}
+      <span class="state" data-state="completed">success</span>
+    {% elif report.startup.status == 'Error' %}
+      <span class="state" data-state="failed">error</span>
+      <span class="filename">{{ report.startup.error or '' }}</span>
+      {% if report.startup.error_code is not none %}<span class="dim mono">({{ report.startup.error_code }})</span>{% endif %}
+    {% else %}
+      <span class="dim">not recorded</span>
+    {% endif %}
+  </dd>
+  {% if report.startup.process_name %}
+  <dt>Launched</dt>
+  <dd class="filename">{{ report.startup.process_name }}
+    {% if report.startup.arguments %} {{ report.startup.arguments }}{% endif %}</dd>
+  {% endif %}
+  {% if report.startup.pid is not none %}
+  <dt>Process</dt>
+  <dd>
+    {% if report.startup.process is not none %}{{ proc(report.startup.process) }}
+    {% else %}<span class="mono">PID {{ report.startup.pid }}</span>
+      <span class="dim">— not in the process tree</span>{% endif %}
+    {% set sp = report.startup_process %}
+    {% if sp %}
+      {% if sp.exit_code_str %}
+        · <span class="exit{% if sp.exited_with_error %} error{% endif %}">{{ sp.exit_code_str }}</span>
+        <span class="dim mono">0x{{ '%08x' | format(sp.exit_code) }}</span>
+      {% elif sp.exited_at is not none %}
+        · <span class="exit">exited</span>
+      {% else %}
+        · <span class="dim">still running when the trace ended</span>
+      {% endif %}
+      {% if sp.killed_by is not none %}· killed by {{ proc(sp.killed_by) }}{% endif %}
+    {% endif %}
+  </dd>
+  {% endif %}
+</dl>
+
+{#
+  Observations, not a score -- the comment at the top of this file still
+  holds. Each technique names the processes it was seen in; the mapping is
+  capa's rule metadata over apimon and syscall events of the sample's own
+  process subtree (analyze_only_malware_pids), so a technique here is
+  something the SAMPLE did, not something the guest did around it.
+#}
+<h2 style="margin-top:1.5rem">Techniques <span class="count">{{ report.ttps | length }}</span></h2>
+{% if report.ttps %}
+<ul class="ttps">
+  {% for t in report.ttps %}
+  <li>
+    <div><strong>{{ t.name }}</strong> {{ procs(t.process_seqids) }}</div>
+    <div>{{ tags(t.attck, 'attck') }}{{ tags(t.mbc, 'mbc') }}</div>
+  </li>
+  {% endfor %}
+</ul>
+{% else %}
+<p class="dim">capa matched no ATT&amp;CK-tagged rule against the sample's
+  processes. That is an observation about this trace, not a verdict.</p>
+{% endif %}
+
+{% else %}
 <div class="empty" style="margin-top:1rem">
-  <strong>No techniques mapped yet.</strong>
-  ATT&amp;CK and MBC come from capa's rule metadata over the DRAKVUF log —
-  DRAFT-019. This tab shows what was observed and offers no score.
+  <strong>No report for this run.</strong>
+  Startup, techniques, the process tree, files, network and memory tabs are
+  filled from <code>report.json</code>, which postprocessing writes for Windows
+  runs after the trace. Runs before it shipped, and Ubuntu and Android runs
+  today, have the artifacts and no report.
 </div>
+{% endif %}

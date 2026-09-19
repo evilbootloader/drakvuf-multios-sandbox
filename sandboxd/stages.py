@@ -45,6 +45,10 @@ from .clone import CloneBuilder, CloneError, CloneSpec
 from .egress import EgressUnavailable, Exit
 from .guests import Interaction, Job, SampleKind, TargetOs, TraceOptions
 from .proc import CommandError
+from .postprocessing.paths import (DUMPS_DIR, DUMPS_ZIP, EXTRACTED_DIR,
+                                   IPT_DIR, IPT_ZIP)
+from .postprocessing.postprocess import postprocess_analysis_dir
+from .postprocessing.plugins.plugin_base import load_postprocessing_config
 
 # Well inside LEASE_SECONDS=120: twelve beats per lease, so a run of failures
 # on a busy platform is survivable where a single missed beat used to eat a
@@ -392,6 +396,11 @@ class Analysis:
 
                 self._check(beat)
                 self._api.report_state(lease.job_id, "collecting")
+
+
+                postprocessing_config = load_postprocessing_config()
+                postprocess_analysis_dir(job_dir, postprocessing_config)
+
                 outcome = self._collect(lease, job_dir)
 
             except Cancelled:
@@ -818,7 +827,16 @@ class Analysis:
             #
             # `parents=True, exist_ok=True` for the same reason the shell used
             # `-p`: a retry reuses the job directory.
-            for sub in ("dump", "memdump"):
+            #
+            # The names are `argv_trace`'s, which are the postprocessing
+            # package's -- see sandboxd/postprocessing/paths.py. `ipt/` only
+            # when the plugin was selected: compress_ipt runs whenever the
+            # directory exists, and an empty `ipt.zip` on every job would
+            # say IPT ran when it did not.
+            subdirs = [EXTRACTED_DIR, DUMPS_DIR]
+            if guests.IPT_PLUGIN in job.options.plugins:
+                subdirs.append(IPT_DIR)
+            for sub in subdirs:
                 (job.result_dir / sub).mkdir(parents=True, exist_ok=True)
 
             self._sleep(timing._trace_waits(job.target_os, job.kind,
@@ -846,9 +864,10 @@ class Analysis:
             # But completing silently after a trace that never attached is the
             # exact failure this architecture exists to remove: correct-looking
             # output with nothing behind it. So the artifacts are kept, the job
-            # completes, and the status is RECORDED -- `trace.log` at 0 bytes
-            # in the manifest, beside a note naming the exit code, is
-            # diagnosable where a bare `completed` is not.
+            # completes, and the status is RECORDED -- a manifest with no
+            # `<plugin>.log` in it at all (trace.log itself is split and never
+            # uploaded), beside a note naming the exit code, is diagnosable
+            # where a bare `completed` is not.
             self._trace_note = None
             if not result.ok:
                 self._trace_note = (
@@ -893,7 +912,26 @@ class Analysis:
 
     def _collect(self, lease, job_dir: Path) -> Outcome:
         """Upload what the run produced and build its manifest."""
-        found = sorted(p for p in job_dir.rglob("*") if p.is_file())
+        # `dumps/` is left out ONLY when `dumps.zip` exists beside it: that
+        # is process_dumps having packed it, and the directory is then a
+        # copy. When process_dumps did not run -- no procmon, so no process
+        # tree, which is every non-Windows job today -- the raw directory is
+        # all there is and it uploads as before. An unconditional exclusion
+        # here would drop every memory dump of such a job with nothing in the
+        # manifest to say so, the exact failure `_trace`'s mkdir comment
+        # describes. `ipt/` and `ipt.zip` are the same pair (compress_ipt).
+        packed = {directory for directory, archive in
+                  ((DUMPS_DIR, DUMPS_ZIP), (IPT_DIR, IPT_ZIP))
+                  if (job_dir / archive).exists()}
+        # `trace.log` never uploads, split or not. The per-plugin logs ARE the
+        # stream (split_drakvuf_log removes the raw file once it has written
+        # them), and a raw copy that outlived a failed split would double the
+        # largest artifact of the job. It is not lost: the job directory stays
+        # on Dom0, and the split's own log line says what went wrong.
+        skipped = packed | {TRACE_LOG}
+        found = sorted(p for p in job_dir.rglob("*")
+                       if p.is_file()
+                       and p.relative_to(job_dir).parts[0] not in skipped)
         truncated = len(found) > MAX_ARTIFACTS
         found = found[:MAX_ARTIFACTS]
 

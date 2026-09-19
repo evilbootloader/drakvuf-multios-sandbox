@@ -307,6 +307,37 @@ Dependencies only if `sandboxd/requirements.txt` changed:
   -r /root/drakvuf-multios-sandbox/sandboxd/requirements.txt
 ```
 
+**capa's rules are not in the repository** (`.gitignore`), and without them
+`capa_analysis` logs "capa rules directory is empty or non-existant" and
+produces no `ttps.json` — the job still completes. Once per Dom0, and again
+whenever the `flare-capa` pin changes major version, at the tag matching that
+pin (`v9.4.0` for `flare-capa==9.4.0`; a rules tree from another major
+version fails to load with a schema error, not a version message):
+
+```bash
+# DOM0 -- Candidate: not yet run there
+cd /root/drakvuf-multios-sandbox
+git clone --depth 1 --branch v9.4.0 https://github.com/mandiant/capa-rules \
+  sandboxd/postprocessing/data/capa-rules
+```
+
+The location is `CapaConfigSection.rules_directory`'s default; a different
+one is `SANDBOXD_POSTPROCESS_CAPA='{"rules_directory": "/path"}'` in the
+environment file.
+
+**vivisect is not a separate install.** The static pass over memory dumps
+(`analyze_memdumps`, on by default) runs capa's vivisect backend, and vivisect
+is a core dependency of `flare-capa`, so the `pip install` above brings it
+(1.3.2 with `flare-capa==9.4.0`). The check that the pass has what it imports:
+
+```bash
+# DOM0 -- Candidate: not yet run there
+/root/drakvuf-multios-sandbox/.venv-sandboxd/bin/python -c "import vivisect, viv_utils, capa.features.extractors.viv.extractor; print('ok')"
+```
+
+An `ImportError` there is an incomplete install of `requirements.txt`, not a
+pin to add.
+
 **Restarting `sandboxd` means stopping and re-running it.** There is no systemd
 unit: `systemctl stop sandboxd` and `journalctl -u sandboxd` both report
 nothing, and assuming otherwise is one of the four wrong assertions that caused

@@ -1,0 +1,118 @@
+{#
+  Pieces shared by the report-driven tabs. Imported `with context` so they can
+  read `job` and `report` without every call site passing both.
+
+  Everything rendered here is sample-influenced text -- process names, command
+  lines, paths -- and relies on autoescape. Nothing in this file is marked safe,
+  and tests/test_ui.py greps the tabs directory to keep it that way.
+#}
+
+{#
+  A process reference: `Notepad.exe (7208)`, linking to its node in the tree.
+  `seqid` is how the report refers to a process everywhere (not the PID, which
+  Windows reuses); `none` is a dump or event that no process in the tree
+  claims, which the report keeps rather than drops -- see process_dumps.py.
+#}
+{% macro proc(seqid) -%}
+  {%- if seqid is none -%}
+    <span class="proc dim" title="not attributed to any process in the tree">unattributed</span>
+  {%- elif report and seqid in report.by_seqid -%}
+    {%- set p = report.by_seqid[seqid] -%}
+    <a class="proc" href="/ui/jobs/{{ job.id }}?tab=behaviour#proc-{{ seqid }}"
+       title="{{ p.name }}">{{ p.basename }} <span class="dim">({{ p.pid }})</span></a>
+  {%- else -%}
+    <span class="proc dim" title="the report names a process the tree does not list">#{{ seqid }}</span>
+  {%- endif -%}
+{%- endmacro %}
+
+{% macro procs(seqids) -%}
+  {%- for s in seqids %}{{ proc(s) }}{% if not loop.last %} {% endif %}{% endfor -%}
+{%- endmacro %}
+
+{#
+  A list of ATT&CK or MBC identifiers as tags. They are capa rule metadata
+  -- written by the rule author, not the sample -- but escaped like everything
+  else; the distinction is not one a template should be trusted with.
+#}
+{% macro tags(items, kind) -%}
+  {%- for t in items %}<span class="tag" data-kind="{{ kind }}">{{ t }}</span> {% endfor -%}
+{%- endmacro %}
+
+{#
+  The process tree. `<details>` rather than script: it collapses, it is
+  keyboard-accessible, and it costs nothing when a run has 146 processes.
+  Open by default -- the reader is here to see the sample's subtree, and the
+  page jumps to it via the `proc-<seqid>` anchor.
+#}
+{% macro tree(nodes) -%}
+<ul class="ptree">
+{%- for node in nodes recursive %}
+  {%- set p = node.process %}
+  <li id="proc-{{ p.seqid }}"
+      {% if report.startup.process == p.seqid %}data-sample="1"{% endif %}
+      {% if p.exited_at is not none or p.exit_code is not none %}data-exited="1"{% endif %}>
+    {%- if node.children %}
+    <details open>
+      <summary>{{ node_line(p) }}</summary>
+      <ul>{{ loop(node.children) }}</ul>
+    </details>
+    {%- else %}
+    <div class="leaf">{{ node_line(p) }}</div>
+    {%- endif %}
+  </li>
+{%- endfor %}
+</ul>
+{%- endmacro %}
+
+{% macro node_line(p) -%}
+  <span class="pname" title="{{ p.name }}">{{ p.basename }}</span>
+  <span class="dim">({{ p.pid }})</span>
+  {%- if p.command_line %} <code class="cmd" title="{{ p.command_line }}">{{ p.command_line }}</code>{% endif %}
+  {%- if p.exit_code_str %} <span class="exit{% if p.exited_with_error %} error{% endif %}"
+       title="exit code 0x{{ '%08x' | format(p.exit_code) }}">{{ p.exit_code_str }}</span>
+  {%- elif p.exited_at is not none %} <span class="exit">exited</span>{% endif %}
+  {%- if p.killed_by is not none %} <span class="dim">killed by</span> {{ proc(p.killed_by) }}{% endif %}
+  {#- Into the panel below the tree, or a page of its own without htmx. #}
+  <a class="logs" href="/ui/jobs/{{ job.id }}/process/{{ p.seqid }}"
+     hx-get="/ui/jobs/{{ job.id }}/process/{{ p.seqid }}"
+     hx-target="#process-panel" hx-swap="innerHTML show:#process-panel:top">logs</a>
+{%- endmacro %}
+
+{#
+  The process diagram: report.py lays it out, this draws it. Inline SVG is
+  HTML to autoescape, so the names in it are escaped exactly as in the tree;
+  `<title>` gives the full path and command line on hover, and every box
+  links to the same `proc-<seqid>` anchor the badges do. The stylesheet
+  colours the sample's subtree and dashes the boxes of processes that ended.
+#}
+{% macro diagram(d, label) -%}
+<div class="pdiagram-wrap">
+<svg class="pdiagram" viewBox="0 0 {{ d.width }} {{ d.height }}"
+     width="{{ d.width }}" height="{{ d.height }}" role="img" aria-label="{{ label }}">
+  {%- for e in d.edges %}
+  <path d="{{ e.path }}"/>
+  {%- endfor %}
+  {%- for b in d.boxes %}
+  <a href="#proc-{{ b.process.seqid }}">
+    <g class="pnode"{% if b.in_sample_tree %} data-sample="1"{% endif %}{% if b.process.exited_at is not none or b.process.exit_code is not none %} data-exited="1"{% endif %}
+       transform="translate({{ b.x }} {{ b.y }})">
+      <title>{{ b.process.name }} (PID {{ b.process.pid }}){% if b.process.command_line %}: {{ b.process.command_line }}{% endif %}</title>
+      <rect width="{{ d.node_w }}" height="{{ d.node_h }}" rx="3"/>
+      <text x="6" y="15">{{ b.label }}</text>
+      <text class="pid" x="{{ d.node_w - 6 }}" y="15" text-anchor="end">{{ b.process.pid }}</text>
+    </g>
+  </a>
+  {%- endfor %}
+</svg>
+</div>
+{%- endmacro %}
+
+{# The report's own explanation of itself, for a tab that has one but nothing
+   in it, or for a report that could not be read. #}
+{% macro unreadable() -%}
+<div class="empty">
+  <strong>The report for this run could not be read.</strong>
+  {{ report_error }}
+  <br>The artifacts are unaffected; <code>report.json</code> is on the Artifacts tab.
+</div>
+{%- endmacro %}

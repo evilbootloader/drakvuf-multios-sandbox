@@ -798,3 +798,73 @@ def test_the_history_poll_stops_when_the_last_job_finishes(
     strict_page.wait_for_timeout(11_000)      # two poll intervals, and a margin
 
     assert len(seen) == settled, seen[settled:]
+
+
+# --- the report tabs: sample-chosen text inside inline SVG -------------------
+
+def _seed_report(job_id: uuid.UUID, doc: dict) -> None:
+    """Put a report.json behind an existing job: manifest row plus object."""
+    import hashlib
+    import json
+
+    import boto3
+    from botocore.config import Config
+
+    from sandbox_platform import report as report_store
+
+    raw = json.dumps(doc).encode()
+    manifest = {"schema_version": 1, "truncated": False, "documents": [],
+                "artifacts": [{"name": "report.json", "size_bytes": len(raw),
+                               "sha256": hashlib.sha256(raw).hexdigest()}]}
+    with psycopg.connect(DSN, autocommit=True) as c:
+        c.execute("UPDATE jobs SET manifest = %s WHERE id = %s",
+                  (json.dumps(manifest), job_id))
+    s3 = boto3.client(
+        "s3",
+        endpoint_url=os.environ.get("S3_INTERNAL_ENDPOINT", "http://127.0.0.1:9000"),
+        aws_access_key_id=os.environ.get("S3_ACCESS_KEY", "devroot"),
+        aws_secret_access_key=os.environ.get("S3_SECRET_KEY", "devrootpass"),
+        region_name=os.environ.get("S3_REGION", "eu-central-1"),
+        config=Config(signature_version="s3v4", s3={"addressing_style": "path"}))
+    s3.put_object(Bucket=os.environ.get("S3_BUCKET", "analysis"),
+                  Key=f"results/{job_id}/report.json", Body=raw)
+    # The server is another process with its own cache, keyed by digest, so
+    # a fresh document is a fresh entry; this clears ours for symmetry.
+    report_store._load.cache_clear()
+
+
+@pytest.mark.parametrize("name", HOSTILE)
+def test_hostile_report_text_does_not_execute(strict_page, server, seed, name):
+    """The report's process names, command lines and paths are the sample's,
+    and the Behaviour tab draws them inside inline SVG as well as HTML --
+    `<svg/onload=...>` inside an `<svg>` is the case a source-level grep for
+    `| safe` cannot speak to. Rendered by a real parser, nothing runs, and the
+    text is still visible as text."""
+    job_id = seed("x.exe", target_os="windows")
+    from test_report import sample_report
+    doc = sample_report()
+    doc["processes"][4]["name"] = name
+    doc["processes"][4]["args"] = [name]
+    doc["modified_files"][0]["filename"] = name
+    doc["ttps"][0]["name"] = name
+    _seed_report(job_id, doc)
+
+    for tab in ("overview", "behaviour", "network", "memory"):
+        strict_page.goto(f"{server}/ui/jobs/{job_id}?tab={tab}")
+        assert strict_page.fired == [], (tab, strict_page.fired)
+        assert strict_page.evaluate("window.__xss") is False
+        assert strict_page.locator("script:not([src])").count() == 0
+        assert strict_page.locator("img[onerror], svg[onload]").count() == 0
+
+    strict_page.goto(f"{server}/ui/jobs/{job_id}?tab=behaviour")
+    # The tree shows the basename (a `/` in the payload splits it, as it
+    # would any path) and carries the full name on the title, byte-exact.
+    pname = strict_page.locator("li#proc-4 .pname").first
+    assert pname.get_attribute("title") == name
+    assert pname.inner_text() == name.replace("\\", "/").rsplit("/", 1)[-1]
+    assert name in strict_page.locator("li#proc-4 .cmd").first.get_attribute("title")
+    # The diagram's box for the sample carries the same name as SVG text and
+    # links to the tree node, never to anything the sample named.
+    box = strict_page.locator("svg.pdiagram a[href='#proc-4']").first
+    assert box.locator("g.pnode[data-sample]").count() == 1
+    assert name in box.locator("title").first.text_content()

@@ -1,0 +1,86 @@
+{% from "tabs/_report_macros.html" import tree, diagram, procs, unreadable with context %}
+{#
+  What the sample did, as processes and files. From report.json's `processes`
+  (procmon, via build_process_tree) and `modified_files` / `deleted_files`
+  (filetracer, via get_modified_files_info). Windows runs only today: the
+  process tree needs procmon's NtCreateUserProcess events.
+#}
+{% if report_error %}
+  {{ unreadable() }}
+{% elif not report %}
+  {% include "tabs/_pending.html" %}
+{% else %}
+
+<h2>Processes
+  <span class="count">{{ report.processes | length }}</span>
+  {% if report.startup_process %}
+  <span class="note-inline">— the sample is
+    <a href="#proc-{{ report.startup.process }}">{{ report.startup_process.basename }}
+      ({{ report.startup_process.pid }})</a>, highlighted below</span>
+  {% endif %}
+</h2>
+{% if report.processes %}
+{#
+  Two pictures of the same forest. The first is the sample's lineage -- its
+  ancestors and everything it spawned -- because that is the question the
+  page is opened to answer, and 146 boxes of idle services would bury five.
+  The second is everything, collapsed until asked for.
+#}
+{% set lineage = report.diagram() %}
+{% if lineage.shown < lineage.total %}
+{{ diagram(lineage, "the sample's lineage") }}
+<details class="advanced">
+  <summary>All {{ lineage.total }} processes as a diagram</summary>
+  {{ diagram(report.diagram(everything=true), "every process in the trace") }}
+</details>
+{% else %}
+{{ diagram(lineage, "every process in the trace") }}
+{% endif %}
+
+{{ tree(report.tree) }}
+
+{#
+  Filled by a node's "logs" link: the process's facts and its lines from the
+  per-plugin logs (tabs/_process.html). Empty until asked, and outside the
+  tree so it survives collapsing.
+#}
+<section id="process-panel" class="process-panel">
+  <p class="dim small">Pick a process — <em>logs</em> beside a node shows what
+    it did, plugin by plugin, out of the run's logs.</p>
+</section>
+{% else %}
+<div class="empty"><strong>No processes in the report.</strong>
+  <code>procmon</code> was not among this run's plugins, or wrote nothing.</div>
+{% endif %}
+
+<h2 style="margin-top:1.5rem">Files written
+  <span class="count">{{ report.modified_files | length }}</span></h2>
+{% if report.modified_files %}
+<div class="scroll-x"><table class="rows">
+  <thead><tr><th>Path</th><th>By</th></tr></thead>
+  <tbody>
+  {% for f in report.modified_files %}
+    <tr><td class="filename">{{ f.filename }}</td><td>{{ procs(f.process_seqids) }}</td></tr>
+  {% endfor %}
+  </tbody>
+</table></div>
+{% else %}
+<p class="dim">None recorded. Opens for write that were then written to, by any process, minus the prefetch directory.</p>
+{% endif %}
+
+<h2 style="margin-top:1.5rem">Files deleted
+  <span class="count">{{ report.deleted_files | length }}</span></h2>
+{% if report.deleted_files %}
+<div class="scroll-x"><table class="rows">
+  <thead><tr><th>Path</th><th>By</th></tr></thead>
+  <tbody>
+  {% for f in report.deleted_files %}
+    <tr><td class="filename">{{ f.filename }}</td><td>{{ procs(f.process_seqids) }}</td></tr>
+  {% endfor %}
+  </tbody>
+</table></div>
+{% else %}
+<p class="dim">None recorded.</p>
+{% endif %}
+
+{% endif %}

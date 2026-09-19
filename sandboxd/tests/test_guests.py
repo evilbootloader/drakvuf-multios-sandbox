@@ -403,6 +403,18 @@ def test_android_traces_with_both_flags(tmp_path):
     assert "--disable-sysret" in argv
 
 
+def test_every_trace_hides_the_hypervisor_from_cpuid(tmp_path):
+    """`-s` -- "Hide Hypervisor bits and signature in CPUID", from
+    `drakvuf --help` (operator-confirmed 2026-09-19). A global, not a per-OS
+    flag: the check it defeats is the same instruction on every guest."""
+    for os_, kind, component in ((TargetOs.UBUNTU, SampleKind.ELF, None),
+                                 (TargetOs.ANDROID, SampleKind.APK, "com.x/.Main"),
+                                 (TargetOs.WINDOWS, SampleKind.PE, None)):
+        argv = G.argv_trace(job(tmp_path, os_, kind), component)
+        assert argv[0] == "drakvuf"
+        assert "-s" in argv[:argv.index("-e")], f"{os_.value}: -s is DRAKVUF's, not the sample's"
+
+
 def test_the_apk_path_gets_the_longer_timeout(tmp_path):
     """`-t 150`, not the ELF path's 120: the C watcher armed a 180s timer over
     this phase, so 150 leaves ~20s of headroom where 120 left 55s unused -- and
@@ -426,13 +438,41 @@ def test_the_two_output_directories_stay_separate(tmp_path):
     """fileextractor's output and memdump's, so a reader can tell a file the
     sample touched from a memory region the trace captured. Pointing them at
     the same directory as the JSON log put three kinds of artifact in one flat
-    namespace."""
+    namespace.
+
+    The names are the postprocessing package's: `process_dumps` reads
+    DUMPS_DIR, and the day they were spelled here by hand `--memdump-dir`
+    said `memdumps/` while the plugin read `dumps/` (2026-09-18). `-D` gets
+    result-schema.md 4.1's name for files the sample wrote."""
+    from sandboxd.postprocessing.paths import DUMPS_DIR, EXTRACTED_DIR
     argv = G.argv_trace(job(tmp_path))
 
-    assert argv[argv.index("-D") + 1].endswith("/dump")
-    assert argv[argv.index("--memdump-dir") + 1].endswith("/memdump")
+    assert argv[argv.index("-D") + 1].endswith("/" + EXTRACTED_DIR)
+    assert argv[argv.index("--memdump-dir") + 1].endswith("/" + DUMPS_DIR)
+    assert EXTRACTED_DIR != DUMPS_DIR
     # `--memdump-dir` is the correct spelling, confirmed from `drakvuf --help`.
     assert "--memdumpdir" not in argv
+
+
+def test_ipt_gets_its_directory_and_ring_only_when_selected(tmp_path):
+    """`--ipt-dir <dir>` and `--ipt-trace-user`, both from `drakvuf --help`
+    (operator-confirmed 2026-09-19), beside `-a ipt` and never without it:
+    compress_ipt runs whenever the directory exists, so an unconditional
+    `--ipt-dir` would put an empty `ipt.zip` in every manifest."""
+    from sandboxd.postprocessing.paths import IPT_DIR
+    plain = G.argv_trace(job(tmp_path))
+    assert "--ipt-dir" not in plain
+    assert "--ipt-trace-user" not in plain
+    assert "--ipt-trace-os" not in plain
+
+    selected = job(tmp_path, options=TraceOptions(
+        plugins=("syscalls", G.IPT_PLUGIN), timeout=120))
+    argv = G.argv_trace(selected)
+    assert argv[argv.index("-a", argv.index("-a") + 1) + 1] == "ipt"
+    assert argv[argv.index("--ipt-dir") + 1] == str(selected.result_dir / IPT_DIR)
+    assert "--ipt-trace-user" in argv
+    # Ring 0 would trace the kernel under the sample, not the sample.
+    assert "--ipt-trace-os" not in argv
 
 
 # --- the injector mode reaches argv as a mode ------------------------------
@@ -604,11 +644,14 @@ def test_a_per_job_plugin_selection_is_honoured_when_supplied(tmp_path):
 
 def test_supplied_options_do_not_change_ubuntu_defaults(tmp_path):
     """Behavioural parity is the acceptance criterion. A job that carries no
-    options must produce exactly what the Ubuntu trace script produced."""
+    options must produce exactly what the Ubuntu trace script produced --
+    plus `-s`, the one deliberate departure (operator, 2026-09-19): the
+    script did not hide the hypervisor from CPUID, and every trace now does.
+    """
     argv = G.argv_trace(job(tmp_path))
 
-    assert argv[:9] == [
-        "drakvuf", "-r", "/root/profiles/linux.json", "-d", "42",
+    assert argv[:10] == [
+        "drakvuf", "-r", "/root/profiles/linux.json", "-s", "-d", "42",
         "-i", "1415", "-m", "execproc",
     ]
 

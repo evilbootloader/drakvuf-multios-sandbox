@@ -86,7 +86,7 @@ CT 102, and everything `qm` and `pct` could do.
 | CPU partition **as deployed** | Dom0 → the first six **online** pCPUs **0,2,4,6,8,10**; clones → **12,14**; platform → **16,17**. 14 of 24 online pCPUs idle | 2026-08-29 |
 | CPU partition **as committed, NOT YET APPLIED** | Dom0 → all eight P-cores **0,2,4,6,8,10,12,14** (needs `dom0_max_vcpus=8` and a **reboot**); clones → **16-27**; platform → **28-31**. Source of truth is **`sandboxd/config.py`**; `automation/platform.env` and `misc/*.cfg` are generated from it by `scripts/gen-xen-configs.py` | 2026-08-31 |
 | Scheduler | Credit**1** (`sched=credit`), not Xen 4.20's default Credit2 | 2026-08-27 |
-| Python | **UNCONFIRMED** — noble ships 3.12, but nobody has run `python3 -V` here. `platform/requirements.txt` pins `websockets==16.1.1` on the strength of "Dom0's Python is older", which was written when Dom0 was jammy | — |
+| Python | **3.12.3** (`python3 -V`, operator-confirmed). Old enough that the `websockets==16.1.1` pin in both requirements files still stands; new enough for `flare-capa==9.4.0`, which needs ≥3.10. The development container runs 3.14, so a wheel that resolves there is not proof it resolves here — `sandboxd/requirements.txt` says how that was checked | 2026-09-18 |
 | Repo checkout | `/root/drakvuf-multios-sandbox` | 2026-08-19 |
 | Volume group | `vg-root` | 2026-08-28 |
 | Analysis bridge | `xenbr1`, per-VLAN `172.16.<vlan>.0/24` | — |
@@ -386,7 +386,7 @@ accurate as dated evidence.
 | | |
 |---|---|
 | sandboxd modules | 16 |
-| test files | 16 sandboxd, 25 platform |
+| test files | 17 sandboxd, 27 platform |
 | documents under `docs/` | 41 |
 
 <!-- END GENERATED -->

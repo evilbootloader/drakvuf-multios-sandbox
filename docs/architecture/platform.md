@@ -327,15 +327,23 @@ Bucket layout:
 
 ```text
 samples/<job_id>/<submitted filename>
-results/<job_id>/trace.log
+results/<job_id>/<plugin>.log          the trace, split per DRAKVUF plugin
+results/<job_id>/parse_errors.log
+results/<job_id>/trace.stderr
 results/<job_id>/preconfig.log
 results/<job_id>/capture.pcap
 results/<job_id>/<capability>.json
-results/<job_id>/memdump/…
+results/<job_id>/report.json           postprocessing; what the job page renders
+results/<job_id>/process_tree.json     postprocessing, Windows
+results/<job_id>/ttps.json             postprocessing, Windows
+results/<job_id>/dumps.zip             memdump output, packed -- or dumps/… raw
 results/<job_id>/extracted/…
 results/<job_id>/screenshots/…
 results/<job_id>/manifest.json
 ```
+
+There is no `trace.log` in the bucket: it is split before upload
+(`result-schema.md` §4.1, amended 2026-09-19).
 
 The reserved names, which prefix holds sample-chosen leaf names, and the
 envelope every `<capability>.json` shares are specified in

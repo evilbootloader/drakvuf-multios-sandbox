@@ -1,0 +1,34 @@
+{#
+  One page of a process's lines, plus the control that fetches the next.
+  Rendered inside _process.html and again, alone, for each "more" -- the
+  button replaces itself with the next page, so earlier lines stay on the
+  page and the log reads top to bottom.
+
+  Each line is one JSON event exactly as DRAKVUF wrote it, as text. It is
+  the sample's text and is escaped like any other.
+#}
+{% if page is none %}
+<div class="empty"><strong>No lines.</strong> The index names nothing for this
+  process in <code>{{ selected }}.log</code>.</div>
+{% elif not page.lines and page.skip == 0 %}
+<div class="empty"><strong>No lines.</strong>
+  {% if method %}No <code>{{ method }}</code> events from this process.{% else %}The index names nothing for this process here.{% endif %}</div>
+{% else %}
+<pre class="log">{% for line in page.lines %}{{ line }}
+{% endfor %}</pre>
+{% if page.truncated_by_requests and page.next_skip is none %}
+<p class="note">This page stopped early: the lines are scattered through the
+  log and the read budget for one page was spent. Use the method filter to
+  narrow it, or download the log from the Artifacts tab.</p>
+{% endif %}
+{% if page.next_skip is not none %}
+<button type="button" class="more"
+        hx-get="/ui/jobs/{{ job.id }}/process/{{ seqid }}?plugin={{ selected }}&amp;method={{ method | urlencode }}&amp;skip={{ page.next_skip }}&amp;part=lines"
+        hx-target="this" hx-swap="outerHTML">
+  more — {{ '{:,}'.format(page.total_bytes - page.next_skip) }} bytes left
+</button>
+<noscript><a href="/ui/jobs/{{ job.id }}/process/{{ seqid }}?plugin={{ selected }}&amp;method={{ method | urlencode }}&amp;skip={{ page.next_skip }}">next page</a></noscript>
+{% else %}
+<p class="dim small">end of {{ selected }}.log for this process</p>
+{% endif %}
+{% endif %}
