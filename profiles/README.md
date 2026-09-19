@@ -112,3 +112,24 @@ Mode `0600` matches what `docs/android_setup.md:696-703` prescribed for
 `/root/android.json`. The profiles are not secret — they are symbol
 tables for public kernel builds — but they identify the exact guest
 kernel under analysis, which is worth not publishing by accident.
+
+### Windows per-binary profiles (`tcpip.json`, `ntdll.json`, …)
+
+Beside `windows.json`, a Windows run passes DRAKVUF one profile per hooked
+DLL or driver — the `--json-*` table in `sandboxd/guests.py`
+(`SYMBOL_PROFILES`). Each is volatility3 `pdbconv.py` output for the exact
+binary in the golden image, keyed by the PDB GUID `tools/pdbguid.py` reads
+off it; `windows_symbols.md` has the kernel one and `tcpip.json` done by
+hand. `scripts/windows-symbol-profiles.py` does the whole table, on Dom0,
+with the golden Windows LV mounted read-only:
+
+```bash
+kpartx -a /dev/vg-root/windows
+mount -o ro /dev/mapper/vg--root-windows2 /mnt
+scripts/windows-symbol-profiles.py            # every row; or name stems: tcpip ntdll
+umount /mnt && kpartx -d /dev/vg-root/windows
+```
+
+Every row is attempted and the failures are summarised at the end; a row
+that fails leaves no file behind. Rerun after any Windows update in the
+golden image — the GUIDs change with the binaries.

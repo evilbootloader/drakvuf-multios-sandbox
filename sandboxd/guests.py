@@ -352,7 +352,8 @@ PATHS = {
 # every other one in the argv and the checkout can live anywhere. Every name
 # is in `long_opts` of both upstream main.cpp and the deployed fork
 # (lfreijo/drakvuf@memdump), checked 2026-09-19; the files themselves are
-# untracked, and `windows_symbols.md` evidences two of them.
+# untracked, `windows_symbols.md` evidences two of them, and
+# `scripts/windows-symbol-profiles.py` produces the set from the golden image.
 #
 # Passed unconditionally: DRAKVUF stores a path and the plugin that wants it
 # opens it, so an unselected plugin's profile costs nothing. `--json-wow` is
@@ -367,7 +368,7 @@ SYMBOL_PROFILES: dict[TargetOs, tuple[tuple[str, str], ...]] = {
     TargetOs.UBUNTU: (),
     TargetOs.ANDROID: (),
     TargetOs.WINDOWS: (
-        ("--json-wow", "wow.jsonc"),
+        ("--json-wow", "wow.json"),
         ("--json-tcpip", "tcpip.json"),
         ("--json-win32k", "win32k.json"),
         ("--json-sspicli", "sspicli.json"),

@@ -498,6 +498,25 @@ def test_windows_symbol_profiles_sit_beside_the_kernel_one_and_linux_gets_none(t
     assert set(G.SYMBOL_PROFILES) == set(TargetOs)
 
 
+def test_the_profile_generator_writes_the_names_guests_py_reads():
+    """`scripts/windows-symbol-profiles.py` produces `profiles/<name>.json`
+    from the same option table; a name that differs between the two is a
+    profile DRAKVUF is never handed, and DRAKVUF says nothing about it."""
+    import importlib.util
+    script = Path(__file__).resolve().parents[2] / "scripts" / "windows-symbol-profiles.py"
+    spec = importlib.util.spec_from_file_location("windows_symbol_profiles", script)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    generated = {option: name for option, name, _ in module.PROFILES}
+    passed = dict(G.SYMBOL_PROFILES[TargetOs.WINDOWS])
+    assert {o: generated[o] for o in passed} == passed
+    # Generated but not passed: the two whose PDBs could not be produced.
+    assert set(generated) - set(passed) == {"--json-ole32", "--json-ndis"}
+    assert len(generated) == len(module.PROFILES)          # no option twice
+    assert len(set(generated.values())) == len(generated)  # no file twice
+
+
 # --- the injector mode reaches argv as a mode ------------------------------
 
 #: Every `-m` value this repository has ever passed to `injector` or `drakvuf`.

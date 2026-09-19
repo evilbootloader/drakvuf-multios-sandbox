@@ -17,7 +17,7 @@ class CapaConfigSection(BaseModel):
     # privileges or bounds their time or memory. Upstream ships this False.
     # It is True here by the operator's decision (2026-09-18); the
     # "Postprocessing" section of sandboxd/requirements.txt has the trade.
-    analyze_memdumps: bool = True
+    analyze_memdumps: bool = False
     # True here where upstream defaults to False: it is what bounds the memory
     # of the capa pass to the sample's own processes (capa_processor.py,
     # decode_json_lines). It needs the `inject` line in trace.log, which
