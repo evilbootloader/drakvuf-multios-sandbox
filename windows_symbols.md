@@ -57,4 +57,13 @@ python3 ./setup.py build
 sudo python3 ./setup.py install
 
 python3 /home/user/drakvuf/volatility3/volatility3/framework/symbols/windows/pdbconv.py --guid 72c69e726c648bc18257af38fa78a2f21 -p ntkrnlmp.pdb -o /root/drakvuf-multios-sandbox/profiles/windows.json
+
+sudo su
+kpartx -a /dev/vg/windows7
+mount -o ro /dev/mapper/vg--root-windows /mnt
+
+python3 /home/user/drakvuf/tools/pdbguid.py /mnt/Windows/System32/drivers/tcpip.sys 
+GUID: 5530a18aaa44087abd04a6ae830d004a1
+Filename: tcpip.pdb
+python3 /home/user/drakvuf/volatility3/volatility3/framework/symbols/windows/pdbconv.py --guid 5530a18aaa44087abd04a6ae830d004a1 -p tcpip.pdb -o /root/drakvuf-multios-sandbox/profiles/tcpip.json
 ```

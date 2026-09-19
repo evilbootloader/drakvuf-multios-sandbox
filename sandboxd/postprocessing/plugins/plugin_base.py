@@ -5,6 +5,7 @@ from pydantic import BaseModel
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from ..process_tree import ProcessTree
+from ...guests import TargetOs
 
 
 class CapaConfigSection(BaseModel):
@@ -64,9 +65,14 @@ class PostprocessContext:
         self,
         analysis_dir: pathlib.Path,
         config: PostprocessingConfig,
+        target_os: TargetOs,
     ) -> None:
         self.analysis_dir = analysis_dir
         self.config = config
+        # Here and not on `config`: that is a BaseSettings of daemon-wide
+        # knobs, and this is the job's. It picks the procmon events that
+        # build the process tree (process_tree.METHOD_PARSERS).
+        self.target_os = target_os
         self._process_tree: Optional[ProcessTree] = None
         # Quick metadata fetched along with analysis status
         self.extra_metadata = {}

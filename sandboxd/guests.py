@@ -347,6 +347,47 @@ PATHS = {
 }
 
 
+# The symbol profiles DRAKVUF takes beside the kernel one (`-r`): option ->
+# file in the directory `Job.profile` is in, so the paths are absolute like
+# every other one in the argv and the checkout can live anywhere. Every name
+# is in `long_opts` of both upstream main.cpp and the deployed fork
+# (lfreijo/drakvuf@memdump), checked 2026-09-19; the files themselves are
+# untracked, and `windows_symbols.md` evidences two of them.
+#
+# Passed unconditionally: DRAKVUF stores a path and the plugin that wants it
+# opens it, so an unselected plugin's profile costs nothing. `--json-wow` is
+# the exception -- it is the core's, loaded in drakvuf_init, and a file that
+# fails to load there is a NULL and a debug line, not an error.
+#
+# `--json-ole32` and `--json-ndis` are absent on purpose: neither DLL's
+# symbols could be produced (2026-09-19).
+#
+# Linux plugins take only the kernel profile.
+SYMBOL_PROFILES: dict[TargetOs, tuple[tuple[str, str], ...]] = {
+    TargetOs.UBUNTU: (),
+    TargetOs.ANDROID: (),
+    TargetOs.WINDOWS: (
+        ("--json-wow", "wow.jsonc"),
+        ("--json-tcpip", "tcpip.json"),
+        ("--json-win32k", "win32k.json"),
+        ("--json-sspicli", "sspicli.json"),
+        ("--json-kernel32", "kernel32.json"),
+        ("--json-kernelbase", "kernelbase.json"),
+        ("--json-wow-kernel32", "kernel32wow.json"),
+        ("--json-ntdll", "ntdll.json"),
+        ("--json-iphlpapi", "iphlpapi.json"),
+        ("--json-clr", "clr.json"),
+        ("--json-mscorwks", "mscorwks.json"),
+        ("--json-hal", "hal.json"),
+        ("--json-fwpkclnt", "fwpkclnt.json"),
+        ("--json-fltmgr", "fltmgr.json"),
+        ("--json-ci", "ci.json"),
+        ("--json-netio", "netio.json"),
+        ("--json-services", "services.json"),
+    ),
+}
+
+
 # --- what a sample is, from its bytes ---------------------------------------
 
 def classify(path: Path) -> SampleKind:
@@ -673,6 +714,8 @@ def argv_trace(job: Job, component: str | None = None) -> list[str]:
         # was selected -- an `--ipt-dir` with no `-a ipt` is a directory
         # nothing writes and compress_ipt would pack empty.
         argv += ["--ipt-dir", str(job.result_dir / IPT_DIR), "--ipt-trace-user"]
+    for option, name in SYMBOL_PROFILES[job.target_os]:
+        argv += [option, str(job.profile.parent / name)]
     return argv
 
 

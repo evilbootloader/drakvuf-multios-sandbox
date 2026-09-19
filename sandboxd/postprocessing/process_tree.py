@@ -2,9 +2,11 @@ import json
 import logging
 import pathlib
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, TextIO
+from typing import Any, Callable, Dict, List, Optional, TextIO
 
 import mslex
+
+from ..guests import TargetOs
 
 logger = logging.getLogger(__name__)
 
@@ -285,8 +287,145 @@ def parse_unknown_process_entry(pstree: ProcessTree, entry: Dict[str, Any]) -> N
         parent=parent,
     )
 
+# --- Linux (procmon's linux.cpp; Ubuntu and Android alike) --------------------
+#
+# Windows procmon reports a process once, named, at NtCreateUserProcess. Linux
+# reports it twice -- `kernel_clone` (a return hook, so NewPid is known, but
+# the image is not) and `do_execveat_common` (image and argv) -- and under
+# vfork NOT in that order: the parent is suspended until the child execs, so
+# the child's execve is logged before the parent's clone returns
+# (samples/procmon-linux.log, PID 2002). Each parser therefore tolerates the
+# other having gone first: execve renames an existing live node instead of
+# adding a second one, and clone leaves a node that execve already made.
+#
+# Both hooks are on kernel functions, not syscalls, so a thread is a clone
+# too, with NewPid its TID, and a thread's exit is a do_exit. This is a tree
+# of processes: CLONE_THREAD clones and do_exit lines with TID != PID are
+# dropped. `killed_by` is never set on this side -- do_exit carries no killer;
+# `send_signal` (TargetPID, SignalStr) is where one would come from.
 
-def tree_from_log(file: TextIO) -> ProcessTree:
+
+def split_linux_commandline(cmdline: str) -> List[str]:
+    # The same fmt::Estr double escape as Windows' (split_commandline), then
+    # argv joined with single spaces and no quoting -- so this is the exact
+    # inverse, short of an argument that itself held a space, which nothing
+    # can recover. Not shlex: a lone quote is ordinary in an argument and a
+    # parse error there.
+    if not cmdline:
+        return []
+    return cmdline.encode().decode("unicode_escape").split(" ")
+
+
+def parse_do_execveat_common(pstree: ProcessTree, entry: Dict[str, Any]) -> None:
+    process_pid = entry["PID"]
+    process_ppid = entry["PPID"]
+    # FileName is bprm->filename, the path execve was given -- for a script,
+    # the script. ImagePathName, and the ProcessName every later line for this
+    # PID carries, is the interpreter.
+    procname = entry["FileName"]
+    args = split_linux_commandline(entry["CommandLine"])
+
+    process = pstree.get_process(process_pid)
+    if process is not None and process.ts_to is None:
+        # The node kernel_clone made, or a process exec'ing a second time:
+        # the same process with a new image, from the same start.
+        process.procname = procname
+        process.args = args
+        return
+
+    evtid = int(entry["EventUID"], 16)
+    parent = pstree.get_process(process_ppid)
+    if parent is None:
+        # Parent must be alive at the process creation time, but who knows what happened
+        logger.warning(
+            f"Parent process not found at the process creation time (PID: {process_pid}, PPID: {process_ppid})"
+        )
+    pstree.add_process(
+        pid=process_pid,
+        ppid=process_ppid,
+        ts_from=float(entry["TimeStamp"]),
+        evtid_from=evtid,
+        procname=procname,
+        parent=parent,
+        args=args,
+    )
+
+
+def parse_kernel_clone(pstree: ProcessTree, entry: Dict[str, Any]) -> None:
+    if "CLONE_THREAD" in entry.get("Flags", ""):
+        return
+    process_pid = entry["NewPid"]
+    process_ppid = entry["PID"]
+
+    process = pstree.get_process(process_pid)
+    if process is not None and process.ts_to is None and process.ppid == process_ppid:
+        # vfork: the child's execve was logged first and made the node.
+        return
+
+    evtid = int(entry["EventUID"], 16)
+    parent = pstree.get_process(process_ppid)
+    if parent is None:
+        # Parent must be alive at the process creation time, but who knows what happened
+        logger.warning(
+            f"Parent process not found at the process creation time (PID: {process_pid}, PPID: {process_ppid})"
+        )
+    pstree.add_process(
+        pid=process_pid,
+        ppid=process_ppid,
+        ts_from=float(entry["TimeStamp"]),
+        evtid_from=evtid,
+        procname="Unnamed",
+        parent=parent,
+    )
+
+
+def parse_do_exit(pstree: ProcessTree, entry: Dict[str, Any]) -> None:
+    pid = entry["PID"]
+    if entry.get("TID", pid) != pid:
+        # A thread of the process exiting, not the process. (The leader
+        # leaving by pthread_exit while the group lives on is the one case
+        # this misreads, and it is rare enough to accept.)
+        return
+    p = pstree.get_process(pid)
+    if p is None:
+        logger.warning(f"Process not found at the process exit time (PID: {pid})")
+        return
+    # Linux has no MmCleanProcessAddressSpace; this is where the process ends.
+    p.ts_to = float(entry["TimeStamp"])
+    p.evtid_to = int(entry["EventUID"], 16)
+    # An integer (fmt::Nval), where Windows' ExitStatus is a hex string.
+    p.exit_code = int(entry["ExitStatus"])
+    p.exit_code_str = entry["ExitStatusStr"]
+
+
+# Which procmon Method builds what, per guest OS. Per-OS table rather than a
+# branch in the loop: Android and Ubuntu are one row each pointing at one
+# table, and a guest this does not know fails on the lookup instead of
+# returning an empty tree.
+_WINDOWS_METHOD_PARSERS: Dict[str, Callable[[ProcessTree, Dict[str, Any]], None]] = {
+    # Process has been created after the analysis started.
+    "NtCreateUserProcess": parse_nt_create_user_process_entry,
+    "NtCreateProcessEx": parse_nt_create_process_ex_entry,
+    # Process has been terminated.
+    "MmCleanProcessAddressSpace": parse_mm_clean_process_address_space_entry,
+    "NtTerminateProcess": parse_mm_terminate_process,
+}
+
+_LINUX_METHOD_PARSERS: Dict[str, Callable[[ProcessTree, Dict[str, Any]], None]] = {
+    "kernel_clone": parse_kernel_clone,
+    "do_execveat_common": parse_do_execveat_common,
+    "do_exit": parse_do_exit,
+}
+
+METHOD_PARSERS: Dict[TargetOs, Dict[str, Callable[[ProcessTree, Dict[str, Any]], None]]] = {
+    TargetOs.WINDOWS: _WINDOWS_METHOD_PARSERS,
+    TargetOs.UBUNTU: _LINUX_METHOD_PARSERS,
+    TargetOs.ANDROID: _LINUX_METHOD_PARSERS,
+}
+
+
+def tree_from_log(file: TextIO, os_: TargetOs) -> ProcessTree:
+    parsers = METHOD_PARSERS[os_]
     pstree = ProcessTree()
     prev_line = None
     for line in file:
@@ -302,17 +441,9 @@ def tree_from_log(file: TextIO) -> ProcessTree:
                 # Process has been created before the analysis started.
                 parse_running_process_entry(pstree, entry)
             elif "Method" in entry:
-                if entry["Method"] == "NtCreateUserProcess":
-                    # Process has been created after the analysis started.
-                    parse_nt_create_user_process_entry(pstree, entry)
-                elif entry["Method"] == "NtCreateProcessEx":
-                    # Process has been created after the analysis started.
-                    parse_nt_create_process_ex_entry(pstree, entry)
-                elif entry["Method"] == "MmCleanProcessAddressSpace":
-                    # Process has been terminated.
-                    parse_mm_clean_process_address_space_entry(pstree, entry)
-                elif entry["Method"] == "NtTerminateProcess":
-                    parse_mm_terminate_process(pstree, entry)
+                parser = parsers.get(entry["Method"])
+                if parser is not None:
+                    parser(pstree, entry)
                 elif "PID" in entry and "PPID" in entry:
                     pid = entry["PID"]
                     ppid = entry["PPID"]

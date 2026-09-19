@@ -475,6 +475,29 @@ def test_ipt_gets_its_directory_and_ring_only_when_selected(tmp_path):
     assert "--ipt-trace-os" not in argv
 
 
+def test_windows_symbol_profiles_sit_beside_the_kernel_one_and_linux_gets_none(tmp_path):
+    """The first cut (2026-09-19) spelled them `profiles/tcpip.json`: relative
+    to the daemon's cwd, which nothing sets, while `-r` beside them was
+    absolute. Resolved against `Job.profile`'s directory instead, from the
+    per-OS table, and the table's Linux rows are empty -- `--json-` is not
+    allowed to leak into the evidenced path."""
+    windows = job(tmp_path, TargetOs.WINDOWS, SampleKind.PE,
+                  profile=Path("/anywhere/profiles/windows.json"))
+    argv = G.argv_trace(windows)
+    pairs = {argv[i]: argv[i + 1] for i, a in enumerate(argv) if a.startswith("--json-")}
+    assert pairs == {option: f"/anywhere/profiles/{name}"
+                     for option, name in G.SYMBOL_PROFILES[TargetOs.WINDOWS]}
+    assert len(pairs) == 17
+    assert not any(a.startswith("--hid-") for a in argv)   # inert off Windows 7
+    # Absent because neither DLL's symbols could be produced, not forgotten.
+    assert not {"--json-ole32", "--json-ndis"} & set(argv)
+
+    for os_, kind in ((TargetOs.UBUNTU, SampleKind.ELF), (TargetOs.ANDROID, SampleKind.ELF)):
+        assert G.SYMBOL_PROFILES[os_] == ()
+        assert not any(a.startswith("--json-") for a in G.argv_trace(job(tmp_path, os_, kind)))
+    assert set(G.SYMBOL_PROFILES) == set(TargetOs)
+
+
 # --- the injector mode reaches argv as a mode ------------------------------
 
 #: Every `-m` value this repository has ever passed to `injector` or `drakvuf`.

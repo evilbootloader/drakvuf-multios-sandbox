@@ -267,7 +267,7 @@ class Config:
     # processes named `init`, and the anchor is deliberately unremarkable so
     # the string `drakvuf` appears nowhere a sample can read (issue #7).
     injection_pids: dict = field(default_factory=lambda: {
-        TargetOs.UBUNTU: 1, TargetOs.ANDROID: 3251, TargetOs.WINDOWS: 4696})
+        TargetOs.UBUNTU: 1, TargetOs.ANDROID: 3251, TargetOs.WINDOWS: 9740})
     # `lv_sizes` was dropped 2026-08-29 with CLONE_LV_SIZE. Clones are thin
     # snapshots and inherit the golden LV's size, so there is no per-OS
     # number left to hold -- see clone.argv_lvcreate.
@@ -399,7 +399,7 @@ class Analysis:
 
 
                 postprocessing_config = load_postprocessing_config()
-                postprocess_analysis_dir(job_dir, postprocessing_config)
+                postprocess_analysis_dir(job_dir, postprocessing_config, os_)
 
                 outcome = self._collect(lease, job_dir)
 

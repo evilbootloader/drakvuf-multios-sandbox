@@ -24,6 +24,7 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
 from sandboxd import stages  # noqa: E402
+from sandboxd.guests import TargetOs  # noqa: E402
 from sandboxd.postprocessing import paths  # noqa: E402
 from sandboxd.postprocessing.plugins import plugin_base  # noqa: E402
 from sandboxd.postprocessing.plugins.capa_plugin import capa_processor as capa  # noqa: E402
@@ -34,8 +35,11 @@ from sandboxd.postprocessing.plugins.split_drakvuf_log import split_drakvuf_log 
 from sandboxd.postprocessing import indexer, postprocess, process_tree  # noqa: E402
 
 
-def context(tmp_path, **env) -> plugin_base.PostprocessContext:
-    return plugin_base.PostprocessContext(tmp_path, plugin_base.PostprocessingConfig(**env))
+SAMPLES = ROOT / "samples"
+
+
+def context(tmp_path, os_=TargetOs.WINDOWS, **env) -> plugin_base.PostprocessContext:
+    return plugin_base.PostprocessContext(tmp_path, plugin_base.PostprocessingConfig(**env), os_)
 
 
 def jsonl(path: Path, *objs) -> Path:
@@ -283,6 +287,88 @@ def test_a_terminate_from_an_unknown_killer_does_not_take_the_tree_down():
     assert tree.get_process(7208).killed_by is None
 
 
+# --- the tree is built per guest OS ---------------------------------------------
+
+def test_the_windows_tree_is_what_the_method_chain_built(tmp_path):
+    """The per-OS parser table (2026-09-19) replaced an if/elif chain on
+    Method. This is what that chain built for the four procmon lines
+    trace-windows.log carries, and a Linux event under Windows falls through
+    to the PID/PPID branch as any unknown Method always did."""
+    log = jsonl(
+        tmp_path / "procmon.log",
+        {"Plugin": "procmon", "TimeStamp": "1.0", "PID": 4, "PPID": 0, "RunningProcess": "System"},
+        {"Plugin": "procmon", "TimeStamp": "1.5", "PID": 976, "PPID": 4, "RunningProcess": "svchost.exe"},
+        {"Plugin": "procmon", "TimeStamp": "2.0", "PID": 976, "PPID": 4, "Method": "NtCreateUserProcess",
+         "EventUID": "0x10", "Status": "0x0", "NewPid": 5084,
+         "ImagePathName": "C:\\Windows\\System32\\DataExchangeHost.exe",
+         "CommandLine": "C:\\\\Windows\\\\System32\\\\DataExchangeHost.exe -Embedding"},
+        {"Plugin": "procmon", "TimeStamp": "3.0", "PID": 5084, "PPID": 976, "Method": "NtTerminateProcess",
+         "EventUID": "0x20", "ExitPid": 0, "ExitStatus": "0x1", "ExitStatusStr": "STATUS_UNSUCCESSFUL"},
+        {"Plugin": "procmon", "TimeStamp": "4.0", "PID": 5084, "PPID": 976, "Method": "MmCleanProcessAddressSpace",
+         "EventUID": "0x30", "ExitPid": 5084},
+        {"Plugin": "procmon", "TimeStamp": "5.0", "PID": 976, "PPID": 4, "TID": 976, "Method": "do_exit",
+         "EventUID": "0x40", "ExitStatus": 0, "ExitStatusStr": "EXIT_SUCCESS"})
+    with log.open() as f:
+        tree = process_tree.tree_from_log(f, TargetOs.WINDOWS)
+
+    assert [p.pid for p in tree.processes] == [4, 976, 5084]
+    deh = tree.get_process(5084)
+    assert deh.parent is tree.get_process(976)
+    assert deh.procname == "C:\\Windows\\System32\\DataExchangeHost.exe"
+    assert deh.args == ["C:\\Windows\\System32\\DataExchangeHost.exe", "-Embedding"]
+    assert (deh.ts_from, deh.evtid_from, deh.ts_to, deh.evtid_to) == (2.0, 0x10, 4.0, 0x30)
+    assert (deh.exit_code, deh.exit_code_str, deh.killed_by) == (1, "STATUS_UNSUCCESSFUL", None)
+    assert tree.get_process(976).ts_to is None
+
+
+def test_the_linux_tree_is_built_from_the_procmon_sample():
+    """samples/procmon-linux.log (2026-09-19): dash (2001, the injected
+    process) vforks `id` and `sleep 120`; systemd forks two services. The
+    first cut of the Linux parsers, run against it, made two nodes per
+    process -- under vfork the child's execve is logged BEFORE the parent's
+    kernel_clone returns, and a plain fork is a clone and then an execve --
+    grew evolution-calendar-factory six `Unnamed` children (kernel_clone is
+    every pthread_create) and killed it six times (do_exit is every thread's
+    exit), and died on the first do_exit anyway: ExitStatus is an integer
+    here where the Windows parser's int(x, 16) wants a hex string."""
+    with (SAMPLES / "procmon-linux.log").open() as f:
+        tree = process_tree.tree_from_log(f, TargetOs.UBUNTU)
+
+    pids = [p.pid for p in tree.processes]
+    assert len(pids) == len(set(pids)), "one node per process"
+    assert not any(p.procname == "Unnamed" for p in tree.processes)
+    assert not ({*range(2004, 2012), 2014, 2015} & set(pids)), "threads are not processes"
+
+    dash = tree.get_process(2001)
+    assert [c.pid for c in dash.children] == [2002, 2003]
+    id_, sleep = dash.children
+    assert (id_.procname, id_.args) == ("/usr/bin/id", ["id"])
+    assert (sleep.procname, sleep.args) == ("/usr/bin/sleep", ["sleep", "120"])
+    # The execve came first and made the node; the clone that followed did
+    # not replace it.
+    assert (id_.ts_from, id_.evtid_from) == (1789814003.999584, 0x807)
+    # do_exit is where a Linux process ends: no MmCleanProcessAddressSpace.
+    assert (id_.ts_to, id_.evtid_to) == (1789814004.013067, 0x888)
+    for p in (id_, sleep, dash):
+        assert p.ts_to is not None
+        assert (p.exit_code, p.exit_code_str, p.killed_by) == (0, "EXIT_SUCCESS", None)
+    # Six of its threads exited; it did not.
+    assert tree.get_process(1300).ts_to is None
+    # Clone first, then execve: the clone's node renamed in place, and a
+    # script's name is the script (FileName), not the interpreter.
+    downloader = tree.get_process(2012)
+    assert downloader.parent is tree.get_process(1)
+    assert (downloader.ts_from, downloader.evtid_from) == (1789814041.369118, 0x364e)
+    assert downloader.procname == "/usr/lib/update-notifier/package-data-downloader"
+    assert downloader.args == ["/usr/bin/python3", "/usr/lib/update-notifier/package-data-downloader"]
+    assert (downloader.ts_to, downloader.evtid_to) == (1789814041.662300, 0x4bba)
+
+
+def test_android_shares_the_linux_parsers_and_an_unknown_os_is_loud():
+    assert process_tree.METHOD_PARSERS[TargetOs.ANDROID] is process_tree.METHOD_PARSERS[TargetOs.UBUNTU]
+    assert set(process_tree.METHOD_PARSERS) == set(TargetOs)
+
+
 # --- the entry point and the config --------------------------------------------
 
 def test_postprocessing_never_raises_into_the_analysis(tmp_path, monkeypatch):
@@ -291,7 +377,8 @@ def test_postprocessing_never_raises_into_the_analysis(tmp_path, monkeypatch):
     def boom(_context):
         raise RuntimeError("plugin table is broken")
     monkeypatch.setattr(postprocess, "run_postprocessing", boom)
-    postprocess.postprocess_analysis_dir(tmp_path, plugin_base.PostprocessingConfig())
+    postprocess.postprocess_analysis_dir(
+        tmp_path, plugin_base.PostprocessingConfig(), TargetOs.WINDOWS)
 
 
 def test_the_config_reads_only_prefixed_environment(tmp_path, monkeypatch):
