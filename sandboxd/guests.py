@@ -60,6 +60,7 @@ log = logging.getLogger("sandboxd.guests")
 # directory (`--ipt-dir`) and a ring to trace. The name is DRAKVUF's, as the
 # platform's catalogue spells it (`catalogue.PLUGINS`).
 IPT_PLUGIN = "ipt"
+UNIXSOCKETMON_PLUGIN = "unixsocketmon"
 
 
 class TargetOs(str, Enum):
@@ -377,6 +378,7 @@ SYMBOL_PROFILES: dict[TargetOs, tuple[tuple[str, str], ...]] = {
         ("--json-wow-kernel32", "kernel32wow.json"),
         ("--json-ntdll", "ntdll.json"),
         ("--json-iphlpapi", "iphlpapi.json"),
+        ("--json-ole32", "ole32.json"),
         ("--json-clr", "clr.json"),
         ("--json-mscorwks", "mscorwks.json"),
         ("--json-hal", "hal.json"),
@@ -384,6 +386,7 @@ SYMBOL_PROFILES: dict[TargetOs, tuple[tuple[str, str], ...]] = {
         ("--json-fltmgr", "fltmgr.json"),
         ("--json-ci", "ci.json"),
         ("--json-netio", "netio.json"),
+        ("--json-ndis", "ndis.json"),
         ("--json-services", "services.json"),
     ),
 }
@@ -715,6 +718,8 @@ def argv_trace(job: Job, component: str | None = None) -> list[str]:
         # was selected -- an `--ipt-dir` with no `-a ipt` is a directory
         # nothing writes and compress_ipt would pack empty.
         argv += ["--ipt-dir", str(job.result_dir / IPT_DIR), "--ipt-trace-user"]
+    if UNIXSOCKETMON_PLUGIN in job.options.plugins:
+        argv += ["--unixsocketmon-max-size-print 2048"]
     for option, name in SYMBOL_PROFILES[job.target_os]:
         argv += [option, str(job.profile.parent / name)]
     return argv
