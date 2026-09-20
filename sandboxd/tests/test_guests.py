@@ -487,11 +487,9 @@ def test_windows_symbol_profiles_sit_beside_the_kernel_one_and_linux_gets_none(t
     pairs = {argv[i]: argv[i + 1] for i, a in enumerate(argv) if a.startswith("--json-")}
     assert pairs == {option: f"/anywhere/profiles/{name}"
                      for option, name in G.SYMBOL_PROFILES[TargetOs.WINDOWS]}
-    assert len(pairs) == 17
+    assert len(pairs) == 19
     assert not any(a.startswith("--hid-") for a in argv)   # inert off Windows 7
     # Absent because neither DLL's symbols could be produced, not forgotten.
-    assert not {"--json-ole32", "--json-ndis"} & set(argv)
-
     for os_, kind in ((TargetOs.UBUNTU, SampleKind.ELF), (TargetOs.ANDROID, SampleKind.ELF)):
         assert G.SYMBOL_PROFILES[os_] == ()
         assert not any(a.startswith("--json-") for a in G.argv_trace(job(tmp_path, os_, kind)))
@@ -512,7 +510,7 @@ def test_the_profile_generator_writes_the_names_guests_py_reads():
     passed = dict(G.SYMBOL_PROFILES[TargetOs.WINDOWS])
     assert {o: generated[o] for o in passed} == passed
     # Generated but not passed: the two whose PDBs could not be produced.
-    assert set(generated) - set(passed) == {"--json-ole32", "--json-ndis"}
+    assert set(generated) - set(passed) == set()
     assert len(generated) == len(module.PROFILES)          # no option twice
     assert len(set(generated.values())) == len(generated)  # no file twice
 
