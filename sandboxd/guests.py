@@ -722,7 +722,7 @@ def argv_trace(job: Job, component: str | None = None) -> list[str]:
         # nothing writes and compress_ipt would pack empty.
         argv += ["--ipt-dir", str(job.result_dir / IPT_DIR), "--ipt-trace-user"]
     if UNIXSOCKETMON_PLUGIN in job.options.plugins:
-        argv += ["--unixsocketmon-max-size-print 2048"]
+        argv += ["--unixsocketmon-max-size-print", "2048"]
     if MEMDUMP_PLUGIN in job.options.plugins or APIMON_PLUGIN in job.options.plugins or RPCMON_PLUGIN in job.options.plugins:
         argv += ["--dll-hooks-list", (Path(__file__).parent.absolute() / "data" / "hooks.txt").as_posix()]
     for option, name in SYMBOL_PROFILES[job.target_os]:
