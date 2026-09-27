@@ -163,7 +163,10 @@ results/<job_id>/
   ipt.zip              the ipt plugin's output, packed     reserved
   ipt/…                (compress_ipt); the same pair as    prefix -- only for a
                        dumps.zip and dumps/                job that chose `ipt`
-  extracted/…          files the SAMPLE wrote (-D)         prefix, untrusted names
+  extracted.zip        fileextractor's output, packed      reserved
+  extracted/…          files the SAMPLE wrote (-D), raw    prefix, untrusted names
+                       -- present only when nothing
+                       packed it
   screenshots/…        DRAFT-054                           prefix
 ```
 
@@ -202,13 +205,34 @@ no `ipt.zip` rather than an empty one. `compress_ipt` packs it. **Candidate**:
 no job has run with `ipt` selected on this Dom0 yet, so the layout DRAKVUF
 writes under `ipt/` is not recorded here.
 
+**`extracted/` and `extracted.zip` are the third pair, since 2026-09-26.**
+`process_extracted` packs the directory and removes it, and `stages._collect`
+reads the same DIR/ZIP rule. It is **not** a copy of `process_dumps`, because
+fileextractor is not memdump:
+
+- **Only Windows writes a `.metadata` sidecar** (`win.cpp::save_file_metadata`).
+  `process_dumps` skips any dump missing one; that guard, copied across, would
+  have dropped every extracted file on Ubuntu and Android.
+- **The on-disk name is per-OS.** Linux writes `%08d_<sanitized name>` and puts
+  the full path in `DumpFile`; Windows writes `file.%06d.mm` and names only
+  `SeqNum`. A per-OS table resolves it, the shape `process_tree.METHOD_PARSERS`
+  established.
+- **The directory is the ground truth, not the log.** A file DRAKVUF wrote but
+  did not log is still a file the sample wrote: it is packed and reported under
+  `process_seqid: null` rather than dropped — the rule the operator set for
+  memory dumps on 2026-09-18.
+- `fileextractor_fail` and `fileextractor_skip` name files that were **not**
+  written. They go to `extraction_failures`, never to `extracted_files`.
+
 **Reserved means a worker may not use the name for anything else**, so a
 reader can trust that `procmon.log` is procmon's output.
 
 **`extracted/` is the one prefix whose leaf names are chosen by the sample.**
 Called out in the layout rather than left to be rediscovered in code: those
 names are untrusted input on the same footing as a submitted filename, and
-`manifest.reject_unsafe_name` is what stands behind them.
+`manifest.reject_unsafe_name` is what stands behind them. The report carries
+the guest's own path for each file (`guest_path`, `guest_basename`) as data
+for display, never as a path to open.
 
 **`capture.pcap` may legitimately be zero bytes.** A sample that made no
 network traffic is a real result, and #37's upload policy starts its

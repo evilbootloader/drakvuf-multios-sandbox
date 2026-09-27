@@ -30,7 +30,9 @@ from sandboxd.postprocessing.plugins import plugin_base  # noqa: E402
 from sandboxd.postprocessing.plugins.capa_plugin import capa_processor as capa  # noqa: E402
 from sandboxd.postprocessing.plugins.compress_ipt import compress_ipt  # noqa: E402
 from sandboxd.postprocessing.plugins.gzip_syscalls import gzip_syscalls  # noqa: E402
+from sandboxd.postprocessing.plugins.get_http_info import get_http_info  # noqa: E402
 from sandboxd.postprocessing.plugins.process_dumps import process_dumps  # noqa: E402
+from sandboxd.postprocessing.plugins.process_extracted import process_extracted  # noqa: E402
 from sandboxd.postprocessing.plugins.split_drakvuf_log import split_drakvuf_log  # noqa: E402
 from sandboxd.postprocessing import indexer, postprocess, process_tree  # noqa: E402
 
@@ -45,6 +47,20 @@ def context(tmp_path, os_=TargetOs.WINDOWS, **env) -> plugin_base.PostprocessCon
 def jsonl(path: Path, *objs) -> Path:
     path.write_text("".join(json.dumps(o) + "\n" for o in objs))
     return path
+
+
+def libmon_line(method, arguments, retval="0x0", pid=4242, evtid="0x30"):
+    """One `api_called` record in libmon's shape.
+
+    Taken from `drakvuf/src/plugins/libmon/libmon.cpp::print_call`, not
+    invented: `Event`, `Library`, `CalledFrom`, `ReturnValue`, `FromModule`,
+    `Arguments`, plus `Method` from the common formatter -- the same shape
+    apimon emits, which is what lets `get_http_info` run one algorithm over
+    both."""
+    return {"Plugin": "libmon", "Event": "api_called", "Method": method,
+            "PID": pid, "EventUID": evtid, "Library": "/lib/x86_64-linux-gnu/libcurl.so.4",
+            "CalledFrom": "0x7f0000000000", "ReturnValue": retval,
+            "Arguments": arguments}
 
 
 # Shaped like trace-windows.log: five roots, the injected process (7208,
@@ -453,3 +469,626 @@ def test_registry_writes_are_summarised_and_reads_are_not(tmp_path):
     assert r["registry_deleted_values"] == [
         {"key": run, "value_name": "Old", "process_seqids": [1]}]
     assert not any("QueryValue" in str(v) for v in r.values())
+
+
+# --- process_extracted ---------------------------------------------------------
+
+def make_linux_tree() -> process_tree.ProcessTree:
+    tree = process_tree.ProcessTree()
+    init = tree.add_process(1, 0, 0, 0.0, "init", None)
+    tree.add_process(4242, 1, 0, 0.0, "sample.bin", init)
+    return tree
+
+
+def test_linux_extracted_files_survive_having_no_metadata_sidecar(tmp_path):
+    """`process_dumps` skips any dump whose `.metadata` is missing, because
+    memdump writes one for every dump. **fileextractor does not** -- only
+    `win.cpp::save_file_metadata` does, so a Linux guest produces none at all.
+
+    Copying that guard would have dropped every extracted file on Ubuntu and
+    Android: the whole output of the plugin, on two of the three guests, with
+    nothing in the report to say so."""
+    extracted = tmp_path / paths.EXTRACTED_DIR
+    extracted.mkdir()
+    (extracted / "00000001_payload.sh").write_bytes(b"#!/bin/sh\n")
+    jsonl(tmp_path / "fileextractor.log",
+          {"Plugin": "fileextractor", "PID": 4242, "EventUID": "0x20",
+           "Reason": "write", "FileName": "/tmp/payload.sh", "Size": 10,
+           "DumpFile": "/root/results/extracted/00000001_payload.sh",
+           "ProcessName": "sample.bin"})
+    ctx = context(tmp_path, TargetOs.UBUNTU)
+    ctx.process_tree = make_linux_tree()
+
+    process_extracted(ctx)
+
+    members = {i.filename for i in
+               zipfile.ZipFile(tmp_path / paths.EXTRACTED_ZIP).infolist()}
+    assert members == {f"{paths.EXTRACTED_DIR}/00000001_payload.sh"}
+    assert not extracted.exists()
+    groups = {g["process_seqid"]: g["files"] for g in ctx.report["extracted_files"]}
+    # Attributed to the sample, and carrying the guest's own path for it.
+    assert list(groups) == [1]
+    assert groups[1][0]["guest_path"] == "/tmp/payload.sh"
+    assert groups[1][0]["guest_basename"] == "payload.sh"
+
+
+def test_an_extracted_file_with_no_log_record_is_kept_unattributed(tmp_path):
+    """The directory is the ground truth, not the log. A file DRAKVUF wrote
+    but did not log -- a truncated run, a line lost to a parse error -- is
+    still a file the sample wrote, so it is packed and reported under seqid
+    None. Same rule the operator set for memory dumps on 2026-09-18."""
+    extracted = tmp_path / paths.EXTRACTED_DIR
+    extracted.mkdir()
+    (extracted / "00000001_known.bin").write_bytes(b"K")
+    (extracted / "00000002_orphan.bin").write_bytes(b"O")
+    jsonl(tmp_path / "fileextractor.log",
+          {"Plugin": "fileextractor", "PID": 4242, "EventUID": "0x20",
+           "Reason": "write", "FileName": "/tmp/known.bin", "Size": 1,
+           "DumpFile": "/x/00000001_known.bin"})
+    ctx = context(tmp_path, TargetOs.UBUNTU)
+    ctx.process_tree = make_linux_tree()
+
+    process_extracted(ctx)
+
+    members = {i.filename for i in
+               zipfile.ZipFile(tmp_path / paths.EXTRACTED_ZIP).infolist()}
+    assert members == {f"{paths.EXTRACTED_DIR}/00000001_known.bin",
+                       f"{paths.EXTRACTED_DIR}/00000002_orphan.bin"}
+    groups = {g["process_seqid"]: g["files"] for g in ctx.report["extracted_files"]}
+    assert set(groups) == {1, None}
+    assert groups[None][0]["name"] == "00000002_orphan.bin"
+
+
+def test_windows_extracted_files_are_found_through_seqnum(tmp_path):
+    """Windows writes `file.%06d.mm` and names no path in the log, so SeqNum
+    is the only link to the file on disk; Linux writes `%08d_<name>` and puts
+    the full path in DumpFile. Per-OS table, not a branch.
+
+    The `.metadata` sidecar is packed with its data file -- it is evidence
+    about the extraction -- but is not itself a file the sample wrote, so it
+    does not become a report entry."""
+    extracted = tmp_path / paths.EXTRACTED_DIR
+    extracted.mkdir()
+    (extracted / "file.000007.mm").write_bytes(b"MZ")
+    # `file.000007.metadata`, NOT `file.000007.mm.metadata`: both names come
+    # from win.cpp::get_filename(folder, idx, ext), which REPLACES the
+    # extension. Appending finds nothing.
+    (extracted / "file.000007.metadata").write_text('{"FileName": "x"}')
+    jsonl(tmp_path / "fileextractor.log",
+          {"Plugin": "fileextractor", "PID": 7208, "EventUID": "0x20",
+           "Reason": "close", "FileName": "C:\\Users\\u\\drop.exe",
+           "Size": 2, "SeqNum": 7, "FileHash": "ab" * 32})
+    ctx = context(tmp_path, TargetOs.WINDOWS)
+    ctx.process_tree = make_windows_tree()
+
+    process_extracted(ctx)
+
+    members = {i.filename for i in
+               zipfile.ZipFile(tmp_path / paths.EXTRACTED_ZIP).infolist()}
+    assert members == {f"{paths.EXTRACTED_DIR}/file.000007.mm",
+                       f"{paths.EXTRACTED_DIR}/file.000007.metadata"}
+    files = ctx.report["extracted_files"][0]["files"]
+    assert [f["name"] for f in files] == ["file.000007.mm"]
+    # A Windows path, split with Windows separators rather than the host's.
+    assert files[0]["guest_basename"] == "drop.exe"
+    assert files[0]["sha256"] == "ab" * 32
+
+
+def test_a_linux_file_the_sample_named_metadata_is_still_evidence(tmp_path):
+    """Why the sidecar skip reads the per-OS table instead of the `.metadata`
+    suffix.
+
+    `linux.cpp::sanitize_filename` replaces separators and non-printables and
+    nothing else, so the sample's own extension reaches the disk:
+    `/tmp/payload.metadata` becomes `00000001_payload.metadata`. A suffix test
+    skipped that file, said nothing about it in the report, and the `rmtree`
+    then deleted it -- so a sample could erase one of its own dropped files from
+    the evidence just by choosing its name. Linux writes no sidecars at all, so
+    there is nothing here to skip."""
+    extracted = tmp_path / paths.EXTRACTED_DIR
+    extracted.mkdir()
+    (extracted / "00000001_payload.metadata").write_bytes(b"payload")
+    jsonl(tmp_path / "fileextractor.log",
+          {"Plugin": "fileextractor", "PID": 4242, "EventUID": "0x20",
+           "Reason": "write", "FileName": "/tmp/payload.metadata", "Size": 7,
+           "DumpFile": "/root/results/extracted/00000001_payload.metadata"})
+    ctx = context(tmp_path, TargetOs.UBUNTU)
+    ctx.process_tree = make_linux_tree()
+
+    process_extracted(ctx)
+
+    members = {i.filename for i in
+               zipfile.ZipFile(tmp_path / paths.EXTRACTED_ZIP).infolist()}
+    assert members == {f"{paths.EXTRACTED_DIR}/00000001_payload.metadata"}
+    files = ctx.report["extracted_files"][0]["files"]
+    assert [f["guest_path"] for f in files] == ["/tmp/payload.metadata"]
+
+
+def test_a_windows_sidecar_with_no_data_file_is_kept(tmp_path):
+    """A sidecar is skipped because it belongs to a data file that is itself
+    packed, not because of what it is called. One standing alone -- a run that
+    died between `win.cpp`'s two writes -- is the only surviving record of that
+    extraction, so the directory-is-ground-truth rule keeps it."""
+    extracted = tmp_path / paths.EXTRACTED_DIR
+    extracted.mkdir()
+    (extracted / "file.000007.metadata").write_text('{"FileName": "x"}')
+    ctx = context(tmp_path, TargetOs.WINDOWS)
+    ctx.process_tree = make_windows_tree()
+
+    process_extracted(ctx)
+
+    members = {i.filename for i in
+               zipfile.ZipFile(tmp_path / paths.EXTRACTED_ZIP).infolist()}
+    assert members == {f"{paths.EXTRACTED_DIR}/file.000007.metadata"}
+    groups = {g["process_seqid"] for g in ctx.report["extracted_files"]}
+    assert groups == {None}
+
+
+def test_a_failed_extraction_is_not_reported_as_a_file(tmp_path):
+    """`fileextractor_fail` and `_skip` name a file that was NOT written.
+    Treating them as extractions would invent artifacts that are not on disk
+    and cannot be uploaded."""
+    extracted = tmp_path / paths.EXTRACTED_DIR
+    extracted.mkdir()
+    jsonl(tmp_path / "fileextractor.log",
+          {"Plugin": "fileextractor_fail", "PID": 4242, "EventUID": "0x20",
+           "FileName": "/tmp/toobig.bin", "Message": "file too large"},
+          {"Plugin": "fileextractor_skip", "PID": 4242, "EventUID": "0x21",
+           "FileName": "/tmp/boring.txt", "Message": "Excluded by filter"})
+    ctx = context(tmp_path, TargetOs.UBUNTU)
+    ctx.process_tree = make_linux_tree()
+
+    process_extracted(ctx)
+
+    assert ctx.report["extracted_files"] == []
+    assert [f["filename"] for f in ctx.report["extraction_failures"]] == [
+        "/tmp/toobig.bin", "/tmp/boring.txt"]
+
+
+def test_extracted_is_packed_so_collect_uploads_the_zip(tmp_path):
+    """The DIR/ZIP pairing `stages._collect` reads. Without the pair the raw
+    directory uploads alongside the archive and every file counts twice
+    against the 4 GiB per-job budget."""
+    assert (paths.EXTRACTED_DIR, paths.EXTRACTED_ZIP) in [
+        (paths.DUMPS_DIR, paths.DUMPS_ZIP), (paths.IPT_DIR, paths.IPT_ZIP),
+        (paths.EXTRACTED_DIR, paths.EXTRACTED_ZIP)]
+    src = Path(stages.__file__).read_text()
+    assert "EXTRACTED_ZIP" in src, "stages._collect must know the pair"
+
+
+# --- get_http_info, per OS -----------------------------------------------------
+
+def test_http_info_reads_libmon_on_linux_and_apimon_on_windows():
+    """One algorithm, two vocabularies -- the shape `process_tree
+    .METHOD_PARSERS` established. A guest this does not know fails on the
+    lookup rather than silently reporting no HTTP."""
+    from sandboxd.postprocessing.plugins.get_http_info import HTTP_SOURCES
+
+    assert HTTP_SOURCES[TargetOs.WINDOWS][0] == "apimon.log"
+    assert HTTP_SOURCES[TargetOs.UBUNTU][0] == "libmon.log"
+    assert HTTP_SOURCES[TargetOs.ANDROID][0] == "libmon.log"
+    assert set(HTTP_SOURCES) == set(TargetOs)
+
+
+def test_a_curl_request_is_reconstructed_from_the_handle_chain(tmp_path):
+    """libcurl carries the same information WinINet does, in a different
+    order: options accumulate onto one handle and the request exists only
+    when `curl_easy_perform` runs it."""
+    jsonl(tmp_path / "libmon.log",
+          libmon_line("curl_easy_init", [], retval="0x55aa"),
+          libmon_line("curl_easy_setopt",
+                      ["Handle=0x55aa", "Option=0x2712", "Value=0x7f:\"http://evil.test/x\""]),
+          libmon_line("curl_easy_setopt",
+                      ["Handle=0x55aa", "Option=0x2722", "Value=0x7f:\"curl/8.5.0\""]),
+          libmon_line("curl_easy_perform", ["Handle=0x55aa"]))
+    ctx = context(tmp_path, TargetOs.UBUNTU)
+    ctx.process_tree = make_linux_tree()
+
+    get_http_info(ctx)
+
+    assert len(ctx.report["http_requests"]) == 1
+    req = ctx.report["http_requests"][0]
+    assert req["url"] == "http://evil.test/x"
+    assert req["user_agent"] == "curl/8.5.0"
+    assert [u["url"] for u in ctx.report["cracked_urls"]] == ["http://evil.test/x"]
+
+
+def test_a_reused_curl_handle_reports_each_url_not_the_last(tmp_path):
+    """curl handles are routinely reused for a second request with a new URL.
+    Reporting the live dict would show BOTH requests with the last URL set on
+    it, which is a false attribution rather than a missing one."""
+    jsonl(tmp_path / "libmon.log",
+          libmon_line("curl_easy_init", [], retval="0x55aa"),
+          libmon_line("curl_easy_setopt",
+                      ["Handle=0x55aa", "Option=0x2712", "Value=0x7f:\"http://first.test/\""]),
+          libmon_line("curl_easy_perform", ["Handle=0x55aa"]),
+          libmon_line("curl_easy_setopt",
+                      ["Handle=0x55aa", "Option=0x2712", "Value=0x7f:\"http://second.test/\""]),
+          libmon_line("curl_easy_perform", ["Handle=0x55aa"]))
+    ctx = context(tmp_path, TargetOs.UBUNTU)
+    ctx.process_tree = make_linux_tree()
+
+    get_http_info(ctx)
+
+    assert [r["url"] for r in ctx.report["http_requests"]] == [
+        "http://first.test/", "http://second.test/"]
+
+
+def test_an_http_call_from_an_unknown_pid_does_not_crash_the_plugin(tmp_path):
+    """`data["process"].seqid` was read unguarded until 2026-09-26. A call
+    from a process the tree never saw raised AttributeError, and because
+    `run_postprocessing` catches per plugin, that lost EVERY request in the
+    run rather than the one line."""
+    jsonl(tmp_path / "libmon.log",
+          libmon_line("curl_easy_init", [], retval="0x1", pid=999999),
+          libmon_line("curl_easy_setopt",
+                      ["Handle=0x1", "Option=0x2712", "Value=0x7f:\"http://orphan.test/\""],
+                      pid=999999),
+          libmon_line("curl_easy_perform", ["Handle=0x1"], pid=999999))
+    ctx = context(tmp_path, TargetOs.UBUNTU)
+    ctx.process_tree = make_linux_tree()
+
+    get_http_info(ctx)  # must not raise
+
+    assert [r["url"] for r in ctx.report["http_requests"]] == ["http://orphan.test/"]
+    assert ctx.report["http_requests"][0]["process_seqid"] is None
+
+
+def test_an_ssl_write_is_reported_only_when_it_is_an_http_request(tmp_path):
+    """Plaintext at the library boundary is the only place an HTTPS body is
+    readable without the session key -- but an arbitrary TLS payload is not a
+    URL, so only a buffer whose first line parses as a request line counts."""
+    jsonl(tmp_path / "libmon.log",
+          libmon_line("SSL_write",
+                      ["Ssl=0x1", "Buf=0x7f:\"GET /beacon HTTP/1.1\\r\\nHost: c2.test\\r\\n\\r\\n\"",
+                       "Num=0x20"]),
+          libmon_line("SSL_write",
+                      ["Ssl=0x1", "Buf=0x7f:\"\\x17\\x03\\x03 binary junk\"", "Num=0x10"]))
+    ctx = context(tmp_path, TargetOs.UBUNTU)
+    ctx.process_tree = make_linux_tree()
+
+    get_http_info(ctx)
+
+    assert len(ctx.report["http_requests"]) == 1
+    req = ctx.report["http_requests"][0]
+    assert (req["verb"], req["path"], req["over_tls"]) == ("GET", "/beacon", True)
+
+
+def test_http_info_reports_empty_rather_than_skipping_when_no_api_log(tmp_path):
+    """The plugin that writes the log is selectable, so a job that ran
+    neither apimon nor libmon has no HTTP evidence. That is a result, not a
+    missing key: a consumer must be able to tell "nothing was seen" from
+    "this run did not look"."""
+    ctx = context(tmp_path, TargetOs.UBUNTU)
+    ctx.process_tree = make_linux_tree()
+
+    get_http_info(ctx)
+
+    assert ctx.report["http_requests"] == []
+    assert ctx.report["cracked_urls"] == []
+
+
+def test_named_hook_arguments_parse_as_positionally_as_ArgN_ones():
+    """DRAKVUF names an argument from the hook list, not always `ArgN`
+    (`libusermode/utils.cpp:216`): a bare type gets `Arg1`, `Arg2`, ..., a
+    `Name:type` entry gets its own name. `hooks.txt` is all bare types;
+    `so-hooks-linux.txt` names its arguments because a libmon line is far
+    easier to read as `Path=` than `Arg2=`.
+
+    The parser required the literal prefix `Arg` and raised otherwise --
+    which `parse_log` catches per line and logs, so a named hook list would
+    have produced an empty result for every consumer rather than an error."""
+    from sandboxd.postprocessing.plugins.parse_utils import parse_apimon_arguments
+
+    assert parse_apimon_arguments(
+        ["Arg1=0x4", 'Arg2=0x7f:"/tmp/x"']) == [4, "/tmp/x"]
+    assert parse_apimon_arguments(
+        ["Fd=0x4", 'Path=0x7f:"/tmp/x"']) == [4, "/tmp/x"]
+    # A colon inside the string never splits early: the VALUE is split, and
+    # only on its first colon, so a URL survives intact.
+    assert parse_apimon_arguments(
+        ['Value=0x7f:"http://evil.test/a:b"']) == ["http://evil.test/a:b"]
+    # Still rejects something that is not `name=value` at all.
+    with pytest.raises(RuntimeError):
+        parse_apimon_arguments(["0x4"])
+
+
+def test_the_shipped_linux_hook_list_parses_as_libmon_expects():
+    """The file `argv_trace` passes as `--so-hooks-list`. Grammar from
+    `src/plugins/libmon/README.md`:
+        <so name>,<function|hex offset>[,no-retval],<log|log+stack>[,<arg>,...]
+
+    Pinned because a malformed line is FATAL: the loader rethrows it as
+    "Invalid entry on line N" and DRAKVUF does not start, so a typo here costs
+    every Ubuntu job rather than one hook."""
+    hooks = ROOT / "sandboxd" / "data" / "so-hooks-linux.txt"
+    lines = [ln.strip() for ln in hooks.read_text().splitlines()]
+    entries = [ln for ln in lines if ln and not ln.startswith("#")]
+
+    assert entries, "the hook list must not be all comments"
+    for entry in entries:
+        fields = entry.split(",")
+        assert len(fields) >= 3, entry
+        so, func, *rest = fields
+        assert so.endswith(".so") or ".so." in so, f"not a shared object: {entry}"
+        assert func, f"no function or offset: {entry}"
+        # `log` or `log+stack`, optionally preceded by `no-retval`.
+        assert "log" in rest[:2], f"no log action: {entry}"
+        for arg in rest[rest.index("log") + 1:] if "log" in rest else []:
+            assert arg, f"empty argument spec: {entry}"
+
+    # The HTTP hooks get_http_info keys on must actually be here, or the
+    # Linux side of that plugin is dead code.
+    from sandboxd.postprocessing.plugins.get_http_info import (
+        _CURL_METHODS, _OPENSSL_METHODS)
+    hooked = {ln.split(",")[1] for ln in entries}
+    assert {"curl_easy_init", "curl_easy_setopt", "curl_easy_perform"} <= hooked
+    assert "SSL_write" in hooked
+    # Everything the replayer handles is hooked; the reverse need not hold.
+    from sandboxd.postprocessing.plugins.get_http_info import _linux_handlers
+    assert set(_linux_handlers()) <= hooked
+
+
+def test_hot_libc_functions_are_not_hooked():
+    """One Dom0 core saturates per concurrent trace at 415-856 syscalls/s
+    (CURRENT-STATE.md), so `read`, `write`, `memcpy` and `getpid` stay out.
+
+    **`strcmp` is no longer on this list, and not for the reason it left.**
+    The operator chose on 2026-09-27 to accept the cost of comparison functions
+    for capa's 835 `string:` features. On Windows they are hooked
+    (`ucrtbase.dll`/`msvcrt.dll`, ordinary exports). On Linux they STILL cannot
+    be: glibc declares `strcmp`, `strstr`, `memcmp`, `strncmp` and
+    `strcasecmp` as `STT_GNU_IFUNC`, whose symbol value is a resolver the
+    linker calls once at load time, and `linux-exports.c` has no IFUNC
+    handling -- so the hook would fire once per process with no strings. This
+    test therefore still keeps them out of the LINUX list, on correctness
+    rather than cost grounds."""
+    hooks = ROOT / "sandboxd" / "data" / "so-hooks-linux.txt"
+    hooked = {ln.split(",")[1] for ln in
+              (l.strip() for l in hooks.read_text().splitlines())
+              if ln and not ln.startswith("#")}
+    # Hot (cost) and IFUNC (cannot work) both belong out of the Linux list.
+    forbidden = {"strlen", "memcpy", "atoi", "read", "write",
+                 "fread", "fwrite", "getc", "putc", "fgetc", "fputc",
+                 "malloc", "free",
+                 "strcmp", "strstr", "memcmp", "strncmp", "strcasecmp"}
+    assert not (hooked & forbidden), f"hot functions hooked: {hooked & forbidden}"
+    # Kernel symbols cannot be resolved in a shared object's .dynsym.
+    assert not (hooked & {"commit_creds", "prepare_kernel_cred",
+                          "nf_register_hook", "nf_register_net_hook"})
+
+
+# --- the capa-derived hook lists -----------------------------------------------
+
+def _hook_lines(path: Path) -> list[tuple[str, str, list[str]]]:
+    """`(module, function, arg specs)` for every hook, comments stripped.
+
+    The action field is found rather than assumed at index 2: `no-retval` may
+    precede it (`libssl.so,SSL_read,no-retval,log,...`), and taking `fields[3:]`
+    blindly counted the literal `log` as an argument type.
+    """
+    out = []
+    for raw in path.read_text().splitlines():
+        line = raw.split("#")[0].strip()
+        if not line:
+            continue
+        fields = line.split(",")
+        assert len(fields) >= 3, f"too few fields: {raw}"
+        action = next((i for i, f in enumerate(fields)
+                       if f in ("log", "log+stack")), None)
+        assert action is not None, f"no log action: {raw}"
+        args = [f for f in fields[action + 1:] if f]
+        out.append((fields[0], fields[1], args))
+    return out
+
+
+HOOKS_WIN = ROOT / "sandboxd" / "data" / "hooks.txt"
+HOOKS_LINUX = ROOT / "sandboxd" / "data" / "so-hooks-linux.txt"
+
+# The only type tokens `libusermode/utils.cpp::make_arg_printer` dispatches on.
+# Anything else reaches the base ArgumentPrinter and prints the raw value, which
+# is harmless -- but a TYPO in one of these is not, because it silently
+# downgrades a string read to a hex number and the log looks fine.
+PRINTER_TYPES = {
+    "lpstr", "lpcstr", "lpctstr",          # AsciiPrinter
+    "lpcwstr", "lpwstr", "bstr",           # WideStringPrinter
+    "punicode_string", "pulong", "pulonglong", "lpvoid*",
+    "refclsid", "refiid", "binary16",
+}
+
+
+def test_every_hook_line_parses_under_the_documented_grammar():
+    """`<module>,<function|hex offset>[,no-retval],<log|log+stack>[,<arg>,...]`
+    -- `src/plugins/libmon/README.md`, and the same grammar apimon's
+    `--dll-hooks-list` takes (both go through `libusermode/utils.cpp`).
+
+    **A malformed line is fatal, not skipped.**
+    `drakvuf_load_dll_hook_config` catches the parse error and rethrows it as
+    "Invalid entry on line N" (`libusermode/userhook.cpp:1035`), so DRAKVUF
+    never starts and every Windows job fails. With ~1,040 generated lines that
+    makes this test load-bearing rather than tidy.
+
+    Order is unforgiving too: `parse_entry` reads any token before the
+    `log`/`log+stack` action that is not `clsid` or `no-retval` as a HEX OFFSET
+    and throws "Invalid offset" when it will not parse."""
+    for path in (HOOKS_WIN, HOOKS_LINUX):
+        hooks = _hook_lines(path)
+        assert hooks, f"{path.name} has no hooks"
+        for module, fn, args in hooks:
+            assert module.endswith((".dll", ".so")) or ".so." in module, \
+                f"{path.name}: not a module name: {module}"
+            assert fn, f"{path.name}: empty function"
+            for arg in args:
+                # `[Name:]type`; a bare type is legal and means ArgN.
+                assert arg.count(":") <= 1, f"{path.name}: bad arg spec {arg!r}"
+
+
+def test_every_string_argument_uses_a_real_printer_type():
+    """The generated lines may only use type tokens this project has decided on.
+
+    A token outside the twelve printer types falls through to the base printer
+    and prints the raw value, which is fine and is what most generated arguments
+    do. The failure this guards is narrower and silent: `lpcwstr` misspelled
+    stops being a string read, the log still looks well formed, and capa quietly
+    loses the String feature the rule needed. So the generator is restricted to
+    a closed vocabulary and anything new has to be added here deliberately.
+
+    The CURATED half of hooks.txt is exempt -- it carries ~150 Windows SDK type
+    names inherited from drakvuf-sandbox (`lpsecurity_attributes`, `hcryptkey`,
+    `pdns_record`, ...) which are all documentation-only fall-throughs."""
+    generated = HOOKS_WIN.read_text().split("# BEGIN GENERATED")[1]
+    # `apimon_type` maps every win32metadata parameter onto `dword`/`lpvoid`
+    # plus the printer types; `size_t` is the one hand-written addition, used
+    # for the length argument of the CRT comparison functions. All three are
+    # fall-throughs -- documentation, not behaviour.
+    allowed = PRINTER_TYPES | {"dword", "lpvoid", "size_t"}
+    seen = set()
+    for raw in generated.splitlines():
+        line = raw.split("#")[0].strip()
+        if not line or "," not in line:
+            continue
+        fields = line.split(",")
+        action = next((i for i, f in enumerate(fields)
+                       if f in ("log", "log+stack")), None)
+        if action is None:
+            continue
+        seen.update(f for f in fields[action + 1:] if f)
+    assert seen, "no typed arguments in the generated block"
+    assert seen <= allowed, f"unexpected type tokens: {sorted(seen - allowed)}"
+    # The string readers must actually be in use -- if a refactor stopped
+    # emitting them, every generated hook would silently lose its String
+    # features and capa would match far less, with nothing failing.
+    assert {"lpcstr", "lpcwstr"} <= seen
+
+
+def test_no_kernel_mode_module_is_hooked():
+    """apimon finds a DLL through its VAD and reads its export table; a kernel
+    driver has no VAD in a process. capa-rules names `ntoskrnl`, `fwpkclnt`,
+    `fltmgr` and a typo'd `ntoskrn`, all of which must be filtered out."""
+    kernel = {"ntoskrnl.dll", "ntoskrn.dll", "fwpkclnt.dll", "fltmgr.dll",
+              "ndis.dll", "hal.dll", "ci.dll", "netio.dll", "win32k.dll",
+              "tcpip.dll"}
+    got = {m for m, _, _ in _hook_lines(HOOKS_WIN)} & kernel
+    assert not got, f"kernel-mode modules hooked: {got}"
+
+
+def test_the_curated_hooks_survive_regeneration():
+    """`gen-hook-lists.py` appends a block and never rewrites what is above it.
+    Two lines prove it: `CreateProcessInternalW` is hooked deliberately instead
+    of `CreateProcess`, and `COleScript_ParseScriptText` is not an export at
+    all -- a generator that rewrote the file would lose both."""
+    functions = {fn for _, fn, _ in _hook_lines(HOOKS_WIN)}
+    assert "CreateProcessInternalW" in functions
+    assert "COleScript_ParseScriptText" in functions
+
+
+def test_the_generated_block_is_marked_and_last():
+    """Everything above the marker is hand-maintained. If the marker moved or
+    vanished, the next regeneration would either duplicate the block or eat the
+    curated lines."""
+    for path in (HOOKS_WIN, HOOKS_LINUX):
+        text = path.read_text()
+        assert text.count("# BEGIN GENERATED") == 1, path.name
+        assert text.count("# END GENERATED") == 1, path.name
+        assert text.index("# BEGIN GENERATED") < text.index("# END GENERATED")
+
+
+def test_the_generator_defers_to_capa_for_what_a_rule_name_means():
+    """`trim_dll_part` decides whether `kernel32.CreateFile` means
+    `CreateFile`. If this generator disagreed with capa, it would hook names
+    capa never looks for -- so it imports capa's function rather than keeping a
+    second copy of that rule."""
+    src = (ROOT / "scripts" / "gen-hook-lists.py").read_text()
+    assert "from capa.rules import trim_dll_part" in src
+
+
+def test_windows_hooks_grew_from_capa_but_stayed_finite():
+    """A regression guard with a real number behind it, not a round one: 302
+    curated lines plus ~1,040 generated. If this doubles again, someone has
+    started generating A/W/bare for everything and the throughput cost of the
+    Windows path needs re-deciding before it ships."""
+    hooks = _hook_lines(HOOKS_WIN)
+    assert 1200 < len(hooks) < 1600, len(hooks)
+
+
+# --- capa actually receiving what we hook ---------------------------------------
+
+def test_a_libmon_record_reaches_capa_at_all(tmp_path):
+    """**Reading `libmon.log` is not enough.** capa's
+    `DrakvufReport.from_raw_report` dispatches on `Plugin` and knows only
+    `syscall` and `apimon` (capa#2181), so before the relabel every libmon line
+    was read and then dropped -- the `libmon.lon` typo fix on its own changed
+    nothing measurable.
+
+    Also pins the `no-retval` case: `WinApiCall.return_value` is REQUIRED, so a
+    record without `ReturnValue` raised a pydantic error out of
+    `from_raw_report` and took the entire capa pass with it, not just the line.
+    `so-hooks-linux.txt` has such a hook (`SSL_read`), so it was reachable."""
+    import io
+    from capa.features.extractors.drakvuf.models import DrakvufReport
+
+    rec = {"Plugin": "libmon", "Event": "api_called", "Method": "getaddrinfo",
+           "TimeStamp": "1.0", "ProcessName": "s", "PID": 1, "PPID": 0, "TID": 1,
+           "Arguments": ['Node=0x7f:"c2.test"']}          # note: no ReturnValue
+    decoded = list(capa.decode_json_lines(io.StringIO(json.dumps(rec) + "\n")))
+
+    assert decoded[0]["Plugin"] == "apimon"
+    assert decoded[0]["ReturnValue"] == "0x0"             # synthetic, documented
+    report = DrakvufReport.from_raw_report(iter(decoded))  # must not raise
+    assert len(report.apicalls) == 1
+    assert report.apicalls[0].name == "getaddrinfo"
+
+
+def test_a_string_argument_becomes_a_matchable_string_feature(tmp_path):
+    """**The single thing that made capa's 835 `string:` features reachable.**
+
+    capa yields an argument value WHOLE (`extractors/drakvuf/call.py`), so a
+    DRAKVUF string arrived as `0x7ffc1234:"Xen"` and measured 2026-09-27:
+    `substring: Xen` matched, `string: /^Xen/i` and `string: Xen` did not.
+    `--userhook-no-addr` does not fix it either -- it drops the address and
+    leaves the quotes.
+
+    Unescaping is part of it: DRAKVUF escapes a backslash, so a Windows path
+    arrives as `C:\\\\Windows` and a rule naming `C:\\Windows` would miss."""
+    import io
+    from capa.features.common import String, Regex, Substring
+    from capa.features.extractors.drakvuf.models import DrakvufReport
+    from capa.features.extractors.drakvuf.call import extract_call_features
+    from capa.features.address import ProcessAddress, ThreadAddress, DynamicCallAddress
+    from capa.features.extractors.base_extractor import (
+        ProcessHandle, ThreadHandle, CallHandle)
+
+    rec = {"Plugin": "apimon", "Event": "api_called", "Method": "strcmp",
+           "TimeStamp": "1.0", "ProcessName": "s", "PID": 1, "PPID": 0, "TID": 1,
+           "ReturnValue": "0x0",
+           "Arguments": ['a=0x7ffc1234:"Xen"', 'b=0x1:"C:\\\\Windows"', "n=0x10"]}
+    decoded = list(capa.decode_json_lines(io.StringIO(json.dumps(rec) + "\n")))
+    assert decoded[0]["Arguments"] == ["a=Xen", "b=C:\\Windows", "n=0x10"]
+
+    report = DrakvufReport.from_raw_report(iter(decoded))
+    pa = ProcessAddress(pid=1, ppid=0)
+    ta = ThreadAddress(process=pa, tid=1)
+    ch = CallHandle(DynamicCallAddress(thread=ta, id=0), inner=report.apicalls[0])
+    feats: dict = {}
+    for feature, addr in extract_call_features(
+            ProcessHandle(pa, inner={}), ThreadHandle(ta, inner={}), ch):
+        feats.setdefault(feature, set()).add(addr)
+
+    assert bool(Regex("/^Xen/i").evaluate(feats))
+    assert bool(String("Xen").evaluate(feats))
+    assert bool(Substring("Xen").evaluate(feats))
+    assert bool(String("C:\\Windows").evaluate(feats))     # unescaped
+    # A non-string argument is untouched and still arrives as a Number.
+    from capa.features.insn import Number
+    assert bool(Number(16).evaluate(feats))
+
+
+def test_windows_gets_apimon_or_the_hook_list_is_only_a_memdump_trigger(tmp_path):
+    """`hooks.txt` is passed whenever memdump is selected, but memdump only uses
+    it to decide where to dump. Without apimon there is no `apimon.log`, so
+    capa's Windows dynamic pass reads `syscall.log` alone and the ~1,330 hooks
+    produce no API features at all -- and the 175 file-scope rules get nothing,
+    since `Import` comes from apimon's `dll_loaded` event."""
+    from sandboxd import guests as G
+    opts = G.default_trace_options(TargetOs.WINDOWS, G.SampleKind.PE)
+    assert "apimon" in opts.plugins

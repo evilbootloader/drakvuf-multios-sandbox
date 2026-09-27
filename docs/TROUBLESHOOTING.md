@@ -2576,3 +2576,54 @@ others.
 `iptables -S | grep -c DRAKVUF_EGRESS_V` is the cheap form of the same check —
 5 lines pre-throttle, 8 after — and it is why that assert exists in runbook 15
 step 3.
+
+### A capa rule that should obviously match produces nothing
+
+**Symptom.** A sample plainly calls `OpenProcess` / `CreateRemoteThread` /
+`GetTickCount`, `ttps.json` has no matching TTP, and `apimon.log` contains no
+line for that API either. Nothing errored.
+
+**Three separate causes, and they look identical from the outside.**
+
+1. **The API is not in the hook list.** DRAKVUF reports only what it was asked
+   to hook. Until 2026-09-27, 811 of the API names capa can match were not in
+   `sandboxd/data/hooks.txt` at all. Check with
+   `grep -c ',<Function>,' sandboxd/data/hooks.txt`, and regenerate per
+   `docs/DEVELOPING.md` 6 if a `flare-capa` bump moved the rules on.
+
+2. **The hook names the wrong DLL, and failing to resolve is SILENT.**
+   `libusermode/userhook.cpp:370` logs a failed symbol lookup through
+   `PRINT_DEBUG`, which is compiled out of a release build — so a hook on a DLL
+   that does not export the symbol produces no error, no warning and no data.
+   This is not hypothetical: on Win11 23H2 kernel32 forwards a great many APIs
+   into kernelbase, and **51 lines inherited from drakvuf-sandbox still say
+   `kernel32.dll`** for functions this guest keeps in kernelbase.
+   `scripts/gen-hook-lists.py --report` lists every one, checked against the
+   symbol profiles in `profiles/`.
+
+3. **The rule is a `.NET` or ordinal rule, which no call log can satisfy.**
+   `Namespace::Method` features are managed calls in JIT'd code, and an ordinal
+   (`ws2_32.#1`) can never match because capa's drakvuf extractor passes an
+   empty module to `generate_symbols`. .NET is reached only by capa's static
+   pass over dumped assemblies, which needs `analyze_memdumps` — currently
+   `False`.
+
+4. **The rule wants a `string:` and the argument was not normalised.** capa
+   yields an argument value whole, so a DRAKVUF string reaches it as
+   `0x7ffc1234:"Xen"` — `substring:` matches that, `string:` and
+   `string: /regex/` do not. `capa_processor.normalise_string_arguments` exists
+   for this; if a rule with a plain `string:` still will not fire, check the
+   argument is actually typed as a string in the hook list, because an untyped
+   one arrives as a number and becomes a `Number` feature instead.
+
+5. **On Linux, the call is a glibc IFUNC.** `strcmp`, `strstr`, `memcmp`,
+   `strncmp` and `strcasecmp` are `STT_GNU_IFUNC`; their symbol value is a
+   resolver, so a hook on the name fires once at process start with no strings
+   and never again. There is no name to hook instead — the implementations are
+   not in `.dynsym`. Nothing in the hook list can fix this; it needs IFUNC
+   support in `libdrakvuf/linux-exports.c`.
+
+**What is NOT the cause:** a malformed hook-list line. That fails loudly and
+early — `drakvuf_load_dll_hook_config` rethrows as `Invalid entry on line N`
+(`userhook.cpp:1035`) and DRAKVUF does not start at all. If the trace ran, the
+list parsed.

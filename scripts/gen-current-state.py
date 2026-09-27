@@ -40,6 +40,24 @@ def sh(*argv: str) -> str:
                           text=True, check=False).stdout.strip()
 
 
+# Submodule working trees, read from `.gitmodules` so adding a second submodule
+# needs no code change here. **This is the second live copy of this idiom** --
+# `scripts/check-refs.py::_submodule_paths` is the other, and it prunes for a
+# different reason (its allowlist deliberately names upstream DRAKVUF paths as
+# unresolvable). They are two short readers of the same file rather than a
+# shared helper because these scripts import nothing from each other; if a third
+# appears, give them one home.
+_SUBMODULES = frozenset(
+    ROOT / m.group(1).strip()
+    for m in re.finditer(r"^\s*path\s*=\s*(.+?)\s*$",
+                         (ROOT / ".gitmodules").read_text(), re.M)
+) if (ROOT / ".gitmodules").is_file() else frozenset()
+
+
+def _under_submodule(p: Path) -> bool:
+    return any(sm in p.parents for sm in _SUBMODULES)
+
+
 # Every host whose shell prompt counts as evidence. **This list is the one part
 # of the generator that a host rename silently invalidates**, and the
 # 2026-08-28 migration did exactly that: Dom0 stopped being the nested VM
@@ -122,9 +140,17 @@ def entrypoints() -> list[str]:
     The `journalctl` mistake came from assuming a systemd unit existed. This
     reports what the repository can prove, and says so when the answer is
     "nothing".
+
+    **Submodules are excluded, and that is load-bearing.** The row means "units
+    this repository ships". Since 2026-09-26 `drakvuf/` carries xen, whose
+    `tools/hotplug/Linux/systemd/` holds seven `.service.in` templates that
+    `make` renders to real `.service` files *in tree* -- so the first person to
+    build the engine would otherwise regenerate this row as `xenconsoled,
+    xendomains, xenstored, ...`, claim the lab ships Xen's units, and fail
+    `test_current_state.py` for everyone who had not built.
     """
     units = sorted(p.name for p in ROOT.rglob("*.service")
-                   if ".git" not in p.parts)
+                   if ".git" not in p.parts and not _under_submodule(p))
     service = ("unit: " + ", ".join(units) if units
                else "**no systemd unit anywhere in the repo**")
     need = ", ".join(f"`{v}`" for v in required_env())

@@ -125,6 +125,17 @@ PLUGINS: tuple[Plugin, ...] = (
            linux=True, windows=False),
     Plugin("unixsocketmon", "Unix-domain socket messages",
            linux=True, windows=False),
+    # The Linux counterpart of `apimon`, from our DRAKVUF fork. `heavy` for
+    # the same reason apimon is: a breakpoint per hooked function, and the
+    # hook list decides the cost (`sandboxd/data/so-hooks-linux.txt`).
+    #
+    # `linux=True` covers Ubuntu AND Android, because `support()` reads one
+    # flag for both -- but only Ubuntu has it on by default, and Android's
+    # standing is unverified rather than proven. `proven_on` is therefore
+    # left empty, which renders it Candidate on both; see the
+    # `_ANDROID_PLUGINS` comment in `sandboxd/guests.py`.
+    Plugin("libmon", "Linux shared-library calls, with arguments",
+           linux=True, windows=False, heavy=True),
 
     Plugin("apimon", "Windows API calls and DLL loads",
            linux=False, windows=True, heavy=True),

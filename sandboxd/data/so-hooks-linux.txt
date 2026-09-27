@@ -1,0 +1,215 @@
+# libmon hook list for a glibc x86-64 Linux guest.
+# Passed as `--so-hooks-list` by `sandboxd.guests.argv_trace` whenever the
+# `libmon` plugin is selected. The Windows counterpart is `hooks.txt`, passed
+# as `--dll-hooks-list`; the grammars match, the contents do not.
+#
+# Format (src/plugins/libmon/README.md in the drakvuf submodule):
+#   <so name>,<function name|hex offset>[,no-retval],<log|log+stack>[,<arg>,...]
+#
+# <so name> matches a prefix of the basename of the mapped path, so
+# "libc.so.6" matches /lib/x86_64-linux-gnu/libc.so.6 and "libssl.so" also
+# matches a versioned libssl.so.3. Matching is case-sensitive.
+#
+# Each <arg> is [Name:]type. Only some types change formatting -- lpcstr
+# reads a NUL-terminated string, pulong/pulonglong dereference a pointer --
+# and any other name documents the signature while the raw value is printed.
+#
+# ---------------------------------------------------------------------------
+# WHAT IS DELIBERATELY ABSENT, AND WHY
+#
+# **Hot functions are not hooked.** One Dom0 core saturates per concurrent
+# trace and measured syscall throughput is 415-856/s (CURRENT-STATE.md, and
+# `12-baremetal-trial.md` Part H). A breakpoint on `strcmp`, `memcpy`, `read`,
+# `write`, `getc` or `putc` fires thousands of times per second in ordinary
+# library code and would cost far more than the trace is worth. capa's rule
+# set names several of them; they are dropped here on purpose, and a future
+# generator over capa-rules must keep dropping them.
+#
+# **Kernel symbols are not hookable here.** capa-rules names `commit_creds`,
+# `prepare_kernel_cred` and `nf_register_hook` for rootkit detection. libmon
+# resolves symbols in a shared object's own `.dynsym` at its load address --
+# userspace only -- so those belong to `syscalls`/`ebpfmon`, not here.
+#
+# **MSVC CRT names are not libc.** `_wsystem`, `_wmkdir`, `_allmul` and
+# friends appear in capa-rules because the same rule covers Windows; there is
+# no such symbol in glibc.
+#
+# **Android is not a target of this file, and the paths here are the second
+# reason.** BlissOS links bionic: there is no `libc.so.6`, and its linker does
+# not export `_r_debug`, so libmon v1 cannot arm there at all (measured
+# 2026-09-26 -- see the `_ANDROID_PLUGINS` comment in `sandboxd/guests.py`).
+# A bionic hook list would key on `libc.so` and `libdl.so` under
+# `/apex/com.android.runtime/lib64/`, and is worth writing only once libmon
+# can attach.
+# ---------------------------------------------------------------------------
+
+# --- process and library loading -------------------------------------------
+libc.so.6,execve,log,Path:lpcstr,argv:lpvoid,envp:lpvoid
+libc.so.6,execvp,log,File:lpcstr,argv:lpvoid
+libc.so.6,fork,log
+libc.so.6,posix_spawn,log,Pid:lpvoid,Path:lpcstr,Actions:lpvoid,Attr:lpvoid,argv:lpvoid,envp:lpvoid
+libc.so.6,system,log,Command:lpcstr
+libc.so.6,popen,log,Command:lpcstr,Mode:lpcstr
+libc.so.6,kill,log,Pid:int,Signal:int
+libc.so.6,prctl,log,Option:int,Arg2:ulong,Arg3:ulong
+
+# dlopen lives in libc, not libdl: glibc 2.34 merged libdl away, leaving
+# libdl.so.2 as a compat stub with nothing useful in it.
+libc.so.6,dlopen,log,Path:lpcstr,Flags:int
+libc.so.6,dlsym,log,Handle:lpvoid,Symbol:lpcstr
+
+# --- files -----------------------------------------------------------------
+# `open`/`openat` are the boundary case: busy enough to notice, but they are
+# how a sample touches the filesystem and `filetracer` does not see the path
+# the process asked for. Kept; revisit if a trace saturates.
+libc.so.6,open,log,Path:lpcstr,Flags:int
+libc.so.6,openat,log,DirFd:int,Path:lpcstr,Flags:int
+libc.so.6,fopen,log,Path:lpcstr,Mode:lpcstr
+libc.so.6,unlink,log,Path:lpcstr
+libc.so.6,unlinkat,log,DirFd:int,Path:lpcstr,Flags:int
+libc.so.6,rename,log,From:lpcstr,To:lpcstr
+libc.so.6,chmod,log,Path:lpcstr,Mode:int
+libc.so.6,chown,log,Path:lpcstr,Owner:int,Group:int
+libc.so.6,mkdir,log,Path:lpcstr,Mode:int
+libc.so.6,rmdir,log,Path:lpcstr
+libc.so.6,readlink,log,Path:lpcstr,Buf:lpvoid,Size:ulong
+libc.so.6,opendir,log,Path:lpcstr
+
+# --- network ---------------------------------------------------------------
+libc.so.6,socket,log,Domain:int,Type:int,Protocol:int
+libc.so.6,connect,log,Fd:int,SockAddr:lpvoid,AddrLen:int
+libc.so.6,bind,log,Fd:int,SockAddr:lpvoid,AddrLen:int
+libc.so.6,listen,log,Fd:int,Backlog:int
+libc.so.6,accept,log,Fd:int,SockAddr:lpvoid,AddrLen:lpvoid
+libc.so.6,getaddrinfo,log,Node:lpcstr,Service:lpcstr,Hints:lpvoid,Result:lpvoid
+libc.so.6,gethostbyname,log,Name:lpcstr
+libc.so.6,setsockopt,log,Fd:int,Level:int,Option:int,Value:lpvoid,Len:int
+
+# --- credentials and host identity -----------------------------------------
+libc.so.6,getpwnam,log,Name:lpcstr
+libc.so.6,getpwuid,log,Uid:int
+libc.so.6,getlogin,log
+libc.so.6,uname,log,Buf:lpvoid
+libc.so.6,gethostname,log,Buf:lpvoid,Len:ulong
+libc.so.6,getenv,log,Name:lpcstr
+
+# --- memory ----------------------------------------------------------------
+libc.so.6,mprotect,log,Addr:lpvoid,Len:ulong,Prot:int
+libc.so.6,memfd_create,log,Name:lpcstr,Flags:int
+libc.so.6,ptrace,log,Request:int,Pid:int,Addr:lpvoid,Data:lpvoid
+
+# --- HTTP via libcurl ------------------------------------------------------
+# **Hand-authored, and necessarily so.** capa-rules v9.4.0 contains no curl,
+# OpenSSL or gnutls `api:` feature at all -- every HTTP API it names is
+# winhttp/wininet/httpapi or .NET -- so nothing can be derived from it here.
+#
+# `get_http_info` replays these as a handle chain, the way it replays
+# WinINet's on Windows: `curl_easy_init` returns a handle, `curl_easy_setopt`
+# accumulates options onto it, and `curl_easy_perform` is the moment a request
+# actually happens. The option NUMBERS are read there (get_http_info
+# .CURL_OPTIONS) because libcurl's ABI fixes them.
+#
+# `Value:lpcstr` is right only for the string options (URL, user agent,
+# referer, custom verb). For a long option the same bytes are printed as a
+# string and will look like garbage; that is preferred to dropping the URL,
+# and `get_http_info` keys on the option number rather than on the rendering.
+libcurl.so.4,curl_easy_init,log
+libcurl.so.4,curl_easy_setopt,log,Handle:lpvoid,Option:int,Value:lpcstr
+libcurl.so.4,curl_easy_perform,log,Handle:lpvoid
+libcurl.so.4,curl_easy_cleanup,log,Handle:lpvoid
+
+# --- TLS payloads via OpenSSL ----------------------------------------------
+# Plaintext at the library boundary, before encryption -- the only place an
+# HTTPS request body is readable without the session key. `get_http_info`
+# reads the first line of an SSL_write buffer and records it only when it
+# parses as an HTTP request line, so an arbitrary TLS payload is not reported
+# as a URL.
+#
+# A sample that uses OpenSSL directly rather than through libcurl is the case
+# this covers; one that uses libcurl is already covered above, and will also
+# appear here because libcurl calls OpenSSL underneath.
+libssl.so,SSL_write,log,Ssl:lpvoid,Buf:lpcstr,Num:int
+libssl.so,SSL_read,no-retval,log,Ssl:lpvoid,Buf:lpvoid,Num:int
+libssl.so,SSL_connect,log,Ssl:lpvoid
+
+# BEGIN GENERATED -- scripts/gen-hook-lists.py
+# capa-rules v9.4.0, verified against /lib/x86_64-linux-gnu/libc.so.6. Regenerate with
+# scripts/gen-hook-lists.py; hand-curated lines above are preserved.
+#
+# 182 lowercase names in capa-rules; 143 are real glibc
+# exports; 36 of those dropped as hot (see HOT_LIBC in the
+# generator for why each one). Names glibc does not export are MSVC CRT,
+# bionic, kernel symbols, libm or simply nonexistent -- none is hookable
+# here, and that check is what keeps this list free of invention.
+libc.so.6,chdir,log
+libc.so.6,cuserid,log
+libc.so.6,dlvsym,log
+libc.so.6,dup2,log
+libc.so.6,execl,log
+libc.so.6,execle,log
+libc.so.6,execlp,log
+libc.so.6,execv,log
+libc.so.6,execvpe,log
+libc.so.6,exit,log
+libc.so.6,faccessat,log
+libc.so.6,fchdir,log
+libc.so.6,fchmod,log
+libc.so.6,fchmodat,log
+libc.so.6,fchown,log
+libc.so.6,fchownat,log
+libc.so.6,fdopen,log
+libc.so.6,fgetpwent,log
+libc.so.6,fgetpwent_r,log
+libc.so.6,fgetspent,log
+libc.so.6,fgetspent_r,log
+libc.so.6,fopen64,log
+libc.so.6,fputws,log
+libc.so.6,freopen,log
+libc.so.6,fstatat,log
+libc.so.6,fstatfs,log
+libc.so.6,ftruncate,log
+libc.so.6,getdents64,log
+libc.so.6,geteuid,log
+libc.so.6,gethostent,log
+libc.so.6,getifaddrs,log
+libc.so.6,getlogin_r,log
+libc.so.6,getnameinfo,log
+libc.so.6,getpwent,log
+libc.so.6,getpwent_r,log
+libc.so.6,getpwnam_r,log
+libc.so.6,getpwuid_r,log
+libc.so.6,getsockname,log
+libc.so.6,getspent,log
+libc.so.6,getspent_r,log
+libc.so.6,getspnam,log
+libc.so.6,getspnam_r,log
+libc.so.6,inet_pton,log
+libc.so.6,ioctl,log
+libc.so.6,lchown,log
+libc.so.6,mmap,log
+libc.so.6,munmap,log
+libc.so.6,pkey_mprotect,log
+libc.so.6,posix_spawnp,log
+libc.so.6,pthread_create,log
+libc.so.6,pthread_detach,log
+libc.so.6,pthread_setname_np,log
+libc.so.6,putspent,log
+libc.so.6,readdir,log
+libc.so.6,recv,log
+libc.so.6,recvfrom,log
+libc.so.6,recvmsg,log
+libc.so.6,remove,log
+libc.so.6,select,log
+libc.so.6,sem_init,log
+libc.so.6,sem_post,log
+libc.so.6,sem_timedwait,log
+libc.so.6,sem_wait,log
+libc.so.6,send,log
+libc.so.6,sendto,log
+libc.so.6,sleep,log
+libc.so.6,statfs,log
+libc.so.6,sysinfo,log
+libc.so.6,usleep,log
+libc.so.6,utime,log
+libc.so.6,utimes,log
+# END GENERATED

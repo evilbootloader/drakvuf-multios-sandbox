@@ -39,6 +39,23 @@ class MemdumpConfigSection(BaseModel):
     filter_out_system_pid: bool = True
 
 
+class ExtractedConfigSection(BaseModel):
+    """Bounds on `process_extracted`, in the shape MemdumpConfigSection has.
+
+    Upstream has no equivalent -- it never passes `-D` and has no plugin for
+    the directory -- so these are this project's, not carried across. They
+    exist because an extracted file is chosen by the SAMPLE: its size is
+    attacker-controlled, and the per-job result budget (platform config.py,
+    `max_job_result_bytes`) is 4 GiB for everything a job uploads.
+    """
+
+    # Generous relative to a memory dump's 32 MiB: a file the sample wrote is
+    # the artifact most likely to be wanted whole, and unlike a dump there is
+    # no second copy of it anywhere.
+    max_single_extracted_size: int = 128 * 1024 * 1024
+    max_total_extracted_size: int = 512 * 1024 * 1024
+
+
 class PostprocessingConfig(BaseSettings):
     # Prefixed, because BaseSettings reads its field names from the
     # environment case-insensitively: unprefixed, a variable called CAPA or
@@ -48,6 +65,7 @@ class PostprocessingConfig(BaseSettings):
 
     capa: CapaConfigSection = CapaConfigSection()
     memdump: MemdumpConfigSection = MemdumpConfigSection()
+    extracted: ExtractedConfigSection = ExtractedConfigSection()
     # Replace syscall.log / sysret.log with .gz copies. On by default where
     # upstream defaults to False: a Windows syscall.log is over 1 GB
     # (trace-windows.log, 2026-09-18; 50 MB gzipped), a quarter of the 4 GiB

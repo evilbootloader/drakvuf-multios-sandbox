@@ -1,0 +1,4 @@
+[submodule "drakvuf"]
+	path = drakvuf
+	url = https://github.com/evilbootloader/drakvuf.git
+	ignore = untracked

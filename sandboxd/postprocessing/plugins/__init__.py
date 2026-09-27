@@ -1,4 +1,7 @@
-from ..paths import DUMPS_DIR, DUMPS_ZIP, IPT_DIR, IPT_ZIP, TRACE_LOG
+from ..paths import (
+    DUMPS_DIR, DUMPS_ZIP, EXTRACTED_DIR, EXTRACTED_ZIP, IPT_DIR, IPT_ZIP,
+    TRACE_LOG,
+)
 from .build_process_tree import build_process_tree
 from .capa_plugin.capa_processor import capa_analysis
 from .compress_ipt import compress_ipt
@@ -15,6 +18,7 @@ from .index_logs import index_logs
 #from .karton_integration import analyze_in_karton
 from .plugin_base import PostprocessPlugin
 from .process_dumps import process_dumps
+from .process_extracted import process_extracted
 from .screenshot_metadata import screenshot_metadata
 from .split_drakvuf_log import split_drakvuf_log
 
@@ -44,6 +48,17 @@ POSTPROCESS_PLUGINS = [
     # above -- DRAKVUF's own -i/-e launch, whose InjectedPid is the sample's
     # process. preconfig.log is the injector's writefile step and names no
     # process (INJECTED_PID:0).
+    # Same DIR/ZIP contract as process_dumps above, and placed beside it for
+    # the same reason: `stages._collect` uploads the directory only while no
+    # archive exists next to it, so whichever of the two runs decides what is
+    # uploaded. Gated on the directory alone -- `fileextractor.log` is
+    # attribution, and a run that produced files but no parsable log must
+    # still pack the files (process_extracted's docstring says why).
+    PostprocessPlugin(
+        function=process_extracted,
+        requires=[EXTRACTED_DIR, "process_tree.json"],
+        generates=[EXTRACTED_ZIP],
+    ),
     PostprocessPlugin(
         function=capa_analysis,
         requires=[
@@ -66,9 +81,14 @@ POSTPROCESS_PLUGINS = [
         requires=["syscall.log"],
         generates=["syscall.log.gz", "sysret.log.gz"],
     ),
+    # **`apimon.log` is deliberately NOT required.** The log this reads is
+    # per-OS (apimon on Windows, libmon on Linux -- get_http_info.HTTP_SOURCES),
+    # and `requires` is one static list for every guest, so naming either one
+    # here would skip the plugin on the guests that write the other. The
+    # function checks for its own log and reports an empty result when absent.
     PostprocessPlugin(
         function=get_http_info,
-        requires=["process_tree.json", "apimon.log"],
+        requires=["process_tree.json"],
         generates=[],
     ),
     PostprocessPlugin(

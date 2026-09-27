@@ -64,6 +64,12 @@ UNIXSOCKETMON_PLUGIN = "unixsocketmon"
 MEMDUMP_PLUGIN = "memdump"
 APIMON_PLUGIN = "apimon"
 RPCMON_PLUGIN = "rpcmon"
+# The Linux counterpart of apimon, from the DRAKVUF fork (`drakvuf/` submodule,
+# `src/plugins/libmon`). Like apimon it needs a hook list to do anything at
+# all -- "without it the plugin does nothing", its README says -- but the
+# option and the file format are its own: `--so-hooks-list`, keyed by shared
+# object rather than by DLL.
+LIBMON_PLUGIN = "libmon"
 
 
 class TargetOs(str, Enum):
@@ -145,7 +151,53 @@ class TraceOptions:
 # replacing them.
 _LINUX_PLUGINS = ("syscalls", "filetracer", "fileextractor", "memdump")
 
-_WINDOWS_PLUGINS = ("syscalls", "filetracer", "fileextractor", "memdump")
+# Ubuntu's set is the shared Linux one plus `libmon`, added 2026-09-26.
+#
+# **Android is excluded on evidence, not on suspicion** (operator, 2026-09-26).
+# The guest is BlissOS, so the linker is bionic. `readelf --dyn-syms` on its
+# bootstrap linker (`system/bin/bootstrap/linker64`, inside `system_a.img`)
+# returns 27 entries and **`_r_debug` is not one of them**:
+#
+#   - Not a layout problem. bionic implements the same SVR4 `r_debug` /
+#     `link_map` shape `dl_rendezvous_abi.hpp` hardcodes.
+#   - It is one symbol lookup. `dl_rendezvous.cpp:268` resolves `_r_debug` at
+#     the LINKER's base, justifying it with a glibc version tag. bionic does
+#     not export it, so `try_arm` cannot succeed: libmon retries
+#     ARM_MAX_ATTEMPTS times and then emits `not_tracked` for every process.
+#     Cost with no output, which is why it is not in the default set.
+#   - **A newer BlissOS does not help.** bionic's export map
+#     (`linker/linker.generic.map`) is an allowlist -- 25 `global:` names,
+#     then `local: *;` -- and `_r_debug` is not on it in AOSP main either. No
+#     Android version ships glibc, so there is no ROM to switch to.
+#
+# **The same output shows the way through.** `rtld_db_dlactivity` IS exported
+# -- bionic's analogue of `_dl_debug_state`, which glibc hides and libmon's
+# README records as unresolvable there. The two libcs export opposite halves
+# of the rendezvous protocol, so a bionic port breakpoints that symbol rather
+# than reaching `r_brk` through `_r_debug`. Walking `link_map` still wants the
+# `DT_DEBUG` route `dl_rendezvous_abi.hpp` already names as v2.
+#
+# Revisit this row when libmon grows either path, not before.
+#
+# The sets are separate names rather than one shared tuple for the reason the
+# `_WINDOWS_PLUGINS` comment below gives: sharing invites an edit to one set
+# to become a silent edit to the other.
+_UBUNTU_PLUGINS = _LINUX_PLUGINS + (LIBMON_PLUGIN,)
+
+_ANDROID_PLUGINS = _LINUX_PLUGINS
+
+# `apimon` added 2026-09-27, and it is what makes `hooks.txt` mean anything to
+# capa. Without it the hook list is passed (memdump takes the same
+# `--dll-hooks-list`) but only drives where memdump dumps: no `apimon.log` is
+# written, so capa's dynamic pass reads `syscall.log` alone, and the 175
+# file-scope rules get nothing because `Import` features come from apimon's
+# `dll_loaded` event (`apimon.cpp:290`).
+#
+# **It is `heavy` in `catalogue.py` and this is the change that makes ~1,330
+# hooks start firing for real.** Cost on a Windows trace is unmeasured; see the
+# CURRENT-STATE row.
+_WINDOWS_PLUGINS = ("syscalls", "filetracer", "fileextractor", "memdump",
+                    "apimon")
 
 
 # A plugin name as `-a` will accept it. Restrictive on purpose: this value
@@ -259,12 +311,12 @@ def default_trace_options(os_: TargetOs, kind: SampleKind) -> TraceOptions:
         # DRAFT-052's syscall filter is strictly better and would replace it:
         # it removes syscall ENTRIES too while keeping returns for the calls
         # actually analysed. Blocked on a curated list of what detection needs.
-        return TraceOptions(plugins=_LINUX_PLUGINS, timeout=120,
+        return TraceOptions(plugins=_UBUNTU_PLUGINS, timeout=120,
                             fast_singlestep=True, disable_sysret=True)
 
     if os_ is TargetOs.ANDROID:
         return TraceOptions(
-            plugins=_LINUX_PLUGINS,
+            plugins=_ANDROID_PLUGINS,
             timeout=150 if kind is SampleKind.APK else 120,
             fast_singlestep=True,
             disable_sysret=True,
@@ -725,6 +777,16 @@ def argv_trace(job: Job, component: str | None = None) -> list[str]:
         argv += ["--unixsocketmon-max-size-print", "2048"]
     if MEMDUMP_PLUGIN in job.options.plugins or APIMON_PLUGIN in job.options.plugins or RPCMON_PLUGIN in job.options.plugins:
         argv += ["--dll-hooks-list", (Path(__file__).parent.absolute() / "data" / "hooks.txt").as_posix()]
+    # libmon's own option and its own file. **Not `--dll-hooks-list`**: the
+    # grammar is the same but the first field is a shared object rather than
+    # a DLL, and pointing libmon at `hooks.txt` would match nothing on a
+    # Linux guest while looking like it was configured. Without the list the
+    # plugin loads and does nothing at all (its README says so), so the two
+    # always travel together.
+    if LIBMON_PLUGIN in job.options.plugins:
+        argv += ["--so-hooks-list",
+                 (Path(__file__).parent.absolute() / "data"
+                  / "so-hooks-linux.txt").as_posix()]
     for option, name in SYMBOL_PROFILES[job.target_os]:
         argv += [option, str(job.profile.parent / name)]
     return argv

@@ -46,7 +46,7 @@ from .egress import EgressUnavailable, Exit
 from .guests import Interaction, Job, SampleKind, TargetOs, TraceOptions
 from .proc import CommandError
 from .postprocessing.paths import (DUMPS_DIR, DUMPS_ZIP, EXTRACTED_DIR,
-                                   IPT_DIR, IPT_ZIP)
+                                   EXTRACTED_ZIP, IPT_DIR, IPT_ZIP)
 from .postprocessing.postprocess import postprocess_analysis_dir
 from .postprocessing.plugins.plugin_base import load_postprocessing_config
 
@@ -921,7 +921,8 @@ class Analysis:
         # manifest to say so, the exact failure `_trace`'s mkdir comment
         # describes. `ipt/` and `ipt.zip` are the same pair (compress_ipt).
         packed = {directory for directory, archive in
-                  ((DUMPS_DIR, DUMPS_ZIP), (IPT_DIR, IPT_ZIP))
+                  ((DUMPS_DIR, DUMPS_ZIP), (IPT_DIR, IPT_ZIP),
+                   (EXTRACTED_DIR, EXTRACTED_ZIP))
                   if (job_dir / archive).exists()}
         # `trace.log` never uploads, split or not. The per-plugin logs ARE the
         # stream (split_drakvuf_log removes the raw file once it has written

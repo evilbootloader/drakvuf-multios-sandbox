@@ -38,15 +38,33 @@ def trim_method_name(method: str) -> str:
 
 
 def parse_apimon_arguments(args: List[str]) -> List[Union[int, str]]:
+    """`["Arg1=0x4", 'Path=0x7f:"/tmp/x"']` -> `[4, "/tmp/x"]`, positionally.
+
+    **The name is not always `ArgN`.** DRAKVUF's printer emits
+    `<name>=<value>` where `<name>` comes from the hook list
+    (`libusermode/utils.cpp:216`): a bare type (`lpcstr`) is named `Arg1`,
+    `Arg2`, ... but a `Name:type` entry is named whatever the list says.
+    `hooks.txt` uses bare types throughout, so every Windows argument is
+    `ArgN=`; `so-hooks-linux.txt` names its arguments, because a libmon line
+    is far easier to read as `Path=` than as `Arg2=`.
+
+    This used to require the literal prefix `Arg` and raise otherwise. That
+    is worse than it sounds: `parse_log` catches the exception per line and
+    logs it, so a named hook list would not fail -- it would produce an empty
+    result for every consumer, quietly. Position is what callers index by,
+    and position is preserved regardless of the name.
+    """
     parsed_args = []
     for arg in args:
-        if not arg.startswith("Arg"):
+        name, sep, value = arg.partition("=")
+        if not sep or not name:
             raise RuntimeError(f"Wrong argument format: {arg}")
-        _, value = arg.split("=", 1)
         if ":" not in value:
             parsed_args.append(int(value, 16))
             continue
-        _, str_value = arg.split(":", 1)
+        # `<addr>:"<string>"` -- split the VALUE, not the whole entry, so a
+        # name is never mistaken for the address half.
+        _, str_value = value.split(":", 1)
         parsed_args.append(ast.literal_eval(str_value))
     return parsed_args
 

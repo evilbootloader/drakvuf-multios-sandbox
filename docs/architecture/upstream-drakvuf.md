@@ -57,6 +57,58 @@ runs, preserving the agentless design.
 > the bus-factor exposure is two plugins rather than "Linux/Android plugin
 > support" as a whole — see the correction in
 > `docs/roadmap/project-roadmap.md` risk #8.
+
+> **2026-09-26 — the matrix above gains a plugin that is ours: `libmon`.**
+> Linux-only, in `evilbootloader/drakvuf` (`drakvuf/src/plugins/libmon`, now a
+> submodule of this repository), and not in either tree the 2026-08-24
+> inventory was read from. It is the Linux counterpart of `apimon`: calls to
+> chosen exported functions in shared objects, with arguments and return
+> values, emitting the same `api_called` record shape — which is what lets
+> `get_http_info` and `capa_analysis` read apimon and libmon through one code
+> path.
+>
+> Where apimon walks PE export tables and `NtMapViewOfSection`, libmon follows
+> glibc's dynamic-linker rendezvous: `AT_BASE` out of `mm_struct.saved_auxv`,
+> then `r_debug.r_brk` for a breakpoint on every later `dlopen`/`dlclose`, and
+> `link_map` for what is already loaded.
+>
+> **Ubuntu-only, and as of 2026-09-26 that is measured rather than assumed.**
+> The `r_debug` and `link_map` *layouts* are the SVR4 protocol gdb uses and
+> bionic implements them too, so BlissOS is not excluded by the struct
+> offsets. What v1 depends on is resolving `r_debug` through ld.so's exported
+> `_r_debug` (`dl_rendezvous.cpp:268`, justified in-source with a **glibc**
+> version tag).
+>
+> `readelf --dyn-syms` on BlissOS's bootstrap linker — `system/bin/bootstrap/
+> linker64`, reached by loop-mounting `system_a.img`, since `system/bin/
+> linker64` is a symlink into an APEX that is only populated at runtime —
+> returns 27 symbols, and **`_r_debug` is not among them**. libmon v1
+> therefore cannot arm on Android: `try_arm` fails, the retry budget runs out
+> and every process is reported `not_tracked`.
+>
+> **The same 27 symbols contain the fix.** `rtld_db_dlactivity` is exported —
+> bionic's equivalent of `_dl_debug_state`, which glibc marks `rtld_hidden`
+> and which libmon's own README lists as unresolvable *there*. The two libcs
+> export precisely opposite halves of the protocol:
+>
+> | | `_r_debug` | rendezvous function |
+> |---|---|---|
+> | glibc | exported — what v1 uses | `_dl_debug_state` hidden |
+> | bionic | **absent** | **`rtld_db_dlactivity` exported** |
+>
+> So a bionic port breakpoints `rtld_db_dlactivity` directly instead of
+> reading `r_brk`, and gets `link_map` from the `DT_DEBUG` route
+> `dl_rendezvous_abi.hpp` already names as v2. Until one of those lands,
+> `sandboxd/guests.py` gives libmon to Ubuntu and holds Android back.
+>
+> **This is structural, so no newer ROM fixes it.** bionic's
+> `linker/linker.generic.map` is an explicit allowlist — 25 `global:` names,
+> all `__loader_*` plus `rtld_db_dlactivity`, then `local: *;` — and
+> `_r_debug` is absent from it on AOSP `main` as well as on this Android 14
+> build. BlissOS 18 (Android 15/16) would behave identically, and there is no
+> glibc Android to move to: bionic is Android's libc in every version. The
+> same map is why `rtld_db_dlactivity` is worth building on — it is canonical
+> upstream, not a BlissOS artifact.
 >
 > The immediately useful consequence: **`procmon`, `procdump2`, `cpuidmon`,
 > **`-a` is restrictive, verified 2026-08-26.** `src/main.cpp:438` enables

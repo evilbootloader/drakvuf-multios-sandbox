@@ -23,15 +23,22 @@ Three reference kinds are checked:
 
 **It ships with an allowlist, deliberately** — the same device `.shellcheckrc`
 already is here. Living documents legitimately name files that were renamed,
-files not yet built, and upstream DRAKVUF sources that are not in this tree. A
-gate that is red by default gets ignored (the DRAFT-031 lesson), so those are
-enumerated below with a reason each, and anything *not* enumerated is a defect.
+files not yet built, and upstream DRAKVUF sources that this repository does not
+own. A gate that is red by default gets ignored (the DRAFT-031 lesson), so those
+are enumerated below with a reason each, and anything *not* enumerated is a
+defect.
+
+**Submodule working trees are not walked** — see `_SUBMODULES` below. Since
+2026-09-26 upstream DRAKVUF is checked out at `drakvuf/`, so "not in this tree"
+became "not ours", and the distinction is now load-bearing rather than
+incidental.
 """
 
 from __future__ import annotations
 
 import argparse
 import importlib.util
+import os
 import re
 import sys
 from pathlib import Path
@@ -84,6 +91,53 @@ _SKIP_SCHEME = ("http://", "https://", "mailto:", "ftp://", "#")
 # Directories with nothing worth checking, or nothing we own.
 _PRUNE = {".git", ".venv", "node_modules", "__pycache__", ".pytest_cache",
           "build", "dist", ".mypy_cache"}
+
+
+def _submodule_paths() -> frozenset[Path]:
+    """Every submodule working tree, read from `.gitmodules` rather than named
+    here so a second submodule needs no code change.
+
+    **Pruning these is correctness, not speed.** `ALLOW_PATHS` below lists
+    upstream DRAKVUF sources (`src/main.cpp`, `src/libdrakvuf/vmi.c`, …) as
+    deliberately unresolvable, because a reference to them means "go read the
+    engine", not "this repository ships that file". Walking `drakvuf/` would
+    make `suffix_resolve` match them for real, turning six reviewed allowlist
+    entries into silent passes against files nobody here maintains -- and the
+    `:line` check would then start failing whenever upstream edits a file.
+
+    Only the top-level `.gitmodules` is read. The nested trees (`xen`,
+    `libvmi`, `volatility3`, `dwarf2json`) need no entry of their own: they sit
+    underneath `drakvuf/`, so pruning the parent already excludes them.
+    """
+    gitmodules = ROOT / ".gitmodules"
+    if not gitmodules.is_file():
+        return frozenset()
+    return frozenset(
+        ROOT / m.group(1).strip()
+        for m in re.finditer(r"^\s*path\s*=\s*(.+?)\s*$",
+                             gitmodules.read_text(), re.M))
+
+
+_SUBMODULES = _submodule_paths()
+
+
+def _walk(pattern: str) -> list[Path]:
+    """`ROOT.rglob(pattern)`, but pruning `_PRUNE` and submodules as it
+    descends rather than filtering afterwards.
+
+    `rglob` has no way to skip a subtree, so it would stat all 4,300 files
+    under `drakvuf/` on every run -- and this gate runs inside the sandboxd
+    suite, where that is paid on every `pytest` invocation.
+    """
+    out: list[Path] = []
+    for dirpath, dirnames, filenames in os.walk(ROOT):
+        here = Path(dirpath)
+        dirnames[:] = [d for d in dirnames
+                       if d not in _PRUNE and here / d not in _SUBMODULES]
+        out.extend(p for name in filenames
+                   if (p := here / name).match(pattern))
+    return out
+
 
 # ---------------------------------------------------------------------------
 # Reviewed allowlist. Every entry names WHY it cannot resolve.
@@ -159,8 +213,7 @@ ALLOW_ANCHORS: set[tuple[str, str]] = set()
 
 
 def tracked_files() -> list[Path]:
-    return [p for p in ROOT.rglob("*")
-            if p.is_file() and not _PRUNE & set(p.relative_to(ROOT).parts)]
+    return _walk("*")
 
 
 def suffix_resolve(ref: str, files: list[Path]) -> Path | None:
@@ -186,12 +239,7 @@ def suffix_resolve(ref: str, files: list[Path]) -> Path | None:
 
 
 def markdown_files() -> list[Path]:
-    out = []
-    for p in ROOT.rglob("*.md"):
-        if _PRUNE & set(p.relative_to(ROOT).parts):
-            continue
-        out.append(p)
-    return sorted(out)
+    return sorted(_walk("*.md"))
 
 
 def headings_of(path: Path) -> set[str]:

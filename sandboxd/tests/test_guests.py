@@ -36,7 +36,11 @@ def job(tmp_path, os_=TargetOs.UBUNTU, kind=SampleKind.ELF,
         domid=42, vlan=vlan, clone_domain=f"{os_.value}_sandbox-{vlan}-clone",
         sample_path=sample, profile=Path("/root/profiles/linux.json"),
         injection_pid=1415, result_dir=tmp_path / "results",
-        options=TraceOptions(plugins=tuple(["syscalls", "filetracer", "fileextractor", "memdump"]), timeout=150 if kind is SampleKind.APK else 120, fast_singlestep=True, disable_sysret=True,), kind=kind,
+        # Derived, not restated. A literal tuple here is a second copy of the
+        # per-OS defaults that drifts silently: it held the pre-2026-09-26 set
+        # and made every test in this file describe a configuration the daemon
+        # had stopped producing.
+        options=G.default_trace_options(os_, kind), kind=kind,
     )
     defaults.update(kw)
     return G.Job(**defaults)
@@ -428,10 +432,59 @@ def test_the_apk_path_gets_the_longer_timeout(tmp_path):
 
 
 def test_the_default_plugin_set_matches_the_scripts(tmp_path):
-    """The literals the per-OS trace scripts passed."""
+    """The literals the per-OS trace scripts passed, plus what has been added
+    since.
+
+    **This assertion used to be `got.sort() == [...].sort()`**, which compares
+    `None` to `None` because `list.sort()` sorts in place and returns nothing.
+    It passed for every possible plugin set, including an empty one, and
+    noticed nothing when `libmon` was added to the Ubuntu defaults on
+    2026-09-26 -- the single change it exists to catch. `sorted()` returns the
+    list; `.sort()` does not.
+    """
     argv = G.argv_trace(job(tmp_path))
     got = [argv[i + 1] for i, a in enumerate(argv) if a == "-a"]
-    assert got.sort() == ["syscalls", "filetracer", "fileextractor", "memdump"].sort()
+    assert sorted(got) == sorted(
+        ["syscalls", "filetracer", "fileextractor", "memdump", "libmon"])
+
+
+def test_android_does_not_get_libmon(tmp_path):
+    """BlissOS links bionic, and libmon v1 finds `r_debug` through ld.so's
+    exported `_r_debug` (`dl_rendezvous.cpp:268`, justified in-source with a
+    glibc version tag).
+
+    **Measured, not assumed** (operator, 2026-09-26): `readelf --dyn-syms` on
+    BlissOS's bootstrap linker returns 27 symbols and `_r_debug` is not one,
+    so `try_arm` can never succeed and every process ends up `not_tracked`.
+    `rtld_db_dlactivity` IS exported and is the way in when libmon grows a
+    bionic path -- see CURRENT-STATE.md.
+
+    Pinned because the two sets were one tuple until 2026-09-26, and sharing
+    it again would hand Android a plugin that costs breakpoints and returns
+    nothing."""
+    argv = G.argv_trace(job(tmp_path, TargetOs.ANDROID))
+    plugins = [argv[i + 1] for i, a in enumerate(argv) if a == "-a"]
+
+    assert "libmon" not in plugins
+    assert "--so-hooks-list" not in argv
+
+
+def test_libmon_always_travels_with_its_hook_list(tmp_path):
+    """Without `--so-hooks-list` the plugin loads and does nothing at all --
+    its README's words. The two are useless apart, so argv_trace emits them
+    together or not at all.
+
+    And it is libmon's OWN option: `--dll-hooks-list` takes DLL names, which
+    match nothing on a Linux guest while looking configured."""
+    argv = G.argv_trace(job(tmp_path))  # Ubuntu
+
+    assert "libmon" in [argv[i + 1] for i, a in enumerate(argv) if a == "-a"]
+    assert "--so-hooks-list" in argv
+    hook_list = Path(argv[argv.index("--so-hooks-list") + 1])
+    assert hook_list.name == "so-hooks-linux.txt"
+    assert hook_list.exists(), "the hook list ships with the repository"
+    # Not the Windows list, and not passed under the Windows option name.
+    assert hook_list.name != "hooks.txt"
 
 
 def test_the_two_output_directories_stay_separate(tmp_path):

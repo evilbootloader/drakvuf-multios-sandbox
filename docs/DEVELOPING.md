@@ -299,6 +299,25 @@ environment `/etc/sandboxd/sandboxd.env` at mode 600.
 cd /root/drakvuf-multios-sandbox && git pull --ff-only && git log --oneline -1
 ```
 
+**`git pull` does not touch submodules**, and since 2026-09-26 this repository
+has one: `drakvuf/`, the engine from our own fork. A pull that moves the pin
+leaves the working tree at the old commit, and a *fresh* checkout leaves
+`drakvuf/` an empty directory — neither says anything, so run this whenever the
+pin moved:
+
+```bash
+# DOM0 -- Candidate: not yet run there
+cd /root/drakvuf-multios-sandbox
+git submodule update --init --recursive
+git -C drakvuf log --oneline -1
+```
+
+`--recursive` is required, not tidiness: DRAKVUF carries `xen`, `libvmi`,
+`volatility3` and `dwarf2json` of its own, and without them the tree does not
+build. Budget ~265 MB. **This is not the tree that built the deployed
+binaries** — that is `~/drakvuf`, and `CURRENT-STATE.md` §1.2 keeps the two
+apart. Nothing here is compiled or installed by this step.
+
 Dependencies only if `sandboxd/requirements.txt` changed:
 
 ```bash
@@ -325,8 +344,28 @@ The location is `CapaConfigSection.rules_directory`'s default; a different
 one is `SANDBOXD_POSTPROCESS_CAPA='{"rules_directory": "/path"}'` in the
 environment file.
 
-**vivisect is not a separate install.** The static pass over memory dumps
-(`analyze_memdumps`, on by default) runs capa's vivisect backend, and vivisect
+**The same rules drive the hook lists, and that is a DEV CONTAINER step, not a
+Dom0 one.** `sandboxd/data/hooks.txt` and `sandboxd/data/so-hooks-linux.txt`
+are generated from capa's `api:` features, so a `flare-capa` major-version bump
+means new rules and a stale hook list — a capa rule naming an API we do not
+hook can never fire. Re-run it then, and only then; the output is committed:
+
+```bash
+# DEV CONTAINER -- needs three inputs, none of them in the repository
+git clone --depth 1 --branch v9.4.0 https://github.com/mandiant/capa-rules /tmp/capa-rules
+git clone --depth 1 https://github.com/marlersoft/win32json /tmp/win32json
+git clone --depth 1 https://github.com/winsiderss/phnt /tmp/phnt
+platform/.venv/bin/python scripts/gen-hook-lists.py \
+  --rules /tmp/capa-rules --win32json /tmp/win32json --phnt /tmp/phnt
+platform/.venv/bin/python scripts/gen-hook-lists.py ... --report   # what did not resolve
+```
+
+It is **not** one of the three suite-enforced generators, for that reason. See
+its module docstring for why the DLL names come from Microsoft's metadata and
+what is deliberately left out.
+
+**vivisect is not a separate install.** The static pass over memory dumps runs
+capa's vivisect backend, and vivisect
 is a core dependency of `flare-capa`, so the `pip install` above brings it
 (1.3.2 with `flare-capa==9.4.0`). The check that the pass has what it imports:
 

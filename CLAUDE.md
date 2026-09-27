@@ -68,7 +68,8 @@ one grep instead of reading a 3,000-line checklist or guessing at keywords.
 | `sandboxd/` | **the pipeline**, and the Dom0 orchestrator: clone, preconfig, trace, collect, destroy. Python, with its own tests |
 | `misc/` | **the Xen guest `.cfg` files** — golden, `_sandbox` templates, and `platform.cfg`. Not in `automation/` |
 | `platform/` | the FastAPI service, migrations, MinIO provisioning, UI, tests |
-| `scripts/` | repository tooling: the three generators (`gen-current-state.py`, `gen-doc-index.py`, `gen-xen-configs.py`), `check-refs.py`, `dev-services.sh` |
+| `scripts/` | repository tooling: the three **suite-enforced** generators (`gen-current-state.py`, `gen-doc-index.py`, `gen-xen-configs.py`), `check-refs.py`, `dev-services.sh`, and `gen-hook-lists.py` — which is **not** in that set, because its inputs (capa-rules, win32metadata, phnt) are not in the repository. Its output is committed and `sandboxd/tests` pins invariants of it instead |
+| `drakvuf/` | **a git submodule, and not our code** — the DRAKVUF engine from our own fork `evilbootloader/drakvuf`, added 2026-09-26 for when we patch it. Recursive: its own `xen`, `libvmi`, `volatility3` and `dwarf2json` submodules are initialised too, so the tree can build. **A fresh checkout needs `git submodule update --init --recursive` or this is an empty directory.** Not the same tree as Dom0's `~/drakvuf`, which built the deployed binaries — `docs/CURRENT-STATE.md` §1.2 keeps them apart |
 | `.claude/skills/` | **tracked** — routers to the docs below: `deployment-state`, `runbook`, `dom0-handoff`. The rest of `.claude/` is not |
 | `profiles/`, `state/`, `tls/` | LibVMI profiles, saved guest memory images, certificates — **none git-tracked** |
 

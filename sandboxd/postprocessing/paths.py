@@ -32,8 +32,12 @@ IPT_ZIP = "ipt.zip"
 # fileextractor's output directory: DRAKVUF's `-D`. Upstream never passes -D
 # and has no plugin for it; the name is result-schema.md's, chosen there
 # because these are the files the SAMPLE wrote, with names the sample chose.
-# Uploaded as-is.
+# Packed by process_extracted into EXTRACTED_ZIP with EXTRACTED_DIR as the
+# member prefix -- the same contract DUMPS_DIR/DUMPS_ZIP have, and the same
+# pairing `stages._collect` reads to decide whether to upload the directory
+# or the archive.
 EXTRACTED_DIR = "extracted"
+EXTRACTED_ZIP = "extracted.zip"
 
 # DRAKVUF's stdout, as `stages._trace` writes it. **Must equal
 # `sandboxd.stages.TRACE_LOG`** -- it is restated here rather than imported

@@ -14,20 +14,20 @@ It maps **headings, not content**: a fact stated in the middle of a section is n
 - `docs/CURRENT-STATE.md:39` — [1. Capabilities](CURRENT-STATE.md#1-capabilities)
   - `docs/CURRENT-STATE.md:41` — [1.1 The host — bare metal since 2026-08-28](CURRENT-STATE.md#11-the-host--bare-metal-since-2026-08-28)
   - `docs/CURRENT-STATE.md:77` — [1.2 Dom0 — the Xen host](CURRENT-STATE.md#12-dom0--the-xen-host)
-    - `docs/CURRENT-STATE.md:111` — [How `sandboxd` is started](CURRENT-STATE.md#how-sandboxd-is-started)
-    - `docs/CURRENT-STATE.md:138` — [Capacity — what actually binds](CURRENT-STATE.md#capacity--what-actually-binds)
-  - `docs/CURRENT-STATE.md:189` — [1.3 The `platform` DomU](CURRENT-STATE.md#13-the-platform-domu)
-  - `docs/CURRENT-STATE.md:235` — [1.4 Per-OS names](CURRENT-STATE.md#14-per-os-names)
-  - `docs/CURRENT-STATE.md:256` — [1.5 What is evidenced, and what is not](CURRENT-STATE.md#15-what-is-evidenced-and-what-is-not)
-    - `docs/CURRENT-STATE.md:268` — [On bare metal, since 2026-08-28](CURRENT-STATE.md#on-bare-metal-since-2026-08-28)
-- `docs/CURRENT-STATE.md:290` — [2. Superseded facts — do not cite these](CURRENT-STATE.md#2-superseded-facts--do-not-cite-these)
-  - `docs/CURRENT-STATE.md:296` — [2a. Superseded by the bare-metal migration, 2026-08-28](CURRENT-STATE.md#2a-superseded-by-the-bare-metal-migration-2026-08-28)
-  - `docs/CURRENT-STATE.md:317` — [2b. Superseded for other reasons](CURRENT-STATE.md#2b-superseded-for-other-reasons)
-- `docs/CURRENT-STATE.md:344` — [3. Derived from the repository](CURRENT-STATE.md#3-derived-from-the-repository)
-    - `docs/CURRENT-STATE.md:350` — [Runbooks, oldest to newest](CURRENT-STATE.md#runbooks-oldest-to-newest)
-    - `docs/CURRENT-STATE.md:374` — [How components are started](CURRENT-STATE.md#how-components-are-started)
-    - `docs/CURRENT-STATE.md:380` — [Environment read by `sandboxd.daemon`](CURRENT-STATE.md#environment-read-by-sandboxddaemon)
-    - `docs/CURRENT-STATE.md:384` — [Repository size](CURRENT-STATE.md#repository-size)
+    - `docs/CURRENT-STATE.md:112` — [How `sandboxd` is started](CURRENT-STATE.md#how-sandboxd-is-started)
+    - `docs/CURRENT-STATE.md:139` — [Capacity — what actually binds](CURRENT-STATE.md#capacity--what-actually-binds)
+  - `docs/CURRENT-STATE.md:190` — [1.3 The `platform` DomU](CURRENT-STATE.md#13-the-platform-domu)
+  - `docs/CURRENT-STATE.md:236` — [1.4 Per-OS names](CURRENT-STATE.md#14-per-os-names)
+  - `docs/CURRENT-STATE.md:257` — [1.5 What is evidenced, and what is not](CURRENT-STATE.md#15-what-is-evidenced-and-what-is-not)
+    - `docs/CURRENT-STATE.md:269` — [On bare metal, since 2026-08-28](CURRENT-STATE.md#on-bare-metal-since-2026-08-28)
+- `docs/CURRENT-STATE.md:301` — [2. Superseded facts — do not cite these](CURRENT-STATE.md#2-superseded-facts--do-not-cite-these)
+  - `docs/CURRENT-STATE.md:307` — [2a. Superseded by the bare-metal migration, 2026-08-28](CURRENT-STATE.md#2a-superseded-by-the-bare-metal-migration-2026-08-28)
+  - `docs/CURRENT-STATE.md:328` — [2b. Superseded for other reasons](CURRENT-STATE.md#2b-superseded-for-other-reasons)
+- `docs/CURRENT-STATE.md:355` — [3. Derived from the repository](CURRENT-STATE.md#3-derived-from-the-repository)
+    - `docs/CURRENT-STATE.md:361` — [Runbooks, oldest to newest](CURRENT-STATE.md#runbooks-oldest-to-newest)
+    - `docs/CURRENT-STATE.md:385` — [How components are started](CURRENT-STATE.md#how-components-are-started)
+    - `docs/CURRENT-STATE.md:391` — [Environment read by `sandboxd.daemon`](CURRENT-STATE.md#environment-read-by-sandboxddaemon)
+    - `docs/CURRENT-STATE.md:395` — [Repository size](CURRENT-STATE.md#repository-size)
 
 ## `docs/DEVELOPING.md`
 
@@ -48,12 +48,12 @@ It maps **headings, not content**: a fact stated in the middle of a section is n
     - `docs/DEVELOPING.md:236` — [5.3 Environment, only if the change added settings](DEVELOPING.md#53-environment-only-if-the-change-added-settings)
     - `docs/DEVELOPING.md:247` — [5.4 Stop, migrate, start — in that order](DEVELOPING.md#54-stop-migrate-start--in-that-order)
   - `docs/DEVELOPING.md:292` — [6. Deploy — Dom0](DEVELOPING.md#6-deploy--dom0)
-    - `docs/DEVELOPING.md:370` — [Which host first](DEVELOPING.md#which-host-first)
-  - `docs/DEVELOPING.md:391` — [7. Verify](DEVELOPING.md#7-verify)
-  - `docs/DEVELOPING.md:406` — [8. Record what happened](DEVELOPING.md#8-record-what-happened)
-  - `docs/DEVELOPING.md:427` — [9. Rollback](DEVELOPING.md#9-rollback)
-  - `docs/DEVELOPING.md:438` — [Traps that bite during this workflow specifically](DEVELOPING.md#traps-that-bite-during-this-workflow-specifically)
-  - `docs/DEVELOPING.md:458` — [Related](DEVELOPING.md#related)
+    - `docs/DEVELOPING.md:409` — [Which host first](DEVELOPING.md#which-host-first)
+  - `docs/DEVELOPING.md:430` — [7. Verify](DEVELOPING.md#7-verify)
+  - `docs/DEVELOPING.md:445` — [8. Record what happened](DEVELOPING.md#8-record-what-happened)
+  - `docs/DEVELOPING.md:466` — [9. Rollback](DEVELOPING.md#9-rollback)
+  - `docs/DEVELOPING.md:477` — [Traps that bite during this workflow specifically](DEVELOPING.md#traps-that-bite-during-this-workflow-specifically)
+  - `docs/DEVELOPING.md:497` — [Related](DEVELOPING.md#related)
 
 ## `docs/TROUBLESHOOTING.md`
 
@@ -177,6 +177,7 @@ It maps **headings, not content**: a fact stated in the middle of a section is n
     - `docs/TROUBLESHOOTING.md:2512` — [A containment claim was written up without being tested](TROUBLESHOOTING.md#a-containment-claim-was-written-up-without-being-tested)
     - `docs/TROUBLESHOOTING.md:2534` — [A measured constant was used directly as a resource guard](TROUBLESHOOTING.md#a-measured-constant-was-used-directly-as-a-resource-guard)
     - `docs/TROUBLESHOOTING.md:2547` — [Baseline measured against throttled code](TROUBLESHOOTING.md#baseline-measured-against-throttled-code)
+    - `docs/TROUBLESHOOTING.md:2580` — [A capa rule that should obviously match produces nothing](TROUBLESHOOTING.md#a-capa-rule-that-should-obviously-match-produces-nothing)
 
 ## `docs/android_setup.md`
 
@@ -407,8 +408,8 @@ It maps **headings, not content**: a fact stated in the middle of a section is n
   - `docs/architecture/result-schema.md:92` — [3. What was open, and where each question went](architecture/result-schema.md#3-what-was-open-and-where-each-question-went)
   - `docs/architecture/result-schema.md:125` — [4. The specification (DRAFT-018)](architecture/result-schema.md#4-the-specification-draft-018)
     - `docs/architecture/result-schema.md:132` — [4.1 Layout](architecture/result-schema.md#41-layout)
-    - `docs/architecture/result-schema.md:218` — [4.2 The manifest](architecture/result-schema.md#42-the-manifest)
-    - `docs/architecture/result-schema.md:253` — [4.3 The capability envelope](architecture/result-schema.md#43-the-capability-envelope)
+    - `docs/architecture/result-schema.md:242` — [4.2 The manifest](architecture/result-schema.md#42-the-manifest)
+    - `docs/architecture/result-schema.md:277` — [4.3 The capability envelope](architecture/result-schema.md#43-the-capability-envelope)
 
 ## `docs/architecture/routed-egress.md`
 
@@ -430,9 +431,9 @@ It maps **headings, not content**: a fact stated in the middle of a section is n
 
 - `docs/architecture/upstream-drakvuf.md:1` — [Upstream DRAKVUF — comparison, provenance, and repository strategy](architecture/upstream-drakvuf.md#upstream-drakvuf--comparison-provenance-and-repository-strategy)
   - `docs/architecture/upstream-drakvuf.md:10` — [Upstream `dirwatch.c` — direct comparison](architecture/upstream-drakvuf.md#upstream-dirwatchc--direct-comparison)
-  - `docs/architecture/upstream-drakvuf.md:85` — [`lfreijo/drakvuf`, `memdump` branch — provenance](architecture/upstream-drakvuf.md#lfreijodrakvuf-memdump-branch--provenance)
-  - `docs/architecture/upstream-drakvuf.md:107` — [Repository strategy recommendation](architecture/upstream-drakvuf.md#repository-strategy-recommendation)
-  - `docs/architecture/upstream-drakvuf.md:147` — [DRAKVUF Sandbox (CERT-Polska) — what's reusable](architecture/upstream-drakvuf.md#drakvuf-sandbox-cert-polska--whats-reusable)
+  - `docs/architecture/upstream-drakvuf.md:137` — [`lfreijo/drakvuf`, `memdump` branch — provenance](architecture/upstream-drakvuf.md#lfreijodrakvuf-memdump-branch--provenance)
+  - `docs/architecture/upstream-drakvuf.md:159` — [Repository strategy recommendation](architecture/upstream-drakvuf.md#repository-strategy-recommendation)
+  - `docs/architecture/upstream-drakvuf.md:199` — [DRAKVUF Sandbox (CERT-Polska) — what's reusable](architecture/upstream-drakvuf.md#drakvuf-sandbox-cert-polska--whats-reusable)
 
 ## `docs/checklists/android.md`
 
@@ -1453,4 +1454,4 @@ It maps **headings, not content**: a fact stated in the middle of a section is n
 
 ---
 
-*1323 headings across 40 documents.*
+*1324 headings across 40 documents.*

@@ -2,6 +2,7 @@ import functools
 import itertools
 import logging
 import multiprocessing
+import re
 import zipfile
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -137,12 +138,18 @@ def decode_json_lines(
             data = orjson.loads(line.strip())
             if wanted is not None and "PID" in data and data["PID"] not in wanted:
                 continue
+            if data.get("Plugin") == "libmon":
+                _relabel_libmon_for_capa(data)
             if (
                 data.get("Plugin") == "apimon"
                 and data.get("Event") == "api_called"
-                and "Arguments" not in data
             ):
-                data["Arguments"] = []
+                if "Arguments" not in data:
+                    data["Arguments"] = []
+                else:
+                    # After the relabel above, so libmon's arguments are
+                    # normalised too -- both plugins emit the same shape.
+                    normalise_string_arguments(data)
             if data.get("Plugin") == "syscall" and "FromParentModule" in data:
                 del data["FromParentModule"]
             if data.get("Plugin") == "syscall" and "FromModule" in data:
@@ -153,7 +160,119 @@ def decode_json_lines(
             logger.debug("bad drakvuf log line: %s", line)
 
 
-CALL_LOGS = ("apimon.log", "syscall.log")
+# `[0xADDR:]"escaped string"` -- what DRAKVUF's string printers emit for an
+# argument (`libusermode/printers/printers.cpp::StringPrinterInterface::print`).
+# The address half is absent under `--userhook-no-addr`; the quotes never are.
+_DRAKVUF_STRING_ARG = re.compile(r'\A(?:0x[0-9a-fA-F]+:)?"(.*)"\Z', re.S)
+
+# DRAKVUF's own escaping, from `printers/utils.cpp::escape_str` and pinned by
+# its tests in `printers/check.cpp`: backslash, tab, CR, LF and double quote
+# get a backslash, anything below 0x20 becomes `\xHH`, UTF-8 passes through.
+# Not JSON escaping -- JSON has no `\xHH` -- so `json.loads` cannot do this.
+_UNESCAPE = {"\\\\": "\\", "\\t": "\t", "\\r": "\r", "\\n": "\n", "\\\"": "\""}
+_ESCAPE_SEQ = re.compile(r"\\\\|\\t|\\r|\\n|\\\"|\\x([0-9A-Fa-f]{2})")
+
+
+def _unescape_drakvuf(text: str) -> str:
+    def sub(m: "re.Match[str]") -> str:
+        if m.group(1) is not None:
+            return chr(int(m.group(1), 16))
+        return _UNESCAPE[m.group(0)]
+
+    return _ESCAPE_SEQ.sub(sub, text)
+
+
+def normalise_string_arguments(data: Dict) -> None:
+    """Reduce `Name=0xADDR:"C:\\\\Windows"` to `Name=C:\\Windows`, in place.
+
+    **Without this every one of capa's 835 `string:` features is unmatchable.**
+    capa reads `call.arguments.values()` and yields the value WHOLE
+    (`extractors/drakvuf/call.py`), deliberately -- its comment says the raw form
+    is "helpful for an analyst looking at the verbose output". The cost is that
+    the feature value is `0x7ffc1234:"Xen"`, so measured 2026-09-27:
+
+        rule feature              raw      --userhook-no-addr   normalised
+        string: /^Xen/i           no       no                   MATCH
+        string: Xen (exact)       no       no                   MATCH
+        substring: Xen            MATCH    MATCH                MATCH
+
+    So `substring:` (145 features) already worked and `string:` (835) never did.
+    `--userhook-no-addr` is NOT the fix -- it removes the address and leaves the
+    quotes, which is still not the string -- and it would break
+    `parse_apimon_arguments`, which splits a value on its first colon.
+
+    Unescaping is required, not cosmetic: a Windows path is escaped to
+    `C:\\\\Windows`, and a rule matching `C:\\Windows` would miss it.
+
+    Two deliberate limits:
+
+    - **A string whose content is all digits becomes a `Number`.** capa tries
+      `int(value, 0)` before falling back to `String`, so `Path=0x7f:"123"`
+      normalises to `123` and is extracted as `Number(123)`. Accepted: it is
+      rare, a bare numeric string is genuinely ambiguous, and the alternative
+      (keeping the quotes) breaks all 835 of the features this exists for.
+    - **Non-string arguments are untouched.** `Arg2=0x10` does not match the
+      pattern, so it still reaches capa as `Number(16)`.
+    """
+    args = data.get("Arguments")
+    if not isinstance(args, list):
+        return
+    out = []
+    for arg in args:
+        if not isinstance(arg, str):
+            continue
+        name, sep, value = arg.partition("=")
+        if not sep:
+            out.append(arg)
+            continue
+        m = _DRAKVUF_STRING_ARG.match(value)
+        out.append(f"{name}={_unescape_drakvuf(m.group(1))}" if m else arg)
+    data["Arguments"] = out
+
+
+def _relabel_libmon_for_capa(data: Dict) -> None:
+    """Make a libmon record legible to capa, in place.
+
+    **capa knows only two plugins.** `DrakvufReport.from_raw_report` dispatches
+    on `Plugin` and handles `"syscall"` and `"apimon"`; anything else is silently
+    dropped, with a TODO to add more (capa issue #2181). So reading `libmon.log`
+    is not enough -- verified 2026-09-27: a record labelled `libmon` yields
+    `apicalls=0, syscalls=0`, and the same record labelled `apimon` parses.
+
+    Two fixes, both narrow:
+
+    - **Relabel the plugin.** Defensible rather than a hack: libmon emits
+      deliberately the same `api_called` shape as apimon -- `Event`, `Method`,
+      `Arguments`, `ReturnValue`, plus the common fields
+      (`libmon.cpp::print_call`) -- which is why it was written that way. Only
+      this feed is relabelled; `libmon.log` on disk, and therefore the uploaded
+      artifact, still says `libmon`.
+
+    - **Default a missing `ReturnValue`.** `WinApiCall.return_value` is a
+      REQUIRED field, so a record from a `no-retval` hook raises
+      `ValidationError` out of `from_raw_report` and takes the whole capa pass
+      with it -- not just that line. `so-hooks-linux.txt` has such a hook
+      (`SSL_read`), so this is reachable today, and the failure would look like
+      capa finding nothing rather than like an error.
+
+      **The value is synthetic**, and capa turns argument and return values into
+      `Number` features, so this manufactures a `Number(0)` the guest never
+      produced. Zero is chosen because it is what a `no-retval` hook means --
+      the return was not observed -- and because a rule matching `number: 0` on
+      a return value would be matching noise anyway.
+
+    Delete all of this when capa learns about libmon upstream.
+    """
+    data["Plugin"] = "apimon"
+    data.setdefault("ReturnValue", "0x0")
+
+
+# libmon is the Linux counterpart of apimon and writes the same record shape,
+# so capa consumes it on the same path -- after `_relabel_libmon_for_capa`,
+# without which every line is read and then discarded. A name that does not
+# match a written log is not an error here (`iter_calls` skips a missing file at
+# debug level), so a typo in this tuple costs the whole feature silently.
+CALL_LOGS = ("libmon.log", "apimon.log", "syscall.log")
 
 
 def iter_calls(

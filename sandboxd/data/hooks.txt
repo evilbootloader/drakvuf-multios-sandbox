@@ -192,6 +192,16 @@ winhttp.dll,WinHttpGetProxyForUrl,log,hinternet,lpcwstr,lpvoid,lpvoid
 winhttp.dll,WinHttpSetOption,log,hinternet,dword,lpvoid,dword
 winhttp.dll,WinHttpConnect,log,hinternet,lpcwstr,internet_port,_reserved_
 winhttp.dll,WinHttpOpenRequest,log,hinternet,lpcwstr,lpcwstr,lpcwstr,lpcwstr,lpcwstr,dword
+# CURATED although the generator resolves it, because win32metadata types
+# `lpszHeaders` as a bare pointer-to-Char and `apimon_type` maps that to
+# `lpvoid` -- deliberately, since it will not guess a string printer from a
+# raw pointer. The generated line was `lpvoid,lpvoid,dword,dword`, and
+# `lpvoid` selects the base ArgumentPrinter, which prints `Arg2=0x<hex>` with
+# no `addr:"..."` half (`printers.cpp::ArgumentPrinter::print`). The header
+# text then reached `get_http_info` as an int instead of a string. Arity and
+# the two trailing scalars are metadata's own; only argument 2 is corrected,
+# to the same shape the `HttpAddRequestHeadersW` line above already uses.
+winhttp.dll,WinHttpAddRequestHeaders,log,hinternet,lpcwstr,dword,dword
 winhttp.dll,WinHttpSetTimeouts,log,hinternet,int,int,int,int
 winhttp.dll,WinHttpQueryHeaders,log,hinternet,dword,lpcwstr,lpvoid,lpdword,lpdword
 winhttp.dll,WinHttpSendRequest,log,hinternet,lpcwstr,dword,lpvoid,dword,dword,dword_ptr
@@ -300,3 +310,1117 @@ cryptsp.dll,CryptEnumProvidersW,log,dword,dword,dword,dword,lpwstr,dword
 kernel32.dll,VirtualFree,log,handle,lpvoid,size_t,dword
 ntdll.dll,RtlSecureZeroMemory,log,lpvoid,size_t
 kernel32.dll,CreateProcessA,log,lpcstr,lpstr,lpsecurity_attributes,lpsecurity_attributes,bool,dword,lpvoid,lpwstr,lpstartupinfo,lpprocess_information
+
+# BEGIN GENERATED -- scripts/gen-hook-lists.py
+# capa-rules v9.4.0, win32json 071df49. Regenerate with
+# scripts/gen-hook-lists.py; hand-curated lines above are preserved.
+#
+# 988 bare Win32 names in capa-rules -> 1267 hookable
+# lines (71 unresolved, see --report). A line with no argument
+# types still yields capa its `api` feature, which is what matches a rule;
+# arguments only add String/Number features, and a WRONG arity manufactures
+# them. DLL names never participate in matching (capa.rules.trim_dll_part).
+activeds.dll,ADsOpenObject,log,lpcwstr,lpcwstr,lpcwstr,dword,lpvoid,lpvoid*
+advapi32.dll,AdjustTokenPrivileges,log,dword,dword,lpvoid,dword,lpvoid,lpvoid
+advapi32.dll,AllocateAndInitializeSid,log,lpvoid,dword,dword,dword,dword,dword,dword,dword,dword,dword,lpvoid
+advapi32.dll,ChangeServiceConfig2A,log,dword,dword,lpvoid
+advapi32.dll,ChangeServiceConfig2W,log,dword,dword,lpvoid
+advapi32.dll,ChangeServiceConfigA,log,dword,dword,dword,dword,lpcstr,lpcstr,lpvoid,lpcstr,lpcstr,lpcstr,lpcstr
+advapi32.dll,ChangeServiceConfigW,log,dword,dword,dword,dword,lpcwstr,lpcwstr,lpvoid,lpcwstr,lpcwstr,lpcwstr,lpcwstr
+advapi32.dll,CheckTokenMembership,log,dword,dword,lpvoid
+advapi32.dll,ClearEventLogA,log,dword,lpcstr
+advapi32.dll,ClearEventLogW,log,dword,lpcwstr
+advapi32.dll,ControlServiceExA,log,dword,dword,dword,lpvoid
+advapi32.dll,ControlServiceExW,log,dword,dword,dword,lpvoid
+advapi32.dll,CreateProcessAsUserA,log,dword,lpcstr,lpcstr,lpvoid,lpvoid,dword,dword,lpvoid,lpcstr,lpvoid,lpvoid
+advapi32.dll,CreateProcessAsUserW,log,dword,lpcwstr,lpcwstr,lpvoid,lpvoid,dword,dword,lpvoid,lpcwstr,lpvoid,lpvoid
+advapi32.dll,CredEnumerateA,log,lpcstr,dword,lpvoid,lpvoid*
+advapi32.dll,CredEnumerateW,log,lpcwstr,dword,lpvoid,lpvoid*
+advapi32.dll,CryptDeriveKey,log,dword,dword,dword,dword,lpvoid
+advapi32.dll,CryptDestroyHash,log,dword
+advapi32.dll,CryptGenRandom,log,dword,dword,lpvoid
+advapi32.dll,CryptGetHashParam,log,dword,dword,lpvoid,lpvoid,dword
+advapi32.dll,CryptImportKey,log,dword,lpvoid,dword,dword,dword,lpvoid
+advapi32.dll,DuplicateToken,log,dword,dword,lpvoid
+advapi32.dll,DuplicateTokenEx,log,dword,dword,lpvoid,dword,dword,lpvoid
+advapi32.dll,ElfClearEventLogFile,log    # capa-hint (UNVERIFIED export)
+advapi32.dll,EnumDependentServicesA,log,dword,dword,lpvoid,dword,lpvoid,lpvoid
+advapi32.dll,EnumDependentServicesW,log,dword,dword,lpvoid,dword,lpvoid,lpvoid
+advapi32.dll,EnumServicesStatusA,log,dword,dword,dword,lpvoid,dword,lpvoid,lpvoid,lpvoid
+advapi32.dll,EnumServicesStatusExA,log,dword,dword,dword,dword,lpvoid,dword,lpvoid,lpvoid,lpvoid,lpcstr
+advapi32.dll,EnumServicesStatusExW,log,dword,dword,dword,dword,lpvoid,dword,lpvoid,lpvoid,lpvoid,lpcwstr
+advapi32.dll,EnumServicesStatusW,log,dword,dword,dword,lpvoid,dword,lpvoid,lpvoid,lpvoid
+advapi32.dll,EqualSid,log,dword,dword
+advapi32.dll,FreeSid,log,dword
+advapi32.dll,GetNumberOfEventLogRecords,log,dword,lpvoid
+advapi32.dll,GetTokenInformation,log,dword,dword,lpvoid,dword,lpvoid
+advapi32.dll,ImpersonateLoggedOnUser,log,dword
+advapi32.dll,InitiateShutdownA,log,lpcstr,lpcstr,dword,dword,dword
+advapi32.dll,InitiateSystemShutdownA,log,lpcstr,lpcstr,dword,dword,dword
+advapi32.dll,InitiateSystemShutdownExA,log,lpcstr,lpcstr,dword,dword,dword,dword
+advapi32.dll,LogonUserA,log,lpcstr,lpcstr,lpcstr,dword,dword,lpvoid
+advapi32.dll,LogonUserW,log,lpcwstr,lpcwstr,lpcwstr,dword,dword,lpvoid
+advapi32.dll,LookupAccountNameA,log,lpcstr,lpcstr,dword,lpvoid,lpvoid,lpvoid,lpvoid
+advapi32.dll,LookupAccountNameW,log,lpcwstr,lpcwstr,dword,lpvoid,lpvoid,lpvoid,lpvoid
+advapi32.dll,LookupPrivilegeNameA,log,lpcstr,lpvoid,lpvoid,lpvoid
+advapi32.dll,LookupPrivilegeNameW,log,lpcwstr,lpvoid,lpvoid,lpvoid
+advapi32.dll,LsaAddAccountRights,log,lpvoid,dword,lpvoid,dword
+advapi32.dll,LsaLookupNames,log,lpvoid,dword,punicode_string,lpvoid*,lpvoid*
+advapi32.dll,LsaLookupNames2,log,lpvoid,dword,dword,punicode_string,lpvoid*,lpvoid*
+advapi32.dll,OpenBackupEventLogA,log,lpcstr,lpcstr
+advapi32.dll,OpenBackupEventLogW,log,lpcwstr,lpcwstr
+advapi32.dll,OpenEventLogA,log,lpcstr,lpcstr
+advapi32.dll,OpenEventLogW,log,lpcwstr,lpcwstr
+advapi32.dll,OpenProcessToken,log,dword,dword,lpvoid
+advapi32.dll,QueryServiceConfig2A,log,dword,dword,lpvoid,dword,lpvoid
+advapi32.dll,QueryServiceConfigA,log,dword,lpvoid,dword,lpvoid
+advapi32.dll,QueryServiceStatus,log,dword,lpvoid
+advapi32.dll,QueryServiceStatusEx,log,dword,dword,lpvoid,dword,lpvoid
+advapi32.dll,RegCreateKeyA,log,dword,lpcstr,lpvoid
+advapi32.dll,RegCreateKeyTransactedA,log,dword,lpcstr,dword,lpcstr,dword,dword,lpvoid,lpvoid,lpvoid,dword,lpvoid
+advapi32.dll,RegCreateKeyTransactedW,log,dword,lpcwstr,dword,lpcwstr,dword,dword,lpvoid,lpvoid,lpvoid,dword,lpvoid
+advapi32.dll,RegCreateKeyW,log,dword,lpcwstr,lpvoid
+advapi32.dll,RegDeleteKeyExA,log,dword,lpcstr,dword,dword
+advapi32.dll,RegDeleteKeyExW,log,dword,lpcwstr,dword,dword
+advapi32.dll,RegDeleteKeyTransactedA,log,dword,lpcstr,dword,dword,dword,lpvoid
+advapi32.dll,RegDeleteKeyTransactedW,log,dword,lpcwstr,dword,dword,dword,lpvoid
+advapi32.dll,RegDeleteKeyValueA,log,dword,lpcstr,lpcstr
+advapi32.dll,RegDeleteKeyValueW,log,dword,lpcwstr,lpcwstr
+advapi32.dll,RegDeleteTreeA,log,dword,lpcstr
+advapi32.dll,RegDeleteTreeW,log,dword,lpcwstr
+advapi32.dll,RegEnumKeyA,log,dword,dword,lpvoid,dword
+advapi32.dll,RegGetValueA,log,dword,lpcstr,lpcstr,dword,lpvoid,lpvoid,lpvoid
+advapi32.dll,RegGetValueW,log,dword,lpcwstr,lpcwstr,dword,lpvoid,lpvoid,lpvoid
+advapi32.dll,RegOpenCurrentUser,log,dword,lpvoid
+advapi32.dll,RegOpenKeyA,log,dword,lpcstr,lpvoid
+advapi32.dll,RegOpenKeyTransactedA,log,dword,lpcstr,dword,dword,lpvoid,dword,lpvoid
+advapi32.dll,RegOpenKeyTransactedW,log,dword,lpcwstr,dword,dword,lpvoid,dword,lpvoid
+advapi32.dll,RegOpenKeyW,log,dword,lpcwstr,lpvoid
+advapi32.dll,RegOpenUserClassesRoot,log,dword,dword,dword,lpvoid
+advapi32.dll,RegQueryMultipleValuesA,log,dword,lpvoid,dword,lpcstr,lpvoid
+advapi32.dll,RegQueryMultipleValuesW,log,dword,lpvoid,dword,lpcwstr,lpvoid
+advapi32.dll,RegQueryValueA,log,dword,lpcstr,lpcstr,lpvoid
+advapi32.dll,RegQueryValueW,log,dword,lpcwstr,lpcwstr,lpvoid
+advapi32.dll,RegSetKeyValueA,log,dword,lpcstr,lpcstr,dword,lpvoid,dword
+advapi32.dll,RegSetKeyValueW,log,dword,lpcwstr,lpcwstr,dword,lpvoid,dword
+advapi32.dll,RegSetValueA,log,dword,lpcstr,dword,lpcstr,dword
+advapi32.dll,RegSetValueW,log,dword,lpcwstr,dword,lpcwstr,dword
+advapi32.dll,RegisterServiceCtrlHandlerA,log,lpcstr,dword
+advapi32.dll,RegisterServiceCtrlHandlerExA,log,lpcstr,dword,lpvoid
+advapi32.dll,RegisterServiceCtrlHandlerExW,log,lpcwstr,dword,lpvoid
+advapi32.dll,RegisterServiceCtrlHandlerW,log,lpcwstr,dword
+advapi32.dll,ReportEventA,log,dword,dword,dword,dword,dword,dword,dword,lpvoid,lpvoid
+advapi32.dll,ReportEventW,log,dword,dword,dword,dword,dword,dword,dword,lpvoid,lpvoid
+advapi32.dll,StartServiceCtrlDispatcherA,log,lpvoid
+advapi32.dll,StartServiceCtrlDispatcherW,log,lpvoid
+advapi32.dll,SystemFunction036,log,lpvoid,dword
+advapi32.dll,SystemFunction040,log,lpvoid,dword,dword
+advapi32.dll,SystemFunction041,log,lpvoid,dword,dword
+api-ms-win-core-memory-l1-1-5.dll,MapViewOfFileNuma2,log,dword,dword,dword,lpvoid,dword,dword,dword,dword
+avicap32.dll,capCreateCaptureWindowA,log,lpcstr,dword,dword,dword,dword,dword,dword,dword
+avicap32.dll,capCreateCaptureWindowW,log,lpcwstr,dword,dword,dword,dword,dword,dword,dword
+bcrypt.dll,BCryptCloseAlgorithmProvider,log,dword,dword
+bcrypt.dll,BCryptCreateHash,log,dword,lpvoid,lpvoid,dword,lpvoid,dword,dword
+bcrypt.dll,BCryptDecrypt,log,dword,lpvoid,dword,lpvoid,lpvoid,dword,lpvoid,dword,lpvoid,dword
+bcrypt.dll,BCryptDestroyHash,log,dword
+bcrypt.dll,BCryptDestroyKey,log,dword
+bcrypt.dll,BCryptEncrypt,log,dword,lpvoid,dword,lpvoid,lpvoid,dword,lpvoid,dword,lpvoid,dword
+bcrypt.dll,BCryptFinishHash,log,dword,lpvoid,dword,dword
+bcrypt.dll,BCryptGenRandom,log,dword,lpvoid,dword,dword
+bcrypt.dll,BCryptGenerateKeyPair,log,dword,lpvoid,dword,dword
+bcrypt.dll,BCryptGenerateSymmetricKey,log,dword,lpvoid,lpvoid,dword,lpvoid,dword,dword
+bcrypt.dll,BCryptHash,log,dword,lpvoid,dword,lpvoid,dword,lpvoid,dword
+bcrypt.dll,BCryptHashData,log,dword,lpvoid,dword,dword
+bcrypt.dll,BCryptImportKey,log,dword,dword,lpcwstr,lpvoid,lpvoid,dword,lpvoid,dword,dword
+bcrypt.dll,BCryptImportKeyPair,log,dword,dword,lpcwstr,lpvoid,lpvoid,dword,dword
+bcrypt.dll,BCryptOpenAlgorithmProvider,log,lpvoid,lpcwstr,lpcwstr,dword
+cabinet.dll,FCIAddFile,log,lpvoid,lpcstr,lpcstr,dword,dword,dword,dword,dword
+cabinet.dll,FCICreate,log,lpvoid,dword,dword,dword,dword,dword,dword,dword,dword,dword,dword,lpvoid,lpvoid
+cabinet.dll,FCIDestroy,log,lpvoid
+cabinet.dll,FCIFlushCabinet,log,lpvoid,dword,dword,dword
+cabinet.dll,FCIFlushFolder,log,lpvoid,dword,dword
+cabinet.dll,FDICopy,log,lpvoid,lpcstr,lpcstr,dword,dword,dword,lpvoid
+cabinet.dll,FDICreate,log,dword,dword,dword,dword,dword,dword,dword,dword,lpvoid
+cabinet.dll,FDIDestroy,log,lpvoid
+clfsw32.dll,CreateLogFile,log,lpcwstr,dword,dword,lpvoid,dword,dword
+clfsw32.dll,CreateLogMarshallingArea,log,dword,dword,dword,lpvoid,dword,dword,dword,lpvoid*
+clfsw32.dll,ReadLogRecord,log,lpvoid,lpvoid,dword,lpvoid*,lpvoid,lpvoid,lpvoid,lpvoid,lpvoid*,lpvoid
+clfsw32.dll,ReadNextLogRecord,log,lpvoid,lpvoid*,lpvoid,lpvoid,lpvoid,lpvoid,lpvoid,lpvoid,lpvoid
+clfsw32.dll,ReserveAndAppendLog,log,lpvoid,lpvoid,dword,lpvoid,lpvoid,dword,lpvoid,dword,lpvoid,lpvoid
+clfsw32.dll,ReserveAndAppendLogAligned,log,lpvoid,lpvoid,dword,dword,lpvoid,lpvoid,dword,lpvoid,dword,lpvoid,lpvoid
+clr.dll,GetLastError,log    # win32metadata, redirected to clr.dll (profile)
+comctl32.dll,DPA_Create,log,dword
+comctl32.dll,DPA_EnumCallback,log,dword,dword,lpvoid
+comctl32.dll,DPA_SetPtr,log,dword,dword,lpvoid
+comctl32.dll,DSA_Create,log,dword,dword
+comctl32.dll,DSA_EnumCallback,log,dword,dword,lpvoid
+comctl32.dll,DSA_InsertItem,log,dword,dword,lpvoid
+credui.dll,CredUIPromptForCredentialsA,log,lpvoid,lpcstr,lpvoid,dword,lpvoid,dword,lpvoid,dword,lpvoid,dword
+credui.dll,CredUIPromptForCredentialsW,log,lpvoid,lpcwstr,lpvoid,dword,lpvoid,dword,lpvoid,dword,lpvoid,dword
+credui.dll,CredUIPromptForWindowsCredentialsA,log,lpvoid,dword,lpvoid,lpvoid,dword,lpvoid*,lpvoid,lpvoid,dword
+credui.dll,CredUIPromptForWindowsCredentialsW,log,lpvoid,dword,lpvoid,lpvoid,dword,lpvoid*,lpvoid,lpvoid,dword
+credui.dll,CredUnPackAuthenticationBufferA,log,dword,lpvoid,dword,lpvoid,lpvoid,lpvoid,lpvoid,lpvoid,lpvoid
+credui.dll,CredUnPackAuthenticationBufferW,log,dword,lpvoid,dword,lpvoid,lpvoid,lpvoid,lpvoid,lpvoid,lpvoid
+crypt32.dll,CertEnumSystemStore,log,dword,lpvoid,lpvoid,dword
+crypt32.dll,CertEnumSystemStoreLocation,log,dword,lpvoid,dword
+crypt32.dll,CryptBinaryToStringA,log,lpvoid,dword,dword,lpvoid,lpvoid
+crypt32.dll,CryptBinaryToStringW,log,lpvoid,dword,dword,lpvoid,lpvoid
+crypt32.dll,CryptEnumOIDInfo,log,dword,dword,lpvoid,dword
+crypt32.dll,CryptProtectData,log,lpvoid,lpcwstr,lpvoid,lpvoid,lpvoid,dword,lpvoid
+crypt32.dll,CryptProtectMemory,log,lpvoid,dword,dword
+crypt32.dll,CryptStringToBinaryA,log,lpvoid,dword,dword,lpvoid,lpvoid,lpvoid,lpvoid
+crypt32.dll,CryptStringToBinaryW,log,lpvoid,dword,dword,lpvoid,lpvoid,lpvoid,lpvoid
+crypt32.dll,CryptUnprotectData,log,lpvoid,lpcwstr,lpvoid,lpvoid,lpvoid,dword,lpvoid
+crypt32.dll,CryptUnprotectMemory,log,lpvoid,dword,dword
+dbghelp.dll,EnumDirTree,log,dword,lpcstr,lpcstr,lpcstr,dword,lpvoid
+dbghelp.dll,EnumDirTreeW,log,dword,lpcwstr,lpcwstr,lpcwstr,dword,lpvoid
+dbghelp.dll,EnumerateLoadedModules,log,dword,dword,lpvoid
+dbghelp.dll,MiniDumpWriteDump,log,dword,dword,dword,dword,lpvoid,lpvoid,lpvoid
+dbghelp.dll,SymEnumProcesses,log,dword,lpvoid
+dbghelp.dll,SymInitialize,log,dword,lpcstr,dword
+dbghelp.dll,SymInitializeW,log,dword,lpcwstr,dword
+dbghelp.dll,SymRegisterCallback,log,dword,dword,lpvoid
+dinput.dll,DirectInputCreateA,log    # capa-hint (UNVERIFIED export)
+dinput.dll,DirectInputCreateEx,log    # capa-hint (UNVERIFIED export)
+dinput.dll,DirectInputCreateW,log    # capa-hint (UNVERIFIED export)
+dinput8.dll,DirectInput8Create,log,dword,dword,lpvoid,lpvoid*,dword
+dnsapi.dll,DnsQueryEx,log,lpvoid,lpvoid,lpvoid
+fltlib.dll,FilterFindFirst,log,dword,lpvoid,dword,lpvoid,lpvoid
+fltlib.dll,FilterFindNext,log,dword,dword,lpvoid,dword,lpvoid
+fltlib.dll,FilterUnload,log,lpcwstr
+fwpuclnt.dll,FwpmFilterAdd0,log,dword,lpvoid,dword,lpvoid
+fwpuclnt.dll,FwpmFilterCreateEnumHandle0,log,dword,lpvoid,lpvoid
+fwpuclnt.dll,FwpmFilterDeleteById0,log,dword,dword
+fwpuclnt.dll,FwpmFilterDeleteByKey0,log,dword,lpvoid
+fwpuclnt.dll,FwpmFilterEnum0,log,dword,dword,dword,lpvoid*,lpvoid
+gdi32.dll,BitBlt,log,dword,dword,dword,dword,dword,dword,dword,dword,dword
+gdi32.dll,CreateCompatibleBitmap,log,dword,dword,dword
+gdi32.dll,CreateCompatibleDC,log,dword
+gdi32.dll,CreateDCA,log,lpcstr,lpcstr,lpcstr,lpvoid
+gdi32.dll,CreateDCW,log,lpcwstr,lpcwstr,lpcwstr,lpvoid
+gdi32.dll,EnumFontFamiliesA,log,dword,lpcstr,dword,dword
+gdi32.dll,EnumFontFamiliesExA,log,dword,lpvoid,dword,dword,dword
+gdi32.dll,EnumFontFamiliesExW,log,dword,lpvoid,dword,dword,dword
+gdi32.dll,EnumFontFamiliesW,log,dword,lpcwstr,dword,dword
+gdi32.dll,EnumFontsA,log,dword,lpcstr,dword,dword
+gdi32.dll,EnumFontsW,log,dword,lpcwstr,dword,dword
+gdi32.dll,EnumObjects,log,dword,dword,dword,dword
+gdi32.dll,GetDIBits,log,dword,dword,dword,dword,lpvoid,lpvoid,dword
+gdi32.dll,LineDDA,log,dword,dword,dword,dword,dword,dword
+httpapi.dll,HttpAddUrl,log,dword,lpcwstr,lpvoid
+httpapi.dll,HttpAddUrlToUrlGroup,log,dword,lpcwstr,dword,dword
+httpapi.dll,HttpInitialize,log,dword,dword,lpvoid
+httpapi.dll,HttpReceiveHttpRequest,log,dword,dword,dword,lpvoid,dword,lpvoid,lpvoid
+httpapi.dll,HttpReceiveRequestEntityBody,log,dword,dword,dword,lpvoid,dword,lpvoid,lpvoid
+httpapi.dll,HttpSendHttpResponse,log,dword,dword,dword,lpvoid,lpvoid,lpvoid,lpvoid,dword,lpvoid,lpvoid
+httpapi.dll,HttpSendResponseEntityBody,log,dword,dword,dword,dword,lpvoid,lpvoid,lpvoid,dword,lpvoid,lpvoid
+httpapi.dll,HttpTerminate,log,dword,lpvoid
+imm32.dll,ImmEnumInputContext,log,dword,dword,dword
+imm32.dll,ImmGetCompositionStringA,log,dword,dword,lpvoid,dword
+imm32.dll,ImmGetCompositionStringW,log,dword,dword,lpvoid,dword
+imm32.dll,ImmGetContext,log,dword
+imm32.dll,ImmGetVirtualKey,log,dword
+imm32.dll,ImmReleaseContext,log,dword,dword
+iphlpapi.dll,CreateIpForwardEntry,log,lpvoid
+iphlpapi.dll,GetExtendedTcpTable,log,lpvoid,lpvoid,dword,dword,dword,dword
+iphlpapi.dll,GetExtendedUdpTable,log,lpvoid,lpvoid,dword,dword,dword,dword
+iphlpapi.dll,GetIfTable,log,lpvoid,lpvoid,dword
+iphlpapi.dll,GetIpForwardTable,log,lpvoid,lpvoid,dword
+iphlpapi.dll,GetIpForwardTable2,log,dword,lpvoid*
+iphlpapi.dll,GetNetworkParams,log,lpvoid,lpvoid
+iphlpapi.dll,Icmp6CreateFile,log
+iphlpapi.dll,Icmp6SendEcho2,log,dword,dword,dword,lpvoid,lpvoid,lpvoid,lpvoid,dword,lpvoid,lpvoid,dword,dword
+iphlpapi.dll,IcmpCloseHandle,log,dword
+iphlpapi.dll,IcmpCreateFile,log
+iphlpapi.dll,IcmpSendEcho,log,dword,dword,lpvoid,dword,lpvoid,lpvoid,dword,dword
+iphlpapi.dll,IcmpSendEcho2,log,dword,dword,dword,lpvoid,dword,lpvoid,dword,lpvoid,lpvoid,dword,dword
+iphlpapi.dll,IcmpSendEcho2Ex,log,dword,dword,dword,lpvoid,dword,dword,lpvoid,dword,lpvoid,lpvoid,dword,dword
+iphlpapi.dll,NotifyAddrChange,log,lpvoid,lpvoid
+iphlpapi.dll,SetTcpEntry,log,lpvoid
+kernel32.dll,AddAtomA,log,lpcstr
+kernel32.dll,AddAtomW,log,lpcwstr
+kernel32.dll,BeginUpdateResourceA,log,lpcstr,dword
+kernel32.dll,BeginUpdateResourceW,log,lpcwstr,dword
+kernel32.dll,CallNamedPipeA,log,lpcstr,lpvoid,dword,lpvoid,dword,lpvoid,dword
+kernel32.dll,CallNamedPipeW,log,lpcwstr,lpvoid,dword,lpvoid,dword,lpvoid,dword
+kernel32.dll,CloseHandle,log,dword
+kernel32.dll,ConvertThreadToFiber,log,lpvoid
+kernel32.dll,CopyFileExA,log,lpcstr,lpcstr,dword,lpvoid,lpvoid,dword
+kernel32.dll,CopyFileTransactedA,log,lpcstr,lpcstr,dword,lpvoid,lpvoid,dword,dword
+kernel32.dll,CopyFileTransactedW,log,lpcwstr,lpcwstr,dword,lpvoid,lpvoid,dword,dword
+kernel32.dll,CreateDirectoryA,log,lpcstr,lpvoid
+kernel32.dll,CreateDirectoryExA,log,lpcstr,lpcstr,lpvoid
+kernel32.dll,CreateDirectoryTransactedA,log,lpcstr,lpcstr,lpvoid,dword
+kernel32.dll,CreateDirectoryTransactedW,log,lpcwstr,lpcwstr,lpvoid,dword
+kernel32.dll,CreateEventA,log,lpvoid,dword,dword,lpcstr
+kernel32.dll,CreateEventW,log,lpvoid,dword,dword,lpcwstr
+kernel32.dll,CreateFiber,log,dword,dword,lpvoid
+kernel32.dll,CreateFileA,log,lpcstr,dword,dword,lpvoid,dword,dword,dword
+kernel32.dll,CreateFileMappingA,log,dword,lpvoid,dword,dword,dword,lpcstr
+kernel32.dll,CreateFileW,log,lpcwstr,dword,dword,lpvoid,dword,dword,dword
+kernel32.dll,CreateMailslotA,log,lpcstr,dword,dword,lpvoid
+kernel32.dll,CreateMailslotW,log,lpcwstr,dword,dword,lpvoid
+kernel32.dll,CreateMutexA,log,lpvoid,dword,lpcstr
+kernel32.dll,CreateMutexExA,log,lpvoid,lpcstr,dword,dword
+kernel32.dll,CreateMutexExW,log,lpvoid,lpcwstr,dword,dword
+kernel32.dll,CreateMutexW,log,lpvoid,dword,lpcwstr
+kernel32.dll,CreateNamedPipeA,log,lpcstr,dword,dword,dword,dword,dword,dword,lpvoid
+kernel32.dll,CreateProcessInternal,log    # capa-hint (UNVERIFIED export)
+kernel32.dll,CreateThreadpoolIo,log,dword,dword,lpvoid,lpvoid
+kernel32.dll,DeleteFileTransactedA,log,lpcstr,dword
+kernel32.dll,DeleteFileTransactedW,log,lpcwstr,dword
+kernel32.dll,EndUpdateResourceA,log,dword,dword
+kernel32.dll,EndUpdateResourceW,log,dword,dword
+kernel32.dll,EnumCalendarInfoA,log,dword,dword,dword,dword
+kernel32.dll,EnumCalendarInfoExA,log,dword,dword,dword,dword
+kernel32.dll,EnumDateFormatsA,log,dword,dword,dword
+kernel32.dll,EnumLanguageGroupLocalesA,log,dword,dword,dword,dword
+kernel32.dll,EnumResourceTypesA,log,dword,dword,dword
+kernel32.dll,EnumResourceTypesW,log,dword,dword,dword
+kernel32.dll,EnumSystemCodePagesA,log,dword,dword
+kernel32.dll,EnumSystemGeoID,log,dword,dword,dword
+kernel32.dll,EnumSystemGeoNames,log,dword,dword,dword
+kernel32.dll,EnumSystemLanguageGroupsA,log,dword,dword,dword
+kernel32.dll,EnumTimeFormatsA,log,dword,dword,dword
+kernel32.dll,EnumUILanguagesA,log,dword,dword,dword
+kernel32.dll,ExitProcess,log,dword
+kernel32.dll,FileTimeToLocalFileTime,log,lpvoid,lpvoid
+kernel32.dll,FindClose,log,dword
+kernel32.dll,FindFirstFileA,log,lpcstr,lpvoid
+kernel32.dll,FindFirstFileNameTransactedW,log,lpcwstr,dword,lpvoid,lpvoid,dword
+kernel32.dll,FindFirstFileNameW,log,lpcwstr,dword,lpvoid,lpvoid
+kernel32.dll,FindFirstFileTransactedA,log,lpcstr,dword,lpvoid,dword,lpvoid,dword,dword
+kernel32.dll,FindFirstFileTransactedW,log,lpcwstr,dword,lpvoid,dword,lpvoid,dword,dword
+kernel32.dll,FindFirstFileW,log,lpcwstr,lpvoid
+kernel32.dll,FindFirstVolumeA,log,lpvoid,dword
+kernel32.dll,FindFirstVolumeMountPointA,log,lpcstr,lpvoid,dword
+kernel32.dll,FindFirstVolumeMountPointW,log,lpcwstr,lpvoid,dword
+kernel32.dll,FindFirstVolumeW,log,lpvoid,dword
+kernel32.dll,FindNextFileA,log,dword,lpvoid
+kernel32.dll,FindNextFileNameW,log,dword,lpvoid,lpvoid
+kernel32.dll,FindNextVolumeA,log,dword,lpvoid,dword
+kernel32.dll,FindNextVolumeMountPointA,log,dword,lpvoid,dword
+kernel32.dll,FindNextVolumeMountPointW,log,dword,lpvoid,dword
+kernel32.dll,FindNextVolumeW,log,dword,lpvoid,dword
+kernel32.dll,FindResourceA,log,dword,lpcstr,lpcstr
+kernel32.dll,FindResourceExA,log,dword,lpcstr,lpcstr,dword
+kernel32.dll,FindVolumeClose,log,dword
+kernel32.dll,FindVolumeMountPointClose,log,dword
+kernel32.dll,GetCurrentProcess,log
+kernel32.dll,GetDriveTypeA,log,lpcstr
+kernel32.dll,GetDriveTypeW,log,lpcwstr
+kernel32.dll,GetEnvironmentStrings,log
+kernel32.dll,GetFileAttributesA,log,lpcstr
+kernel32.dll,GetFileAttributesW,log,lpcwstr
+kernel32.dll,GetFileSize,log,dword,lpvoid
+kernel32.dll,GetFileSizeEx,log,dword,lpvoid
+kernel32.dll,GetFileTime,log,dword,lpvoid,lpvoid,lpvoid
+kernel32.dll,GetFirmwareEnvironmentVariableA,log,lpcstr,lpcstr,lpvoid,dword
+kernel32.dll,GetFirmwareEnvironmentVariableExA,log,lpcstr,lpcstr,lpvoid,dword,lpvoid
+kernel32.dll,GetFirmwareEnvironmentVariableExW,log,lpcwstr,lpcwstr,lpvoid,dword,lpvoid
+kernel32.dll,GetFirmwareEnvironmentVariableW,log,lpcwstr,lpcwstr,lpvoid,dword
+kernel32.dll,GetFullPathNameA,log,lpcstr,dword,lpvoid,lpcstr
+kernel32.dll,GetFullPathNameW,log,lpcwstr,dword,lpvoid,lpcwstr
+kernel32.dll,GetGeoInfoA,log,dword,dword,lpvoid,dword,dword
+kernel32.dll,GetGeoInfoW,log,dword,dword,lpvoid,dword,dword
+kernel32.dll,GetLogicalDriveStringsA,log,dword,lpvoid
+kernel32.dll,GetLogicalDriveStringsW,log,dword,lpvoid
+kernel32.dll,GetLogicalDrives,log
+kernel32.dll,GetMailslotInfo,log,dword,lpvoid,lpvoid,lpvoid,lpvoid
+kernel32.dll,GetPrivateProfileIntA,log,lpcstr,lpcstr,dword,lpcstr
+kernel32.dll,GetPrivateProfileIntW,log,lpcwstr,lpcwstr,dword,lpcwstr
+kernel32.dll,GetPrivateProfileSectionA,log,lpcstr,lpvoid,dword,lpcstr
+kernel32.dll,GetPrivateProfileSectionNamesA,log,lpvoid,dword,lpcstr
+kernel32.dll,GetPrivateProfileSectionNamesW,log,lpvoid,dword,lpcwstr
+kernel32.dll,GetPrivateProfileSectionW,log,lpcwstr,lpvoid,dword,lpcwstr
+kernel32.dll,GetPrivateProfileStringA,log,lpcstr,lpcstr,lpcstr,lpvoid,dword,lpcstr
+kernel32.dll,GetPrivateProfileStringW,log,lpcwstr,lpcwstr,lpcwstr,lpvoid,dword,lpcwstr
+kernel32.dll,GetPrivateProfileStructA,log,lpcstr,lpcstr,lpvoid,dword,lpcstr
+kernel32.dll,GetPrivateProfileStructW,log,lpcwstr,lpcwstr,lpvoid,dword,lpcwstr
+kernel32.dll,GetStartupInfoA,log,lpvoid
+kernel32.dll,GetSystemDirectoryA,log,lpvoid,dword
+kernel32.dll,GetSystemDirectoryW,log,lpvoid,dword
+kernel32.dll,GetSystemWow64DirectoryA,log,lpvoid,dword
+kernel32.dll,GetSystemWow64DirectoryW,log,lpvoid,dword
+kernel32.dll,GetTempFileNameA,log,lpcstr,lpcstr,dword,lpvoid
+kernel32.dll,GetTempFileNameW,log,lpcwstr,lpcwstr,dword,lpvoid
+kernel32.dll,GetTempPathA,log,dword,lpvoid
+kernel32.dll,GetTempPathW,log,dword,lpvoid
+kernel32.dll,GetUserGeoID,log,dword
+kernel32.dll,GetVolumeInformationA,log,lpcstr,lpvoid,dword,lpvoid,lpvoid,lpvoid,lpvoid,dword
+kernel32.dll,GetVolumeInformationW,log,lpcwstr,lpvoid,dword,lpvoid,lpvoid,lpvoid,lpvoid,dword
+kernel32.dll,GetVolumeNameForVolumeMountPointA,log,lpcstr,lpvoid,dword
+kernel32.dll,GetVolumePathNamesForVolumeNameA,log,lpcstr,lpvoid,dword,lpvoid
+kernel32.dll,GetVolumePathNamesForVolumeNameW,log,lpcwstr,lpvoid,dword,lpvoid
+kernel32.dll,GlobalAddAtomA,log,lpcstr
+kernel32.dll,GlobalAddAtomExA,log,lpcstr,dword
+kernel32.dll,GlobalAddAtomExW,log,lpcwstr,dword
+kernel32.dll,GlobalAddAtomW,log,lpcwstr
+kernel32.dll,KeInsertQueueApc,log    # capa-hint (UNVERIFIED export)
+kernel32.dll,LZCopy,log,dword,dword
+kernel32.dll,LZOpenFileA,log,lpcstr,lpvoid,dword
+kernel32.dll,LZOpenFileW,log,lpcwstr,lpvoid,dword
+kernel32.dll,LZRead,log,dword,lpcstr,dword
+kernel32.dll,Module32First,log,dword,lpvoid
+kernel32.dll,Module32FirstW,log,dword,lpvoid
+kernel32.dll,Module32Next,log,dword,lpvoid
+kernel32.dll,Module32NextW,log,dword,lpvoid
+kernel32.dll,MoveFileA,log,lpcstr,lpcstr
+kernel32.dll,MoveFileExA,log,lpcstr,lpcstr,dword
+kernel32.dll,MoveFileTransactedA,log,lpcstr,lpcstr,dword,lpvoid,dword,dword
+kernel32.dll,MoveFileTransactedW,log,lpcwstr,lpcwstr,dword,lpvoid,dword,dword
+kernel32.dll,MoveFileW,log,lpcwstr,lpcwstr
+kernel32.dll,MoveFileWithProgressA,log,lpcstr,lpcstr,dword,lpvoid,dword
+kernel32.dll,OpenMutexA,log,dword,dword,lpcstr
+kernel32.dll,OpenMutexW,log,dword,dword,lpcwstr
+kernel32.dll,Process32First,log,dword,lpvoid
+kernel32.dll,Process32Next,log,dword,lpvoid
+kernel32.dll,QueryDosDeviceA,log,lpcstr,lpvoid,dword
+kernel32.dll,QueryDosDeviceW,log,lpcwstr,lpvoid,dword
+kernel32.dll,QueryInformationJobObject,log,dword,dword,lpvoid,dword,lpvoid
+kernel32.dll,ReadConsoleOutputCharacterA,log,dword,lpvoid,dword,dword,lpvoid
+kernel32.dll,ReadConsoleOutputCharacterW,log,dword,lpvoid,dword,dword,lpvoid
+kernel32.dll,ReadFile,log,dword,lpvoid,dword,lpvoid,lpvoid
+kernel32.dll,ReadFileEx,log,dword,lpvoid,dword,lpvoid,dword
+kernel32.dll,RegisterWaitForSingleObject,log,lpvoid,dword,dword,lpvoid,dword,dword
+kernel32.dll,RemoveDirectoryTransactedA,log,lpcstr,dword
+kernel32.dll,RemoveDirectoryTransactedW,log,lpcwstr,dword
+kernel32.dll,SetConsoleCursorPosition,log,dword,dword
+kernel32.dll,SetConsoleTitleA,log,lpcstr
+kernel32.dll,SetConsoleTitleW,log,lpcwstr
+kernel32.dll,SetEndOfFile,log,dword
+kernel32.dll,SetEnvironmentStringsA,log,lpcstr
+kernel32.dll,SetEvent,log,dword
+kernel32.dll,SetFileAttributesA,log,lpcstr,dword
+kernel32.dll,SetFileAttributesW,log,lpcwstr,dword
+kernel32.dll,SetFileInformationByHandle,log,dword,dword,lpvoid,dword
+kernel32.dll,SetFilePointer,log,dword,dword,lpvoid,dword
+kernel32.dll,SetFileTime,log,dword,lpvoid,lpvoid,lpvoid
+kernel32.dll,SetFirmwareEnvironmentVariableA,log,lpcstr,lpcstr,lpvoid,dword
+kernel32.dll,SetFirmwareEnvironmentVariableExA,log,lpcstr,lpcstr,lpvoid,dword,dword
+kernel32.dll,SetFirmwareEnvironmentVariableExW,log,lpcwstr,lpcwstr,lpvoid,dword,dword
+kernel32.dll,SetFirmwareEnvironmentVariableW,log,lpcwstr,lpcwstr,lpvoid,dword
+kernel32.dll,SetHandleInformation,log,dword,dword,dword
+kernel32.dll,SetMailslotInfo,log,dword,dword
+kernel32.dll,SetThreadpoolWait,log,lpvoid,dword,lpvoid
+kernel32.dll,SleepEx,log,dword,dword
+kernel32.dll,SwitchToFiber,log,lpvoid
+kernel32.dll,Thread32First,log,dword,lpvoid
+kernel32.dll,Thread32Next,log,dword,lpvoid
+kernel32.dll,TlsGetValue,log,dword
+kernel32.dll,Toolhelp32ReadProcessMemory,log,dword,lpvoid,lpvoid,dword,lpvoid
+kernel32.dll,UpdateResourceA,log,dword,lpcstr,lpcstr,dword,lpvoid,dword
+kernel32.dll,UpdateResourceW,log,dword,lpcwstr,lpcwstr,dword,lpvoid,dword
+kernel32.dll,VerifyVersionInfoA,log,lpvoid,dword,dword
+kernel32.dll,VerifyVersionInfoW,log,lpvoid,dword,dword
+kernel32.dll,WaitForMultipleObjects,log,dword,lpvoid,dword,dword
+kernel32.dll,WaitForMultipleObjectsEx,log,dword,lpvoid,dword,dword,dword
+kernel32.dll,WaitForSingleObject,log,dword,dword
+kernel32.dll,WaitForSingleObjectEx,log,dword,dword,dword
+kernel32.dll,WaitForThreadpoolWaitCallbacks,log,lpvoid,dword
+kernel32.dll,WinExec,log,lpcstr,dword
+kernel32.dll,WriteConsoleInputA,log,dword,lpvoid,dword,lpvoid
+kernel32.dll,WriteConsoleInputW,log,dword,lpvoid,dword,lpvoid
+kernel32.dll,WriteConsoleOutputA,log,dword,lpvoid,dword,dword,lpvoid
+kernel32.dll,WriteConsoleOutputCharacterA,log,dword,lpvoid,dword,dword,lpvoid
+kernel32.dll,WriteConsoleOutputCharacterW,log,dword,lpvoid,dword,dword,lpvoid
+kernel32.dll,WriteConsoleOutputW,log,dword,lpvoid,dword,dword,lpvoid
+kernel32.dll,WriteFile,log,dword,lpvoid,dword,lpvoid,lpvoid
+kernel32.dll,WriteFileEx,log,dword,lpvoid,dword,lpvoid,dword
+kernel32.dll,WritePrivateProfileStringA,log,lpcstr,lpcstr,lpcstr,lpcstr
+kernel32.dll,WritePrivateProfileStringW,log,lpcwstr,lpcwstr,lpcwstr,lpcwstr
+kernelbase.dll,CheckRemoteDebuggerPresent,log,dword,lpvoid    # win32metadata, redirected to kernelbase.dll (profile)
+kernelbase.dll,ConnectNamedPipe,log,dword,lpvoid    # win32metadata, redirected to kernelbase.dll (profile)
+kernelbase.dll,ContinueDebugEvent,log,dword,dword,dword    # win32metadata, redirected to kernelbase.dll (profile)
+kernelbase.dll,CopyFile2,log,lpcwstr,lpcwstr,lpvoid    # win32metadata, redirected to kernelbase.dll (profile)
+kernelbase.dll,CopyFileExW,log,lpcwstr,lpcwstr,dword,lpvoid,lpvoid,dword    # win32metadata, redirected to kernelbase.dll (profile)
+kernelbase.dll,CreateDirectoryExW,log,lpcwstr,lpcwstr,lpvoid    # win32metadata, redirected to kernelbase.dll (profile)
+kernelbase.dll,CreateFileMappingW,log,dword,lpvoid,dword,dword,dword,lpcwstr    # win32metadata, redirected to kernelbase.dll (profile)
+kernelbase.dll,CreateNamedPipeW,log,lpcwstr,dword,dword,dword,dword,dword,dword,lpvoid    # win32metadata, redirected to kernelbase.dll (profile)
+kernelbase.dll,CreatePipe,log,lpvoid,lpvoid,lpvoid,dword    # win32metadata, redirected to kernelbase.dll (profile)
+kernelbase.dll,CreateProcessA,log,lpcstr,lpcstr,lpvoid,lpvoid,dword,dword,lpvoid,lpcstr,lpvoid,lpvoid    # win32metadata, redirected to kernelbase.dll (profile)
+kernelbase.dll,CreateProcessW,log,lpcwstr,lpcwstr,lpvoid,lpvoid,dword,dword,lpvoid,lpcwstr,lpvoid,lpvoid    # win32metadata, redirected to kernelbase.dll (profile)
+kernelbase.dll,CreateRemoteThread,log,dword,lpvoid,dword,dword,lpvoid,dword,lpvoid    # win32metadata, redirected to kernelbase.dll (profile)
+kernelbase.dll,CreateRemoteThreadEx,log,dword,lpvoid,dword,dword,lpvoid,dword,dword,lpvoid    # win32metadata, redirected to kernelbase.dll (profile)
+kernelbase.dll,CreateThread,log,lpvoid,dword,dword,lpvoid,dword,lpvoid    # win32metadata, redirected to kernelbase.dll (profile)
+kernelbase.dll,CreateThreadpoolTimer,log,dword,lpvoid,lpvoid    # win32metadata, redirected to kernelbase.dll (profile)
+kernelbase.dll,CreateThreadpoolWait,log,dword,lpvoid,lpvoid    # win32metadata, redirected to kernelbase.dll (profile)
+kernelbase.dll,CreateThreadpoolWork,log,dword,lpvoid,lpvoid    # win32metadata, redirected to kernelbase.dll (profile)
+kernelbase.dll,CreateTimerQueueTimer,log,lpvoid,dword,dword,lpvoid,dword,dword,dword    # win32metadata, redirected to kernelbase.dll (profile)
+kernelbase.dll,DeviceIoControl,log,dword,dword,lpvoid,dword,lpvoid,dword,lpvoid,lpvoid    # win32metadata, redirected to kernelbase.dll (profile)
+kernelbase.dll,EnumCalendarInfoExW,log,dword,dword,dword,dword    # win32metadata, redirected to kernelbase.dll (profile)
+kernelbase.dll,EnumCalendarInfoW,log,dword,dword,dword,dword    # win32metadata, redirected to kernelbase.dll (profile)
+kernelbase.dll,EnumDateFormatsW,log,dword,dword,dword    # win32metadata, redirected to kernelbase.dll (profile)
+kernelbase.dll,EnumLanguageGroupLocalesW,log,dword,dword,dword,dword    # win32metadata, redirected to kernelbase.dll (profile)
+kernelbase.dll,EnumSystemCodePagesW,log,dword,dword    # win32metadata, redirected to kernelbase.dll (profile)
+kernelbase.dll,EnumSystemFirmwareTables,log,dword,lpvoid,dword    # win32metadata, redirected to kernelbase.dll (profile)
+kernelbase.dll,EnumSystemLanguageGroupsW,log,dword,dword,dword    # win32metadata, redirected to kernelbase.dll (profile)
+kernelbase.dll,EnumSystemLocalesA,log,dword,dword    # win32metadata, redirected to kernelbase.dll (profile)
+kernelbase.dll,EnumSystemLocalesW,log,dword,dword    # win32metadata, redirected to kernelbase.dll (profile)
+kernelbase.dll,EnumTimeFormatsW,log,dword,dword,dword    # win32metadata, redirected to kernelbase.dll (profile)
+kernelbase.dll,EnumUILanguagesW,log,dword,dword,dword    # win32metadata, redirected to kernelbase.dll (profile)
+kernelbase.dll,ExpandEnvironmentStringsA,log,lpcstr,lpvoid,dword    # win32metadata, redirected to kernelbase.dll (profile)
+kernelbase.dll,ExpandEnvironmentStringsW,log,lpcwstr,lpvoid,dword    # win32metadata, redirected to kernelbase.dll (profile)
+kernelbase.dll,FindResourceExW,log,dword,lpcwstr,lpcwstr,dword    # win32metadata, redirected to kernelbase.dll (profile)
+kernelbase.dll,FindResourceW,log,dword,lpcwstr,lpcwstr    # win32metadata, redirected to kernelbase.dll (profile)
+kernelbase.dll,FreeLibrary,log,dword    # win32metadata, redirected to kernelbase.dll (profile)
+kernelbase.dll,FreeResource,log,dword    # win32metadata, redirected to kernelbase.dll (profile)
+kernelbase.dll,GetCommandLineA,log    # win32metadata, redirected to kernelbase.dll (profile)
+kernelbase.dll,GetCommandLineW,log    # win32metadata, redirected to kernelbase.dll (profile)
+kernelbase.dll,GetComputerNameExA,log,dword,lpvoid,lpvoid    # win32metadata, redirected to kernelbase.dll (profile)
+kernelbase.dll,GetComputerNameExW,log,dword,lpvoid,lpvoid    # win32metadata, redirected to kernelbase.dll (profile)
+kernelbase.dll,GetCurrentDirectoryA,log,dword,lpvoid    # win32metadata, redirected to kernelbase.dll (profile)
+kernelbase.dll,GetCurrentDirectoryW,log,dword,lpvoid    # win32metadata, redirected to kernelbase.dll (profile)
+kernelbase.dll,GetEnvironmentStringsW,log    # win32metadata, redirected to kernelbase.dll (profile)
+kernelbase.dll,GetEnvironmentVariableA,log,lpcstr,lpvoid,dword    # win32metadata, redirected to kernelbase.dll (profile)
+kernelbase.dll,GetEnvironmentVariableW,log,lpcwstr,lpvoid,dword    # win32metadata, redirected to kernelbase.dll (profile)
+kernelbase.dll,GetLocaleInfoA,log,dword,dword,lpvoid,dword    # win32metadata, redirected to kernelbase.dll (profile)
+kernelbase.dll,GetLocaleInfoEx,log,lpcwstr,dword,lpvoid,dword    # win32metadata, redirected to kernelbase.dll (profile)
+kernelbase.dll,GetLocaleInfoW,log,dword,dword,lpvoid,dword    # win32metadata, redirected to kernelbase.dll (profile)
+kernelbase.dll,GetModuleHandleA,log,lpcstr    # win32metadata, redirected to kernelbase.dll (profile)
+kernelbase.dll,GetModuleHandleExA,log,dword,lpcstr,lpvoid    # win32metadata, redirected to kernelbase.dll (profile)
+kernelbase.dll,GetModuleHandleExW,log,dword,lpcwstr,lpvoid    # win32metadata, redirected to kernelbase.dll (profile)
+kernelbase.dll,GetModuleHandleW,log,lpcwstr    # win32metadata, redirected to kernelbase.dll (profile)
+kernelbase.dll,GetNativeSystemInfo,log,lpvoid    # win32metadata, redirected to kernelbase.dll (profile)
+kernelbase.dll,GetProcAddress,log,dword,lpcstr    # win32metadata, redirected to kernelbase.dll (profile)
+kernelbase.dll,GetProductInfo,log,dword,dword,dword,dword,lpvoid    # win32metadata, redirected to kernelbase.dll (profile)
+kernelbase.dll,GetStartupInfoW,log,lpvoid    # win32metadata, redirected to kernelbase.dll (profile)
+kernelbase.dll,GetStdHandle,log,dword    # win32metadata, redirected to kernelbase.dll (profile)
+kernelbase.dll,GetSystemDefaultUILanguage,log    # win32metadata, redirected to kernelbase.dll (profile)
+kernelbase.dll,GetSystemFirmwareTable,log,dword,dword,lpvoid,dword    # win32metadata, redirected to kernelbase.dll (profile)
+kernelbase.dll,GetSystemInfo,log,lpvoid    # win32metadata, redirected to kernelbase.dll (profile)
+kernelbase.dll,GetSystemTime,log,lpvoid    # win32metadata, redirected to kernelbase.dll (profile)
+kernelbase.dll,GetSystemTimeAsFileTime,log,lpvoid    # win32metadata, redirected to kernelbase.dll (profile)
+kernelbase.dll,GetThreadContext,log,dword,lpvoid    # win32metadata, redirected to kernelbase.dll (profile)
+kernelbase.dll,GetTickCount,log    # win32metadata, redirected to kernelbase.dll (profile)
+kernelbase.dll,GetTickCount64,log    # win32metadata, redirected to kernelbase.dll (profile)
+kernelbase.dll,GetUserDefaultLangID,log    # win32metadata, redirected to kernelbase.dll (profile)
+kernelbase.dll,GetUserDefaultUILanguage,log    # win32metadata, redirected to kernelbase.dll (profile)
+kernelbase.dll,GetVersion,log    # win32metadata, redirected to kernelbase.dll (profile)
+kernelbase.dll,GetVersionExA,log,lpvoid    # win32metadata, redirected to kernelbase.dll (profile)
+kernelbase.dll,GetVersionExW,log,lpvoid    # win32metadata, redirected to kernelbase.dll (profile)
+kernelbase.dll,GetWindowsDirectoryA,log,lpvoid,dword    # win32metadata, redirected to kernelbase.dll (profile)
+kernelbase.dll,GetWindowsDirectoryW,log,lpvoid,dword    # win32metadata, redirected to kernelbase.dll (profile)
+kernelbase.dll,GetWriteWatch,log,dword,lpvoid,dword,lpvoid,lpvoid,lpvoid    # win32metadata, redirected to kernelbase.dll (profile)
+kernelbase.dll,GlobalAlloc,log,dword,dword    # win32metadata, redirected to kernelbase.dll (profile)
+kernelbase.dll,GlobalLock,log,dword    # win32metadata, redirected to kernelbase.dll (profile)
+kernelbase.dll,GlobalMemoryStatusEx,log,lpvoid    # win32metadata, redirected to kernelbase.dll (profile)
+kernelbase.dll,GlobalUnlock,log,dword    # win32metadata, redirected to kernelbase.dll (profile)
+kernelbase.dll,HeapCreate,log,dword,dword,dword    # win32metadata, redirected to kernelbase.dll (profile)
+kernelbase.dll,K32EnumProcessModules,log,dword,lpvoid,dword,lpvoid    # win32metadata, redirected to kernelbase.dll (profile)
+kernelbase.dll,K32EnumProcessModulesEx,log,dword,lpvoid,dword,lpvoid,dword    # win32metadata, redirected to kernelbase.dll (profile)
+kernelbase.dll,K32EnumProcesses,log,lpvoid,dword,lpvoid    # win32metadata, redirected to kernelbase.dll (profile)
+kernelbase.dll,K32GetProcessImageFileNameA,log,dword,lpvoid,dword    # win32metadata, redirected to kernelbase.dll (profile)
+kernelbase.dll,K32GetProcessImageFileNameW,log,dword,lpvoid,dword    # win32metadata, redirected to kernelbase.dll (profile)
+kernelbase.dll,LoadLibraryA,log,lpcstr    # win32metadata, redirected to kernelbase.dll (profile)
+kernelbase.dll,LoadLibraryExA,log,lpcstr,dword,dword    # win32metadata, redirected to kernelbase.dll (profile)
+kernelbase.dll,LoadLibraryExW,log,lpcwstr,dword,dword    # win32metadata, redirected to kernelbase.dll (profile)
+kernelbase.dll,LoadLibraryW,log,lpcwstr    # win32metadata, redirected to kernelbase.dll (profile)
+kernelbase.dll,LoadResource,log,dword,dword    # win32metadata, redirected to kernelbase.dll (profile)
+kernelbase.dll,LockResource,log,dword    # win32metadata, redirected to kernelbase.dll (profile)
+kernelbase.dll,MapViewOfFile,log,dword,dword,dword,dword,dword    # win32metadata, redirected to kernelbase.dll (profile)
+kernelbase.dll,MoveFileExW,log,lpcwstr,lpcwstr,dword    # win32metadata, redirected to kernelbase.dll (profile)
+kernelbase.dll,MoveFileWithProgressW,log,lpcwstr,lpcwstr,dword,lpvoid,dword    # win32metadata, redirected to kernelbase.dll (profile)
+kernelbase.dll,OpenProcess,log,dword,dword,dword    # win32metadata, redirected to kernelbase.dll (profile)
+kernelbase.dll,OpenThread,log,dword,dword,dword    # win32metadata, redirected to kernelbase.dll (profile)
+kernelbase.dll,OutputDebugStringA,log,lpcstr    # win32metadata, redirected to kernelbase.dll (profile)
+kernelbase.dll,OutputDebugStringW,log,lpcwstr    # win32metadata, redirected to kernelbase.dll (profile)
+kernelbase.dll,PeekNamedPipe,log,dword,lpvoid,dword,lpvoid,lpvoid,lpvoid    # win32metadata, redirected to kernelbase.dll (profile)
+kernelbase.dll,ProcessIdToSessionId,log,dword,lpvoid    # win32metadata, redirected to kernelbase.dll (profile)
+kernelbase.dll,PssCaptureSnapshot,log,dword,dword,dword,lpvoid    # win32metadata, redirected to kernelbase.dll (profile)
+kernelbase.dll,PssQuerySnapshot,log,dword,dword,lpvoid,dword    # win32metadata, redirected to kernelbase.dll (profile)
+kernelbase.dll,PssWalkSnapshot,log,dword,dword,dword,lpvoid,dword    # win32metadata, redirected to kernelbase.dll (profile)
+kernelbase.dll,QueueUserAPC,log,dword,dword,dword    # win32metadata, redirected to kernelbase.dll (profile)
+kernelbase.dll,ReadProcessMemory,log,dword,lpvoid,lpvoid,dword,lpvoid    # win32metadata, redirected to kernelbase.dll (profile)
+kernelbase.dll,ResumeThread,log,dword    # win32metadata, redirected to kernelbase.dll (profile)
+kernelbase.dll,SetCurrentDirectoryA,log,lpcstr    # win32metadata, redirected to kernelbase.dll (profile)
+kernelbase.dll,SetCurrentDirectoryW,log,lpcwstr    # win32metadata, redirected to kernelbase.dll (profile)
+kernelbase.dll,SetEnvironmentStringsW,log,lpcwstr    # win32metadata, redirected to kernelbase.dll (profile)
+kernelbase.dll,SetEnvironmentVariableA,log,lpcstr,lpcstr    # win32metadata, redirected to kernelbase.dll (profile)
+kernelbase.dll,SetEnvironmentVariableW,log,lpcwstr,lpcwstr    # win32metadata, redirected to kernelbase.dll (profile)
+kernelbase.dll,SetLastError,log,dword    # win32metadata, redirected to kernelbase.dll (profile)
+kernelbase.dll,SetProcessMitigationPolicy,log,dword,lpvoid,dword    # win32metadata, redirected to kernelbase.dll (profile)
+kernelbase.dll,SetThreadContext,log,dword,lpvoid    # win32metadata, redirected to kernelbase.dll (profile)
+kernelbase.dll,SignalObjectAndWait,log,dword,dword,dword,dword    # win32metadata, redirected to kernelbase.dll (profile)
+kernelbase.dll,SizeofResource,log,dword,dword    # win32metadata, redirected to kernelbase.dll (profile)
+kernelbase.dll,Sleep,log,dword    # win32metadata, redirected to kernelbase.dll (profile)
+kernelbase.dll,SuspendThread,log,dword    # win32metadata, redirected to kernelbase.dll (profile)
+kernelbase.dll,SystemTimeToFileTime,log,lpvoid,lpvoid    # win32metadata, redirected to kernelbase.dll (profile)
+kernelbase.dll,TerminateProcess,log,dword,dword    # win32metadata, redirected to kernelbase.dll (profile)
+kernelbase.dll,TerminateThread,log,dword,dword    # win32metadata, redirected to kernelbase.dll (profile)
+kernelbase.dll,TlsAlloc,log    # win32metadata, redirected to kernelbase.dll (profile)
+kernelbase.dll,TlsSetValue,log,dword,lpvoid    # win32metadata, redirected to kernelbase.dll (profile)
+kernelbase.dll,TransactNamedPipe,log,dword,lpvoid,dword,lpvoid,dword,lpvoid,lpvoid    # win32metadata, redirected to kernelbase.dll (profile)
+kernelbase.dll,UnmapViewOfFile,log,lpvoid    # win32metadata, redirected to kernelbase.dll (profile)
+kernelbase.dll,UpdateProcThreadAttribute,log,dword,dword,dword,lpvoid,dword,lpvoid,lpvoid    # win32metadata, redirected to kernelbase.dll (profile)
+kernelbase.dll,VirtualAlloc,log,lpvoid,dword,dword,dword    # win32metadata, redirected to kernelbase.dll (profile)
+kernelbase.dll,VirtualAllocEx,log,dword,lpvoid,dword,dword,dword    # win32metadata, redirected to kernelbase.dll (profile)
+kernelbase.dll,VirtualAllocExNuma,log,dword,lpvoid,dword,dword,dword,dword    # win32metadata, redirected to kernelbase.dll (profile)
+kernelbase.dll,VirtualProtect,log,lpvoid,dword,dword,lpvoid    # win32metadata, redirected to kernelbase.dll (profile)
+kernelbase.dll,VirtualProtectEx,log,dword,lpvoid,dword,dword,lpvoid    # win32metadata, redirected to kernelbase.dll (profile)
+kernelbase.dll,VirtualQueryEx,log,dword,lpvoid,lpvoid,dword    # win32metadata, redirected to kernelbase.dll (profile)
+kernelbase.dll,WaitForDebugEvent,log,lpvoid,dword    # win32metadata, redirected to kernelbase.dll (profile)
+kernelbase.dll,WriteProcessMemory,log,dword,lpvoid,lpvoid,dword,lpvoid    # win32metadata, redirected to kernelbase.dll (profile)
+mpr.dll,WNetAddConnection2A,log,lpvoid,lpcstr,lpcstr,dword
+mpr.dll,WNetAddConnection2W,log,lpvoid,lpcwstr,lpcwstr,dword
+mpr.dll,WNetAddConnection3A,log,dword,lpvoid,lpcstr,lpcstr,dword
+mpr.dll,WNetAddConnection3W,log,dword,lpvoid,lpcwstr,lpcwstr,dword
+mpr.dll,WNetAddConnectionA,log,lpcstr,lpcstr,lpcstr
+mpr.dll,WNetAddConnectionW,log,lpcwstr,lpcwstr,lpcwstr
+mpr.dll,WNetCancelConnection2A,log,lpcstr,dword,dword
+mpr.dll,WNetCancelConnection2W,log,lpcwstr,dword,dword
+mpr.dll,WNetCancelConnectionA,log,lpcstr,dword
+mpr.dll,WNetCancelConnectionW,log,lpcwstr,dword
+mpr.dll,WNetEnumResourceA,log,dword,lpvoid,lpvoid,lpvoid
+mpr.dll,WNetEnumResourceW,log,dword,lpvoid,lpvoid,lpvoid
+mscoree.dll,CLRCreateInstance,log    # capa-hint (UNVERIFIED export)
+mscoree.dll,CorBindToCurrentRuntime,log    # capa-hint (UNVERIFIED export)
+mscoree.dll,CorBindToRuntime,log    # capa-hint (UNVERIFIED export)
+mscoree.dll,CorBindToRuntimeByCfg,log    # capa-hint (UNVERIFIED export)
+mscoree.dll,CorBindToRuntimeEx,log    # capa-hint (UNVERIFIED export)
+mscoree.dll,CorBindToRuntimeHost,log    # capa-hint (UNVERIFIED export)
+mscorwks.dll,QueryPerformanceCounter,log,lpvoid    # win32metadata, redirected to mscorwks.dll (profile)
+msvcrt.dll,__android_log_print,log    # CRT (UNVERIFIED export)
+msvcrt.dll,__p__pgmptr,log    # CRT (UNVERIFIED export)
+msvcrt.dll,__p__wpgmptr,log    # CRT (UNVERIFIED export)
+msvcrt.dll,__system_property_get,log    # CRT (UNVERIFIED export)
+msvcrt.dll,_allmul,log    # CRT (UNVERIFIED export)
+msvcrt.dll,_beginthread,log    # CRT (UNVERIFIED export)
+msvcrt.dll,_beginthreadex,log    # CRT (UNVERIFIED export)
+msvcrt.dll,_fwrite,log    # CRT (UNVERIFIED export)
+msvcrt.dll,_get_pgmptr,log    # CRT (UNVERIFIED export)
+msvcrt.dll,_get_wpgmptr,log    # CRT (UNVERIFIED export)
+msvcrt.dll,_mkdir,log    # CRT (UNVERIFIED export)
+msvcrt.dll,_pgmptr,log    # CRT (UNVERIFIED export)
+msvcrt.dll,_read,log    # CRT (UNVERIFIED export)
+msvcrt.dll,_rmdir,log    # CRT (UNVERIFIED export)
+msvcrt.dll,_stricmp,log,lpcstr,lpcstr    # CRT (UNVERIFIED export)
+msvcrt.dll,_system,log    # CRT (UNVERIFIED export)
+msvcrt.dll,_wcsicmp,log,lpcwstr,lpcwstr    # CRT (UNVERIFIED export)
+msvcrt.dll,_wmkdir,log    # CRT (UNVERIFIED export)
+msvcrt.dll,_wpgmptr,log    # CRT (UNVERIFIED export)
+msvcrt.dll,_wremove,log    # CRT (UNVERIFIED export)
+msvcrt.dll,_wrename,log    # CRT (UNVERIFIED export)
+msvcrt.dll,_wrmdir,log    # CRT (UNVERIFIED export)
+msvcrt.dll,_wsystem,log    # CRT (UNVERIFIED export)
+msvcrt.dll,memcmp,log,lpvoid,lpvoid,size_t    # CRT (UNVERIFIED export)
+msvcrt.dll,strcmp,log,lpcstr,lpcstr    # CRT (UNVERIFIED export)
+msvcrt.dll,strstr,log,lpcstr,lpcstr    # CRT (UNVERIFIED export)
+msvcrt.dll,wcscmp,log,lpcwstr,lpcwstr    # CRT (UNVERIFIED export)
+msvcrt.dll,wcsstr,log,lpcwstr,lpcwstr    # CRT (UNVERIFIED export)
+mswsock.dll,WSARecvEx,log,dword,lpcstr,dword,lpvoid
+msxfs.dll,WFSCleanUp,log    # capa-hint (UNVERIFIED export)
+msxfs.dll,WFSClose,log    # capa-hint (UNVERIFIED export)
+msxfs.dll,WFSExecute,log    # capa-hint (UNVERIFIED export)
+msxfs.dll,WFSFreeResult,log    # capa-hint (UNVERIFIED export)
+msxfs.dll,WFSGetInfo,log    # capa-hint (UNVERIFIED export)
+msxfs.dll,WFSLock,log    # capa-hint (UNVERIFIED export)
+msxfs.dll,WFSOpen,log    # capa-hint (UNVERIFIED export)
+msxfs.dll,WFSRegister,log    # capa-hint (UNVERIFIED export)
+msxfs.dll,WFSStartUp,log    # capa-hint (UNVERIFIED export)
+msxfs.dll,WFSUnlock,log    # capa-hint (UNVERIFIED export)
+netapi32.dll,DsEnumerateDomainTrustsA,log,lpcstr,dword,lpvoid*,lpvoid
+netapi32.dll,DsEnumerateDomainTrustsW,log,lpcwstr,dword,lpvoid*,lpvoid
+netapi32.dll,DsGetDcNameA,log,lpcstr,lpcstr,lpvoid,lpcstr,dword,lpvoid*
+netapi32.dll,DsGetDcNameW,log,lpcwstr,lpcwstr,lpvoid,lpcwstr,dword,lpvoid*
+netapi32.dll,DsRoleGetPrimaryDomainInformation,log,lpcwstr,dword,lpvoid*
+netapi32.dll,NetApiBufferFree,log,lpvoid
+netapi32.dll,NetGetDCName,log,lpcwstr,lpcwstr,lpvoid*
+netapi32.dll,NetGroupAdd,log,lpcwstr,dword,lpvoid,lpvoid
+netapi32.dll,NetGroupAddUser,log,lpcwstr,lpcwstr,lpcwstr
+netapi32.dll,NetGroupDel,log,lpcwstr,lpcwstr
+netapi32.dll,NetGroupDelUser,log,lpcwstr,lpcwstr,lpcwstr
+netapi32.dll,NetGroupEnum,log,lpcwstr,dword,lpvoid*,dword,lpvoid,lpvoid,lpvoid
+netapi32.dll,NetGroupGetUsers,log,lpcwstr,lpcwstr,dword,lpvoid*,dword,lpvoid,lpvoid,lpvoid
+netapi32.dll,NetGroupSetUsers,log,lpcwstr,lpcwstr,dword,lpvoid,dword
+netapi32.dll,NetLocalGroupAdd,log,lpcwstr,dword,lpvoid,lpvoid
+netapi32.dll,NetLocalGroupAddMember,log,lpcwstr,lpcwstr,dword
+netapi32.dll,NetLocalGroupAddMembers,log,lpcwstr,lpcwstr,dword,lpvoid,dword
+netapi32.dll,NetLocalGroupDel,log,lpcwstr,lpcwstr
+netapi32.dll,NetLocalGroupDelMember,log,lpcwstr,lpcwstr,dword
+netapi32.dll,NetLocalGroupDelMembers,log,lpcwstr,lpcwstr,dword,lpvoid,dword
+netapi32.dll,NetLocalGroupEnum,log,lpcwstr,dword,lpvoid*,dword,lpvoid,lpvoid,lpvoid
+netapi32.dll,NetLocalGroupGetMembers,log,lpcwstr,lpcwstr,dword,lpvoid*,dword,lpvoid,lpvoid,lpvoid
+netapi32.dll,NetServerEnum,log,lpcwstr,dword,lpvoid*,dword,lpvoid,lpvoid,dword,lpcwstr,lpvoid
+netapi32.dll,NetShareEnum,log,lpcwstr,dword,lpvoid*,dword,lpvoid,lpvoid,lpvoid
+netapi32.dll,NetUserAdd,log,lpcwstr,dword,lpvoid,lpvoid
+netapi32.dll,NetUserChangePassword,log,lpcwstr,lpcwstr,lpcwstr,lpcwstr
+netapi32.dll,NetUserDel,log,lpcwstr,lpcwstr
+netapi32.dll,NetUserEnum,log,lpcwstr,dword,dword,lpvoid*,dword,lpvoid,lpvoid,lpvoid
+netapi32.dll,NetUserGetGroups,log,lpcwstr,lpcwstr,dword,lpvoid*,dword,lpvoid,lpvoid
+ntdll.dll,DbgBreakPoint,log    # phnt (native API, ntdll export)
+ntdll.dll,LdrAccessResource,log    # phnt (native API, ntdll export)
+ntdll.dll,LdrCallEnclave,log    # phnt (native API, ntdll export)
+ntdll.dll,LdrFindResourceEx_U,log    # phnt (native API, ntdll export)
+ntdll.dll,LdrFindResource_U,log    # phnt (native API, ntdll export)
+ntdll.dll,LdrGetProcedureAddressEx,log    # phnt (native API, ntdll export)
+ntdll.dll,LdrGetProcedureAddressForCaller,log    # phnt (native API, ntdll export)
+ntdll.dll,NtAllocateVirtualMemory,log    # phnt (native API, ntdll export)
+ntdll.dll,NtCreateDirectoryObject,log    # phnt (native API, ntdll export)
+ntdll.dll,NtCreateFile,log,lpvoid,dword,lpvoid,lpvoid,lpvoid,dword,dword,dword,dword,lpvoid,dword
+ntdll.dll,NtCreateKey,log    # phnt (native API, ntdll export)
+ntdll.dll,NtCreateMutant,log    # phnt (native API, ntdll export)
+ntdll.dll,NtCreateProcess,log    # phnt (native API, ntdll export)
+ntdll.dll,NtCreateProcessEx,log    # phnt (native API, ntdll export)
+ntdll.dll,NtCreateSection,log    # phnt (native API, ntdll export)
+ntdll.dll,NtCreateThread,log    # phnt (native API, ntdll export)
+ntdll.dll,NtCreateThreadEx,log    # phnt (native API, ntdll export)
+ntdll.dll,NtCreateUserProcess,log    # phnt (native API, ntdll export)
+ntdll.dll,NtDelayExecution,log    # phnt (native API, ntdll export)
+ntdll.dll,NtDeleteFile,log    # phnt (native API, ntdll export)
+ntdll.dll,NtDeleteKey,log    # phnt (native API, ntdll export)
+ntdll.dll,NtDeleteValueKey,log    # phnt (native API, ntdll export)
+ntdll.dll,NtDeviceIoControlFile,log,dword,dword,dword,lpvoid,lpvoid,dword,lpvoid,dword,lpvoid,dword
+ntdll.dll,NtDuplicateToken,log    # phnt (native API, ntdll export)
+ntdll.dll,NtEnumerateKey,log    # phnt (native API, ntdll export)
+ntdll.dll,NtEnumerateSystemEnvironmentValuesEx,log    # phnt (native API, ntdll export)
+ntdll.dll,NtEnumerateValueKey,log    # phnt (native API, ntdll export)
+ntdll.dll,NtFilterToken,log    # phnt (native API, ntdll export)
+ntdll.dll,NtLoadDriver,log    # phnt (native API, ntdll export)
+ntdll.dll,NtMapViewOfSection,log    # phnt (native API, ntdll export)
+ntdll.dll,NtOpenDirectoryObject,log    # phnt (native API, ntdll export)
+ntdll.dll,NtOpenFile,log,lpvoid,dword,lpvoid,lpvoid,dword,dword
+ntdll.dll,NtOpenKey,log    # phnt (native API, ntdll export)
+ntdll.dll,NtOpenMutant,log    # phnt (native API, ntdll export)
+ntdll.dll,NtOpenProcess,log    # phnt (native API, ntdll export)
+ntdll.dll,NtOpenProcessToken,log    # phnt (native API, ntdll export)
+ntdll.dll,NtOpenSection,log    # phnt (native API, ntdll export)
+ntdll.dll,NtOpenThread,log    # phnt (native API, ntdll export)
+ntdll.dll,NtProtectVirtualMemory,log    # phnt (native API, ntdll export)
+ntdll.dll,NtQueryDirectoryFile,log    # phnt (native API, ntdll export)
+ntdll.dll,NtQueryDirectoryObject,log    # phnt (native API, ntdll export)
+ntdll.dll,NtQueryInformationFile,log    # phnt (native API, ntdll export)
+ntdll.dll,NtQueryInformationProcess,log,dword,dword,lpvoid,dword,lpvoid
+ntdll.dll,NtQueryKey,log    # phnt (native API, ntdll export)
+ntdll.dll,NtQueryLicenseValue,log    # phnt (native API, ntdll export)
+ntdll.dll,NtQueryMutant,log    # phnt (native API, ntdll export)
+ntdll.dll,NtQuerySystemEnvironmentValue,log    # phnt (native API, ntdll export)
+ntdll.dll,NtQuerySystemEnvironmentValueEx,log    # phnt (native API, ntdll export)
+ntdll.dll,NtQuerySystemInformation,log,dword,lpvoid,dword,lpvoid
+ntdll.dll,NtQuerySystemInformationEx,log    # phnt (native API, ntdll export)
+ntdll.dll,NtQueryValueKey,log    # phnt (native API, ntdll export)
+ntdll.dll,NtQueueApcThread,log    # phnt (native API, ntdll export)
+ntdll.dll,NtQueueApcThreadEx,log    # phnt (native API, ntdll export)
+ntdll.dll,NtQueueApcThreadEx2,log    # phnt (native API, ntdll export)
+ntdll.dll,NtReadFile,log    # phnt (native API, ntdll export)
+ntdll.dll,NtResumeThread,log    # phnt (native API, ntdll export)
+ntdll.dll,NtSetInformationFile,log    # phnt (native API, ntdll export)
+ntdll.dll,NtSetInformationKey,log,dword,dword,lpvoid,dword
+ntdll.dll,NtSetInformationThread,log,dword,dword,lpvoid,dword
+ntdll.dll,NtSetInformationToken,log    # phnt (native API, ntdll export)
+ntdll.dll,NtSetSystemInformation,log    # phnt (native API, ntdll export)
+ntdll.dll,NtSetTimer2,log    # phnt (native API, ntdll export)
+ntdll.dll,NtSetValueKey,log    # phnt (native API, ntdll export)
+ntdll.dll,NtSuspendThread,log    # phnt (native API, ntdll export)
+ntdll.dll,NtTerminateProcess,log    # phnt (native API, ntdll export)
+ntdll.dll,NtUnloadDriver,log    # phnt (native API, ntdll export)
+ntdll.dll,NtUnmapViewOfSection,log    # phnt (native API, ntdll export)
+ntdll.dll,NtWow64WriteVirtualMemory64,log    # phnt (native API, ntdll export)
+ntdll.dll,NtWriteFile,log    # phnt (native API, ntdll export)
+ntdll.dll,NtWriteVirtualMemory,log    # phnt (native API, ntdll export)
+ntdll.dll,NtYieldExecution,log    # phnt (native API, ntdll export)
+ntdll.dll,RtlAdjustPrivilege,log    # phnt (native API, ntdll export)
+ntdll.dll,RtlCheckRegistryKey,log    # phnt (native API, ntdll export)
+ntdll.dll,RtlComputeCrc32,log    # phnt (native API, ntdll export)
+ntdll.dll,RtlCopyMemory,log    # capa-hint (UNVERIFIED export)
+ntdll.dll,RtlCreateRegistryKey,log    # phnt (native API, ntdll export)
+ntdll.dll,RtlDecompressBufferEx,log    # phnt (native API, ntdll export)
+ntdll.dll,RtlDecompressBufferEx2,log    # phnt (native API, ntdll export)
+ntdll.dll,RtlDeleteRegistryValue,log    # phnt (native API, ntdll export)
+ntdll.dll,RtlGetNativeSystemInformation,log    # phnt (native API, ntdll export)
+ntdll.dll,RtlGetNtVersionNumbers,log    # phnt (native API, ntdll export)
+ntdll.dll,RtlGetVersion,log    # phnt (native API, ntdll export)
+ntdll.dll,RtlImageNtHeader,log    # phnt (native API, ntdll export)
+ntdll.dll,RtlImageNtHeaderEx,log    # phnt (native API, ntdll export)
+ntdll.dll,RtlMoveMemory,log    # capa-hint (UNVERIFIED export)
+ntdll.dll,RtlQueryRegistryValues,log    # phnt (native API, ntdll export)
+ntdll.dll,RtlRegisterWait,log    # phnt (native API, ntdll export)
+ntdll.dll,RtlWriteRegistryValue,log    # phnt (native API, ntdll export)
+ntdll.dll,VerSetConditionMask,log,dword,dword,dword    # win32metadata, redirected to ntdll.dll (profile)
+ntdll.dll,ZwAllocateVirtualMemory,log    # phnt (native API, ntdll export)
+ntdll.dll,ZwCreateDirectoryObject,log    # phnt (native API, ntdll export)
+ntdll.dll,ZwCreateFile,log    # phnt (native API, ntdll export)
+ntdll.dll,ZwCreateKey,log    # phnt (native API, ntdll export)
+ntdll.dll,ZwCreateKeyTransacted,log    # phnt (native API, ntdll export)
+ntdll.dll,ZwCreateProcess,log    # phnt (native API, ntdll export)
+ntdll.dll,ZwCreateProcessEx,log    # phnt (native API, ntdll export)
+ntdll.dll,ZwCreateSection,log    # phnt (native API, ntdll export)
+ntdll.dll,ZwCreateThread,log    # phnt (native API, ntdll export)
+ntdll.dll,ZwCreateThreadEx,log    # phnt (native API, ntdll export)
+ntdll.dll,ZwCreateUserProcess,log    # phnt (native API, ntdll export)
+ntdll.dll,ZwDeleteFile,log    # phnt (native API, ntdll export)
+ntdll.dll,ZwDeleteKey,log    # phnt (native API, ntdll export)
+ntdll.dll,ZwDeleteValueKey,log    # phnt (native API, ntdll export)
+ntdll.dll,ZwEnumerateKey,log    # phnt (native API, ntdll export)
+ntdll.dll,ZwEnumerateValueKey,log    # phnt (native API, ntdll export)
+ntdll.dll,ZwFreeVirtualMemory,log    # phnt (native API, ntdll export)
+ntdll.dll,ZwLoadDriver,log    # phnt (native API, ntdll export)
+ntdll.dll,ZwMapViewOfSection,log    # phnt (native API, ntdll export)
+ntdll.dll,ZwOpenFile,log    # phnt (native API, ntdll export)
+ntdll.dll,ZwOpenKey,log    # phnt (native API, ntdll export)
+ntdll.dll,ZwOpenKeyEx,log    # phnt (native API, ntdll export)
+ntdll.dll,ZwOpenKeyTransacted,log    # phnt (native API, ntdll export)
+ntdll.dll,ZwOpenKeyTransactedEx,log    # phnt (native API, ntdll export)
+ntdll.dll,ZwOpenProcess,log    # phnt (native API, ntdll export)
+ntdll.dll,ZwOpenSection,log    # phnt (native API, ntdll export)
+ntdll.dll,ZwOpenThread,log    # phnt (native API, ntdll export)
+ntdll.dll,ZwProtectVirtualMemory,log    # phnt (native API, ntdll export)
+ntdll.dll,ZwQueryDirectoryFile,log    # phnt (native API, ntdll export)
+ntdll.dll,ZwQueryInformationFile,log    # phnt (native API, ntdll export)
+ntdll.dll,ZwQueryInformationProcess,log    # phnt (native API, ntdll export)
+ntdll.dll,ZwQueryKey,log    # phnt (native API, ntdll export)
+ntdll.dll,ZwQuerySystemInformation,log    # phnt (native API, ntdll export)
+ntdll.dll,ZwQuerySystemInformationEx,log    # phnt (native API, ntdll export)
+ntdll.dll,ZwQueryValueKey,log    # phnt (native API, ntdll export)
+ntdll.dll,ZwReadFile,log    # phnt (native API, ntdll export)
+ntdll.dll,ZwResumeThread,log    # phnt (native API, ntdll export)
+ntdll.dll,ZwSetInformationFile,log    # phnt (native API, ntdll export)
+ntdll.dll,ZwSetInformationThread,log    # phnt (native API, ntdll export)
+ntdll.dll,ZwSetSystemInformation,log    # phnt (native API, ntdll export)
+ntdll.dll,ZwSetValueKey,log    # phnt (native API, ntdll export)
+ntdll.dll,ZwSuspendThread,log    # phnt (native API, ntdll export)
+ntdll.dll,ZwTerminateProcess,log    # phnt (native API, ntdll export)
+ntdll.dll,ZwUnloadDriver,log    # phnt (native API, ntdll export)
+ntdll.dll,ZwUnmapViewOfSection,log    # phnt (native API, ntdll export)
+ntdll.dll,ZwWriteFile,log    # phnt (native API, ntdll export)
+ntdll.dll,ZwWriteVirtualMemory,log    # phnt (native API, ntdll export)
+ole32.dll,CoGetObject,log,lpcwstr,lpvoid,lpvoid,lpvoid*
+oleaut32.dll,SysAllocString,log,lpcwstr
+oleaut32.dll,VariantInit,log,lpvoid
+powrprof.dll,EnumPwrSchemes,log,dword,dword
+psapi.dll,EnumDeviceDrivers,log,lpvoid*,dword,lpvoid    # win32metadata (psapi K32 wrapper)
+psapi.dll,EnumProcessModules,log,dword,lpvoid,dword,lpvoid    # win32metadata (psapi K32 wrapper)
+psapi.dll,EnumProcessModulesEx,log,dword,lpvoid,dword,lpvoid,dword    # win32metadata (psapi K32 wrapper)
+psapi.dll,EnumProcesses,log,lpvoid,dword,lpvoid    # win32metadata (psapi K32 wrapper)
+psapi.dll,GetProcessImageFileNameA,log,dword,lpvoid,dword    # win32metadata (psapi K32 wrapper)
+psapi.dll,GetProcessImageFileNameW,log,dword,lpvoid,dword    # win32metadata (psapi K32 wrapper)
+psapi.dll,QueryWorkingSet,log,dword,lpvoid,dword    # win32metadata (psapi K32 wrapper)
+rpcrt4.dll,NdrAsyncClientCall,log,lpvoid,lpvoid
+rpcrt4.dll,RpcAsyncInitializeHandle,log,lpvoid,dword
+rpcrt4.dll,RpcBindingFromStringBindingW,log,lpvoid,lpvoid*
+rpcrt4.dll,RpcBindingSetAuthInfoExW,log,lpvoid,lpvoid,dword,dword,lpvoid,dword,lpvoid
+rpcrt4.dll,RpcServerListen,log,dword,dword,dword
+rpcrt4.dll,RpcStringBindingComposeW,log,lpvoid,lpvoid,lpvoid,lpvoid,lpvoid,lpvoid*
+rpcrt4.dll,UuidFromStringA,log,lpvoid,lpvoid
+rpcrt4.dll,UuidFromStringW,log,lpvoid,lpvoid
+rstrtmgr.dll,RmGetList,log,dword,lpvoid,lpvoid,lpvoid,lpvoid
+rstrtmgr.dll,RmRegisterResources,log,dword,dword,lpvoid,dword,lpvoid,dword,lpvoid
+rstrtmgr.dll,RmShutdown,log,dword,dword,dword
+rstrtmgr.dll,RmStartSession,log,lpvoid,dword,lpcwstr
+secur32.dll,AcquireCredentialsHandleA,log,lpcstr,lpcstr,dword,lpvoid,lpvoid,dword,lpvoid,lpvoid,lpvoid
+secur32.dll,AcquireCredentialsHandleW,log,lpcwstr,lpcwstr,dword,lpvoid,lpvoid,dword,lpvoid,lpvoid,lpvoid
+secur32.dll,DecryptMessage,log,lpvoid,lpvoid,dword,lpvoid
+secur32.dll,EncryptMessage,log,lpvoid,dword,lpvoid,dword
+secur32.dll,GetComputerObjectNameA,log,dword,lpvoid,lpvoid
+secur32.dll,GetComputerObjectNameW,log,dword,lpvoid,lpvoid
+secur32.dll,GetUserNameExA,log,dword,lpvoid,lpvoid
+secur32.dll,GetUserNameExW,log,dword,lpvoid,lpvoid
+secur32.dll,LsaEnumerateLogonSessions,log,lpvoid,lpvoid*
+secur32.dll,LsaGetLogonSessionData,log,lpvoid,lpvoid*
+secur32.dll,QueryContextAttributesA,log,lpvoid,dword,lpvoid
+secur32.dll,QueryContextAttributesW,log,lpvoid,dword,lpvoid
+setupapi.dll,SetupDiDestroyDeviceInfoList,log,dword
+setupapi.dll,SetupDiEnumDeviceInfo,log,dword,dword,lpvoid
+shell32.dll,CommandLineToArgvW,log,lpcwstr,lpvoid
+shell32.dll,DragQueryFileA,log,dword,dword,lpvoid,dword
+shell32.dll,DragQueryFileW,log,dword,dword,lpvoid,dword
+shell32.dll,IsUserAnAdmin,log
+shell32.dll,SHCreateDirectory,log,dword,lpcwstr
+shell32.dll,SHCreateDirectoryExA,log,dword,lpcstr,lpvoid
+shell32.dll,SHCreateDirectoryExW,log,dword,lpcwstr,lpvoid
+shell32.dll,SHEmptyRecycleBinA,log,dword,lpcstr,dword
+shell32.dll,SHEmptyRecycleBinW,log,dword,lpcwstr,dword
+shell32.dll,SHFileOperationA,log,lpvoid
+shell32.dll,SHFileOperationW,log,lpvoid
+shell32.dll,SHGetFileInfoA,log,lpcstr,dword,lpvoid,dword,dword
+shell32.dll,SHGetFolderLocation,log,dword,dword,dword,dword,lpvoid*
+shell32.dll,SHGetFolderPathA,log,dword,dword,dword,dword,lpvoid
+shell32.dll,SHGetFolderPathAndSubDirA,log,dword,dword,dword,dword,lpcstr,lpvoid
+shell32.dll,SHGetFolderPathAndSubDirW,log,dword,dword,dword,dword,lpcwstr,lpvoid
+shell32.dll,SHGetSpecialFolderLocation,log,dword,dword,lpvoid*
+shell32.dll,SHGetSpecialFolderPathA,log,dword,lpvoid,dword,dword
+shell32.dll,SHGetSpecialFolderPathW,log,dword,lpvoid,dword,dword
+shell32.dll,ShellExecuteA,log,dword,lpcstr,lpcstr,lpcstr,lpcstr,dword
+shell32.dll,ShellExecuteExA,log,lpvoid
+shell32.dll,ShellExecuteW,log,dword,lpcwstr,lpcwstr,lpcwstr,lpcwstr,dword
+shlwapi.dll,PathFileExistsA,log,lpcstr
+shlwapi.dll,PathFileExistsW,log,lpcwstr
+shlwapi.dll,SHCreateThread,log,dword,lpvoid,dword,dword
+shlwapi.dll,SHCreateThreadWithHandle,log,dword,lpvoid,dword,dword,lpvoid
+shlwapi.dll,SHDeleteEmptyKeyA,log,dword,lpcstr
+shlwapi.dll,SHDeleteEmptyKeyW,log,dword,lpcwstr
+shlwapi.dll,SHDeleteKeyA,log,dword,lpcstr
+shlwapi.dll,SHDeleteKeyW,log,dword,lpcwstr
+shlwapi.dll,SHDeleteValueA,log,dword,lpcstr,lpcstr
+shlwapi.dll,SHDeleteValueW,log,dword,lpcwstr,lpcwstr
+shlwapi.dll,SHEnumKeyExA,log,dword,dword,lpvoid,lpvoid
+shlwapi.dll,SHEnumKeyExW,log,dword,dword,lpvoid,lpvoid
+shlwapi.dll,SHEnumValueA,log,dword,dword,lpvoid,lpvoid,lpvoid,lpvoid,lpvoid
+shlwapi.dll,SHEnumValueW,log,dword,dword,lpvoid,lpvoid,lpvoid,lpvoid,lpvoid
+shlwapi.dll,SHGetValueA,log,dword,lpcstr,lpcstr,lpvoid,lpvoid,lpvoid
+shlwapi.dll,SHGetValueW,log,dword,lpcwstr,lpcwstr,lpvoid,lpvoid,lpvoid
+shlwapi.dll,SHOpenRegStream2A,log,dword,lpcstr,lpcstr,dword
+shlwapi.dll,SHOpenRegStream2W,log,dword,lpcwstr,lpcwstr,dword
+shlwapi.dll,SHOpenRegStreamA,log,dword,lpcstr,lpcstr,dword
+shlwapi.dll,SHOpenRegStreamW,log,dword,lpcwstr,lpcwstr,dword
+shlwapi.dll,SHQueryInfoKeyA,log,dword,lpvoid,lpvoid,lpvoid,lpvoid
+shlwapi.dll,SHQueryInfoKeyW,log,dword,lpvoid,lpvoid,lpvoid,lpvoid
+shlwapi.dll,SHQueryValueExA,log,dword,lpcstr,lpvoid,lpvoid,lpvoid,lpvoid
+shlwapi.dll,SHQueryValueExW,log,dword,lpcwstr,lpvoid,lpvoid,lpvoid,lpvoid
+shlwapi.dll,SHRegCreateUSKeyA,log,lpcstr,dword,dword,lpvoid,dword
+shlwapi.dll,SHRegCreateUSKeyW,log,lpcwstr,dword,dword,lpvoid,dword
+shlwapi.dll,SHRegDeleteEmptyUSKeyA,log,dword,lpcstr,dword
+shlwapi.dll,SHRegDeleteEmptyUSKeyW,log,dword,lpcwstr,dword
+shlwapi.dll,SHRegDeleteUSValueA,log,dword,lpcstr,dword
+shlwapi.dll,SHRegDeleteUSValueW,log,dword,lpcwstr,dword
+shlwapi.dll,SHRegEnumUSKeyA,log,dword,dword,lpvoid,lpvoid,dword
+shlwapi.dll,SHRegEnumUSKeyW,log,dword,dword,lpvoid,lpvoid,dword
+shlwapi.dll,SHRegEnumUSValueA,log,dword,dword,lpvoid,lpvoid,lpvoid,lpvoid,lpvoid,dword
+shlwapi.dll,SHRegEnumUSValueW,log,dword,dword,lpvoid,lpvoid,lpvoid,lpvoid,lpvoid,dword
+shlwapi.dll,SHRegGetBoolUSValueA,log,lpcstr,lpcstr,dword,dword
+shlwapi.dll,SHRegGetBoolUSValueW,log,lpcwstr,lpcwstr,dword,dword
+shlwapi.dll,SHRegGetIntW,log,dword,lpcwstr,dword
+shlwapi.dll,SHRegGetPathA,log,dword,lpcstr,lpcstr,lpvoid,dword
+shlwapi.dll,SHRegGetPathW,log,dword,lpcwstr,lpcwstr,lpvoid,dword
+shlwapi.dll,SHRegGetUSValueA,log,lpcstr,lpcstr,lpvoid,lpvoid,lpvoid,dword,lpvoid,dword
+shlwapi.dll,SHRegGetUSValueW,log,lpcwstr,lpcwstr,lpvoid,lpvoid,lpvoid,dword,lpvoid,dword
+shlwapi.dll,SHRegGetValueA,log,dword,lpcstr,lpcstr,dword,lpvoid,lpvoid,lpvoid
+shlwapi.dll,SHRegGetValueFromHKCUHKLM,log,lpcwstr,lpcwstr,dword,lpvoid,lpvoid,lpvoid
+shlwapi.dll,SHRegGetValueW,log,dword,lpcwstr,lpcwstr,dword,lpvoid,lpvoid,lpvoid
+shlwapi.dll,SHRegOpenUSKeyA,log,lpcstr,dword,dword,lpvoid,dword
+shlwapi.dll,SHRegOpenUSKeyW,log,lpcwstr,dword,dword,lpvoid,dword
+shlwapi.dll,SHRegQueryInfoUSKeyA,log,dword,lpvoid,lpvoid,lpvoid,lpvoid,dword
+shlwapi.dll,SHRegQueryInfoUSKeyW,log,dword,lpvoid,lpvoid,lpvoid,lpvoid,dword
+shlwapi.dll,SHRegQueryUSValueA,log,dword,lpcstr,lpvoid,lpvoid,lpvoid,dword,lpvoid,dword
+shlwapi.dll,SHRegQueryUSValueW,log,dword,lpcwstr,lpvoid,lpvoid,lpvoid,dword,lpvoid,dword
+shlwapi.dll,SHRegSetPathA,log,dword,lpcstr,lpcstr,lpcstr,dword
+shlwapi.dll,SHRegSetPathW,log,dword,lpcwstr,lpcwstr,lpcwstr,dword
+shlwapi.dll,SHRegSetUSValueA,log,lpcstr,lpcstr,dword,lpvoid,dword,dword
+shlwapi.dll,SHRegSetUSValueW,log,lpcwstr,lpcwstr,dword,lpvoid,dword,dword
+shlwapi.dll,SHRegWriteUSValueA,log,dword,lpcstr,dword,lpvoid,dword,dword
+shlwapi.dll,SHRegWriteUSValueW,log,dword,lpcwstr,dword,lpvoid,dword,dword
+shlwapi.dll,SHSetValueA,log,dword,lpcstr,lpcstr,dword,lpvoid,dword
+shlwapi.dll,SHSetValueW,log,dword,lpcwstr,lpcwstr,dword,lpvoid,dword
+slwga.dll,SLIsGenuineLocal,log,lpvoid,lpvoid,lpvoid
+ucrtbase.dll,__android_log_print,log    # CRT (UNVERIFIED export)
+ucrtbase.dll,__p__pgmptr,log    # CRT (UNVERIFIED export)
+ucrtbase.dll,__p__wpgmptr,log    # CRT (UNVERIFIED export)
+ucrtbase.dll,__system_property_get,log    # CRT (UNVERIFIED export)
+ucrtbase.dll,_allmul,log    # CRT (UNVERIFIED export)
+ucrtbase.dll,_beginthread,log    # CRT (UNVERIFIED export)
+ucrtbase.dll,_beginthreadex,log    # CRT (UNVERIFIED export)
+ucrtbase.dll,_fwrite,log    # CRT (UNVERIFIED export)
+ucrtbase.dll,_get_pgmptr,log    # CRT (UNVERIFIED export)
+ucrtbase.dll,_get_wpgmptr,log    # CRT (UNVERIFIED export)
+ucrtbase.dll,_mkdir,log    # CRT (UNVERIFIED export)
+ucrtbase.dll,_pgmptr,log    # CRT (UNVERIFIED export)
+ucrtbase.dll,_read,log    # CRT (UNVERIFIED export)
+ucrtbase.dll,_rmdir,log    # CRT (UNVERIFIED export)
+ucrtbase.dll,_stricmp,log,lpcstr,lpcstr    # CRT (UNVERIFIED export)
+ucrtbase.dll,_system,log    # CRT (UNVERIFIED export)
+ucrtbase.dll,_wcsicmp,log,lpcwstr,lpcwstr    # CRT (UNVERIFIED export)
+ucrtbase.dll,_wmkdir,log    # CRT (UNVERIFIED export)
+ucrtbase.dll,_wpgmptr,log    # CRT (UNVERIFIED export)
+ucrtbase.dll,_wremove,log    # CRT (UNVERIFIED export)
+ucrtbase.dll,_wrename,log    # CRT (UNVERIFIED export)
+ucrtbase.dll,_wrmdir,log    # CRT (UNVERIFIED export)
+ucrtbase.dll,_wsystem,log    # CRT (UNVERIFIED export)
+ucrtbase.dll,memcmp,log,lpvoid,lpvoid,size_t    # CRT (UNVERIFIED export)
+ucrtbase.dll,strcmp,log,lpcstr,lpcstr    # CRT (UNVERIFIED export)
+ucrtbase.dll,strstr,log,lpcstr,lpcstr    # CRT (UNVERIFIED export)
+ucrtbase.dll,wcscmp,log,lpcwstr,lpcwstr    # CRT (UNVERIFIED export)
+ucrtbase.dll,wcsstr,log,lpcwstr,lpcwstr    # CRT (UNVERIFIED export)
+urlmon.dll,URLDownloadToCacheFileA,log,dword,lpcstr,lpvoid,dword,dword,dword
+urlmon.dll,URLDownloadToFileA,log,dword,lpcstr,lpcstr,dword,dword
+urlmon.dll,URLOpenBlockingStreamA,log,dword,lpcstr,lpvoid,dword,dword
+urlmon.dll,URLOpenBlockingStreamW,log,dword,lpcwstr,lpvoid,dword,dword
+urlmon.dll,URLOpenPullStreamA,log,dword,lpcstr,dword,dword
+urlmon.dll,URLOpenPullStreamW,log,dword,lpcwstr,dword,dword
+urlmon.dll,URLOpenStreamA,log,dword,lpcstr,dword,dword
+urlmon.dll,URLOpenStreamW,log,dword,lpcwstr,dword,dword
+urlmon.dll,UrlMkGetSessionOption,log,dword,lpvoid,dword,lpvoid,dword
+user32.dll,AddClipboardFormatListener,log,dword
+user32.dll,AttachThreadInput,log,dword,dword,dword
+user32.dll,CallNextHookEx,log,dword,dword,dword,dword
+user32.dll,CallWindowProcA,log,dword,dword,dword,dword,dword
+user32.dll,CallWindowProcW,log,dword,dword,dword,dword,dword
+user32.dll,CloseClipboard,log
+user32.dll,CreateDesktopA,log,lpcstr,lpcstr,lpvoid,dword,dword,lpvoid
+user32.dll,CreateDesktopW,log,lpcwstr,lpcwstr,lpvoid,dword,dword,lpvoid
+user32.dll,DrawStateA,log,dword,dword,dword,dword,dword,dword,dword,dword,dword,dword
+user32.dll,DrawStateW,log,dword,dword,dword,dword,dword,dword,dword,dword,dword,dword
+user32.dll,EmptyClipboard,log
+user32.dll,EnumChildWindows,log,dword,dword,dword
+user32.dll,EnumDesktopWindows,log,dword,dword,dword
+user32.dll,EnumDesktopsA,log,dword,dword,dword
+user32.dll,EnumDesktopsW,log,dword,dword,dword
+user32.dll,EnumDisplayMonitors,log,dword,lpvoid,dword,dword
+user32.dll,EnumPropsA,log,dword,dword
+user32.dll,EnumPropsExA,log,dword,dword,dword
+user32.dll,EnumPropsExW,log,dword,dword,dword
+user32.dll,EnumPropsW,log,dword,dword
+user32.dll,EnumThreadWindows,log,dword,dword,dword
+user32.dll,EnumWindowStationsA,log,dword,dword
+user32.dll,EnumWindowStationsW,log,dword,dword
+user32.dll,EnumWindows,log,dword,dword
+user32.dll,ExitWindows,log    # capa-hint (UNVERIFIED export)
+user32.dll,GetClipboardData,log,dword
+user32.dll,GetDC,log,dword
+user32.dll,GetDCEx,log,dword,dword,dword
+user32.dll,GetDesktopWindow,log
+user32.dll,GetForegroundWindow,log
+user32.dll,GetForgroundWindow,log    # capa-hint (UNVERIFIED export)
+user32.dll,GetKeyNameTextA,log,dword,lpvoid,dword
+user32.dll,GetKeyNameTextW,log,dword,lpvoid,dword
+user32.dll,GetKeyState,log,dword
+user32.dll,GetKeyboardLayout,log,dword
+user32.dll,GetKeyboardLayoutList,log,dword,lpvoid
+user32.dll,GetKeyboardLayoutNameA,log,lpvoid
+user32.dll,GetKeyboardLayoutNameW,log,lpvoid
+user32.dll,GetKeyboardState,log,lpvoid
+user32.dll,GetMousePointsEx,log    # capa-hint (UNVERIFIED export)
+user32.dll,GetRawInputData,log,dword,dword,lpvoid,lpvoid,dword
+user32.dll,GetShellWindow,log
+user32.dll,GetWindowDC,log,dword
+user32.dll,GetWindowLongPtrA,log,dword,dword
+user32.dll,GetWindowLongPtrW,log,dword,dword
+user32.dll,GetWindowTextA,log,dword,lpvoid,dword
+user32.dll,GetWindowTextW,log,dword,lpvoid,dword
+user32.dll,GetWindowThreadProcessId,log,dword,lpvoid
+user32.dll,GrayStringA,log,dword,dword,dword,dword,dword,dword,dword,dword,dword
+user32.dll,GrayStringW,log,dword,dword,dword,dword,dword,dword,dword,dword,dword
+user32.dll,IsWindowVisible,log,dword
+user32.dll,LoadIconA,log,dword,lpcstr
+user32.dll,LoadIconW,log,dword,lpcwstr
+user32.dll,LockWorkStation,log
+user32.dll,MapVirtualKeyA,log,dword,dword
+user32.dll,MapVirtualKeyW,log,dword,dword
+user32.dll,MsgWaitForMultipleObjects,log,dword,lpvoid,dword,dword,dword
+user32.dll,OpenClipboard,log,dword
+user32.dll,OpenDesktopA,log,lpcstr,dword,dword,dword
+user32.dll,OpenDesktopW,log,lpcwstr,dword,dword,dword
+user32.dll,OpenInputDesktop,log,dword,dword,dword
+user32.dll,OpenWindowStationA,log,lpcstr,dword,dword
+user32.dll,OpenWindowStationW,log,lpcwstr,dword,dword
+user32.dll,PostMessageA,log,dword,dword,dword,dword
+user32.dll,PostMessageW,log,dword,dword,dword,dword
+user32.dll,RegisterHotKey,log,dword,dword,dword,dword
+user32.dll,RegisterRawInputDevices,log,lpvoid,dword,dword
+user32.dll,SendMessageA,log,dword,dword,dword,dword
+user32.dll,SendMessageW,log,dword,dword,dword,dword
+user32.dll,SetClipboardData,log,dword,dword
+user32.dll,SetCursorPos,log,dword,dword
+user32.dll,SetProcessWindowStation,log,dword
+user32.dll,SetPropA,log,dword,lpcstr,dword
+user32.dll,SetPropW,log,dword,lpcwstr,dword
+user32.dll,SetThreadDesktop,log,dword
+user32.dll,ShowWindow,log,dword,dword
+user32.dll,SwapMouseButton,log,dword
+user32.dll,SwitchDesktop,log,dword
+user32.dll,UnregisterHotKey,log,dword,dword
+user32.dll,VkKeyScanA,log,dword
+user32.dll,VkKeyScanExA,log,dword,dword
+user32.dll,VkKeyScanExW,log,dword,dword
+user32.dll,VkKeyScanW,log,dword
+user32.dll,keybd_event,log,dword,dword,dword,dword
+user32.dll,mouse_event,log,dword,dword,dword,dword,dword
+userenv.dll,GetAllUsersProfileDirectoryA,log,lpvoid,lpvoid
+userenv.dll,GetAllUsersProfileDirectoryW,log,lpvoid,lpvoid
+userenv.dll,GetAppContainerFolderPath,log,lpcwstr,lpcwstr
+userenv.dll,GetDefaultUserProfileDirectoryA,log,lpvoid,lpvoid
+userenv.dll,GetDefaultUserProfileDirectoryW,log,lpvoid,lpvoid
+userenv.dll,GetProfilesDirectoryA,log,lpvoid,lpvoid
+userenv.dll,GetProfilesDirectoryW,log,lpvoid,lpvoid
+userenv.dll,GetUserProfileDirectoryA,log,dword,lpvoid,lpvoid
+userenv.dll,GetUserProfileDirectoryW,log,dword,lpvoid,lpvoid
+userenv.dll,LoadUserProfileA,log,dword,lpvoid
+userenv.dll,LoadUserProfileW,log,dword,lpvoid
+verifier.dll,VerifierEnumerateResource,log,dword,dword,dword,dword,lpvoid
+version.dll,GetFileVersionInfoA,log,lpcstr,dword,dword,lpvoid
+version.dll,GetFileVersionInfoExA,log,dword,lpcstr,dword,dword,lpvoid
+version.dll,GetFileVersionInfoExW,log,dword,lpcwstr,dword,dword,lpvoid
+version.dll,GetFileVersionInfoSizeA,log,lpcstr,lpvoid
+version.dll,GetFileVersionInfoSizeExA,log,dword,lpcstr,lpvoid
+version.dll,GetFileVersionInfoSizeExW,log,dword,lpcwstr,lpvoid
+version.dll,VerQueryValueA,log,lpvoid,lpcstr,lpvoid*,lpvoid
+version.dll,VerQueryValueW,log,lpvoid,lpcwstr,lpvoid*,lpvoid
+vertdll.dll,WaitOnAddress,log,lpvoid,lpvoid,dword,dword
+virtdisk.dll,AttachVirtualDisk,log,dword,dword,dword,dword,lpvoid,lpvoid
+virtdisk.dll,GetVirtualDiskPhysicalPath,log,dword,lpvoid,lpcwstr
+virtdisk.dll,OpenVirtualDisk,log,lpvoid,lpcwstr,dword,dword,lpvoid,lpvoid
+wevtapi.dll,EvtClearLog,log,dword,lpcwstr,lpcwstr,dword
+wevtapi.dll,EvtOpenLog,log,dword,lpcwstr,dword
+wevtapi.dll,EvtOpenSession,log,dword,lpvoid,dword,dword
+winhttp.dll,WinHttpQueryDataAvailable,log,lpvoid,lpvoid
+winhttp.dll,WinHttpReadData,log,lpvoid,lpvoid,dword,lpvoid
+winhttp.dll,WinHttpWriteData,log,lpvoid,lpvoid,dword,lpvoid
+wininet.dll,DeleteUrlCacheEntry,log,lpcstr
+wininet.dll,DeleteUrlCacheEntryA,log,lpcstr
+wininet.dll,DeleteUrlCacheEntryW,log,lpcwstr
+wininet.dll,FindCloseUrlCache,log,dword
+wininet.dll,FindFirstUrlCacheEntryA,log,lpcstr,lpvoid,lpvoid
+wininet.dll,FindFirstUrlCacheEntryW,log,lpcwstr,lpvoid,lpvoid
+wininet.dll,FindNextUrlCacheEntryA,log,dword,lpvoid,lpvoid
+wininet.dll,FindNextUrlCacheEntryW,log,dword,lpvoid,lpvoid
+wininet.dll,FtpCreateDirectoryA,log,lpvoid,lpcstr
+wininet.dll,FtpCreateDirectoryW,log,lpvoid,lpcwstr
+wininet.dll,FtpDeleteFileA,log,lpvoid,lpcstr
+wininet.dll,FtpDeleteFileW,log,lpvoid,lpcwstr
+wininet.dll,FtpGetCurrentDirectoryA,log,lpvoid,lpvoid,lpvoid
+wininet.dll,FtpGetCurrentDirectoryW,log,lpvoid,lpvoid,lpvoid
+wininet.dll,FtpGetFileA,log,lpvoid,lpcstr,lpcstr,dword,dword,dword,dword
+wininet.dll,FtpGetFileSize,log,lpvoid,lpvoid
+wininet.dll,FtpGetFileW,log,lpvoid,lpcwstr,lpcwstr,dword,dword,dword,dword
+wininet.dll,FtpOpenFileA,log,lpvoid,lpcstr,dword,dword,dword
+wininet.dll,FtpOpenFileW,log,lpvoid,lpcwstr,dword,dword,dword
+wininet.dll,FtpPutFileA,log,lpvoid,lpcstr,lpcstr,dword,dword
+wininet.dll,FtpPutFileW,log,lpvoid,lpcwstr,lpcwstr,dword,dword
+wininet.dll,FtpRemoveDirectoryA,log,lpvoid,lpcstr
+wininet.dll,FtpRemoveDirectoryW,log,lpvoid,lpcwstr
+wininet.dll,FtpRenameFileA,log,lpvoid,lpcstr,lpcstr
+wininet.dll,FtpRenameFileW,log,lpvoid,lpcwstr,lpcwstr
+wininet.dll,FtpSetCurrentDirectoryA,log,lpvoid,lpcstr
+wininet.dll,FtpSetCurrentDirectoryW,log,lpvoid,lpcwstr
+wininet.dll,InternetAttemptConnect,log,dword
+wininet.dll,InternetCheckConnectionA,log,lpcstr,dword,dword
+wininet.dll,InternetCheckConnectionW,log,lpcwstr,dword,dword
+wininet.dll,InternetQueryDataAvailable,log,lpvoid,lpvoid,dword,dword
+wininet.dll,InternetReadFileExA,log,lpvoid,lpvoid,dword,dword
+wininet.dll,InternetReadFileExW,log,lpvoid,lpvoid,dword,dword
+wininet.dll,UnlockUrlCacheEntryFile,log,lpcstr,dword
+wininet.dll,UnlockUrlCacheEntryFileA,log,lpcstr,dword
+wininet.dll,UnlockUrlCacheEntryFileW,log,lpcwstr,dword
+winmm.dll,mciSendStringA,log,lpcstr,lpvoid,dword,dword
+winmm.dll,mciSendStringW,log,lpcwstr,lpvoid,dword,dword
+winmm.dll,waveInAddBuffer,log,dword,lpvoid,dword
+winmm.dll,waveInOpen,log,lpvoid,dword,lpvoid,dword,dword,dword
+winmm.dll,waveInStart,log,dword
+ws2_32.dll,GetAddrInfoExA,log,lpcstr,lpcstr,dword,lpvoid,lpvoid,lpvoid*,lpvoid,lpvoid,dword,lpvoid
+ws2_32.dll,GetAddrInfoExW,log,lpcwstr,lpcwstr,dword,lpvoid,lpvoid,lpvoid*,lpvoid,lpvoid,dword,lpvoid
+ws2_32.dll,WSAGetLastError,log
+ws2_32.dll,WSAIoctl,log,dword,dword,lpvoid,dword,lpvoid,dword,lpvoid,lpvoid,dword
+ws2_32.dll,WSARecvDisconnect,log,dword,lpvoid
+ws2_32.dll,WSARecvMsg,log    # capa-hint (UNVERIFIED export)
+ws2_32.dll,getnameinfo,log,lpvoid,dword,lpvoid,dword,lpvoid,dword,dword
+ws2_32.dll,getsockname,log,dword,lpvoid,lpvoid
+ws2_32.dll,inet_pton,log,dword,lpcstr,lpvoid
+wsmsvc.dll,WSManCreateShell,log,lpvoid,dword,lpcwstr,lpvoid,lpvoid,lpvoid,lpvoid,lpvoid*
+wsmsvc.dll,WSManRunShellCommand,log,lpvoid,dword,lpcwstr,lpvoid,lpvoid,lpvoid,lpvoid*
+wsmsvc.dll,WSManRunShellCommandEx,log,lpvoid,dword,lpcwstr,lpcwstr,lpvoid,lpvoid,lpvoid,lpvoid*
+wtsapi32.dll,WTSEnumerateProcessesA,log,dword,dword,dword,lpvoid*,lpvoid
+wtsapi32.dll,WTSEnumerateProcessesExA,log,dword,lpvoid,dword,lpcstr,lpvoid
+wtsapi32.dll,WTSEnumerateProcessesExW,log,dword,lpvoid,dword,lpcwstr,lpvoid
+wtsapi32.dll,WTSEnumerateProcessesW,log,dword,dword,dword,lpvoid*,lpvoid
+wtsapi32.dll,WTSEnumerateSessionsA,log,dword,dword,dword,lpvoid*,lpvoid
+wtsapi32.dll,WTSEnumerateSessionsExA,log,dword,lpvoid,dword,lpvoid*,lpvoid
+wtsapi32.dll,WTSEnumerateSessionsExW,log,dword,lpvoid,dword,lpvoid*,lpvoid
+wtsapi32.dll,WTSEnumerateSessionsW,log,dword,dword,dword,lpvoid*,lpvoid
+wtsapi32.dll,WTSFreeMemory,log,lpvoid
+wtsapi32.dll,WTSOpenServerA,log,lpcstr
+wtsapi32.dll,WTSOpenServerW,log,lpcwstr
+wtsapi32.dll,WTSQuerySessionInformationA,log,dword,dword,dword,lpcstr,lpvoid
+wtsapi32.dll,WTSQuerySessionInformationW,log,dword,dword,dword,lpcwstr,lpvoid
+wudfplatform.dll,WudfIsAnyDebuggerPresent,log    # capa-hint (UNVERIFIED export)
+wudfplatform.dll,WudfIsKernelDebuggerPresent,log    # capa-hint (UNVERIFIED export)
+wudfplatform.dll,WudfIsUserDebuggerPresent,log    # capa-hint (UNVERIFIED export)
+# END GENERATED
