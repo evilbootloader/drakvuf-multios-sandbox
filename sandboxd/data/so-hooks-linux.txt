@@ -100,7 +100,7 @@ libc.so.6,getenv,log,Name:lpcstr
 libc.so.6,mprotect,log,Addr:lpvoid,Len:ulong,Prot:int
 libc.so.6,memfd_create,log,Name:lpcstr,Flags:int
 libc.so.6,ptrace,log,Request:int,Pid:int,Addr:lpvoid,Data:lpvoid
-libc.so.6,strcmp,log,lpvoid,lpvoid
+libc.so.6,strcmp,log,str1:lpcstr,str2:lpcstr
 libc.so.6,memcpy,log,dest:lpvoid,src:lpvoid,n:ulong 
 
 # --- HTTP via libcurl ------------------------------------------------------
