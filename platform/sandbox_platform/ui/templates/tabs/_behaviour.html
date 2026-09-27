@@ -59,6 +59,21 @@
   <code>procmon</code> was not among this run's plugins, or wrote nothing.</div>
 {% endif %}
 
+<h2 style="margin-top:1.5rem">Files read
+  <span class="count">{{ report.read_files | length }}</span></h2>
+{% if report.read_files %}
+<div class="scroll-x"><table class="rows">
+  <thead><tr><th>Path</th><th>By</th></tr></thead>
+  <tbody>
+  {% for f in report.read_files %}
+    <tr><td class="filename">{{ f.filename }}</td><td>{{ procs(f.process_seqids) }}</td></tr>
+  {% endfor %}
+  </tbody>
+</table></div>
+{% else %}
+<p class="dim">None recorded. Opens for write that were then written to, by any process, minus the prefetch directory.</p>
+{% endif %}
+
 <h2 style="margin-top:1.5rem">Files written
   <span class="count">{{ report.modified_files | length }}</span></h2>
 {% if report.modified_files %}
