@@ -5,7 +5,7 @@ import os
 
 from .parse_utils import parse_log
 from .plugin_base import PostprocessContext
-
+from ...guests import TargetOs
 
 def get_modified_files_info(context: PostprocessContext) -> None:
     analysis_dir = context.analysis_dir
