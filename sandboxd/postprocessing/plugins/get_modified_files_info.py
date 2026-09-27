@@ -269,6 +269,16 @@ def get_modified_files_info(context: PostprocessContext) -> None:
         if path_str in excluded_files:
             return None
 
+        try:
+            event_uid = int(data["EventUID"], 16)
+            pid = data["PID"]
+        except (KeyError, TypeError, ValueError):
+            return None
+
+        process = process_tree.get_process_for_evtid(
+            pid,
+            event_uid,
+        )
         # ------------------------------------------------------------
         # Normalize event
         # ------------------------------------------------------------
