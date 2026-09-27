@@ -74,6 +74,9 @@ libc.so.6,mkdir,log,Path:lpcstr,Mode:int
 libc.so.6,rmdir,log,Path:lpcstr
 libc.so.6,readlink,log,Path:lpcstr,Buf:lpvoid,Size:ulong
 libc.so.6,opendir,log,Path:lpcstr
+libc.so.6,read,log,fd:int,buf:lpvoid,:ulong
+libc.so.6,pread,log,fd:int,buf:lpvoid,:ulong,offset:ulong
+libc.so.6,write,log,fd:int,buf:lpvoid,count:ulong
 
 # --- network ---------------------------------------------------------------
 libc.so.6,socket,log,Domain:int,Type:int,Protocol:int
@@ -97,6 +100,8 @@ libc.so.6,getenv,log,Name:lpcstr
 libc.so.6,mprotect,log,Addr:lpvoid,Len:ulong,Prot:int
 libc.so.6,memfd_create,log,Name:lpcstr,Flags:int
 libc.so.6,ptrace,log,Request:int,Pid:int,Addr:lpvoid,Data:lpvoid
+libc.so.6,strcmp,log,lpvoid,lpvoid
+libc.so.6,memcpy,log,dest:lpvoid,src:lpvoid,n:ulong 
 
 # --- HTTP via libcurl ------------------------------------------------------
 # **Hand-authored, and necessarily so.** capa-rules v9.4.0 contains no curl,
