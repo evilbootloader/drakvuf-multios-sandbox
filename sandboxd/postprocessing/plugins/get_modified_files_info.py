@@ -285,7 +285,7 @@ def get_modified_files_info(context: PostprocessContext) -> None:
 
         return {
             "process": process,
-            "handle": data["FileHandle"],
+            #"handle": data["FileHandle"],
             "file_name": data["FileName"],
             "method": method,
         }
