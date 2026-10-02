@@ -17,6 +17,15 @@ load-bearing.
 
 ## The inventory, and what measured each
 
+    5s    the launch delay, and the one wait NOT defined here:
+          `guests.LAUNCH_DELAY`, because the guest spends it, not sandboxd.
+          The sample waits that long after the injection before its own first
+          instruction, because DRAKVUF arms its plugins AFTER injecting
+          (`main.cpp`: `inject_cmd()`, `start_plugins()`, `loop()`) and
+          whatever the sample does before that is not recorded anywhere. Listed
+          here so this inventory stays what it claims to be; the reasoning,
+          and how to measure it rather than argue about it, is at the constant.
+
     5s    settle before the trace attaches
           What it is REALLY covering: preconfig's network injection is an
           execproc, so it has returned without the guest having finished

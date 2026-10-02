@@ -2194,6 +2194,19 @@ Arguments:
 
 ## 3.9 Native ELF branch
 
+- [ ] **Validate the launch delay on a clone** (added 2026-10-02). The ELF path
+  now runs `/system/bin/sh -c '/system/bin/sleep 5; exec "$1"' sh <sample>`
+  rather than the sample directly, so DRAKVUF finishes arming its plugins
+  before the sample's first instruction — `docs/architecture/analysis-pipeline.md`,
+  "Sample execution: the launch delay". Desk-checked only. What a run settles:
+  `/system/bin/sleep` is present and reachable from the injected shell (toybox
+  provides it; if the path is wrong the shell exits and **the trace completes
+  having run no sample**), and the sample's own `execve` now appears in
+  `trace.log`, which is both the acceptance criterion and the way to measure
+  what arming really costs here. **The APK branch (3.3) is deliberately not
+  delayed** — `am start` plus an ART startup already outlasts arming, and a
+  shell in that window costs ~4,500 traced syscall events (measured
+  2026-08-17).
 - [ ] Inspect ELF architecture on Dom0.
 - [ ] Initially permit only verified x86_64 executables.
 - [ ] Validate x86 32-bit support before enabling it.

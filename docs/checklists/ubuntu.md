@@ -177,6 +177,24 @@ Three things the same run surfaced that are **not** fixed:
   hand. **The 54 s measurement itself is not superseded** and is the number
   any future tightening must be checked against.
 
+- [ ] **The launch delay is not validated on Dom0** (added 2026-10-02).
+  The sample is now `exec`'d by a shell that waits `LAUNCH_DELAY` seconds
+  first, so DRAKVUF finishes arming its plugins before the sample's first
+  instruction — see `docs/architecture/analysis-pipeline.md`, "Sample
+  execution: the launch delay". Desk-checked only. Three things a single
+  Ubuntu run settles, none of which this container can:
+  1. `/usr/bin/sleep` exists in the guest and the injected shell can reach it
+     — the injected process inherits the ANCHOR's environment, so an absolute
+     path is used, but the path itself is unverified on this image. If it is
+     wrong the shell exits and **the trace completes having run no sample**.
+  2. The sample's own `execve` appears in `trace.log`
+     (`do_execveat_common`, `FileName` = `/home/carlos/Desktop/<name>`). It
+     could not appear before this change, so its presence is the acceptance
+     criterion, and its absence means the delay is shorter than arming.
+  3. Whether 5s is the right number. The span from the run's first event to
+     that `execve` is the arming cost measured on the real plugin set; raise
+     `LAUNCH_DELAY` if it exceeds the delay, and do not patch a per-guest row.
+
 - [ ] **`xl destroy` on a clone whose DRAKVUF is still attached leaves a
   `(null) --p--d` zombie domain** (observed on Dom0 2026-08-20).
   Pre-existing behaviour, not introduced by any change in flight at the
@@ -218,6 +236,14 @@ Three things the same run surfaced that are **not** fixed:
   must be resolved on Dom0. The repo's literal `<USER>` path would fail with
   `ENOENT` if deployed — mechanically certain, never observed, because it
   was never deployed.
+
+  **`-e` is no longer the sample, as of 2026-10-02**, so a current run prints
+  `"ProcessName": "/usr/bin/sh"` where the output above prints the staged
+  path. The pid it reports is still the sample's — the shell `exec`s it — and
+  the reason the shell is there at all is `LAUNCH_DELAY` in
+  `sandboxd/guests.py`. The reasoning above still holds for every argument it
+  makes: the path is resolved on Dom0, and the sample still arrives at
+  `execve` as its own argv element rather than as shell text.
 
 - [x] **Repo↔Dom0 drift — RESOLVED 2026-08-08 by syncing `automation/` from
   the tested production host.** Discovered while verifying the item above.

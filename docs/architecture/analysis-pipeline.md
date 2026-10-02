@@ -208,6 +208,71 @@ One origin domain is hard-coded per invocation (`dirwatch.c:472`), so a
 that constraint into the OS-selection mechanism — one watcher and one
 incoming directory per target OS — rather than working around it.
 
+### Sample execution: the launch delay (2026-10-02)
+
+**Applies to all three OS pipelines.** `sandboxd/guests.py::LAUNCH_DELAY` is
+the single value; `_linux_launch` and `_windows_launch` beside it are how each
+guest spends it.
+
+DRAKVUF injects the sample **before** it arms its plugins. In
+`drakvuf/src/main.cpp` the order is `inject_cmd()`, then `start_plugins()`,
+then `loop()`, and `inject_cmd` returns once the injected `execve` has
+returned in the child — `libinjector/linux/methods/linux_execve.c` STEP4,
+which is the same fact `sandboxd/timing.py` opens with ("`injector -m
+execproc` returns when the guest process STARTS").
+
+So from the sample's first instruction until the last plugin is in place,
+nothing is hooked. The trace then completes normally and its events simply
+begin partway through the sample's life, with nothing anywhere recording that
+a beginning was missed. That window is the expensive one to lose: unpacking,
+the anti-analysis probes and the first `connect()` all happen in it. The
+fork's own `libmon` README states the same ordering as the reason it has to
+adopt already-running processes at startup, and names the cost directly — "a
+process that does its work and exits inside that window is missed".
+
+The fix is a wait inside the guest, not on Dom0: the injected process is a
+shell that waits `LAUNCH_DELAY` seconds and only then becomes the sample, so
+arming happens while it sleeps.
+
+| Guest | How it waits | Then |
+|---|---|---|
+| Ubuntu | `/usr/bin/sleep 5` | `exec "$1"` — same pid, same `argv[0]` |
+| BlissOS (ELF) | `/system/bin/sleep 5` | `exec "$1"` |
+| BlissOS (APK) | not delayed | `am start -n` is already slower than arming |
+| Windows | `ping.exe -n 5 127.0.0.1 >nul` | `& "<sample>"`, a child of `cmd.exe` |
+
+Four properties, each of which something depends on:
+
+1. **`exec`, on the Linux family.** The shell replaces itself, so the sample
+   keeps the pid the injection reported. A child instead would make
+   `inject.log`'s `InjectedPid` — and `report.json`'s `startup.process`
+   through it — describe the shell, and would point `--procdump-on-finish` at
+   the shell if `procdump` is ever selected. Windows has no `exec`, so there
+   the injected process **is** `cmd.exe` and the sample is its child.
+2. **The filename is never spliced**, on the Linux family: `sh -c '<script>'
+   sh "$1"` hands it over as a separate `execve` element, which is what
+   `sample_name_admissible()` relies on when it admits `"`, `$`, a backtick
+   and `;`.
+3. **`cmd.exe` has no equivalent**, so the Windows form is the one place a
+   sample-chosen name reaches a guest shell as text. It is admitted only if it
+   contains none of `"%&<>|^!` (`guests._CMD_UNSAFE`); a name that fails is
+   launched directly, losing its delay and nothing else. `timeout /t` is not
+   usable in its place — it reads the console for a keypress and aborts with
+   "ERROR: Input redirection is not supported" when it has none, which is the
+   normal case under `/c` from an injected `ShellExecuteEx`.
+4. **`drakvuf -t` is not raised to compensate.** The window still opens when
+   `loop()` does, so the sample is observed from its first instruction for
+   `timeout` minus whatever of the delay outlasted arming — a few seconds at
+   the end of the window traded for the whole beginning of it.
+
+**`LAUNCH_DELAY = 5` is unmeasured on this host**, chosen for the asymmetry:
+too short silently reinstates the gap, too long costs late-trace runtime. It
+is measurable from the trace itself now and only now — the sample's own
+`execve` is an event in `trace.log` (`do_execveat_common`, `FileName` = the
+staged path), which it could not be while the exec happened before the
+syscalls plugin existed. The span from the run's first event to that one is
+the arming cost on the real plugin set.
+
 ### Clone concurrency: fixed slots today, resource-aware admission needed
 
 Concurrency is currently a fixed count, and that count doubles as the VLAN

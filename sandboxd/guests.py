@@ -36,6 +36,17 @@ reason attached:
     Extension dispatch and `argv[0]` self-checks are real evasion surface that
     a hash-named file exercises none of.
 
+## What is NOT carried across, because it was wrong
+
+**The sample is no longer launched directly** (2026-10-02). The scripts did
+`-e <sample>`, which starts it before DRAKVUF has armed a single plugin --
+`main.cpp` injects, then calls `start_plugins()`, then `loop()` -- so the
+sample's first seconds were never recorded by any of them, on any guest, and
+the trace completed normally without saying so. `LAUNCH_DELAY` below is the
+wait that closes that, and the two `_*_launch` builders are how each guest
+spends it. Parity with the scripts is the acceptance criterion everywhere else
+in this module; here it is the defect.
+
 ## What is deliberately NOT carried
 
 `1>"$OUT/drakvuf.log" 2>&1`. Every trace in the scripts merges DRAKVUF's
@@ -374,6 +385,47 @@ def default_trace_options(os_: TargetOs, kind: SampleKind) -> TraceOptions:
     )
 
 
+# **Seconds the sample waits, inside the guest, before its own first
+# instruction** -- the one wait that is not in `timing.py`, because the guest
+# spends it rather than sandboxd (the inventory there points here).
+#
+# It covers DRAKVUF's plugin arming, which happens AFTER the injection.
+# `drakvuf/src/main.cpp` runs `inject_cmd()`, then `start_plugins()`, then
+# `loop()`, and `inject_cmd` returns once the injected `execve` has returned in
+# the child (`libinjector/linux/methods/linux_execve.c`, STEP4) -- so the sample
+# is already running, unhooked, while the plugins are still going in. Nothing in
+# that window is recorded and nothing anywhere says so: the trace completes
+# normally and its events simply begin partway through the sample's life.
+#
+# That window is the most informative part of a trace -- unpacking,
+# anti-analysis probes and the first connect() all happen in a sample's first
+# moments. `libmon`'s README states the same ordering as the reason it has to
+# adopt already-running processes at startup, and its limitations put the cost
+# plainly: "a process that does its work and exits inside that window is
+# missed".
+#
+# **UNMEASURED on this host (2026-10-02).** 10s is chosen for the asymmetry, not
+# from a measurement: too short silently reinstates the gap this exists to
+# close, too long costs a few seconds of late-trace runtime. Arming cost is a
+# property of Dom0 and of the plugin set rather than of the guest, so it is one
+# number and not a per-OS row -- only the command that spends it is per-OS.
+#
+# **Lower it from a trace, not from an argument.** The sample's own `execve` is
+# now an event in `trace.log` (`do_execveat_common`, `FileName` = the staged
+# path), which it could not be before: the exec used to happen before the
+# syscalls plugin existed. The span from the first event of the run to that one
+# IS the arming cost, measured on the real plugin set.
+#
+# `drakvuf -t` is deliberately NOT raised to compensate. The trace window still
+# opens when `loop()` does, so a sample is observed from its first instruction
+# for `timeout` minus however much of the delay outlasted arming. That trades a
+# few seconds at the end of the window for the whole beginning of it, which is
+# the trade this exists to make; raising `-t` instead would also move the phase
+# budget and the Android APK path's 150s, neither of which this change has
+# evidence to touch.
+LAUNCH_DELAY = 5
+
+
 @dataclass(frozen=True)
 class GuestPaths:
     """Where a sample lands inside the guest, per OS.
@@ -382,25 +434,77 @@ class GuestPaths:
     in the saved Android image and permits execution, where
     `/storage/self/primary/Download` is a noexec mount on which `chmod` is
     silently a no-op.
+
+    `delay` is a guest command that waits `LAUNCH_DELAY` seconds and prints
+    nothing, rendered here rather than templated so the row shows exactly what
+    the guest runs. `None` means this guest launches its sample immediately.
     """
 
     staging_dir: str
     shell: str
     nameserver: str = "1.1.1.1"
+    delay: str | None = None
 
 
 PATHS = {
     TargetOs.UBUNTU: GuestPaths(staging_dir="/home/carlos/Desktop",
-                                shell="/usr/bin/sh"),
+                                shell="/usr/bin/sh",
+                                delay=f"/usr/bin/sleep {LAUNCH_DELAY}"),
     # /system/bin/sh, not /usr/bin/sh: the Ubuntu path does not exist here. No
     # sudo and no `su -c` either -- the guest is already root and ships
     # neither. All three measured by DRAFT-013.
+    #
+    # `sleep` is toybox, in the same directory as the shell.
     TargetOs.ANDROID: GuestPaths(staging_dir="/data/local/tmp",
-                                 shell="/system/bin/sh"),
+                                 shell="/system/bin/sh",
+                                 delay=f"/system/bin/sleep {LAUNCH_DELAY}"),
 
-    TargetOs.WINDOWS: GuestPaths(staging_dir="C:\\Users\\carlos\\Desktop",
-                                 shell="C:\\Windows\\System32\\cmd.exe"),
+    # **`ping`, because `timeout` cannot be used here.** `timeout /t` reads the
+    # console to watch for a keypress and aborts with "ERROR: Input redirection
+    # is not supported" whenever it does not own one -- which is the normal case
+    # for a command cmd.exe runs under `/c` from an injected `ShellExecuteEx`.
+    # `ping` to loopback is the idiom that works without a console, and it is
+    # the operator's call (2026-10-02).
+    #
+    # **`-n` is a COUNT, not a duration**, which is why this row is spelled out
+    # rather than templated from `LAUNCH_DELAY`: the first echo goes out
+    # immediately and the gap between consecutive ones is a second, so five
+    # pings wait about four. Windows therefore gets a second less than the
+    # Linux guests, deliberately (operator, 2026-10-02) -- five pings is the
+    # idiom, and a `+1` to make the two exactly equal would be arithmetic
+    # nobody reading `ping -n 6` would expect. If arming turns out to need the
+    # whole `LAUNCH_DELAY`, raise the constant rather than patching this row.
+    #
+    # Absolute path for the same reason as the Linux rows: the injected process
+    # inherits the ANCHOR's environment, and a `ping` found on PATH is a `ping`
+    # that can be "not found" in a guest whose anchor has a thin one.
+    TargetOs.WINDOWS: GuestPaths(
+        staging_dir="C:\\Users\\carlos\\Desktop",
+        shell="C:\\Windows\\System32\\cmd.exe",
+        delay=f"C:\\Windows\\System32\\ping.exe -n {LAUNCH_DELAY} "
+              f"127.0.0.1 >nul"),
 }
+
+
+# **What makes a staged filename stop being one argument to `cmd.exe /c`.**
+#
+# The Linux launch hands the untrusted name to the guest as a separate `execve`
+# element (`sh -c '<script>' sh "$1"`), which is what CLAUDE.md requires and
+# what `sample_name_admissible()` leans on when it admits `"`, `$`, a backtick
+# and `;`. **cmd.exe has no equivalent**: `/c` takes one string it re-parses,
+# and `%1` in a batch file is substituted before parsing rather than after. So
+# the Windows delay is the one place in this module where a sample-chosen name
+# does reach a guest shell as text, and it is admitted only after this check.
+#
+# A name that fails it keeps the direct `ShellExecuteEx` the trace used before
+# this change -- so it loses its launch delay, not its analysis, and never its
+# byte-exact name (C5, DRAFT-030).
+#
+# Inside a double-quoted argument cmd stops processing `& < > | ^`, and `!`
+# needs delayed expansion, which is off by default -- so `"` and `%` are the
+# two that actually escape the quoting. The rest are rejected anyway: reviewing
+# this should not require knowing that.
+_CMD_UNSAFE = frozenset('"%&<>|^!')
 
 
 # The symbol profiles DRAKVUF takes beside the kernel one (`-r`): option ->
@@ -724,13 +828,76 @@ def argv_remove_handoff(job: Job, handoff: str) -> list[str]:
 
 # --- tracing -----------------------------------------------------------------
 
+def _linux_launch(paths: GuestPaths, target: str) -> list[str]:
+    """Wait `LAUNCH_DELAY`, then become the sample.
+
+    **The untrusted filename never becomes shell text.** `sh -c '<script>' sh
+    "$GUEST_SAMPLE"` puts the path in `$1`, which nothing re-parses --
+    `sample_name_admissible()` admits `"`, `$`, a backtick and `;`, and all four
+    are live inside a double-quoted guest shell word. Same idiom and same
+    reason as `argv_install_apk`.
+
+    **`exec`, never `<delay>; <sample>`.** The shell replaces itself, so the
+    sample keeps the pid the injection reported, its `argv[0]` is the staged
+    path byte for byte (C5, DRAFT-030), and its parent is the anchor -- exactly
+    what a direct `-e <sample>` produced. A child process instead would make
+    `inject.log`'s `InjectedPid`, and therefore `report.json`'s
+    `startup.process`, describe the shell rather than the sample, and would
+    point `--procdump-on-finish` at it if `procdump` is ever selected
+    (`main.cpp` sets `options.procdump_on_finish = injected_pid`).
+
+    The shell's own startup is NOT in the traced window -- it is what the
+    injection returns from, so it runs while the plugins are still going in,
+    which is the whole point. What lands inside the window is one `execve`.
+    """
+    if not paths.delay:
+        return ["-e", target]
+    return ["-e", paths.shell, "-f", "-c",
+            "-f", f'{paths.delay}; exec "$1"',
+            "-f", "sh", "-f", target]
+
+
+def _windows_launch(paths: GuestPaths, target: str) -> list[str]:
+    """The same wait, through the one shell that cannot take it as an argument.
+
+    `shellexec` reaches `ShellExecuteEx` with `-e` as `lpFile` and **only the
+    first `-f` as `lpParameters`** (`win_injector.c` uses `args[0]` and ignores
+    the rest), so the whole command is one string cmd.exe re-parses. `_CMD_UNSAFE`
+    is what keeps the staged name out of that string when the name would not
+    survive it; a rejected name is launched directly, as before this change.
+
+    **`&`, not `&&`.** `ping` to loopback should always succeed, but a guest
+    whose loopback is broken would skip the sample entirely under `&&` -- a
+    trace that completes, uploads, and analysed nothing. `&` runs the sample
+    whatever the wait did.
+
+    Two consequences worth knowing, both from Windows having no `exec`:
+    cmd.exe is the injected process, so `inject.log` reports its pid and name
+    and `report.json`'s `startup.process` resolves to it, with the sample as
+    its child -- a child the plugins now SEE being created, which they could
+    not before. And the sample runs with a console attached. Normal for
+    Windows, and a closer parent than the anchor process was.
+    """
+    if not paths.delay or _CMD_UNSAFE & set(target):
+        return ["-e", target]
+    return ["-e", paths.shell, "-f", f'/c {paths.delay} & "{target}"']
+
+
 def argv_trace(job: Job, component: str | None = None) -> list[str]:
     """The DRAKVUF invocation.
 
     Two execution paths, selected from the sample's bytes: an APK is LAUNCHED,
-    already installed, via `am start -n`; anything else is `execve`d directly.
+    already installed, via `am start -n`; anything else is executed through a
+    guest shell that waits first.
+
+    **The sample does not begin when the injection returns. It begins
+    `LAUNCH_DELAY` seconds later**, because DRAKVUF arms its plugins after
+    injecting and nothing records what the sample did in between -- see that
+    constant, and the two `_*_launch` helpers for how each guest spends the
+    wait. The APK path is the exception and says why inline.
     """
     mode = "shellexec" if job.target_os == TargetOs.WINDOWS else "execproc"
+    paths = PATHS[job.target_os]
 
     # `-s`: "Hide Hypervisor bits and signature in CPUID" (`drakvuf --help`,
     # operator-confirmed 2026-09-19). The cheapest evasion a sample tries is
@@ -748,10 +915,22 @@ def argv_trace(job: Job, component: str | None = None) -> list[str]:
                 "it and a missing one means resolve-activity returned a "
                 "diagnostic -- nothing should be executed"
             )
+        # **No launch delay here, and that is a decision rather than an
+        # omission.** The sample is not this process: `am` asks the activity
+        # manager to start the activity and the app is forked from zygote
+        # afterwards, so the sample's first instruction is already an `am`
+        # startup plus an ART startup past the injection -- past arming without
+        # help. Adding the shell would also undo a measured finding: a shell in
+        # this window cost 1434 + 1546 + 1542 traced syscall events (2026-08-17)
+        # out of a budget the launch was already failing to fit into, which is
+        # what `test_the_traced_window_is_one_execve` pins.
         argv += ["-e", "/system/bin/am", "-f", "start", "-f", "-n",
                  "-f", component]
+
+    elif job.target_os == TargetOs.WINDOWS:
+        argv += _windows_launch(paths, job.guest_sample)
     else:
-        argv += ["-e", job.guest_sample]
+        argv += _linux_launch(paths, job.guest_sample)
 
     argv += job.options.drakvuf_flags()
     argv += ["-o", "json", "-t", str(job.options.timeout)]

@@ -846,6 +846,43 @@ explicitly; `vmi-process-list` resolves through the config file and is not.
 is `linux.json`, **not** `ubuntu.json` — `CURRENT-STATE.md` §1.4 records it as
 never renamed in the `linux` → `ubuntu` pass.
 
+### A trace completed, the sample clearly ran, and its first seconds are missing
+
+**Symptom.** `trace.log` is full of plausible events, the artifact set is
+complete, the job is `completed` — and the beginning is not there. No `execve`
+of the staged sample. No `openat` of the files it must have read to get
+started. Library calls that begin mid-sequence. On a sample that unpacks and
+exits quickly, possibly nothing attributable to the sample at all, with no
+error anywhere.
+
+**Cause.** **DRAKVUF injects before it arms its plugins.** `main.cpp` runs
+`inject_cmd()`, then `start_plugins()`, then `loop()`, and `inject_cmd` returns
+as soon as the injected `execve` has returned in the child
+(`libinjector/linux/methods/linux_execve.c`, STEP4). Everything the sample does
+between those two moments happens with nothing hooked, and nothing reports it:
+the trace is not truncated, it just starts late.
+
+This is also why `libmon` adopts already-running processes at startup rather
+than waiting for an `exec` — its README says so, and names the residue: "a
+process that does its work and exits inside that window is missed".
+
+**Fix.** The sample is launched through a shell that waits
+`sandboxd/guests.py::LAUNCH_DELAY` seconds first, so arming finishes while it
+sleeps — `/usr/bin/sleep` on Ubuntu, `/system/bin/sleep` on BlissOS,
+`ping.exe -n 5 127.0.0.1 >nul` on Windows. See
+`docs/architecture/analysis-pipeline.md`, "Sample execution: the launch delay".
+
+If a trace still starts late with the delay in place, the delay is shorter than
+arming on this host. **Measure it rather than guessing**: the sample's own
+`execve` is now an event in the log (`do_execveat_common`, `FileName` = the
+staged path), and the span from the run's first event to that one is what
+arming actually cost. Raise `LAUNCH_DELAY`; do not patch a per-guest row.
+
+Two things that are *not* this symptom. A trace with **no** sample events at
+all and no `execve` is a failed launch, not a late one — check the anchor PID
+entries below. And on the Android APK path there is deliberately no delay: the
+traced process is `am`, and the sample is a later zygote fork.
+
 ### `injector` reported a JSON error and then kept going
 
 **Symptom.**

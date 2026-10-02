@@ -87,14 +87,40 @@ def test_a_corrupt_zip_does_not_raise(tmp_path):
 
 # --- the guest path is built by ONE rule ------------------------------------
 
+def launch_chunk(argv: list[str]) -> list[str]:
+    """Just the `-e …` the launch builder produced.
+
+    `argv_trace` appends plugins, output paths and symbol profiles after it,
+    and none of them passes `-f`, so the chunk ends two past the last one.
+    """
+    start = argv.index("-e")
+    fs = [i for i, a in enumerate(argv) if a == "-f"]
+    return argv[start:(fs[-1] + 2) if fs else start + 2]
+
+
+def traced_target(argv: list[str]) -> str:
+    """The path a Linux-family trace will execute, through the wrapper or not.
+
+    `-e` is the guest SHELL on the delayed-launch paths, so the sample is the
+    last thing the chunk carries -- `$1` to the shell's `-c` script.
+    """
+    return launch_chunk(argv)[-1]
+
+
 def test_delivery_and_execution_name_the_same_file(tmp_path):
     """Issue #2's defect: the trace held a literal
     `/home/<USER>/Desktop/test` while preconfig staged to
-    `/home/carlos/Desktop/test`, so analyses ran nothing and said nothing."""
+    `/home/carlos/Desktop/test`, so analyses ran nothing and said nothing.
+
+    **The trace no longer names the sample at `-e`**: the launch delay put the
+    guest shell there (`guests.LAUNCH_DELAY`), so the sample is the shell's
+    `$1`. The invariant is untouched and is the part that matters -- one rule
+    builds the path and both stages read it from `Job.guest_sample`.
+    """
     j = job(tmp_path, filename="payload.bin")
 
     delivered = G.argv_deliver(j)[G.argv_deliver(j).index("-e") + 1]
-    executed = G.argv_trace(j)[G.argv_trace(j).index("-e") + 1]
+    executed = traced_target(G.argv_trace(j))
 
     assert delivered == executed == "/home/carlos/Desktop/payload.bin"
 
@@ -325,6 +351,137 @@ def test_the_traced_window_is_one_execve(tmp_path):
                         "com.x/.Main")
     assert "/system/bin/sh" not in argv
     assert "-c" not in argv
+
+
+# --- the launch delay -------------------------------------------------------
+#
+# What these defend: DRAKVUF injects, THEN arms its plugins, THEN loops
+# (`main.cpp`). Without a delay the sample's startup -- unpacking, the
+# anti-analysis probes, the first connect() -- happens while the plugins are
+# still going in, and the trace records none of it while completing normally.
+# A regression here is silent in exactly that way, which is why it is pinned
+# per guest rather than once.
+
+@pytest.mark.parametrize("os_", [TargetOs.UBUNTU, TargetOs.ANDROID])
+def test_the_sample_waits_for_the_plugins_before_it_runs(tmp_path, os_):
+    """The whole chunk, because every element of it is load-bearing: the shell
+    is what the injection starts, the script is what spends the wait, `sh` is
+    `$0` so the untrusted path is `$1`, and `$1` is the staged sample."""
+    paths = G.PATHS[os_]
+
+    assert launch_chunk(G.argv_trace(job(tmp_path, os_, SampleKind.ELF))) == [
+        "-e", paths.shell,
+        "-f", "-c",
+        "-f", f'{paths.delay}; exec "$1"',
+        "-f", "sh",
+        "-f", f"{paths.staging_dir}/sample.bin",
+    ]
+
+
+@pytest.mark.parametrize("os_", [TargetOs.UBUNTU, TargetOs.ANDROID])
+def test_the_delayed_sample_keeps_the_injected_pid(tmp_path, os_):
+    """`exec`, not `<delay>; <sample>`.
+
+    A child process would keep the shell alive as the injected process, so
+    `inject.log`'s `InjectedPid` -- and `report.json`'s `startup.process`
+    through it -- would describe the shell, and `--procdump-on-finish` would
+    dump the shell if `procdump` is ever selected. `exec` replaces the image
+    in place: same pid, same parent, same `argv[0]`.
+    """
+    chunk = launch_chunk(G.argv_trace(job(tmp_path, os_, SampleKind.ELF)))
+    script = chunk[chunk.index("-c") + 2]
+
+    assert 'exec "$1"' in script
+    # The forms that would fork instead: a backgrounded launch, or one the
+    # shell waits on. `exec` is the last word, so nothing may follow it either.
+    assert "&" not in script
+    assert script.endswith('exec "$1"')
+
+
+@pytest.mark.parametrize("name", [
+    'quote".bin', "semi;colon", "back`tick", "dollar$sign", "a b.exe",
+    "$(id).bin", "&& rm -rf.bin",
+])
+def test_the_launch_delay_never_splices_the_filename(tmp_path, name):
+    """CLAUDE.md's rule, on the one path this change added.
+
+    `sample_name_admissible()` admits `"`, `$`, a backtick and `;` on purpose
+    -- byte-exact delivery of a hostile name is part of what is analysed -- and
+    says in its own docstring that what stops them hurting is this idiom, not
+    the check. So the name must reach the guest as its own `execve` element and
+    must appear nowhere inside the script text.
+    """
+    (tmp_path / name).write_bytes(b"\x7fELF")
+    chunk = launch_chunk(G.argv_trace(job(tmp_path, filename=name)))
+
+    assert chunk[-1] == f"/home/carlos/Desktop/{name}"
+    script = chunk[chunk.index("-c") + 2]
+    assert name not in script
+    assert script == f'{G.PATHS[TargetOs.UBUNTU].delay}; exec "$1"'
+
+
+def test_one_number_governs_the_wait_on_every_guest(tmp_path):
+    """Prefer parameterisation over duplicated literals: a host that needs
+    longer arming changes `LAUNCH_DELAY`, not three rows. The commands differ
+    because the guests do; the number may not."""
+    for os_ in (TargetOs.UBUNTU, TargetOs.ANDROID, TargetOs.WINDOWS):
+        delay = G.PATHS[os_].delay
+        assert delay, f"{os_.value} has no launch delay"
+        assert str(G.LAUNCH_DELAY) in delay, (
+            f"{os_.value} spends {delay!r}, which does not come from "
+            f"LAUNCH_DELAY={G.LAUNCH_DELAY}"
+        )
+
+
+def test_windows_waits_with_ping_because_timeout_needs_a_console(tmp_path):
+    """`timeout /t` aborts with "ERROR: Input redirection is not supported"
+    when it does not own a console, which is the normal case under `/c` from an
+    injected `ShellExecuteEx`. Five pings to loopback is the idiom."""
+    chunk = launch_chunk(G.argv_trace(job(tmp_path, TargetOs.WINDOWS,
+                                          SampleKind.PE)))
+
+    assert chunk[:3] == ["-e", "C:\\Windows\\System32\\cmd.exe", "-f"]
+    line = chunk[-1]
+    assert line.startswith("/c C:\\Windows\\System32\\ping.exe -n 5 127.0.0.1 >nul")
+    assert "timeout" not in line
+    # `&`, never `&&`: a guest with broken loopback would otherwise skip the
+    # sample entirely and still produce a complete, empty-looking analysis.
+    assert ' & "C:\\Users\\carlos\\Desktop\\sample.bin"' in line
+    assert "&&" not in line
+
+
+@pytest.mark.parametrize("name", [
+    'quote".exe', "percent%var.exe", "amp&.exe", "caret^.exe", "pipe|.exe",
+    "bang!.exe", "lt<.exe", "gt>.exe",
+])
+def test_a_cmd_hostile_name_loses_the_delay_and_not_the_analysis(tmp_path, name):
+    """The one place a sample-chosen name reaches a guest shell as text.
+
+    `cmd.exe /c` has no `sh -c '…' sh "$1"` equivalent, so a name cmd would
+    re-parse is launched the way it was before this change -- directly, with
+    no wrapper and no delay. It keeps its bytes (C5, DRAFT-030) and keeps its
+    analysis; it loses only the wait.
+    """
+    (tmp_path / name).write_bytes(b"MZ")
+    argv = G.argv_trace(job(tmp_path, TargetOs.WINDOWS, SampleKind.PE,
+                            filename=name))
+
+    assert argv[argv.index("-e") + 1] == f"C:\\Users\\carlos\\Desktop\\{name}"
+    assert not any("ping.exe" in a for a in argv)
+    assert not any(a.startswith("/c ") for a in argv)
+
+
+def test_the_apk_launch_is_not_delayed(tmp_path):
+    """`am` asks the activity manager to start the activity and the app is
+    forked from zygote afterwards, so the sample's first instruction is an `am`
+    startup plus an ART startup past the injection -- past arming unaided. The
+    shell this would add is also what `test_the_traced_window_is_one_execve`
+    exists to keep out, on a measured cost of ~4,500 traced syscall events."""
+    argv = G.argv_trace(job(tmp_path, TargetOs.ANDROID, SampleKind.APK),
+                        "com.x/.Main")
+
+    assert not any("sleep" in a for a in argv)
+    assert argv[argv.index("-e") + 1] == "/system/bin/am"
 
 
 def test_an_apk_without_a_component_is_refused(tmp_path):

@@ -105,6 +105,49 @@ individual decision is correct.
 Fixed by DRAFT-041's head-of-line reservation, not before. Until then, run
 Windows alone.
 
+### The launch delay, and the one place a filename reaches a guest shell
+
+**Added 2026-10-02, unvalidated on the Windows guest.** The trace no longer
+`ShellExecuteEx`es the sample directly. It runs
+
+```
+cmd.exe /c C:\Windows\System32\ping.exe -n 5 127.0.0.1 >nul & "<staged sample>"
+```
+
+because DRAKVUF arms its plugins *after* injecting, so a sample launched
+directly runs its first seconds with nothing hooked — the full reasoning is in
+`docs/architecture/analysis-pipeline.md`, "Sample execution: the launch delay".
+`ping` rather than `timeout /t`, which aborts with "ERROR: Input redirection is
+not supported" when it does not own a console.
+
+Three things that make this guest different from the other two, all of them
+consequences of `cmd.exe`:
+
+1. **The injected process is `cmd.exe`, not the sample.** Linux `exec`s, so
+   there the sample keeps the injected pid; Windows cannot, so `inject.log`
+   reports cmd's pid and name and `report.json`'s `startup.process` resolves
+   to it, with the sample as its child. The child's creation is now *inside*
+   the traced window, which it was not before.
+2. **The staged filename is spliced into a command string.** The only such
+   place in `sandboxd/guests.py`: `/c` takes one string it re-parses and `%1`
+   in a batch file is substituted before parsing, so the
+   `sh -c '…' sh "$1"` idiom the Linux guests use has no equivalent. A name
+   containing any of `"%&<>|^!` (`guests._CMD_UNSAFE`) is therefore launched
+   the old way — directly, no wrapper, no delay — keeping its bytes and its
+   analysis. **A mechanism rather than a quoting trick would close this
+   properly**: a process created suspended and resumed after
+   `start_plugins()`, which is a change to the fork's injector.
+3. **A console window exists** for the trace's duration. Ordinary for Windows,
+   and a more plausible parent than the anchor process, but it is a difference
+   from the previous behaviour and a sample can see it.
+
+What a run must confirm, and nothing here can: that `ping.exe` is at that path
+and reachable from the injected `cmd.exe`, that the sample is created at all
+(if the command line is malformed, `cmd` exits and **the trace completes having
+run no sample**), and that five pings is longer than arming with `apimon`'s
+~1,330 hooks going in — the Windows plugin set is heavier than Ubuntu's, so
+this is the guest most likely to need a larger `LAUNCH_DELAY`.
+
 ### Inherited contract (issue #6, 2026-08-10)
 
 The Windows guest is not designed from scratch. It must satisfy the
