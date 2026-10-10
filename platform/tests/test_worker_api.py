@@ -376,8 +376,13 @@ def test_the_declared_size_binds_the_artifact_policy(
     over = httpx.post(ticket["url"], data=ticket["fields"],
                       files={"file": ("trace.log", b"x" * 2000)})
 
+    # 400 from both stores; the body differs. MinIO says `EntityTooLarge`,
+    # Garage says `InvalidRequest, "File size does not match policy"` --
+    # measured 2026-10-03. The control is the store refusing the write, not the
+    # wording it refuses with.
     assert over.status_code == 400
-    assert "EntityTooLarge" in over.text
+    assert ("EntityTooLarge" in over.text
+            or "File size does not match policy" in over.text), over.text
 
 
 def test_an_oversized_declaration_never_gets_a_ticket(

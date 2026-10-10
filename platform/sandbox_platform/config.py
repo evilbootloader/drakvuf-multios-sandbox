@@ -49,19 +49,19 @@ class Settings:
     #
     # SigV4 signs the Host header, so a presigned URL is valid only against
     # the host it was signed for -- there is no rewriting it afterwards. Dom0
-    # reaches MinIO over the LAN; browsers reach it through the Cloudflare
+    # reaches the store over the LAN; browsers reach it through the Cloudflare
     # tunnel (issue #39). Each audience therefore needs a URL signed for its
     # own hostname, which means two clients over the same bucket.
     #
-    # PUBLIC is the API's OWN hostname, not a second one (issue #37). MinIO
+    # PUBLIC is the API's OWN hostname, not a second one (issue #37). The store
     # uses path-style addressing, so every object URL begins `/analysis/`, and
-    # cloudflared routes that path to MinIO while everything else goes to the
+    # cloudflared routes that path to the store while everything else goes to the
     # API. One origin, so the browser upload needs no CORS -- and the store
     # inherits the same Cloudflare Access application rather than sitting on a
     # hostname outside it, which is where it was until 2026-08-24.
     #
     # The cost of sharing a namespace: no API or UI route may ever begin
-    # `/analysis`, or cloudflared sends it to MinIO and the route silently
+    # `/analysis`, or cloudflared sends it to the store and the route silently
     # disappears. Asserted in tests/test_objects.py.
     #
     # INTERNAL is also the only one that makes real network calls -- HEAD and
@@ -78,7 +78,8 @@ class Settings:
     s3_access_key: str = os.environ.get("S3_ACCESS_KEY", "")
     s3_secret_key: str = os.environ.get("S3_SECRET_KEY", "")
 
-    # MUST match MinIO's own configured region (MINIO_SITE_REGION). The region
+    # MUST match the store's own configured region -- `MINIO_SITE_REGION` for
+    # MinIO, `s3_region` in /etc/garage.toml for Garage. The region
     # is part of the SigV4 signing scope, so a mismatch fails every presigned
     # URL with a 403 that mentions the signature and never the region -- which
     # is a long afternoon if you do not know to look.
@@ -89,7 +90,9 @@ class Settings:
     # rather than on a default nobody chose.
     s3_region: str = os.environ.get("S3_REGION", "eu-central-1")
 
-    # CA bundle for verifying MinIO's certificate on the internal link. Empty
+    # CA bundle for verifying the store's certificate on the internal link.
+    # Garage serves plain HTTP and nginx terminates TLS in front of it, so this
+    # verifies that certificate (runbook 18 Part E). Empty
     # means system trust, which is right in development and wrong in
     # deployment -- the LAN certificate is signed by the internal CA (#39).
     s3_ca_bundle: str = os.environ.get("S3_CA_BUNDLE", "")
@@ -99,18 +102,19 @@ class Settings:
     upload_ttl: int = _int("S3_UPLOAD_TTL", 900)        # 15 min
     artifact_get_ttl: int = _int("S3_ARTIFACT_GET_TTL", 300)   # 5 min
 
-    # How long MinIO keeps an object before its lifecycle rule expires it
-    # (issue #37). **This does not enforce anything** -- MinIO does the
-    # deleting, from the rule `minio/provision.sh` installs. It exists so the
+    # How long the store keeps an object before its lifecycle rule expires it
+    # (issue #37). **This does not enforce anything** -- the store does the
+    # deleting, from the rule its provisioning script installs. It exists so the
     # API knows the policy, and it MUST match RETENTION_DAYS there.
     #
     # Why the API needs to know: a job row is permanent and its objects are
     # not, so past this window `GET /jobs/{id}` would hand out presigned URLs
-    # for objects MinIO has already removed -- a download link that 404s, with
+    # for objects the store has already removed -- a download link that 404s, with
     # nothing to tell a reader whether the artifact was lost or never existed.
     #
     # Age is an approximation of expiry, deliberately erring toward "gone":
-    # lifecycle scans run on MinIO's own schedule, so an object may briefly
+    # lifecycle scans run on the store's own schedule -- daily at midnight on
+    # Garage -- so an object may briefly
     # outlive the window. Withholding a link that would have worked is a much
     # smaller cost than offering one that will not.
     #
@@ -218,6 +222,10 @@ class Settings:
     # refused ~45s later. So the quota stops accumulation over days and permits
     # an overshoot bounded by write rate times scanner interval -- which is not
     # a documented contract and should not be leaned on.
+    #
+    # Garage's quota is `garage bucket set-quotas --max-size` and its
+    # promptness is UNMEASURED, so assume the same shape: a bound on days, not
+    # on the next write.
     #
     # Declared sizes are sound accounting here: the presigned POST policy binds
     # each upload to the size it was declared with, so a worker cannot declare
@@ -361,7 +369,8 @@ class Settings:
     # same millisecond; this is what does.
     #
     # 4 x 64 MiB = 256 MiB, against a 4096 MiB DomU (`CURRENT-STATE.md`, applied
-    # 2026-09-12) also running Postgres, MinIO, uvicorn and cloudflared. Raise
+    # 2026-09-12) also running Postgres, the object store, uvicorn and
+    # cloudflared. Raise
     # it only alongside the host, and recompute the product -- the number that
     # matters is `memory_cost x this`, never either alone.
     max_concurrent_hashes: int = _int("MAX_CONCURRENT_HASHES", 4)

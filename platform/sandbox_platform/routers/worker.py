@@ -597,7 +597,7 @@ def artifact_urls(job: LeasedJob,
     # construction.
     #
     # Charged when the ticket is minted, not when bytes land, because the API
-    # is not in the upload path -- the worker POSTs straight to MinIO. The
+    # is not in the upload path -- the worker POSTs straight to the store. The
     # point is to refuse the CAPABILITY, which is the only moment refusing
     # still prevents anything.
     #

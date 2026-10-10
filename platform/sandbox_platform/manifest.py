@@ -52,7 +52,7 @@ from pydantic import (
 #
 # It was 900 while `results/<uuid>/` was the whole prefix. Issue #40's decision
 # 7 spent 261 more bytes on `u/<owner>/<shard>/`, and 900 + 45 + 261 is 1206 --
-# a key MinIO refuses, reached only by a long artifact name under a long
+# a key S3 refuses, reached only by a long artifact name under a long
 # address, so it would have shipped and failed on somebody else's sample.
 #
 # `objects.MAX_OWNER` and this constant are one budget. Raising either without
@@ -100,10 +100,16 @@ def reject_unsafe_name(name: str) -> str:
     **Lives here, not in `routers/worker.py`, because the same names arrive
     through two doors.** The ticket endpoint validated them and the manifest
     did not, so a worker could request tickets for clean names and then declare
-    anything it liked. Traversal was not exploitable through that gap -- MinIO
-    refuses `..` components itself, `XMinioInvalidResourceName`, verified
-    2026-08-25 -- but a guarantee that rests entirely on a dependency's input
-    validation is one upgrade away from resting on nothing.
+    anything it liked. Traversal was not exploitable through that gap, because
+    MinIO refused `..` components itself -- `XMinioInvalidResourceName`,
+    verified 2026-08-25 -- but a guarantee that rests entirely on a
+    dependency's input validation is one upgrade away from resting on nothing.
+
+    **That upgrade happened, and it was a store swap.** Garage accepts `..` in
+    a key and stores it literally (measured 2026-10-04), so on that store this
+    function is the only thing between a worker's declared artifact name and a
+    key outside its job's prefix. The sentence above was written as a
+    precaution; it is now the mechanism.
     """
     if not name:
         raise ValueError("artifact name is empty")

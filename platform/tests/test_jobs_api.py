@@ -149,13 +149,23 @@ def test_the_signed_policy_cannot_be_edited_client_side(client):
     raised["policy"] = base64.b64encode(json.dumps(policy).encode()).decode()
     assert post(raised, 100_000) == 403          # SignatureDoesNotMatch
 
+    # **A removed field is malformed, not merely unauthorised**, and the two
+    # stores classify it differently: MinIO 403, Garage
+    # `400 InvalidRequest` (measured 2026-10-03). Either way the upload does
+    # not land -- verified directly against Garage: after all four tamper
+    # attempts the bucket held only the honest object.
     unsigned = dict(raised)
     unsigned.pop("x-amz-signature", None)
-    assert post(unsigned, 100_000) == 403
+    assert post(unsigned, 100_000) in (400, 403)
 
+    # Same split again: MinIO 403 AccessDenied, Garage `400 InvalidRequest,
+    # "Key 'key' has value not allowed in policy"`. Checked directly against
+    # Garage on 2026-10-04 -- after the tamper NEITHER key existed in the
+    # bucket, so the policy's key condition is what refused it and not a
+    # coincidence of ordering.
     redirected = dict(fields)
     redirected["key"] = "samples/00000000-0000-0000-0000-000000000000/evil.bin"
-    assert post(redirected) == 403               # AccessDenied
+    assert post(redirected) in (400, 403)
 
 
 def test_a_same_size_swap_after_admission_fails_the_job(registered, worker_headers):

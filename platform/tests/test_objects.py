@@ -1,9 +1,17 @@
-"""The object store's own posture, against a real MinIO.
+"""The object store's own posture, against a real store.
 
 Issue #37 (DRAFT-044).
 
 These test the STORE, not the API: what a presigned URL can reach, what an
-unauthenticated caller can learn, and what the service account is refused. Most
+unauthenticated caller can learn, and what the service account is refused.
+
+**Both stores, by assertion rather than by name.** `scripts/dev-services.sh`
+brings up MinIO or Garage (`OBJECT_STORE=`), and CI runs the suite against
+each, so the assertions here test properties -- refused, expired, absent --
+rather than one vendor's error strings. Where the two genuinely differ the
+comment says so and names the measurement. The three `mc`-gated tests at the
+bottom are the exception: a service-account policy is MinIO admin-plane and
+has no Garage equivalent, which is what `tests/test_object_front.py` is for. Most
 of it was configured during #36 and asserted nowhere, which is the gap this
 file closes -- a policy nobody exercises is a policy nobody knows the shape of.
 
@@ -78,7 +86,7 @@ def test_inspect_reads_the_etag_from_the_get_not_a_second_request(
 
 
 def test_inspect_reports_the_etag_of_the_bytes_it_hashed(put_object):
-    """End to end against real MinIO: the pair is self-consistent.
+    """End to end against the real store: the pair is self-consistent.
 
     A single-part upload's ETag is the object's MD5, which is exactly why it
     is not the integrity guarantee -- but it must at least describe the object
@@ -145,8 +153,16 @@ def test_a_presigned_url_expires(put_object):
 
     time.sleep(2)
     expired = httpx.get(url)
-    assert expired.status_code == 403
-    assert "Expired" in expired.text or "expired" in expired.text
+    # **The property is "refused", and the two stores say it differently.**
+    # MinIO answers 403 with `Expired`; Garage answers
+    # `400 InvalidRequest, "Date is too old"` (measured 2026-10-03). Asserting
+    # MinIO's exact shape would make a store swap look like a broken
+    # capability, and `sandboxd` cannot tell them apart either -- it treats
+    # every 4xx as a permanent refusal (`api.py`).
+    assert expired.status_code in (400, 403), expired.text
+    assert any(m in expired.text for m in ("Expired", "expired", "too old"))
+    # What actually matters: the bytes are gone with the capability.
+    assert b"data" not in expired.content
 
 
 def test_a_url_for_one_job_cannot_reach_another(put_object):
@@ -246,14 +262,18 @@ def test_versioning_is_off():
 
 def test_object_lock_is_off():
     """Object lock would make retention UNDECIDABLE -- you cannot delete what
-    is locked, and the lifecycle rule in minio/provision.sh must be able to.
+    is locked, and the store's lifecycle rule must be able to.
 
     It can only be set at bucket creation, so this can only be an assertion.
+    `NotImplemented` is Garage's answer and is the strongest form of this
+    passing: the feature does not exist there at all, so it cannot be enabled
+    by accident later.
     """
     with pytest.raises(ClientError) as exc:
         _client().get_object_lock_configuration(Bucket=S3_BUCKET)
     assert exc.value.response["Error"]["Code"] in (
         "ObjectLockConfigurationNotFoundError", "InvalidRequest",
+        "NotImplemented",
     )
 
 
@@ -327,7 +347,7 @@ def test_the_service_account_cannot_enumerate(restricted_client):
 
 
 def test_the_service_account_cannot_delete(restricted_client, put_object):
-    """No DeleteObject. Retention is done by MinIO's own lifecycle rule, so
+    """No DeleteObject. Retention is done by the store's own lifecycle rule, so
     the capability buys nothing and would make a compromised API destructive.
 
     This is what lets `platform.md` say the API is not a deletion primitive
@@ -350,8 +370,8 @@ def test_no_api_route_claims_the_bucket_prefix():
 
     The cost is a shared namespace: cloudflared matches `^/analysis(/|$)`
     before the API rule, so an API or UI route beginning `/analysis` would be
-    routed to MinIO and simply stop existing. It would fail in deployment
-    only, with a 403 from MinIO about a signature.
+    routed to the store and simply stop existing. It would fail in deployment
+    only, with the store complaining about a signature.
     """
     from sandbox_platform.app import app
 

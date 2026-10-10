@@ -47,8 +47,15 @@ os.environ.setdefault("MAINTENANCE_INTERVAL", "0")
 
 os.environ.setdefault("S3_INTERNAL_ENDPOINT", "http://127.0.0.1:9000")
 os.environ.setdefault("S3_PUBLIC_ENDPOINT", "http://localhost:9000")
-os.environ.setdefault("S3_ACCESS_KEY", "devroot")
-os.environ.setdefault("S3_SECRET_KEY", "devrootpass")
+# **Lengths, not taste.** Garage refuses a key id under 8 characters and a
+# secret under 16 ("Key identifiers should be at least 8 characters long",
+# "Secret keys should be at least 16 characters long", measured 2026-10-04),
+# and `scripts/dev-services.sh` imports a key with exactly these values so the
+# documented `pytest -q` works against either store with no environment at
+# all. The previous pair, `devroot`/`devrootpass`, was 7 and 11 and cannot be
+# imported into Garage. MinIO's minimums are 3 and 8, so these satisfy both.
+os.environ.setdefault("S3_ACCESS_KEY", "devrootkey")
+os.environ.setdefault("S3_SECRET_KEY", "devrootpassphrase")
 os.environ.setdefault("S3_BUCKET", "analysis")
 os.environ.setdefault("S3_REGION", "eu-central-1")
 

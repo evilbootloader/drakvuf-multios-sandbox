@@ -176,13 +176,15 @@ def _reject_unsafe_filename(name: str, target: TargetOs | None = None) -> str:
     process:
 
     - **The object key.** `samples/<job_id>/<name>` must stay inside its
-      prefix. MinIO happens to refuse `..` components itself
-      (`XMinioInvalidObjectName`, checked 2026-08-24), so this is not a live
-      escape today -- but that is MinIO's behaviour, not S3's. On real S3 a key
-      is fully opaque and `samples/<job>/../../x` is a legal, distinct key, so
-      the object would land outside the prefix the whole model assumes.
-      DRAFT-044 calls moving to real S3 "a configuration change, not a
-      redesign", which is exactly why this cannot rest on the store.
+      prefix. MinIO happened to refuse `..` components itself
+      (`XMinioInvalidObjectName`, checked 2026-08-24) -- but that was MinIO's
+      behaviour, not S3's, and **it is already gone**: Garage accepts `..` and
+      stores the key literally (measured 2026-10-04), so
+      `samples/<job>/../../x` is a legal, distinct key that lands outside the
+      prefix the whole model assumes. DRAFT-044 called moving stores "a
+      configuration change, not a redesign", which is exactly why this never
+      rested on the store -- and why the escape it prevents is live now
+      rather than hypothetical.
     - **The guest staging path.** `sandboxd` stages the sample at
       `<staging dir>/<submitted filename>` inside the guest and executes it
       there (`guests.GuestPaths`). A `/` in the name moves that path.
@@ -362,7 +364,7 @@ class JobDetail(JobSummary):
     manifest_legacy: bool = False
 
     # True once the job is older than the store's retention window, at which
-    # point `artifacts` is empty because MinIO has expired the objects behind
+    # point `artifacts` is empty because the store has expired the objects behind
     # it (issue #37). The manifest still lists what the run produced, so a
     # reader can tell "this analysis collected a pcap, and it is gone" from
     # "this analysis collected nothing" -- which one empty dict alone cannot.
@@ -825,7 +827,7 @@ def _detail(conn, job_id: UUID, identity: Caller) -> JobDetail:
     if row is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "no such job")
 
-    # Past the retention window MinIO has expired the objects, so minting URLs
+    # Past the retention window the store has expired the objects, so minting URLs
     # would produce download links that 404. Computed from age rather than a
     # HEAD per artifact: a detail view would otherwise cost one round trip per
     # file to learn something the policy already determines.
@@ -842,11 +844,11 @@ def _detail(conn, job_id: UUID, identity: Caller) -> JobDetail:
 
     artifacts: dict[str, str] = {}
     if not expired:
-        # **Links to this API's wrapping routes, NOT presigned GETs to MinIO.**
+        # **Links to this API's wrapping routes, NOT presigned GETs to the store.**
         # A presigned GET hands over the stored object exactly as it is, so an
         # analyst clicking something recovered from `extracted/` received a
         # live executable while the tab told them it arrived as a
-        # password-protected ZIP. The wrapping can only happen here -- MinIO
+        # password-protected ZIP. The wrapping can only happen here -- the store
         # serves what it stores -- so the link has to come back through the
         # API. See the download routes below.
         #
@@ -1064,13 +1066,13 @@ def get_job(job_id: Annotated[UUID, Path()],
 # the bytes in transit, and protects nothing from whoever holds the link.
 #
 # These two routes are the ONLY way artifacts are offered now. The presigned
-# GET that `_detail` used to mint per artifact went straight to MinIO and
+# GET that `_detail` used to mint per artifact went straight to the store and
 # handed over an unwrapped executable, so it is gone -- `JobDetail.artifacts`
 # now carries these URLs instead.
 #
 # The API is in the data path here, which `objects.py` otherwise avoids on
 # purpose. That is the trade: wrapping cannot happen anywhere else, because
-# MinIO serves what it stores. Nothing is buffered -- `packaging.stream` and
+# the store serves what it stores. Nothing is buffered -- `packaging.stream` and
 # `objects.chunks` are both generators, so an abandoned download stops pulling
 # from the store rather than running to completion.
 

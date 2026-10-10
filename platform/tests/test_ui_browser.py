@@ -80,8 +80,8 @@ def server():
             "S3_INTERNAL_ENDPOINT", "http://127.0.0.1:9000"),
         "S3_PUBLIC_ENDPOINT": os.environ.get(
             "S3_PUBLIC_ENDPOINT", "http://localhost:9000"),
-        "S3_ACCESS_KEY": os.environ.get("S3_ACCESS_KEY", "devroot"),
-        "S3_SECRET_KEY": os.environ.get("S3_SECRET_KEY", "devrootpass"),
+        "S3_ACCESS_KEY": os.environ.get("S3_ACCESS_KEY", "devrootkey"),
+        "S3_SECRET_KEY": os.environ.get("S3_SECRET_KEY", "devrootpassphrase"),
         "S3_BUCKET": os.environ.get("S3_BUCKET", "analysis"),
         "S3_REGION": os.environ.get("S3_REGION", "eu-central-1"),
     }
@@ -822,8 +822,8 @@ def _seed_report(job_id: uuid.UUID, doc: dict) -> None:
     s3 = boto3.client(
         "s3",
         endpoint_url=os.environ.get("S3_INTERNAL_ENDPOINT", "http://127.0.0.1:9000"),
-        aws_access_key_id=os.environ.get("S3_ACCESS_KEY", "devroot"),
-        aws_secret_access_key=os.environ.get("S3_SECRET_KEY", "devrootpass"),
+        aws_access_key_id=os.environ.get("S3_ACCESS_KEY", "devrootkey"),
+        aws_secret_access_key=os.environ.get("S3_SECRET_KEY", "devrootpassphrase"),
         region_name=os.environ.get("S3_REGION", "eu-central-1"),
         config=Config(signature_version="s3v4", s3={"addressing_style": "path"}))
     s3.put_object(Bucket=os.environ.get("S3_BUCKET", "analysis"),

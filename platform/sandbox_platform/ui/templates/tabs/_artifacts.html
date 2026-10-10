@@ -9,8 +9,8 @@
     The `not job.manifest` branch is the same class of defect and the one an
     operator actually hit. `/complete` is the only writer of `jobs.manifest`,
     and jobs finished before the 2026-08-26 fix reported `completed` through
-    `/state` instead, so it was never written. Their objects are still in
-    MinIO, but nothing records what they are called. "This run produced no
+    `/state` instead, so it was never written. Their objects are still in the
+    store, but nothing records what they are called. "This run produced no
     artifacts" asserts a fact about the RUN that is not known -- what is known
     is that no manifest was recorded.
   #}

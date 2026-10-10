@@ -18,7 +18,8 @@ carries the bearer token and Dom0's client certificate. The object store gets a
 separate client carrying NEITHER: a presigned URL is already authorised by the
 signature in its query string, so sending the token spends a credential on a
 request that does not need it, and the worker token has no business reaching
-MinIO. It still verifies the CA, because the internal store is signed by ours.
+the object store. It still verifies the CA, because the internal store's
+certificate is signed by ours.
 """
 
 from __future__ import annotations

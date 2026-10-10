@@ -307,6 +307,19 @@ jobs:
   # -------------------------------------------------------------------------
   platform:
     runs-on: ubuntu-latest
+    # **Both object stores, every run.** MinIO is what the deployment runs
+    # today; Garage is what runbook 18 migrates it to. The suite's assertions
+    # are written against properties rather than one vendor's error strings
+    # (tests/test_objects.py says so at the top), and this matrix is what keeps
+    # that true -- four of those assertions were MinIO-shaped until 2026-10-04
+    # and passed only because nothing else had ever answered them.
+    #
+    # Drop the `minio` leg in the same change that cuts the deployment over.
+    strategy:
+      fail-fast: false
+      matrix:
+        store: [minio, garage]
+    name: platform (${{ matrix.store }})
     services:
       postgres:
         image: postgres:17
@@ -336,6 +349,7 @@ jobs:
           pip install -r platform/requirements.txt pytest
 
       - name: Start MinIO
+        if: matrix.store == 'minio'
         # **A `services:` block cannot do this**, and that is why it is a step.
         # GitHub Actions services accept `options` but no *command*, and
         # `minio/minio` needs `server /data` -- without it the container prints
@@ -365,8 +379,8 @@ jobs:
         # See docs/TROUBLESHOOTING.md, "pull access denied for minio/minio".
         run: |
           docker run -d --name minio -p 9000:9000 \
-            -e MINIO_ROOT_USER=devroot \
-            -e MINIO_ROOT_PASSWORD=devrootpass \
+            -e MINIO_ROOT_USER=devrootkey \
+            -e MINIO_ROOT_PASSWORD=devrootpassphrase \
             -e MINIO_SITE_REGION=eu-central-1 \
             quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z server /data
           for _ in $(seq 1 30); do
@@ -378,19 +392,153 @@ jobs:
           echo "minio did not become healthy"; docker logs minio; exit 1
 
       - name: Create the analysis bucket
+        if: matrix.store == 'minio'
         # `conftest.py` writes objects with `put_object` and never creates the
-        # bucket -- on the deployment `minio/provision.sh` does that, and here
-        # nothing would.
+        # bucket -- on the deployment the provisioning script does that, and
+        # here nothing would.
         run: |
           pip install boto3
           python - <<'PY'
           import boto3
           boto3.client("s3", endpoint_url="http://127.0.0.1:9000",
-                       aws_access_key_id="devroot",
-                       aws_secret_access_key="devrootpass",
+                       aws_access_key_id="devrootkey",
+                       aws_secret_access_key="devrootpassphrase",
                        region_name="eu-central-1").create_bucket(Bucket="analysis")
           print("bucket 'analysis' created")
           PY
+
+      - name: Start Garage
+        if: matrix.store == 'garage'
+        # Pinned for the same reason the MinIO image is: this job asserts
+        # behaviour about signature scoping and policy enforcement, and a store
+        # that moves under it turns a real regression and an upstream change
+        # into the same red X.
+        #
+        # **Nothing publishes a checksum beside the binary** -- runbook 18
+        # FINDING C-1 -- so the digest is pinned here instead, and a mismatch
+        # fails the job rather than being installed.
+        #
+        # It binds 127.0.0.1:9000 because that is where conftest.py's fixed
+        # defaults look. The deployment puts nginx there and Garage on 3900;
+        # the front's own assertions are tests/test_object_front.py, which
+        # skips here because CI has no certificate and no front.
+        env:
+          GARAGE_VERSION: v2.4.1
+          GARAGE_SHA256: ae49f8de4aaee6b5ca305f7cbdccc8cd8a29b2804aac074649f18bfb83d0a2b6
+        run: |
+          curl -fsSLo /usr/local/bin/garage \
+            "https://garagehq.deuxfleurs.fr/_releases/$GARAGE_VERSION/x86_64-unknown-linux-musl/garage"
+          echo "$GARAGE_SHA256  /usr/local/bin/garage" | sha256sum -c -
+          chmod +x /usr/local/bin/garage
+
+          mkdir -p /tmp/garage/meta /tmp/garage/data
+          cat > /tmp/garage.toml <<EOF
+          metadata_dir = "/tmp/garage/meta"
+          data_dir     = "/tmp/garage/data"
+          db_engine    = "lmdb"
+          replication_factor = 1
+          rpc_bind_addr   = "127.0.0.1:3901"
+          rpc_public_addr = "127.0.0.1:3901"
+          rpc_secret      = "$(openssl rand -hex 32)"
+          [s3_api]
+          s3_region     = "eu-central-1"
+          api_bind_addr = "127.0.0.1:9000"
+          [admin]
+          api_bind_addr = "127.0.0.1:3903"
+          EOF
+          chmod 600 /tmp/garage.toml   # Garage refuses a world-readable secret
+
+          garage -c /tmp/garage.toml server >/tmp/garage.log 2>&1 &
+          for _ in $(seq 1 30); do
+            curl -s -o /dev/null http://127.0.0.1:3903/health && break
+            sleep 1
+          done
+
+          # A node with no layout accepts no writes and /health stays 503.
+          node="$(garage -c /tmp/garage.toml node id -q | cut -d@ -f1)"
+          garage -c /tmp/garage.toml layout assign -z ci -c 10G "$node"
+          garage -c /tmp/garage.toml layout apply --version 1
+          curl -sf http://127.0.0.1:3903/health || { cat /tmp/garage.log; exit 1; }
+          echo "garage healthy"
+
+      - name: Provision the analysis bucket (garage)
+        if: matrix.store == 'garage'
+        # `key import`, not `key create`: create mints a GK... id that
+        # conftest.py's fixed defaults would not know. The lengths are Garage's
+        # minimums -- 8 for an id, 16 for a secret -- which is why the dev
+        # credential is `devrootkey`/`devrootpassphrase` and not the shorter
+        # pair it used to be.
+        #
+        # CORS `*` is DEVELOPMENT ONLY and matches scripts/dev-services.sh: the
+        # two upload tests in test_ui_browser.py are cross-origin on a random
+        # localhost port, and they passed under MinIO only because MinIO's own
+        # default is `*`. platform/garage/provision.sh refuses `*` outright so
+        # a deployment cannot acquire it by accident.
+        run: |
+          pip install boto3
+          garage -c /tmp/garage.toml bucket create analysis
+          garage -c /tmp/garage.toml key import devrootkey devrootpassphrase \
+            -n ci-conftest --yes
+          garage -c /tmp/garage.toml bucket allow --read --write --owner \
+            analysis --key devrootkey
+          python - <<'PY'
+          import boto3
+          from botocore.config import Config
+          s3 = boto3.client("s3", endpoint_url="http://127.0.0.1:9000",
+                            aws_access_key_id="devrootkey",
+                            aws_secret_access_key="devrootpassphrase",
+                            region_name="eu-central-1",
+                            config=Config(signature_version="s3v4",
+                                          s3={"addressing_style": "path"}))
+          s3.put_bucket_cors(Bucket="analysis", CORSConfiguration={"CORSRules": [{
+              "AllowedOrigins": ["*"], "AllowedMethods": ["GET", "HEAD", "POST"],
+              "AllowedHeaders": ["*"], "MaxAgeSeconds": 3000}]})
+          print("bucket 'analysis' provisioned, CORS '*' (CI only)")
+          PY
+
+      - name: Start the capability front (garage)
+        if: matrix.store == 'garage'
+        # **This is the regression test for platform/garage/objects.conf**, a
+        # file that carries a security property: Garage's permission model
+        # cannot express "GetObject and PutObject only", so the capabilities
+        # MinIO's api-policy.json withheld are refused by nginx instead
+        # (runbook 18 DECISION A2). Nothing else in this repository runs the
+        # front, so without this step nothing notices if it stops filtering.
+        #
+        # The shipped file is installed verbatim and only its three
+        # HOST-SPECIFIC lines are rewritten: the listen address (9443, because
+        # Garage has 9000 here), and the upstream port. The certificate paths
+        # are not rewritten -- the cert is created where the file already looks
+        # for it.
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends nginx-light
+          sudo rm -f /etc/nginx/sites-enabled/default
+
+          # 755, where runbook 18 Part E uses 700 on the DomU: there nothing
+          # unprivileged reads this directory, and here the health check and
+          # pytest both do. A 644 file inside a 700 directory is still
+          # unreadable, and curl reports that as the option being "badly used".
+          sudo install -d -m 755 /etc/nginx/tls
+          sudo openssl req -x509 -newkey rsa:2048 -nodes -days 1 \
+            -keyout /etc/nginx/tls/objects.key -out /etc/nginx/tls/objects.crt \
+            -subj /CN=objects-ci -addext subjectAltName=IP:127.0.0.1
+          # The KEY is private; the CERTIFICATE is not, and both the health
+          # check below and pytest's S3_FRONT_CA read it as the runner user.
+          # An unreadable --cacert makes curl complain that the option "is
+          # badly used here", which names neither the file nor the permission.
+          sudo chmod 600 /etc/nginx/tls/objects.key
+          sudo chmod 644 /etc/nginx/tls/objects.crt
+
+          sed -e 's|listen 192.168.1.10:9000 ssl;|listen 127.0.0.1:9443 ssl;|' \
+              -e '/listen 127.0.0.1:9000 ssl;/d' \
+              -e 's|server 127.0.0.1:3900;|server 127.0.0.1:9000;|' \
+              platform/garage/objects.conf | sudo tee /etc/nginx/conf.d/objects.conf >/dev/null
+
+          sudo nginx -t
+          sudo nginx
+          curl -sf --cacert /etc/nginx/tls/objects.crt \
+            https://127.0.0.1:9443/healthz >/dev/null && echo "front healthy"
 
       - name: Cache the Playwright browser
         uses: actions/cache@v6
@@ -408,10 +556,17 @@ jobs:
       - name: pytest
         working-directory: platform
         # Only the database URL. Every S3 value conftest.py needs is already its
-        # own default -- devroot/devrootpass/analysis/eu-central-1 against
+        # own default -- devrootkey/devrootpassphrase/analysis/eu-central-1 against
         # 127.0.0.1:9000 -- and the first version of this job set `S3_ENDPOINT`,
         # which conftest does not read. It wants S3_INTERNAL_ENDPOINT and
         # S3_PUBLIC_ENDPOINT.
         env:
           TEST_DATABASE_URL: postgresql://platform:platform@localhost:5432/sandbox_platform_test
+          # Only the garage leg has a front. Empty is falsy to
+          # `os.environ.get`, so on the minio leg test_object_front.py skips
+          # with the message that says those absences are UNVERIFIED -- which
+          # is true there: under MinIO they are the service account's, and the
+          # three `mc`-gated tests in test_objects.py are what assert them.
+          S3_FRONT_ENDPOINT: ${{ matrix.store == 'garage' && 'https://127.0.0.1:9443' || '' }}
+          S3_FRONT_CA: ${{ matrix.store == 'garage' && '/etc/nginx/tls/objects.crt' || '' }}
         run: python -m pytest -q

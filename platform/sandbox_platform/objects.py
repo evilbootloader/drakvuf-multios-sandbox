@@ -10,10 +10,18 @@ enumerate the bucket, read another job's artifacts, or reach the history.
 That last clause is held up by `manifest.reject_unsafe_name`, which every key
 component passes through before a URL is minted for it -- at the ticket
 endpoint and again at `/complete`. Until DRAFT-018 only the first door checked,
-and the guarantee rested on MinIO refusing `..` itself
-(`XMinioInvalidResourceName`, verified 2026-08-25). It was never exploitable,
+and the guarantee rested on the store refusing `..` itself -- MinIO did,
+`XMinioInvalidResourceName`, verified 2026-08-25. It was never exploitable,
 but a claim made in this docstring should hold because of code in this
 repository, not because of a dependency's input validation.
+
+**And that backstop is now gone, which is why it was never the argument.**
+Garage accepts `..` in a key and stores it literally (`a/../b.bin`,
+`../escape.bin`, measured 2026-10-04), so `reject_unsafe_name` is the only
+thing refusing traversal on this store. The three live copies of that rule --
+`routers/jobs.py::_reject_unsafe_filename`, `manifest.reject_unsafe_name`,
+`sandboxd/naming.py::sample_name_admissible` -- must not disagree, and
+`test_manifest.py` and `test_jobs_api.py` are what pin them.
 """
 
 from __future__ import annotations
@@ -36,8 +44,9 @@ class Audience(Enum):
 
     Not cosmetic. SigV4 covers the Host header, so a URL signed for the LAN
     address is rejected when presented to the tunnel hostname and vice versa.
-    Choosing the wrong one here produces a 403 from MinIO that talks about
-    signatures and never mentions the host.
+    Choosing the wrong one here produces a signature error from the store
+    that talks about signatures and never mentions the host -- a 403 from
+    MinIO, a 400 from Garage.
     """
 
     WORKER = "worker"     # Dom0, over the LAN
@@ -53,7 +62,7 @@ def _client(audience: Audience):
 
     The BROWSER client never makes a network call: signing is local
     arithmetic, so it needs no route to the tunnel and its TLS settings are
-    irrelevant. Only the WORKER client talks to MinIO.
+    irrelevant. Only the WORKER client talks to the store.
     """
     endpoint = (
         settings.s3_internal_endpoint
@@ -102,7 +111,7 @@ class UploadTicket:
 
 
 def presigned_upload(job_id: UUID, filename: str, max_bytes: int, key_prefix: str) -> UploadTicket:
-    """A browser-usable upload capability, with the size cap enforced by MinIO.
+    """A browser-usable upload capability, with the size cap enforced by the store.
 
     **POST rather than PUT, and this is the whole reason.** A presigned PUT
     cannot constrain the upload's size: the signature covers the key and the
@@ -217,7 +226,7 @@ def sample_status(key: str, expected: str | None) -> str:
     boolean, because they have different causes and a worker's `failure_reason`
     is diagnostic. Collapsing them was harmless until retention landed
     (issue #37): a job queued past the expiry window loses its sample to
-    MinIO's lifecycle rule, and reporting that as "changed after admission"
+    the store's lifecycle rule, and reporting that as "changed after admission"
     sends whoever reads it hunting for a tamper that never happened.
 
     **Why `changed` matters.** The presigned POST issued at submission stays
@@ -236,9 +245,10 @@ def sample_status(key: str, expected: str | None) -> str:
     an impossible state is to refuse it.
 
     **What this does NOT establish.** For a single-part upload -- which is what
-    `generate_presigned_post` produces -- MinIO's ETag is the object's MD5. So
-    a match here says the two objects have the same MD5, not that they are the
-    same bytes, and MD5 collisions are constructible to order. This is a cheap
+    `generate_presigned_post` produces -- the ETag is the object's MD5 on both
+    MinIO and Garage (`etag_from_md5`, measured 2026-10-03). So a match here
+    says the two objects have the same MD5, not that they are the same bytes,
+    and MD5 collisions are constructible to order. This is a cheap
     early check that makes the ordinary swap loud; it is not the integrity
     guarantee.
 

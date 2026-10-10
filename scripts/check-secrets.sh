@@ -127,15 +127,17 @@ note "project patterns: scanning what git would take..."
 #   REDACTED           the project's redaction convention (runbook 08 set it)
 #   <TEAM> <AUD>       placeholders in a documented command
 #   EXAMPLE example.com  RFC 2606 / illustrative
-#   devroot devrootpass  the development container's and CI's throwaway MinIO
-#                        credentials, defined in scripts/dev-services.sh and in
-#                        .github/workflows/static-checks.yml. They authenticate
-#                        to a container that is destroyed with the job and is
-#                        never reachable off localhost.
+#   devrootkey devrootpassphrase
+#                        the development container's and CI's throwaway object
+#                        store credentials, defined in scripts/dev-services.sh
+#                        and in .github/workflows/static-checks.yml. They
+#                        authenticate to a store that is destroyed with the job
+#                        and is never reachable off localhost. The lengths are
+#                        Garage's minimums (8 and 16), not a preference.
 #
 # **Add to this list only for a value that cannot be a secret anywhere.** A
 # value that is merely "not secret right now" belongs redacted instead.
-ALLOWED='REDACTED|<TEAM>|<AUD>|EXAMPLE|example\.com|xxxx|devroot|devrootpass'
+ALLOWED='REDACTED|<TEAM>|<AUD>|EXAMPLE|example\.com|xxxx|devrootkey|devrootpassphrase'
 
 FILES="$(mktemp)"
 trap 'rm -f "$FILES" "${EXCLUDES:-}"' EXIT INT TERM
@@ -182,6 +184,23 @@ scan "WORKER_TOKEN value" \
 # two spellings disagreed, not because a real secret was ever there.
 scan "MinIO / S3 secret" \
      '(MINIO_ROOT_PASSWORD|S3_SECRET_KEY|MINIO_SECRET_KEY|MINIO_ROOT_USER)[=:][[:space:]]*["'\'']?[A-Za-z0-9/+_-]{8,}'
+
+# Garage's two server-side secrets, which live in /etc/garage.toml. Runbook 18
+# prints both while provisioning, and its EVIDENCE blocks are exactly where a
+# pasted config file would land.
+#
+# TOML spelling only (`key = "value"`), because that is the file they appear
+# in; the environment forms GARAGE_RPC_SECRET and GARAGE_ADMIN_TOKEN are
+# caught by the generic pass when trufflehog is installed.
+scan "Garage rpc_secret / admin_token" \
+     '(rpc_secret|admin_token|metrics_token)[[:space:]]*=[[:space:]]*["'\''][A-Za-z0-9/+=_-]{16,}'
+
+# A Garage S3 access key is `GK` + 24 hex, and its SECRET is 64 hex with
+# nothing to name it -- so the id is what is detectable, and finding one means
+# a credential pair was probably pasted together. `provision.sh` prints them
+# adjacently, which is the realistic accident.
+scan "Garage access key id" \
+     'GK[0-9a-f]{24}'
 
 # Private keys of any kind. `tls/` is untracked and excluded above; this catches
 # one pasted into a runbook.

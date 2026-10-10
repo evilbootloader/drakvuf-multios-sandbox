@@ -83,7 +83,7 @@ class FakeWorker:
         # token nor the client certificate. A presigned URL is already
         # authorised by the signature in its query string, so sending either
         # one spends a credential on a request that does not need it -- and
-        # the worker token in particular has no business reaching MinIO.
+        # the worker token in particular has no business reaching the store.
         # It still verifies, because the internal store is signed by our CA.
         self.s3 = httpx.Client(timeout=60.0, verify=ssl_context(cacert))
 
@@ -209,7 +209,7 @@ def main() -> int:
     ap.add_argument("--once", action="store_true",
                     help="take one job and exit, instead of looping")
     ap.add_argument("--cacert",
-                    help="CA bundle that signed the API and MinIO certificates")
+                    help="CA bundle that signed the API and object-store certificates")
     ap.add_argument("--cert",
                     help="client certificate presented to the API; the "
                          "deployed listener requires one")

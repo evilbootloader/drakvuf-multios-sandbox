@@ -2453,6 +2453,179 @@ signal to live malware. Same reasoning renamed the injection anchor away from
 
 ---
 
+# The object store — Garage
+
+**Nothing here describes the deployment yet.** It runs MinIO; runbook 18 is the
+migration and has not been executed. Every symptom below was met while
+rehearsing it in the development container on 2026-10-02/04, and is filed here
+because the next person to run `platform/garage/provision.sh` or
+`scripts/dev-services.sh OBJECT_STORE=garage` will meet them too.
+
+### `garage key create` ran twice and now two keys have the same name
+
+**Symptom.** `garage key list` shows two entries with the same `Name`, and
+`garage key info <name>` refuses with
+`InvalidRequest (400): Bad request: 2 matching keys`. Nothing says which id the
+application is using.
+
+**Cause. `key create` does not converge** — it mints a new key every time,
+name collisions included. Running a provisioning step twice is enough.
+
+**Fix.** Decide which id is live by reading the consumer, not the store:
+`grep '^S3_ACCESS_KEY=' /etc/sandbox-platform/api.env`. Delete the other:
+
+```bash
+garage -c /etc/garage.toml key list
+garage -c /etc/garage.toml key delete <the unused id> --yes
+```
+
+`platform/garage/provision.sh` counts keys by name and refuses at two or more
+rather than guessing, so this cannot be reached through it.
+
+### `garage bucket info` or `key info` exits 1 and the thing does exist
+
+**Symptom.** A shell `if` built on `garage bucket info X` takes the wrong
+branch.
+
+**Cause.** Both commands exit 1 for *absent* **and** for *ambiguous*
+(`2 matching keys`), so the status alone does not distinguish "create it" from
+"stop and ask a human". They also print `Error: ... (404)` to stdout, which a
+pipeline can swallow.
+
+**Fix.** Use `bucket info` as an existence test (one meaning), and parse
+`garage key list` for keys — never `key info`.
+
+### `nginx -t` fails with `Address already in use` and the config is fine
+
+**Symptom.** Validating the object store's front before the cutover:
+
+```
+nginx: the configuration file /etc/nginx/nginx.conf syntax is ok
+nginx: [emerg] bind() to 192.168.1.10:9000 failed (98: Address already in use)
+nginx: configuration file /etc/nginx/nginx.conf test failed
+```
+
+**Cause. `nginx -t` binds every `listen` directive** — it is not a
+syntax-only check. MinIO still holds port 9000 until the cutover.
+
+**Fix.** Read the first line: `syntax is ok` means the file parsed, including
+the `map`, `log_format` and `upstream` blocks that only work because Debian
+includes `conf.d/` inside `http {}`. A bind error is the only error to accept
+there, and `nginx -t` must come back fully clean after MinIO stops.
+
+### The store refuses a presigned URL with `400`, not `403`
+
+**Symptom.** An expired upload ticket, a tampered POST policy, or an
+over-range upload is refused with `400 InvalidRequest` where MinIO answered
+`403` or `EntityTooLarge`. A test asserting the old shape fails while the
+control plainly works.
+
+**Cause.** Garage classifies these as malformed rather than unauthorised:
+`Date is too old`, `Key 'key' has value not allowed in policy`,
+`File size does not match policy`.
+
+**Fix.** Assert the property, not the vendor's string —
+`platform/tests/test_objects.py` says so at the top, and the four assertions
+that were MinIO-shaped now accept both. `sandboxd` never cared: it treats
+every 4xx as a permanent refusal.
+
+### A wrong `S3_REGION` seems not to matter
+
+**Symptom.** `head_object` with the wrong region fails, `get_object` with the
+same wrong region succeeds, and a presigned URL fails with
+`400 AuthorizationHeaderMalformed`.
+
+**Cause. botocore is hiding it.** Garage returns the correct region in its
+error body; botocore reads that hint and silently re-signs, so any call with a
+response body appears to work. A HEAD has no body to read and a presigned URL
+has nobody to retry it.
+
+**Fix.** Treat the presigned failure as authoritative — it is also the
+real-world one, since every URL the platform issues is presigned. `s3_region`
+in `/etc/garage.toml` must equal `S3_REGION` in `api.env`;
+`platform/garage/provision.sh` compares them before it creates anything.
+
+### A setting in `garage.toml` has no effect and nothing complains
+
+**Symptom.** A configuration key is present, spelled slightly wrong, and
+silently inert.
+
+**Cause.** Garage ignores unknown configuration keys. Probed 2026-10-03 with
+`tls_cert_file`/`tls_key_file` under `[s3_api]`: accepted without comment, and
+no TLS. There is no `nginx -t` equivalent for the config file.
+
+**Fix.** Check the value took effect rather than that it was accepted —
+`garage -c … status`, `bucket info`, or the behaviour itself. And Garage has no
+TLS listener at all: the API binds a plain `TcpListener`, which is why nginx is
+in front of it.
+
+### `/health` returns 503 on a store that just started
+
+**Symptom.** `curl http://127.0.0.1:3903/health` → 503, and every write is
+refused.
+
+**Cause.** No layout has been applied, so the node holds no data role and
+cannot serve. `garage status` shows `NO ROLE ASSIGNED`.
+
+**Fix.**
+
+```bash
+node="$(garage -c /etc/garage.toml node id -q | cut -d@ -f1)"
+garage -c /etc/garage.toml layout assign -z lab -c 200G "$node"
+garage -c /etc/garage.toml layout apply --version 1
+```
+
+503-until-layout is why this endpoint replaced `/minio/health/live`: it is a
+readiness probe rather than a liveness ping.
+
+### `mc` does nothing useful against Garage
+
+**Symptom.** `mc admin ...` fails against the new store; the three
+service-account policy tests skip.
+
+**Cause.** `mc admin` is MinIO's admin plane and Garage has none. Ordinary S3
+verbs work; the admin ones do not exist.
+
+**Fix.** The `garage` CLI replaces them for provisioning, and the capabilities
+`api-policy.json` withheld are asserted against the TLS front instead —
+`platform/tests/test_object_front.py` and `platform/garage/conformance.py`.
+Neither needs `mc`.
+
+### The browser upload fails only in the development container
+
+**Symptom.** `test_ui_browser.py`'s two upload tests fail with *"It is on a
+different origin to this page, so the browser blocked the upload"*, against a
+store that works for every other test.
+
+**Cause.** The page is served from a random localhost port and the upload goes
+to another, so it is cross-origin — and Garage has no default CORS rule where
+MinIO's own default is `*`.
+
+**Fix.** `scripts/dev-services.sh` sets `AllowedOrigins: ["*"]` on the dev
+bucket, and CI does the same. **The deployment must never have it**: there the
+upload is same-origin by routing, and `platform/garage/provision.sh` refuses
+`*` outright.
+
+### An object's ETag changed after a store migration
+
+**Symptom.** `jobs.sample_etag` no longer matches, or a copied object's ETag
+has lost a `-4`-style suffix.
+
+**Cause.** The suffix form is a digest of the original part digests, and part
+boundaries are not recoverable — so an object MinIO stored multipart cannot
+keep its ETag through a single-part copy. Measured over 3,300 objects: 3,297
+identical, 3 changed, all of them large `results/` artifacts, and **no sample**
+(a sample arrives by presigned POST, which is always one part).
+
+**Fix.** Accept a changed ETag **only** where the source side had a `-N`
+suffix and the sizes match; anything else is a bad copy. Artifact ETags are
+recorded nowhere and compared by nothing. Do not verify a copy with
+`rclone lsjson --hash`: it reports no hash at all for either store
+(rclone 1.60.1), so it compares `null` to `null`.
+
+
+---
+
 # Reading the project record itself
 
 ### A fact from a runbook turned out to be superseded

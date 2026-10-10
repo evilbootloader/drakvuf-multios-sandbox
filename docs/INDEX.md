@@ -168,17 +168,28 @@ It maps **headings, not content**: a fact stated in the middle of a section is n
     - `docs/TROUBLESHOOTING.md:2411` — [`bash: !xenbr0: event not found`](TROUBLESHOOTING.md#bash-xenbr0-event-not-found)
     - `docs/TROUBLESHOOTING.md:2424` — [`iptables -S` says a chain is "incompatible", and the chain is simply absent](TROUBLESHOOTING.md#iptables--s-says-a-chain-is-incompatible-and-the-chain-is-simply-absent)
     - `docs/TROUBLESHOOTING.md:2440` — [An analysis left evidence of itself inside the guest](TROUBLESHOOTING.md#an-analysis-left-evidence-of-itself-inside-the-guest)
-- `docs/TROUBLESHOOTING.md:2456` — [Reading the project record itself](TROUBLESHOOTING.md#reading-the-project-record-itself)
-    - `docs/TROUBLESHOOTING.md:2458` — [A fact from a runbook turned out to be superseded](TROUBLESHOOTING.md#a-fact-from-a-runbook-turned-out-to-be-superseded)
-    - `docs/TROUBLESHOOTING.md:2473` — [A performance measurement did not reproduce](TROUBLESHOOTING.md#a-performance-measurement-did-not-reproduce)
-    - `docs/TROUBLESHOOTING.md:2488` — [An upstream DRAKVUF build passed a casual check and was the wrong binary](TROUBLESHOOTING.md#an-upstream-drakvuf-build-passed-a-casual-check-and-was-the-wrong-binary)
-    - `docs/TROUBLESHOOTING.md:2512` — [`libzstd found: NO` and the build succeeded anyway](TROUBLESHOOTING.md#libzstd-found-no-and-the-build-succeeded-anyway)
-    - `docs/TROUBLESHOOTING.md:2523` — [A regenerated `profiles/linux.json` silently does not work](TROUBLESHOOTING.md#a-regenerated-profileslinuxjson-silently-does-not-work)
-    - `docs/TROUBLESHOOTING.md:2535` — [Reasoning from upstream capability tables gave the wrong answer](TROUBLESHOOTING.md#reasoning-from-upstream-capability-tables-gave-the-wrong-answer)
-    - `docs/TROUBLESHOOTING.md:2549` — [A containment claim was written up without being tested](TROUBLESHOOTING.md#a-containment-claim-was-written-up-without-being-tested)
-    - `docs/TROUBLESHOOTING.md:2571` — [A measured constant was used directly as a resource guard](TROUBLESHOOTING.md#a-measured-constant-was-used-directly-as-a-resource-guard)
-    - `docs/TROUBLESHOOTING.md:2584` — [Baseline measured against throttled code](TROUBLESHOOTING.md#baseline-measured-against-throttled-code)
-    - `docs/TROUBLESHOOTING.md:2617` — [A capa rule that should obviously match produces nothing](TROUBLESHOOTING.md#a-capa-rule-that-should-obviously-match-produces-nothing)
+- `docs/TROUBLESHOOTING.md:2456` — [The object store — Garage](TROUBLESHOOTING.md#the-object-store--garage)
+    - `docs/TROUBLESHOOTING.md:2464` — [`garage key create` ran twice and now two keys have the same name](TROUBLESHOOTING.md#garage-key-create-ran-twice-and-now-two-keys-have-the-same-name)
+    - `docs/TROUBLESHOOTING.md:2485` — [`garage bucket info` or `key info` exits 1 and the thing does exist](TROUBLESHOOTING.md#garage-bucket-info-or-key-info-exits-1-and-the-thing-does-exist)
+    - `docs/TROUBLESHOOTING.md:2498` — [`nginx -t` fails with `Address already in use` and the config is fine](TROUBLESHOOTING.md#nginx--t-fails-with-address-already-in-use-and-the-config-is-fine)
+    - `docs/TROUBLESHOOTING.md:2516` — [The store refuses a presigned URL with `400`, not `403`](TROUBLESHOOTING.md#the-store-refuses-a-presigned-url-with-400-not-403)
+    - `docs/TROUBLESHOOTING.md:2532` — [A wrong `S3_REGION` seems not to matter](TROUBLESHOOTING.md#a-wrong-s3_region-seems-not-to-matter)
+    - `docs/TROUBLESHOOTING.md:2548` — [A setting in `garage.toml` has no effect and nothing complains](TROUBLESHOOTING.md#a-setting-in-garagetoml-has-no-effect-and-nothing-complains)
+    - `docs/TROUBLESHOOTING.md:2562` — [`/health` returns 503 on a store that just started](TROUBLESHOOTING.md#health-returns-503-on-a-store-that-just-started)
+    - `docs/TROUBLESHOOTING.md:2581` — [`mc` does nothing useful against Garage](TROUBLESHOOTING.md#mc-does-nothing-useful-against-garage)
+    - `docs/TROUBLESHOOTING.md:2594` — [The browser upload fails only in the development container](TROUBLESHOOTING.md#the-browser-upload-fails-only-in-the-development-container)
+    - `docs/TROUBLESHOOTING.md:2609` — [An object's ETag changed after a store migration](TROUBLESHOOTING.md#an-objects-etag-changed-after-a-store-migration)
+- `docs/TROUBLESHOOTING.md:2629` — [Reading the project record itself](TROUBLESHOOTING.md#reading-the-project-record-itself)
+    - `docs/TROUBLESHOOTING.md:2631` — [A fact from a runbook turned out to be superseded](TROUBLESHOOTING.md#a-fact-from-a-runbook-turned-out-to-be-superseded)
+    - `docs/TROUBLESHOOTING.md:2646` — [A performance measurement did not reproduce](TROUBLESHOOTING.md#a-performance-measurement-did-not-reproduce)
+    - `docs/TROUBLESHOOTING.md:2661` — [An upstream DRAKVUF build passed a casual check and was the wrong binary](TROUBLESHOOTING.md#an-upstream-drakvuf-build-passed-a-casual-check-and-was-the-wrong-binary)
+    - `docs/TROUBLESHOOTING.md:2685` — [`libzstd found: NO` and the build succeeded anyway](TROUBLESHOOTING.md#libzstd-found-no-and-the-build-succeeded-anyway)
+    - `docs/TROUBLESHOOTING.md:2696` — [A regenerated `profiles/linux.json` silently does not work](TROUBLESHOOTING.md#a-regenerated-profileslinuxjson-silently-does-not-work)
+    - `docs/TROUBLESHOOTING.md:2708` — [Reasoning from upstream capability tables gave the wrong answer](TROUBLESHOOTING.md#reasoning-from-upstream-capability-tables-gave-the-wrong-answer)
+    - `docs/TROUBLESHOOTING.md:2722` — [A containment claim was written up without being tested](TROUBLESHOOTING.md#a-containment-claim-was-written-up-without-being-tested)
+    - `docs/TROUBLESHOOTING.md:2744` — [A measured constant was used directly as a resource guard](TROUBLESHOOTING.md#a-measured-constant-was-used-directly-as-a-resource-guard)
+    - `docs/TROUBLESHOOTING.md:2757` — [Baseline measured against throttled code](TROUBLESHOOTING.md#baseline-measured-against-throttled-code)
+    - `docs/TROUBLESHOOTING.md:2790` — [A capa rule that should obviously match produces nothing](TROUBLESHOOTING.md#a-capa-rule-that-should-obviously-match-produces-nothing)
 
 ## `docs/android_setup.md`
 
@@ -1457,4 +1468,4 @@ It maps **headings, not content**: a fact stated in the middle of a section is n
 
 ---
 
-*1327 headings across 40 documents.*
+*1338 headings across 40 documents.*

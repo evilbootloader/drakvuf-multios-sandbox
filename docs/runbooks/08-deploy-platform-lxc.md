@@ -584,13 +584,13 @@ silent merge.
 ## Step 12 — apply the migrations
 
 ```bash
-root@pve1:~# pct exec 102 -- su - platform -s /bin/bash -c '
-  cd /opt/platform/src/platform
-  export DATABASE_URL="postgresql:///sandbox_platform"
-  .venv/bin/python migrations/run.py --status
-  .venv/bin/python migrations/run.py
-  .venv/bin/python migrations/run.py
-'
+  root@pve1:~# pct exec 102 -- su - platform -s /bin/bash -c '
+    cd /opt/platform/src/platform
+    export DATABASE_URL="postgresql:///sandbox_platform"
+    .venv/bin/python migrations/run.py --status
+    .venv/bin/python migrations/run.py
+    .venv/bin/python migrations/run.py
+  '
  pending  0001_jobs.sql
  pending  0002_triggers.sql
 applied  0001_jobs.sql
