@@ -23,7 +23,7 @@
 # Usage:
 #   ./issue-cert.sh init                          # once, ever
 #   ./issue-cert.sh server api    192.168.1.10 platform.lan
-#   ./issue-cert.sh server minio  192.168.1.10 platform.lan
+#   ./issue-cert.sh server objects 192.168.1.10 platform.lan
 #   ./issue-cert.sh client dom0-lab
 #   ./issue-cert.sh verify api
 
