@@ -481,8 +481,7 @@ PATHS = {
     TargetOs.WINDOWS: GuestPaths(
         staging_dir="C:\\Users\\carlos\\Desktop",
         shell="C:\\Windows\\System32\\cmd.exe",
-        delay=f"C:\\Windows\\System32\\ping.exe -n {LAUNCH_DELAY} "
-              f"127.0.0.1 >nul"),
+        delay=f"C:\\Windows\\System32\\PING.EXE -n {LAUNCH_DELAY} 127.0.0.1 >nul"),
 }
 
 

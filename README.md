@@ -164,3 +164,109 @@ This project is developed with Claude Code. `CLAUDE.md` carries the
 project-specific rules; see Anthropic's
 [Claude Code best practices](https://code.claude.com/docs/en/best-practices)
 for general guidance on the tool itself.
+
+
+## INSTALL PLATFORM DOMU
+
+```
+sudo su
+cd ~/path/to/repo/misc/xen-vms
+ssh-keygen # Don't add a password to the key
+# Update Makefile line with the key between the quotes.
+# RSA_KEY	:= ""
+make web_vm
+make web_sandbox
+```
+
+At the end of the script you will get something like `WORKER_TOKEN=...`, save it. If you did not save it you can always run
+
+```
+ssh <PLATFORM_VM_IP>
+sudo -u platform DATABASE_URL=postgresql:///sandbox_platform \
+  .venv/bin/python create_worker.py dom0-1 --rotate
+```
+
+Creating users when registration is not active
+```
+ssh <PLATFORM_VM_IP>
+cd /opt/platform/src/platform
+sudo -u platform DATABASE_URL=postgresql:///sandbox_platform \
+  .venv/bin/python create_user.py you@example.com --balance 100000  # balance is in seconds
+```
+
+### Cloudflare tunnel on WEB SANDBOX
+
+```
+ssh <PLATFORM_VM_IP>
+
+sed 's/TRUSTED_CLIENT_IP_HEADER=/TRUSTED_CLIENT_IP_HEADER=CF-Connecting-IP/g' -i /etc/sandbox_platform/api.env
+
+curl -fsSL https://pkg.cloudflare.com/cloudflare-main.gpg \
+  -o /usr/share/keyrings/cloudflare-main.gpg
+echo "deb [signed-by=/usr/share/keyrings/cloudflare-main.gpg] https://pkg.cloudflare.com/cloudflared any main" \
+  > /etc/apt/sources.list.d/cloudflared.list
+apt-get update && apt-get install -y cloudflared
+
+cloudflared tunnel create sandbox-platform
+cloudflared tunnel route dns sandbox-platform <SANDBOX_DOMAIN>
+
+install -d -m 750 /etc/cloudflared
+mv ~/.cloudflared/<UUID>.json /etc/cloudflared/
+chmod 600 /etc/cloudflared/<UUID>.json
+
+useradd --system --no-create-home --shell /usr/sbin/nologin cloudflared || true
+cp /etc/sandbox_platform/tls/ca.crt /etc/cloudflared/ca.crt
+chown -R cloudflared:cloudflared /etc/cloudflared
+
+cat > /etc/systemd/system/cloudflared.service <<EOF
+[Unit]
+Description=Cloudflare Tunnel (browser-facing ingress)
+After=network-online.target sandbox-api.service
+Wants=network-online.target
+
+[Service]
+Type=notify
+User=cloudflared
+Group=cloudflared
+ExecStart=/usr/bin/cloudflared --no-autoupdate --config /etc/cloudflared/config.yml tunnel run
+Restart=on-failure
+RestartSec=5
+TimeoutStartSec=0
+
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
+EOF
+systemctl daemon-reload
+
+cat > /etc/cloudflared/config.yml <<EOF
+tunnel: UUID
+credentials-file: /etc/cloudflared/UUID.json
+# /etc/cloudflared/config.yml
+ingress:
+  # bucket FIRST -- cloudflared matches in order
+  - hostname: https://SANDBOX_DOMAIN
+    path: ^/analysis(/|$)
+    service: https://VM_IP:9000
+    originRequest:
+      caPool: /etc/cloudflared/ca.crt
+  - hostname: https://SANDBOX_DOMAIN
+    path: ^/api/v1/worker(/|$)
+    service: http_status:404
+  - hostname: https://SANDBOX_DOMAIN
+    service: https://VM_IP:8000
+    originRequest:
+      caPool: /etc/cloudflared/ca.crt
+  - service: http_status:404
+EOF
+chown cloudflared:cloudflared /etc/cloudflared/config.yml
+cloudflared --config /etc/cloudflared/config.yml tunnel ingress validate
+systemctl enable --now cloudflared
+systemctl status cloudflared --no-pager | head -5
+
+
+```

@@ -328,5 +328,5 @@ step "state"
 g bucket info "$BUCKET"
 
 step "done"
-echo  "S3_ACCESS_KEY=$api_id\nS3_SECRET_KEY=$(key_secret_of "$API_KEY_NAME")" > /etc/sandbox-platform/api.env
+echo  "S3_ACCESS_KEY=$api_id\nS3_SECRET_KEY=$(key_secret_of "$API_KEY_NAME")" > /etc/sandbox_platform/api.env
 

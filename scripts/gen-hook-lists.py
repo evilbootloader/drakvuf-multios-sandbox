@@ -656,7 +656,6 @@ def main() -> int:
     new_win = {k: v for k, v in win_lines.items() if k not in curated_win}
     win_body = [
         f"{dll},{fn},log" + (f",{args_}" if args_ else "")
-        + ("" if prov == "win32metadata" else f"    # {prov}")
         for (dll, fn), (prov, args_) in sorted(new_win.items())
     ]
     win_header = (

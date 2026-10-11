@@ -189,6 +189,8 @@ web_sandbox:
 	$$G layout apply --version 1; \
 	$$G layout show; \
 	$$G status; \
+	mkdir /etc/sandbox_platform/; \
+	chown platform:platform /etc/sandbox_platform ; \
 	BROWSER_ORIGIN=https://$(SANDBOX_WEB) BUCKET_QUOTA=$(S3_QUOTA)GiB RETENTION_DAYS=$(S3_RETENTION) /opt/platform/src/platform/garage/provision.sh; \
 	set -a; . /etc/sandbox_platform/api.env; set +a \
 	  /opt/platform/src/platform/.venv/bin/python \
@@ -196,7 +198,6 @@ web_sandbox:
 	      --front  https://192.168.1.10:9000 \
 	      --direct http://127.0.0.1:3900 \
 	      --origin https://$(SANDBOX_WEB); \
-	mkdir /etc/sandbox_platform/; \
 	printf "%s\n" \
 	"DATABASE_URL=postgresql:///sandbox_platform" \
 	"" \
@@ -207,6 +208,7 @@ web_sandbox:
 	"S3_PUBLIC_ENDPOINT=https://$(SANDBOX_WEB)" \
 	"S3_BUCKET=analysis" \
 	"S3_REGION=eu-central-1" \
+	"S3_CA_BUNDLE=/etc/sandbox_platform/tls/ca.crt" \
 	"JWT_SIGNING_KEY=$$(openssl rand -hex 32)" \
 	"JWT_ISSUER=sandbox.evilbootloader.com" \
 	"JWT_AUDIENCE=sandbox-platform" \
@@ -229,6 +231,7 @@ web_sandbox:
 	"# grant of 3600 analysis seconds, so an open2-__ route is free compute for anyone" \
 	"# with an email address and a Telegram account. Closed, create_user.py is the" \
 	"# only way in -- and password reset still works for accounts that exist." \
+	"CONSOLE_ENABLED=True" \
 	"REGISTRATION_OPEN=0" >> /etc/sandbox_platform/api.env;
 	chmod 600 /etc/sandbox_platform/api.env; \
 	chown platform:platform /etc/sandbox_platform/api.env; \
