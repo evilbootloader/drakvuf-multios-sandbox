@@ -954,7 +954,7 @@ DECISION A2's absences, asserted directly.
 
 ```bash
 CA=/etc/sandbox-platform/tls/ca.crt
-B=https://192.168.1.10:9000
+B=https://192.168.1.12:9000
 c() { curl -s -o /dev/null -w "%-34s %{http_code}\n" --cacert $CA "$@"; }
 
 c "$B/analysis"                                  # ListObjects          -> 403
