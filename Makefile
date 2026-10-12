@@ -2,7 +2,7 @@ SHELL	:= /bin/bash
 .ONESHELL:
 
 VM      := platform
-CFG     := platform.cfg
+CFG     := misc/xen-vms/platform.cfg
 VMADDR	:= 192.168.1.12/24
 VMIP := $(firstword $(subst /, ,$(VMADDR)))
 VMROUTE	:= 192.168.1.1
@@ -13,7 +13,7 @@ S3_QUOTA := 100
 S3_RETENTION := 30
 SANDBOXDIP := 192.168.1.6
 
-.PHONY: web_vm web_sandbox up down destroy reboot reset console status ssh clean
+.PHONY: web_vm web_sandbox sandboxd
 
 web_vm:
 	@echo "Installing $(VM)..."
@@ -283,34 +283,62 @@ web_sandbox:
 	 .venv/bin/python create_worker.py dom0-1; \
 	'
 
-up:
-	@echo "Starting $(VM)..."
-	sudo xl create $(CFG)
+sandboxd:
+	@echo "Installing libvmi, drakvuf and sandboxd orquestrator"
+	cd drakvuf/libvmi
+	autoreconf -vif
+	./configure --disable-kvm --disable-bareflank --disable-file
+	make
+	make install
+	@if [ -n "$$LD_LIBRARY_PATH" ]; then \
+		echo 'export LD_LIBRARY_PATH=$$LD_LIBRARY_PATH:/usr/local/lib' >> ~/.bashrc; \
+	else \
+		echo 'export LD_LIBRARY_PATH=/usr/local/lib' >> ~/.bashrc; \
+	fi
+	cd ../
+	meson setup build --native-file llvm.ini
+	ninja -C build
+	ninja -C build install
+	mkdir /etc/sandboxd/tls -p
+	scp $(VMIP):/etc/sandbox_platform/tls/ca.crt /etc/sandboxd/tls/
+	scp $(VMIP):/etc/sandbox_platform/tls/dom0-lab.crt /etc/sandboxd/tls/
+	scp $(VMIP):/etc/sandbox_platform/tls/dom0-lab.key /etc/sandboxd/tls/
+	printf "%s\n" \
+	"SANDBOXD_API=https://$(VMIP):8000" \
+	"SANDBOXD_CACERT=/etc/sandboxd/tls/ca.crt" \
+	"SANDBOXD_CLIENT_CERT=/etc/sandboxd/tls/dom0-lab.crt" \
+	"SANDBOXD_CLIENT_KEY=/etc/sandboxd/tls/dom0-lab.key" \
+	"SANDBOXD_MAX_CLONES=3" \
+	"SANDBOXD_TOTAL_MIB=15000" \
+	"SANDBOXD_CONSOLE_API=https://$(VMIP):8000" \
+	"SANDBOXD_CONSOLE_ENABLED=1" >> /etc/systemd/system/sandbox-api.service	
 
-down:
-	@echo "Gracefully shutting down $(VM)..."
-	sudo xl shutdown $(VM)
 
-destroy:
-	@echo "Force destroying $(VM)..."
-	-sudo xl destroy $(VM)
-
-reboot:
-	sudo xl reboot $(VM)
-
-reset:
-	-sudo xl destroy $(VM)
-	sleep 1
-	sudo xl create $(CFG)
-
-console:
-	sudo xl console $(VM)
-
-status:
-	sudo xl list $(VM)
-
-ssh:
-	ssh root@$(VMIP)
-
-clean:
-	-sudo xl destroy $(VM)
+linux_analysis_vm:
+	printf "%s\n" \
+	"arch = 'x86_64'" \
+	"name = 'ubuntu_analysis'"" \
+	"maxmem = 4096" \
+	"memory = 4096" \
+	"vcpus = 1" \
+	"maxvcpus = 1"
+	"builder = 'hvm'" \
+	"boot = 'dc'" \
+	"hap = 1" \
+	"on_poweroff = 'destroy'" \
+	"on_reboot = 'restart'" \
+	"on_crash = "destroy'" \
+	"vnc = 1" \
+	"vnclisten = '127.0.0.1'" \
+	"vga = 'stdvga' \
+	"usb = 1 \
+	"usbdevice = 'tablet'" \
+	"audio = 1" \
+	"viridian = 1" \
+	"altp2m = 2" \
+	"shadow_memory = 32" \
+	"vif = [ 'type=ioemu,model=e1000,bridge=xenbr0' ]" \
+	"disk = [" \
+	"		'phy:/dev/vg-root/ubuntu,hda,w'," \
+	"		'file:/home/user/Documents/seed.iso,hdc:cdrom,r'" \
+	"		]" \
