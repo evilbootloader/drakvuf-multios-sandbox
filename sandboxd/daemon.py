@@ -421,8 +421,8 @@ class Daemon:
                 log.warning("not offering %s: %s", os_.value, exc)
         if not out:
             raise SystemExit(
-                "sandboxd: no analysis pipeline is available -- no template "
-                f"config found under {self._cfg.repo_root / 'misc'}"
+                "sandboxd: no analysis pipeline is available -- "
+                f"Read the README for setting up the VMS"
             )
         return out
 

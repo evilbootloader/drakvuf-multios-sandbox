@@ -301,7 +301,7 @@ sandboxd:
 	./configure --disable-kvm --disable-bareflank --disable-file; \
 	make; \
 	make install; \
-	@if [ -n "$$LD_LIBRARY_PATH" ]; then \
+	if [ -n "$$LD_LIBRARY_PATH" ]; then \
 		echo 'export LD_LIBRARY_PATH=$$LD_LIBRARY_PATH:/usr/local/lib' >> ~/.bashrc; \
 	else \
 		echo 'export LD_LIBRARY_PATH=/usr/local/lib' >> ~/.bashrc; \
@@ -326,9 +326,10 @@ sandboxd:
 	"SANDBOXD_CLIENT_CERT=/etc/sandboxd/tls/dom0-lab.crt" \
 	"SANDBOXD_CLIENT_KEY=/etc/sandboxd/tls/dom0-lab.key" \
 	"SANDBOXD_MAX_CLONES=3" \
-	"SANDBOXD_TOTAL_MIB=echo $$(( $$(xl info | grep free_mem | cut -d':' -f2) - 2000 ))" \
+	"SANDBOXD_TOTAL_MIB=$$(( $$(xl info | grep free_mem | cut -d':' -f2) - 2000 ))" \
 	"SANDBOXD_CONSOLE_API=https://$(VMIP):8000" \
-	"SANDBOXD_CONSOLE_ENABLED=1" >> /etc/sandboxd/sandboxd.env; \
+	"SANDBOXD_CONSOLE_ENABLED=1" \
+	"$$(ssh 192.168.1.12 'sudo -u platform DATABASE_URL=postgresql:///sandbox_platform /opt/platform/src/platform/.venv/bin/python /opt/platform/src/platform/create_worker.py dom0-1 --rotate;' | grep -Eo "WORKER_TOKEN.*")">> /etc/sandboxd/sandboxd.env; \
 	sudo lvcreate --type thin-pool -l 90%FREE --poolmetadatasize 16G -n thinpool vg-root
 
 
@@ -377,7 +378,7 @@ ubuntu_analysis_vm:
 		"$(REPO_ROOT)/misc/iso/cidata/user-data" \
 		"$(REPO_ROOT)/misc/iso/cidata/meta-data"; \
 	\
-	#wget "https://releases.ubuntu.com/24.04/ubuntu-24.04.5.1-desktop-amd64.iso" -O $(REPO_ROOT)/misc/iso/ubuntu-24.04.5.1-desktop-amd64.iso ; \
+	wget "https://releases.ubuntu.com/24.04/ubuntu-24.04.5.1-desktop-amd64.iso" -O $(REPO_ROOT)/misc/iso/ubuntu-24.04.5.1-desktop-amd64.iso ; \
 	printf "%s\n" \
 	"arch = 'x86_64'" \
 	"name = 'ubuntu_analysis'" \
@@ -416,7 +417,7 @@ windows_analysis_vm:
 	apt install wget genisoimage -y; \
 	rm -rf /tmp/win11iso/; \
 	mkdir /tmp/win11iso/; \
-	#wget https://archive.org/download/win-11-23-h-2-english-international-x-64/Win11_23H2_EnglishInternational_x64.iso -O $(REPO_ROOT)/misc/iso/win-11-23-h-2-english-international-x-64/Win11_23H2_EnglishInternational_x64.iso ; \
+	wget https://archive.org/download/win-11-23-h-2-english-international-x-64/Win11_23H2_EnglishInternational_x64.iso -O $(REPO_ROOT)/misc/iso/Win11_23H2_EnglishInternational_x64.iso ; \
 	sudo mount -o loop,ro $(REPO_ROOT)/misc/iso/Win11_23H2_EnglishInternational_x64.iso /mnt; \
 	sudo cp -r /mnt/* /tmp/win11iso/; \
 	sudo umount /mnt; \
@@ -497,7 +498,7 @@ setup_hooks_windows:
 	"vif = [ 'type=ioemu,model=e1000,bridge=xenbr0' ]" \
 	"disk = [ 'phy:/dev/vg-root/windows_sandbox_test,hda,w' ]" > $(REPO_ROOT)/misc/xen-vms/windows_sandbox.cfg; \
 	xl create $(REPO_ROOT)/misc/xen-vms/windows_sandbox.cfg; \
-	sleep 30
+	sleep 30; \
 	INJECTION_PID=$$(vmi-process-list -d $$(xl domid ubuntu_analysis_sandbox) -j $(REPO_ROOT)/profiles/windows.json \
 	    | grep -Eo "\[\s*[0-9]+\]\s*explorer\.exe" | cut -d']' -f1 | grep -Eo "[0-9]+"); \
 	echo "INJECTION_PID=$$INJECTION_PID"; \

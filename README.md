@@ -172,18 +172,24 @@ for general guidance on the tool itself.
 sudo su
 cd ~/path/to/repo/misc/xen-vms
 ssh-keygen # Don't add a password to the key
-# Update Makefile line with the key between the quotes.
-# RSA_KEY	:= ""
+# Update Makefile lines with the key between the quotes and the domain.
+# RSA_KEY	:= 
+# SANDBOX_WEB :=
 make web_vm
 make web_sandbox
-```
+make sandboxd
+make windows_analysis_vm
 
-At the end of the script you will get something like `WORKER_TOKEN=...`, save it. If you did not save it you can always run
+# Connect through VNC. When it is completely installed shut it down through VNC, then run:
+make setup_hooks_windows
 
-```
-ssh <PLATFORM_VM_IP>
-sudo -u platform DATABASE_URL=postgresql:///sandbox_platform \
-  .venv/bin/python create_worker.py dom0-1 --rotate
+make ubuntu_analysis_vm
+# Connect through VNC. When it is completely installed shut it down through VNC, then run:
+make setup_hooks_ubuntu
+
+# Run the sandbox with
+set -a; . /etc/sandboxd/sandboxd.env; set +a
+.venv-sandboxd/bin/python -m sandboxd.daemon
 ```
 
 Creating users when registration is not active

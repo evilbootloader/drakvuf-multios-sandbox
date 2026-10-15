@@ -498,57 +498,86 @@ powercfg.exe -H off
 		</File>
 		<File path="C:\Windows\Setup\Scripts\Specialize.ps1">
 $scripts = @(
-	{
-		reg.exe add "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\OOBE" /v BypassNRO /t REG_DWORD /d 1 /f;
-	};
-	{
-		net.exe accounts /maxpwage:UNLIMITED;
-	};
-	{
-        Register-ScheduledTask -TaskName 'PauseWindowsUpdate' `
-            -Xml (Get-Content -LiteralPath 'C:\Windows\Setup\Scripts\PauseWindowsUpdate.xml' -Raw) `
-            -Force -ErrorAction Stop;
-	};
-	{
-		reg.exe add "HKLM\SOFTWARE\Policies\Microsoft\Windows Defender Security Center\Notifications" /v DisableNotifications /t REG_DWORD /d 1 /f;
-	};
-	{
-		reg.exe add "HKLM\SYSTEM\CurrentControlSet\Control\CI\Policy" /v VerifiedAndReputablePolicyState /t REG_DWORD /d 0 /f;
-	};
-	{
-		reg.exe add "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer" /v SmartScreenEnabled /t REG_SZ /d "Off" /f;
-		reg.exe add "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\WTDS\Components" /v ServiceEnabled /t REG_DWORD /d 0 /f;
-		reg.exe add "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\WTDS\Components" /v NotifyMalicious /t REG_DWORD /d 0 /f;
-		reg.exe add "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\WTDS\Components" /v NotifyPasswordReuse /t REG_DWORD /d 0 /f;
-		reg.exe add "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\WTDS\Components" /v NotifyUnsafeApp /t REG_DWORD /d 0 /f;
-		reg.exe add "HKLM\SOFTWARE\Policies\Microsoft\Windows Defender Security Center\Systray" /v HideSystray /t REG_DWORD /d 1 /f;
-	};
-	{
-		reg.exe add "HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Power" /v HiberbootEnabled /t REG_DWORD /d 0 /f;
-	};
-	{
-		reg.exe add "HKLM\SYSTEM\CurrentControlSet\Control\BitLocker" /v "PreventDeviceEncryption" /t REG_DWORD /d 1 /f;
-	};
-	{
-		C:\Windows\Setup\Scripts\unattend-01.cmd;
-	};
+    {
+        # --- Disable the three core Windows Update services ---
+        # WaaSMedicSvc (Windows Update Medic) must be disabled via registry to avoid "Access Denied"
+        Set-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Services\wuauserv" -Name "Start" -Value 4 -Type DWord -Force
+        Set-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Services\UsoSvc" -Name "Start" -Value 4 -Type DWord -Force
+        Set-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Services\WaaSMedicSvc" -Name "Start" -Value 4 -Type DWord -Force
+
+        # Stop them if they are currently running
+        Stop-Service -Name wuauserv -Force -ErrorAction SilentlyContinue
+        Stop-Service -Name UsoSvc -Force -ErrorAction SilentlyContinue
+        Stop-Service -Name WaaSMedicSvc -Force -ErrorAction SilentlyContinue
+    };
+    {
+        # --- Disable all update-related scheduled tasks ---
+        # These are the hidden triggers that can restart the update process.
+        Get-ScheduledTask -TaskPath "\Microsoft\Windows\UpdateOrchestrator\" | Disable-ScheduledTask -ErrorAction SilentlyContinue
+        Get-ScheduledTask -TaskPath "\Microsoft\Windows\WindowsUpdate\" | Disable-ScheduledTask -ErrorAction SilentlyContinue
+        Get-ScheduledTask -TaskPath "\Microsoft\Windows\WaaSMedic\" | Disable-ScheduledTask -ErrorAction SilentlyContinue
+    };
+    {
+        # --- Apply Group Policy to lock down automatic updates ---
+        $policyPath = "HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU"
+        if (-not (Test-Path $policyPath)) { New-Item -Path $policyPath -Force | Out-Null }
+        Set-ItemProperty -Path $policyPath -Name "NoAutoUpdate" -Value 1 -Type DWord -Force
+        Set-ItemProperty -Path $policyPath -Name "AUOptions" -Value 1 -Type DWord -Force
+    };
+    {
+        # --- Block Windows Update servers at the network level ---
+        # This prevents the machine from contacting Microsoft servers even if a service wakes up.
+        $hostsFile = "$env:windir\System32\drivers\etc\hosts"
+        $blockedHosts = @(
+            "0.0.0.0 windowsupdate.microsoft.com",
+            "0.0.0.0 update.microsoft.com",
+            "0.0.0.0 fe2.update.microsoft.com",
+            "0.0.0.0 download.windowsupdate.com",
+            "0.0.0.0 wustat.windows.com",
+            "0.0.0.0 ntservicepack.microsoft.com"
+        )
+        Add-Content -Path $hostsFile -Value "`r`n# Block Windows Update" -Force
+        $blockedHosts | ForEach-Object { Add-Content -Path $hostsFile -Value $_ -Force }
+    };
+    {
+        # --- Your existing OOBE and account tweaks ---
+        reg.exe add "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\OOBE" /v BypassNRO /t REG_DWORD /d 1 /f;
+        net.exe accounts /maxpwage:UNLIMITED;
+    };
+    {
+        # --- Your existing security tweaks ---
+        reg.exe add "HKLM\SOFTWARE\Policies\Microsoft\Windows Defender Security Center\Notifications" /v DisableNotifications /t REG_DWORD /d 1 /f;
+        reg.exe add "HKLM\SYSTEM\CurrentControlSet\Control\CI\Policy" /v VerifiedAndReputablePolicyState /t REG_DWORD /d 0 /f;
+        reg.exe add "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer" /v SmartScreenEnabled /t REG_SZ /d "Off" /f;
+        reg.exe add "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\WTDS\Components" /v ServiceEnabled /t REG_DWORD /d 0 /f;
+        reg.exe add "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\WTDS\Components" /v NotifyMalicious /t REG_DWORD /d 0 /f;
+        reg.exe add "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\WTDS\Components" /v NotifyPasswordReuse /t REG_DWORD /d 0 /f;
+        reg.exe add "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\WTDS\Components" /v NotifyUnsafeApp /t REG_DWORD /d 0 /f;
+        reg.exe add "HKLM\SOFTWARE\Policies\Microsoft\Windows Defender Security Center\Systray" /v HideSystray /t REG_DWORD /d 1 /f;
+        reg.exe add "HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Power" /v HiberbootEnabled /t REG_DWORD /d 0 /f;
+        reg.exe add "HKLM\SYSTEM\CurrentControlSet\Control\BitLocker" /v "PreventDeviceEncryption" /t REG_DWORD /d 1 /f;
+    };
+    {
+        # --- Your existing command file execution ---
+        & 'C:\Windows\Setup\Scripts\unattend-01.cmd';
+    };
 );
 
-&amp; {
+& {
   [float] $complete = 0;
   [float] $increment = 100 / $scripts.Count;
   foreach( $script in $scripts ) {
     Write-Progress -Id 0 -Activity 'Running scripts to customize your Windows installation. Do not close this window.' -PercentComplete $complete;
-    '*** Will now execute command &#xAB;{0}&#xBB;.' -f $(
-      $script.ToString().Trim() -replace '\s+', ' ' -replace '^(.{99})(.+)$', '$1&#x2026;';
+    '*** Will now execute command «{0}».' -f (
+      $script.ToString().Trim() -replace '\s+', ' ' -replace '^(.{99})(.+)$', '$1…';
     );
     $start = [datetime]::Now;
-    &amp; $script;
+    & $script;
     '*** Finished executing command after {0:0} ms.' -f [datetime]::Now.Subtract( $start ).TotalMilliseconds;
     "`r`n" * 3;
     $complete += $increment;
   }
-} *&gt;&amp;1 | Out-String -Width 1KB -Stream &gt;&gt; "C:\Windows\Setup\Scripts\Specialize.log";
+} *>&1 | Out-String -Width 1KB -Stream >> "C:\Windows\Setup\Scripts\Specialize.log";
 		</File>
 		<File path="C:\Windows\Setup\Scripts\UserOnce.ps1">
 $scripts = @(
