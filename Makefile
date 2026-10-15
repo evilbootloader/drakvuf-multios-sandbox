@@ -15,7 +15,7 @@ SANDBOXDIP := 192.168.1.6
 ANALYSIS_VM_PASS := malware
 ANALYSIS_VM_USER := user
 ANALYSIS_VM_IP := 
-REPO_ROOT := "$(shell pwd)"
+REPO_ROOT := $(shell pwd)
 
 .PHONY: web_vm web_sandbox sandboxd
 
@@ -330,7 +330,9 @@ sandboxd:
 	"SANDBOXD_CONSOLE_API=https://$(VMIP):8000" \
 	"SANDBOXD_CONSOLE_ENABLED=1" \
 	"$$(ssh 192.168.1.12 'sudo -u platform DATABASE_URL=postgresql:///sandbox_platform /opt/platform/src/platform/.venv/bin/python /opt/platform/src/platform/create_worker.py dom0-1 --rotate;' | grep -Eo "WORKER_TOKEN.*")">> /etc/sandboxd/sandboxd.env; \
+	sed -i 's|/root/drakvuf-multios-sandbox|$(REPO_ROOT)|g' $(REPO_ROOT)/sandboxd/config.py; \
 	sudo lvcreate --type thin-pool -l 90%FREE --poolmetadatasize 16G -n thinpool vg-root
+
 
 
 ubuntu_analysis_vm:
@@ -503,7 +505,7 @@ setup_hooks_windows:
 	    | grep -Eo "\[\s*[0-9]+\]\s*explorer\.exe" | cut -d']' -f1 | grep -Eo "[0-9]+"); \
 	echo "INJECTION_PID=$$INJECTION_PID"; \
 	xl save windows_analysis_sandbox $(REPO_ROOT)/state/windows_sandbox.bak; \
-	sed -Ei "s/INJECTION_PID_WINDOWS=.*/INJECTION_PID_WINDOWS=$$INJECTION_PID/g" $(REPO_ROOT)/sandboxd/config.py
+	sed -Ei "s/INJECTION_PID_WINDOWS = .*/INJECTION_PID_WINDOWS = $$INJECTION_PID/g" $(REPO_ROOT)/sandboxd/config.py
 
 setup_hooks_ubuntu:
 	kpartx -a /dev/vg-root/ubuntu_test; \
@@ -553,4 +555,4 @@ setup_hooks_ubuntu:
 	    | grep -Eo "\[\s*[0-9]+\]\s*gdm3" | cut -d']' -f1 | grep -Eo "[0-9]+"); \
 	echo "INJECTION_PID=$$INJECTION_PID"; \
 	xl save ubuntu_analysis_sandbox $(REPO_ROOT)/state/ubuntu_sandbox.bak; \
-	sed -Ei "s/INJECTION_PID_UBUNTU=.*/INJECTION_PID_UBUNTU=$$INJECTION_PID/g" $(REPO_ROOT)/sandboxd/config.py
+	sed -Ei "s/INJECTION_PID_UBUNTU = .*/INJECTION_PID_UBUNTU = $$INJECTION_PID/g" $(REPO_ROOT)/sandboxd/config.py

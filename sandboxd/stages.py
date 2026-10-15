@@ -271,11 +271,11 @@ class Config:
     # the string `drakvuf` appears nowhere a sample can read (issue #7).
     injection_pids: dict = field(default_factory=lambda: {
         os_: pid
-        for os_, pid in (
-            (TargetOs.UBUNTU, config.INJECTION_PID_UBUNTU),
-            (TargetOs.WINDOWS, config.INJECTION_PID_WINDOWS),
-            (TargetOs.ANDROID, config.INJECTION_PID_ANDROID),
-        )
+        for os_, pid in {
+            TargetOs.UBUNTU: config.INJECTION_PID_UBUNTU,
+            TargetOs.WINDOWS: config.INJECTION_PID_WINDOWS,
+            TargetOs.ANDROID: config.INJECTION_PID_ANDROID,
+        }.items()
         if pid
     })
     # `lv_sizes` was dropped 2026-08-29 with CLONE_LV_SIZE. Clones are thin
@@ -303,7 +303,7 @@ class Config:
         return f"{os_.value}_sandbox"
 
     def domain_config(self, os_: TargetOs) -> Path:
-        return self.repo_root / "misc" / "xen_vms" / f"{self.origin(os_)}.cfg"
+        return self.repo_root / "misc" / "xen-vms" / f"{self.origin(os_)}.cfg"
 
     def saved_state(self, os_: TargetOs) -> Path:
         return self.repo_root / "state" / f"{self.origin(os_)}.bak"
