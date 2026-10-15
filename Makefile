@@ -380,7 +380,7 @@ ubuntu_analysis_vm:
 		"$(REPO_ROOT)/misc/iso/cidata/user-data" \
 		"$(REPO_ROOT)/misc/iso/cidata/meta-data"; \
 	\
-	wget "https://releases.ubuntu.com/24.04/ubuntu-24.04.5.1-desktop-amd64.iso" -O $(REPO_ROOT)/misc/iso/ubuntu-24.04.5.1-desktop-amd64.iso ; \
+	wget "https://releases.ubuntu.com/jammy/ubuntu-22.04.5-desktop-amd64.iso" -O $(REPO_ROOT)/misc/iso/ubuntu-22.04.5-desktop-amd64.iso ; \
 	printf "%s\n" \
 	"arch = 'x86_64'" \
 	"name = 'ubuntu_analysis'" \
@@ -404,7 +404,7 @@ ubuntu_analysis_vm:
 	"altp2m = 2" \
 	"shadow_memory = 32" \
 	"vif = [ 'type=ioemu,model=e1000,bridge=xenbr0' ]" \
-	"disk = ['phy:/dev/vg-root/ubuntu_test,hda,w','file:$(REPO_ROOT)/misc/iso/seed.iso,hdb:cdrom,r','file:$(REPO_ROOT)/misc/iso/ubuntu-24.04.5.1-desktop-amd64.iso,hdc:cdrom,r']" \
+	"disk = ['phy:/dev/vg-root/ubuntu_test,hda,w','file:$(REPO_ROOT)/misc/iso/seed.iso,hdb:cdrom,r','file:$(REPO_ROOT)/misc/iso/ubuntu-22.04.5-desktop-amd64.iso,hdc:cdrom,r']" \
 		> $(REPO_ROOT)/misc/xen-vms/ubuntu.cfg; \
 	sudo lvcreate -V 1T --thin -n ubuntu_test vg-root/thinpool; \
 	xl create $(REPO_ROOT)/misc/xen-vms/ubuntu.cfg
