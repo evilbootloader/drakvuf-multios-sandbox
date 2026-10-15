@@ -62,6 +62,7 @@ import zipfile
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
+from . import config
 
 from .postprocessing.paths import DUMPS_DIR, EXTRACTED_DIR, IPT_DIR
 
@@ -447,7 +448,7 @@ class GuestPaths:
 
 
 PATHS = {
-    TargetOs.UBUNTU: GuestPaths(staging_dir="/home/carlos/Desktop",
+    TargetOs.UBUNTU: GuestPaths(staging_dir="/home/{config.ANALYSIS_USERNAME}/Desktop",
                                 shell="/usr/bin/sh",
                                 delay=f"/usr/bin/sleep {LAUNCH_DELAY}"),
     # /system/bin/sh, not /usr/bin/sh: the Ubuntu path does not exist here. No
@@ -479,7 +480,7 @@ PATHS = {
     # inherits the ANCHOR's environment, and a `ping` found on PATH is a `ping`
     # that can be "not found" in a guest whose anchor has a thin one.
     TargetOs.WINDOWS: GuestPaths(
-        staging_dir="C:\\Users\\carlos\\Desktop",
+        staging_dir="C:\\Users\\{config.ANALYSIS_USERNAME}\\Desktop",
         shell="C:\\Windows\\System32\\cmd.exe",
         delay=f"C:\\Windows\\System32\\PING.EXE -n {LAUNCH_DELAY} 127.0.0.1 >nul"),
 }
