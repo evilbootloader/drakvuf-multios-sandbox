@@ -14,7 +14,6 @@ S3_RETENTION := 30
 SANDBOXDIP := 192.168.1.6
 ANALYSIS_VM_PASS := malware
 ANALYSIS_VM_USER := user
-ANALYSIS_VM_IP := 
 REPO_ROOT := $(shell pwd)
 
 .PHONY: web_vm web_sandbox sandboxd
@@ -331,6 +330,7 @@ sandboxd:
 	"SANDBOXD_CONSOLE_ENABLED=1" \
 	"$$(ssh 192.168.1.12 'sudo -u platform DATABASE_URL=postgresql:///sandbox_platform /opt/platform/src/platform/.venv/bin/python /opt/platform/src/platform/create_worker.py dom0-1 --rotate;' | grep -Eo "WORKER_TOKEN.*")">> /etc/sandboxd/sandboxd.env; \
 	sed -i 's|/root/drakvuf-multios-sandbox|$(REPO_ROOT)|g' $(REPO_ROOT)/sandboxd/config.py; \
+	sed -i 's/ANALYSIS_USERNAME =.*/ANALYSIS_USERNAME = "$(ANALYSIS_VM_USER)"/g' $(REPO_ROOT)/sandboxd/config.py; \
 	sudo lvcreate --type thin-pool -l 90%FREE --poolmetadatasize 16G -n thinpool vg-root
 
 
@@ -424,6 +424,10 @@ windows_analysis_vm:
 	sudo cp -r /mnt/* /tmp/win11iso/; \
 	sudo umount /mnt; \
 	cp $(REPO_ROOT)/misc/xen-vms/autounattend.xml /tmp/win11iso/; \
+	sed -i 's|<Name>carlos</Name>|<Name>$(ANALYSIS_VM_USER)</Name>|g' /tmp/win11iso/autounattend.xml; \
+	sed -i 's|<DisplayName>carlos</DisplayName>|<DisplayName>$(ANALYSIS_VM_USER)</DisplayName>|g' /tmp/win11iso/autounattend.xml; \
+	sed -i 's|<Username>carlos</Username>|<Username>$(ANALYSIS_VM_USER)</Username>|g' /tmp/win11iso/autounattend.xml; \
+	sed -i 's|<Value>malware</Value>|<Value>$(ANALYSIS_VM_PASS)</Value>|g' /tmp/win11iso/autounattend.xml;
 	genisoimage -o $(REPO_ROOT)/misc/iso/Win11_modified.iso \
 	  -b boot/etfsboot.com -no-emul-boot -boot-load-seg 0x07C0 -boot-load-size 8 \
 	  -eltorito-alt-boot -e efi/microsoft/boot/efisys.bin -no-emul-boot \
