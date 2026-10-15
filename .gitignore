@@ -105,3 +105,6 @@ samples/*
 # matches the flare-capa pin in sandboxd/requirements.txt (~1,000 YAML files).
 # Cloned onto Dom0 by the step in docs/DEVELOPING.md 6, never committed.
 sandboxd/postprocessing/data/
+
+misc
+.venv-sandbodx

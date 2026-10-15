@@ -303,7 +303,7 @@ class Config:
         return f"{os_.value}_sandbox"
 
     def domain_config(self, os_: TargetOs) -> Path:
-        return self.repo_root / "misc" / f"{self.origin(os_)}.cfg"
+        return self.repo_root / "misc" / "xen_vms" / f"{self.origin(os_)}.cfg"
 
     def saved_state(self, os_: TargetOs) -> Path:
         return self.repo_root / "state" / f"{self.origin(os_)}.bak"

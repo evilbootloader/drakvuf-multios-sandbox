@@ -502,7 +502,7 @@ setup_hooks_windows:
 	INJECTION_PID=$$(vmi-process-list -d $$(xl domid ubuntu_analysis_sandbox) -j $(REPO_ROOT)/profiles/windows.json \
 	    | grep -Eo "\[\s*[0-9]+\]\s*explorer\.exe" | cut -d']' -f1 | grep -Eo "[0-9]+"); \
 	echo "INJECTION_PID=$$INJECTION_PID"; \
-	xl save windows_analysis_sandbox $(REPO_ROOT)/state/windows_analysis_sandbox.bak; \
+	xl save windows_analysis_sandbox $(REPO_ROOT)/state/windows_sandbox.bak; \
 	sed -Ei "s/INJECTION_PID_WINDOWS=.*/INJECTION_PID_WINDOWS=$$INJECTION_PID/g" $(REPO_ROOT)/sandboxd/config.py
 
 setup_hooks_ubuntu:
@@ -552,5 +552,5 @@ setup_hooks_ubuntu:
 	INJECTION_PID=$$(vmi-process-list -d $$(xl domid ubuntu_analysis_sandbox) -j $(REPO_ROOT)/profiles/linux.json \
 	    | grep -Eo "\[\s*[0-9]+\]\s*gdm3" | cut -d']' -f1 | grep -Eo "[0-9]+"); \
 	echo "INJECTION_PID=$$INJECTION_PID"; \
-	xl save ubuntu_analysis_sandbox $(REPO_ROOT)/state/ubuntu_analysis_sandbox.bak; \
+	xl save ubuntu_analysis_sandbox $(REPO_ROOT)/state/ubuntu_sandbox.bak; \
 	sed -Ei "s/INJECTION_PID_UBUNTU=.*/INJECTION_PID_UBUNTU=$$INJECTION_PID/g" $(REPO_ROOT)/sandboxd/config.py
