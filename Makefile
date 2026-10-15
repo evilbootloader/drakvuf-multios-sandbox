@@ -6,12 +6,16 @@ CFG     := misc/xen-vms/platform.cfg
 VMADDR	:= 192.168.1.12/24
 VMIP := $(firstword $(subst /, ,$(VMADDR)))
 VMROUTE	:= 192.168.1.1
-RSA_KEY	:= ""
+RSA_KEY	:= 
 SANDBOX_WEB := sandbox.evilbootloader.com
 GARAGE_V := v2.4.1
 S3_QUOTA := 100
 S3_RETENTION := 30
 SANDBOXDIP := 192.168.1.6
+ANALYSIS_VM_PASS := malware
+ANALYSIS_VM_USER := user
+ANALYSIS_VM_IP := 
+REPO_ROOT := "$(shell pwd)"
 
 .PHONY: web_vm web_sandbox sandboxd
 
@@ -189,7 +193,7 @@ web_sandbox:
 	$$G layout apply --version 1; \
 	$$G layout show; \
 	$$G status; \
-	mkdir /etc/sandbox_platform/; \
+	mkdir /etc/sandbox_platform ; \
 	chown platform:platform /etc/sandbox_platform ; \
 	BROWSER_ORIGIN=https://$(SANDBOX_WEB) BUCKET_QUOTA=$(S3_QUOTA)GiB RETENTION_DAYS=$(S3_RETENTION) /opt/platform/src/platform/garage/provision.sh; \
 	set -a; . /etc/sandbox_platform/api.env; set +a \
@@ -285,60 +289,267 @@ web_sandbox:
 
 sandboxd:
 	@echo "Installing libvmi, drakvuf and sandboxd orquestrator"
-	cd drakvuf/libvmi
-	autoreconf -vif
-	./configure --disable-kvm --disable-bareflank --disable-file
-	make
-	make install
+	set -e; \
+	xl domid $(VM) || xl create $(CFG) || echo "Run make web_vm and make web_sandbox"; \
+	cd $(REPO_ROOT); \
+	git clone --depth 1 --branch v9.4.0 https://github.com/mandiant/capa-rules sandboxd/postprocessing/data/capa-rules; \
+	git submodule update --init; \
+	cd drakvuf; \
+	git submodule update --init; \
+	cd libvmi; \
+	autoreconf -vif; \
+	./configure --disable-kvm --disable-bareflank --disable-file; \
+	make; \
+	make install; \
 	@if [ -n "$$LD_LIBRARY_PATH" ]; then \
 		echo 'export LD_LIBRARY_PATH=$$LD_LIBRARY_PATH:/usr/local/lib' >> ~/.bashrc; \
 	else \
 		echo 'export LD_LIBRARY_PATH=/usr/local/lib' >> ~/.bashrc; \
-	fi
-	cd ../
-	meson setup build --native-file llvm.ini
-	ninja -C build
-	ninja -C build install
-	mkdir /etc/sandboxd/tls -p
-	scp $(VMIP):/etc/sandbox_platform/tls/ca.crt /etc/sandboxd/tls/
-	scp $(VMIP):/etc/sandbox_platform/tls/dom0-lab.crt /etc/sandboxd/tls/
-	scp $(VMIP):/etc/sandbox_platform/tls/dom0-lab.key /etc/sandboxd/tls/
+	fi; \
+	cd $(REPO_ROOT)/drakvuf/volatility3; \
+	python3 ./setup.py build; \
+	sudo python3 ./setup.py install; \
+	cd $(REPO_ROOT)/drakvuf; \
+	meson setup build --native-file llvm.ini; \
+	ninja -C build; \
+	ninja -C build install; \
+	mkdir /etc/sandboxd/tls -p; \
+	scp $(VMIP):/etc/sandbox_platform/tls/ca.crt /etc/sandboxd/tls/; \
+	scp $(VMIP):/etc/sandbox_platform/tls/dom0-lab.crt /etc/sandboxd/tls/; \
+	scp $(VMIP):/etc/sandbox_platform/tls/dom0-lab.key /etc/sandboxd/tls/; \
+	cd $(REPO_ROOT); \
+	python3 -m venv .venv-sandboxd; \
+	.venv-sandboxd/bin/pip install -r sandboxd/requirements.txt; \
 	printf "%s\n" \
 	"SANDBOXD_API=https://$(VMIP):8000" \
 	"SANDBOXD_CACERT=/etc/sandboxd/tls/ca.crt" \
 	"SANDBOXD_CLIENT_CERT=/etc/sandboxd/tls/dom0-lab.crt" \
 	"SANDBOXD_CLIENT_KEY=/etc/sandboxd/tls/dom0-lab.key" \
 	"SANDBOXD_MAX_CLONES=3" \
-	"SANDBOXD_TOTAL_MIB=15000" \
+	"SANDBOXD_TOTAL_MIB=echo $$(( $$(xl info | grep free_mem | cut -d':' -f2) - 2000 ))" \
 	"SANDBOXD_CONSOLE_API=https://$(VMIP):8000" \
-	"SANDBOXD_CONSOLE_ENABLED=1" >> /etc/sandboxd/sandboxd.env
+	"SANDBOXD_CONSOLE_ENABLED=1" >> /etc/sandboxd/sandboxd.env; \
+	sudo lvcreate --type thin-pool -l 90%FREE --poolmetadatasize 16G -n thinpool vg-root
 
 
-linux_analysis_vm:
+ubuntu_analysis_vm:
+	@echo "Installing ubuntu analysis VM"; \
+	set -e; \
+	HASH=$$(openssl passwd -6 -salt "$$(openssl rand -hex 8)" '$(ANALYSIS_VM_PASS)'); \
+	apt install cloud-image-utils wget -y;\
+	mkdir -p $(REPO_ROOT)/misc/iso/cidata; \
+	cd $(REPO_ROOT)/misc/iso/cidata; \
+	\
+	printf "%s\n" \
+	"#cloud-config" \
+	"autoinstall:" \
+	"  version: 1" \
+	"  identity:" \
+	"    hostname: ubuntu" \
+	"    password: \"$$HASH\"" \
+	"    username: $(ANALYSIS_VM_USER)" \
+	"  ssh:" \
+	"    install-server: true" \
+	"    authorized-keys:" \
+	"      - $(RSA_KEY)" \
+	"    allow-pw: false" \
+	"  codecs:" \
+	"    install: true" \
+	"  packages:" \
+	"    - git" \
+	"    - curl" \
+	"    - python3" \
+	"  timezone: \"Europe/Madrid\"" \
+	"  updates: all" \
+	"  shutdown: reboot" \
+	"  late-commands:" \
+	"    - curtin in-target --target=/target -- sh -c 'printf \"Types\072 deb\nURIs\072 http://ddebs.ubuntu.com/\nSuites\072 \$$(lsb_release -cs) \$$(lsb_release -cs)-updates \$$(lsb_release -cs)-proposed\nComponents\072 main restricted universe multiverse\nSigned-By\072 /usr/share/keyrings/ubuntu-dbgsym-keyring.gpg\n\" | tee /etc/apt/sources.list.d/ddebs.sources'" \
+	"    - curtin in-target --target=/target -- apt-get install -y ubuntu-dbgsym-keyring" \
+	"    - curtin in-target --target=/target -- apt-get update" \
+	"    - curtin in-target --target=/target -- bash -c 'KVER=\$$(ls /boot/vmlinuz-* | sed \"s|/boot/vmlinuz-||\" | sort -V | tail -1); apt-get install -y linux-image-\$${KVER}-dbgsym'" \
+	"    - curtin in-target --target=/target -- mkdir -p /etc/gdm3" \
+	"    - curtin in-target --target=/target -- sh -c 'printf \"[daemon]\nAutomaticLoginEnable=true\nAutomaticLogin=$(ANALYSIS_VM_USER)\n\" > /etc/gdm3/custom.conf'" \
+	"  keyboard:" \
+	"    layout: \"es\"" > user-data; \
+	touch meta-data; \
+	cloud-localds \
+		"$(REPO_ROOT)/misc/iso/seed.iso" \
+		"$(REPO_ROOT)/misc/iso/cidata/user-data" \
+		"$(REPO_ROOT)/misc/iso/cidata/meta-data"; \
+	\
+	#wget "https://releases.ubuntu.com/24.04/ubuntu-24.04.5.1-desktop-amd64.iso" -O $(REPO_ROOT)/misc/iso/ubuntu-24.04.5.1-desktop-amd64.iso ; \
 	printf "%s\n" \
 	"arch = 'x86_64'" \
-	"name = 'ubuntu_analysis'"" \
+	"name = 'ubuntu_analysis'" \
 	"maxmem = 4096" \
 	"memory = 4096" \
-	"vcpus = 1" \
-	"maxvcpus = 1"
+	"vcpus = 2" \
+	"maxvcpus = 2" \
 	"builder = 'hvm'" \
-	"boot = 'dc'" \
+	"boot = 'cd'" \
 	"hap = 1" \
 	"on_poweroff = 'destroy'" \
 	"on_reboot = 'restart'" \
-	"on_crash = "destroy'" \
+	"on_crash = 'destroy'" \
 	"vnc = 1" \
-	"vnclisten = '127.0.0.1'" \
-	"vga = 'stdvga' \
-	"usb = 1 \
+	"vnclisten = '0.0.0.0'" \
+	"vga = 'stdvga'" \
+	"usb = 1" \
 	"usbdevice = 'tablet'" \
 	"audio = 1" \
 	"viridian = 1" \
 	"altp2m = 2" \
 	"shadow_memory = 32" \
 	"vif = [ 'type=ioemu,model=e1000,bridge=xenbr0' ]" \
-	"disk = [" \
-	"		'phy:/dev/vg-root/ubuntu,hda,w'," \
-	"		'file:/home/user/Documents/seed.iso,hdc:cdrom,r'" \
-	"		]" \
+	"disk = ['phy:/dev/vg-root/ubuntu_test,hda,w','file:$(REPO_ROOT)/misc/iso/seed.iso,hdb:cdrom,r','file:$(REPO_ROOT)/misc/iso/ubuntu-24.04.5.1-desktop-amd64.iso,hdc:cdrom,r']" \
+		> $(REPO_ROOT)/misc/xen-vms/ubuntu.cfg; \
+	sudo lvcreate -V 1T --thin -n ubuntu_test vg-root/thinpool; \
+	xl create $(REPO_ROOT)/misc/xen-vms/ubuntu.cfg
+	# TODO "/etc/lvm/lvm.conf" 12-baremetal-trial
+	# thin_pool_autoextend_threshold = 80
+	# thin_pool_autoextend_percent   = 20
+	# sudo systemctl restart lvm2-monitor
+
+windows_analysis_vm:
+	@echo "Installing Windows 11 23H2 analysis VM"; \
+	set -e; \
+	apt install wget genisoimage -y; \
+	rm -rf /tmp/win11iso/; \
+	mkdir /tmp/win11iso/; \
+	#wget https://archive.org/download/win-11-23-h-2-english-international-x-64/Win11_23H2_EnglishInternational_x64.iso -O $(REPO_ROOT)/misc/iso/win-11-23-h-2-english-international-x-64/Win11_23H2_EnglishInternational_x64.iso ; \
+	sudo mount -o loop,ro $(REPO_ROOT)/misc/iso/Win11_23H2_EnglishInternational_x64.iso /mnt; \
+	sudo cp -r /mnt/* /tmp/win11iso/; \
+	sudo umount /mnt; \
+	cp $(REPO_ROOT)/misc/xen-vms/autounattend.xml /tmp/win11iso/; \
+	genisoimage -o $(REPO_ROOT)/misc/iso/Win11_modified.iso \
+	  -b boot/etfsboot.com -no-emul-boot -boot-load-seg 0x07C0 -boot-load-size 8 \
+	  -eltorito-alt-boot -e efi/microsoft/boot/efisys.bin -no-emul-boot \
+	  -udf -J -joliet-long -allow-limited-size \
+	  -V "WIN11_SEABIOS" \
+	  /tmp/win11iso/
+	printf "%s\n" \
+	"arch = 'x86_64'" \
+	"name = 'windows_analysis'" \
+	"maxmem = 6144" \
+	"memory = 6144" \
+	"vcpus = 2" \
+	"maxvcpus = 2" \
+	"builder = 'hvm'" \
+	"boot = 'cd'" \
+	"hap = 1" \
+	"on_poweroff = 'destroy'" \
+	"on_reboot = 'restart'" \
+	"on_crash = 'destroy'" \
+	"vnc = 1" \
+	"vnclisten = '0.0.0.0'" \
+	"vga = 'stdvga'" \
+	"usb = 1" \
+	"usbdevice = 'tablet'" \
+	"audio = 1" \
+	"viridian = 1" \
+	"altp2m = 2" \
+	"shadow_memory = 32" \
+	"vif = [ 'type=ioemu,model=e1000,bridge=xenbr0' ]" \
+	"disk = [ 'phy:/dev/vg-root/windows_test,hda,w', 'file:$(REPO_ROOT)/misc/iso/Win11_modified.iso,hdc:cdrom,r' ]" > $(REPO_ROOT)/misc/xen-vms/windows.cfg; \
+	sudo lvcreate -V 1T --thin -n windows_test vg-root/thinpool; \
+	xl create $(REPO_ROOT)/misc/xen-vms/windows.cfg
+
+modify_windows:
+	@echo "Connect through VNC and tune Windows installation, then run setup_hooks"
+	xl create $(REPO_ROOT)/misc/xen-vms/windows.cfg
+
+modify_ubuntu:
+	@echo "Connect through VNC and tune Ubuntu installation"
+	xl create $(REPO_ROOT)/misc/xen-vms/ubuntu.cfg
+
+
+setup_hooks_windows:
+	kpartx -a /dev/vg-root/windows_test; \
+	mount -o ro /dev/mapper/vg--root-windows_test2 /mnt/; \
+	cd $(REPO_ROOT); \
+	python3 drakvuf/volatility3/volatility3/framework/symbols/windows/pdbconv.py --guid $$(python3 drakvuf/tools/pdbguid.py /mnt/Windows/System32/ntoskrnl.exe | grep GUID | cut -d' ' -f 2) -p $$(python3 drakvuf/tools/pdbguid.py /mnt/Windows/System32/ntoskrnl.exe | grep Filename | cut -d' ' -f 2) -o $(REPO_ROOT)/profiles/windows.json ; \
+	python3 $(REPO_ROOT)/scripts/windows-symbol-profiles.py; \
+	umount /mnt; \
+	kpartx -d /dev/vg-root/windows_test; \
+	lvcreate -s -kn -n windows_sandbox_test vg-root/windows_test; \
+	printf "%s\n" \
+	"arch = 'x86_64'" \
+	"name = 'windows_analysis_sandbox'" \
+	"maxmem = 8192" \
+	"memory = 8192" \
+	"vcpus = 2" \
+	"maxvcpus = 2" \
+	"builder = 'hvm'" \
+	"boot = 'dc'" \
+	"hap = 1" \
+	"on_poweroff = 'destroy'" \
+	"on_reboot = 'restart'" \
+	"on_crash = 'destroy'" \
+	"vnc = 1" \
+	"vnclisten = '127.0.0.1'" \
+	"vga = 'stdvga'" \
+	"usb = 1" \
+	"usbdevice = 'tablet'" \
+	"audio = 1" \
+	"viridian = 1" \
+	"altp2m = 2" \
+	"shadow_memory = 32" \
+	"vif = [ 'type=ioemu,model=e1000,bridge=xenbr0' ]" \
+	"disk = [ 'phy:/dev/vg-root/windows_sandbox_test,hda,w' ]" > $(REPO_ROOT)/misc/xen-vms/windows_sandbox.cfg; \
+	xl create $(REPO_ROOT)/misc/xen-vms/windows_sandbox.cfg; \
+	sleep 30
+	INJECTION_PID=$$(vmi-process-list -d $$(xl domid ubuntu_analysis_sandbox) -j $(REPO_ROOT)/profiles/windows.json \
+	    | grep -Eo "\[\s*[0-9]+\]\s*explorer\.exe" | cut -d']' -f1 | grep -Eo "[0-9]+"); \
+	echo "INJECTION_PID=$$INJECTION_PID"; \
+	xl save windows_analysis_sandbox $(REPO_ROOT)/state/windows_analysis_sandbox.bak; \
+	sed -Ei "s/INJECTION_PID_WINDOWS=.*/INJECTION_PID_WINDOWS=$$INJECTION_PID/g" $(REPO_ROOT)/sandboxd/config.py
+
+setup_hooks_ubuntu:
+	kpartx -a /dev/vg-root/ubuntu_test; \
+	kpartx -a /dev/mapper/vg--root-ubuntu_test3; \
+	vgchange -ay ubuntu-vg; \
+	lvchange -ay ubuntu-vg/ubuntu-lv; \
+	mount /dev/mapper/ubuntu--vg-ubuntu--lv /mnt; \
+	mount /dev/mapper/vg--root-ubuntu_test2 /mnt/boot/; \
+	cd $(REPO_ROOT)/drakvuf/dwarf2json; \
+	go build; \
+	./dwarf2json linux --system-map /mnt/boot/System.map-*-generic --elf /mnt/usr/lib/debug/boot/vmlinux-*-generic > $(REPO_ROOT)/profiles/linux.json; \
+	umount /mnt/boot; \
+	umount /mnt; \
+	lvchange -an ubuntu-vg/ubuntu-lv; \
+	vgchange -an ubuntu-vg; \
+	kpartx -d /dev/mapper/vg--root-ubuntu_test3; \
+	kpartx -d /dev/vg-root/ubuntu_test; \
+	lvcreate -s -kn -n ubuntu_sandbox_test vg-root/ubuntu_test; \
+	printf "%s\n" \
+	"arch = 'x86_64'" \
+	"name = 'ubuntu_analysis_sandbox'" \
+	"maxmem = 8192" \
+	"memory = 8192" \
+	"vcpus = 2" \
+	"maxvcpus = 2" \
+	"builder = 'hvm'" \
+	"boot = 'dc'" \
+	"hap = 1" \
+	"on_poweroff = 'destroy'" \
+	"on_reboot = 'restart'" \
+	"on_crash = 'destroy'" \
+	"vnc = 1" \
+	"vnclisten = '127.0.0.1'" \
+	"vga = 'stdvga'" \
+	"usb = 1" \
+	"usbdevice = 'tablet'" \
+	"audio = 1" \
+	"viridian = 1" \
+	"altp2m = 2" \
+	"shadow_memory = 32" \
+	"vif = [ 'type=ioemu,model=e1000,bridge=xenbr0' ]" \
+	"disk = ['phy:/dev/vg-root/ubuntu_sandbox_test,hda,w' ]" \
+		> $(REPO_ROOT)/misc/xen-vms/ubuntu_sandbox.cfg; \
+	xl create $(REPO_ROOT)/misc/xen-vms/ubuntu_sandbox.cfg; \
+	sleep 30; \
+	INJECTION_PID=$$(vmi-process-list -d $$(xl domid ubuntu_analysis_sandbox) -j $(REPO_ROOT)/profiles/linux.json \
+	    | grep -Eo "\[\s*[0-9]+\]\s*gdm3" | cut -d']' -f1 | grep -Eo "[0-9]+"); \
+	echo "INJECTION_PID=$$INJECTION_PID"; \
+	xl save ubuntu_analysis_sandbox $(REPO_ROOT)/state/ubuntu_analysis_sandbox.bak; \
+	sed -Ei "s/INJECTION_PID_UBUNTU=.*/INJECTION_PID_UBUNTU=$$INJECTION_PID/g" $(REPO_ROOT)/sandboxd/config.py
