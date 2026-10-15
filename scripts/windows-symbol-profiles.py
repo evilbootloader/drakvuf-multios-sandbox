@@ -72,7 +72,7 @@ PROFILES: tuple[tuple[str, str, str], ...] = (
 
 # Where the evidence in windows_symbols.md found them.
 DEFAULT_MOUNT = Path("/mnt")
-DEFAULT_DRAKVUF = Path("/home/user/drakvuf")
+DEFAULT_DRAKVUF = Path(os.getcwd()+"/drakvuf")
 PDBGUID = Path("tools/pdbguid.py")
 PDBCONV = Path("volatility3/volatility3/framework/symbols/windows/pdbconv.py")
 

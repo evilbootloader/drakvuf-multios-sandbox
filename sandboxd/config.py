@@ -384,3 +384,7 @@ MAX_EGRESS_RATE_BURST = "6291824b"
 #: entries per source. This is the cap that bounds horizontal scanning, which
 #: shows up as hundreds of simultaneous half-open SYNs.
 MAX_PARALLEL_CONNS = "50"
+
+INJECTION_PID_UBUNTU=
+INJECTION_PID_WINDOWS=
+INJECTION_PID_ANDROID=

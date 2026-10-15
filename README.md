@@ -207,6 +207,7 @@ echo "deb [signed-by=/usr/share/keyrings/cloudflare-main.gpg] https://pkg.cloudf
   > /etc/apt/sources.list.d/cloudflared.list
 apt-get update && apt-get install -y cloudflared
 
+cloudflared tunnel login
 cloudflared tunnel create sandbox-platform
 cloudflared tunnel route dns sandbox-platform <SANDBOX_DOMAIN>
 
@@ -249,15 +250,15 @@ credentials-file: /etc/cloudflared/UUID.json
 # /etc/cloudflared/config.yml
 ingress:
   # bucket FIRST -- cloudflared matches in order
-  - hostname: https://SANDBOX_DOMAIN
+  - hostname: SANDBOX_DOMAIN
     path: ^/analysis(/|$)
     service: https://VM_IP:9000
     originRequest:
       caPool: /etc/cloudflared/ca.crt
-  - hostname: https://SANDBOX_DOMAIN
+  - hostname: SANDBOX_DOMAIN
     path: ^/api/v1/worker(/|$)
     service: http_status:404
-  - hostname: https://SANDBOX_DOMAIN
+  - hostname: SANDBOX_DOMAIN
     service: https://VM_IP:8000
     originRequest:
       caPool: /etc/cloudflared/ca.crt

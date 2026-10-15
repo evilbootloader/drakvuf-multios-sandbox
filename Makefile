@@ -311,7 +311,7 @@ sandboxd:
 	"SANDBOXD_MAX_CLONES=3" \
 	"SANDBOXD_TOTAL_MIB=15000" \
 	"SANDBOXD_CONSOLE_API=https://$(VMIP):8000" \
-	"SANDBOXD_CONSOLE_ENABLED=1" >> /etc/systemd/system/sandbox-api.service	
+	"SANDBOXD_CONSOLE_ENABLED=1" >> /etc/sandboxd/sandboxd.env
 
 
 linux_analysis_vm:

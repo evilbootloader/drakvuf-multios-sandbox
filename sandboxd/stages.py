@@ -195,6 +195,9 @@ class Config:
     results_dir: Path = config.RESULTS_DIR
     config_dir: Path = config.CONFIG_DIR
     repo_root: Path = config.DOM0_REPO_ROOT
+    ubuntu_injection_pid: int = config.INJECTION_PID_UBUNTU
+    windows_injection_pid: int = config.INJECTION_PID_WINDOWS
+    android_injection_pid: int = config.INJECTION_PID_ANDROID
     # Per-host, as the Android env file's ${APK_INSTALL_WAIT:-20} already was.
     # Lowering one below what was measured is how a preconfig starts handing a
     # still-running install to the trace -- see `timing.py` for each number and
@@ -267,7 +270,14 @@ class Config:
     # processes named `init`, and the anchor is deliberately unremarkable so
     # the string `drakvuf` appears nowhere a sample can read (issue #7).
     injection_pids: dict = field(default_factory=lambda: {
-        TargetOs.UBUNTU: 1, TargetOs.ANDROID: 3251, TargetOs.WINDOWS: 7608})
+        os_: pid
+        for os_, pid in (
+            (TargetOs.UBUNTU, config.INJECTION_PID_UBUNTU),
+            (TargetOs.WINDOWS, config.INJECTION_PID_WINDOWS),
+            (TargetOs.ANDROID, config.INJECTION_PID_ANDROID),
+        )
+        if pid
+    })
     # `lv_sizes` was dropped 2026-08-29 with CLONE_LV_SIZE. Clones are thin
     # snapshots and inherit the golden LV's size, so there is no per-OS
     # number left to hold -- see clone.argv_lvcreate.
