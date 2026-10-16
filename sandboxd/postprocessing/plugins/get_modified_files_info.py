@@ -120,7 +120,7 @@ def get_modified_files_info(context: PostprocessContext) -> None:
         return {
             "process": process,
             "handle": data.get("FileHandle"),
-            "file_name": data["FileName"],
+            "file_name": data.get("FileName"),
             "method": method,
         }
 
@@ -285,8 +285,8 @@ def get_modified_files_info(context: PostprocessContext) -> None:
 
         return {
             "process": process,
-            #"handle": data["FileHandle"],
-            "file_name": data["FileName"],
+            "handle": data.get("FileHandle"),
+            "file_name": data.get("FileName"),
             "method": method,
         }
 
