@@ -496,8 +496,8 @@ setup_hooks_windows:
 	"name = 'windows_analysis_sandbox'" \
 	"maxmem = 8192" \
 	"memory = 8192" \
-	"vcpus = 2" \
-	"maxvcpus = 2" \
+	"vcpus = 1" \
+	"maxvcpus = 1" \
 	"builder = 'hvm'" \
 	"boot = 'dc'" \
 	"hap = 1" \
@@ -545,8 +545,8 @@ setup_hooks_ubuntu:
 	"name = 'ubuntu_analysis_sandbox'" \
 	"maxmem = 8192" \
 	"memory = 8192" \
-	"vcpus = 2" \
-	"maxvcpus = 2" \
+	"vcpus = 1" \
+	"maxvcpus = 1" \
 	"builder = 'hvm'" \
 	"boot = 'dc'" \
 	"hap = 1" \
