@@ -409,12 +409,12 @@ ubuntu_analysis_vm:
 	"altp2m = 2" \
 	"shadow_memory = 32" \
 	"vif = [ 'type=ioemu,model=e1000,bridge=xenbr0' ]" \
-	"disk = ['phy:/dev/vg-root/ubuntu_test,hda,w','file:$(REPO_ROOT)/misc/iso/seed.iso,hdb:cdrom,r','file:$(REPO_ROOT)/misc/iso/ubuntu-22.04.5-live-server-amd64.iso,hdc:cdrom,r']" \
+	"disk = ['phy:/dev/vg-root/ubuntu,hda,w','file:$(REPO_ROOT)/misc/iso/seed.iso,hdb:cdrom,r','file:$(REPO_ROOT)/misc/iso/ubuntu-22.04.5-live-server-amd64.iso,hdc:cdrom,r']" \
 	"kernel = '$(REPO_ROOT)/misc/iso/vmlinuz'" \
 	"ramdisk = '$(REPO_ROOT)/misc/iso/initrd'" \
 	"extra = 'autoinstall'" \
 		> $(REPO_ROOT)/misc/xen-vms/ubuntu.cfg; \
-	sudo lvcreate -V 1T --thin -n ubuntu_test vg-root/thinpool; \
+	sudo lvcreate -V 1T --thin -n ubuntu vg-root/thinpool; \
 	xl create $(REPO_ROOT)/misc/xen-vms/ubuntu.cfg; \
 	sed -Ei 's/^kernel.*|^ramdisk.*|^extra.*//g' $(REPO_ROOT)/misc/xen-vms/ubuntu.cfg;
 	# TODO "/etc/lvm/lvm.conf" 12-baremetal-trial
@@ -468,8 +468,8 @@ windows_analysis_vm:
 	"altp2m = 2" \
 	"shadow_memory = 32" \
 	"vif = [ 'type=ioemu,model=e1000,bridge=xenbr0' ]" \
-	"disk = [ 'phy:/dev/vg-root/windows_test,hda,w', 'file:$(REPO_ROOT)/misc/iso/Win11_modified.iso,hdc:cdrom,r' ]" > $(REPO_ROOT)/misc/xen-vms/windows.cfg; \
-	sudo lvcreate -V 1T --thin -n windows_test vg-root/thinpool; \
+	"disk = [ 'phy:/dev/vg-root/windows,hda,w', 'file:$(REPO_ROOT)/misc/iso/Win11_modified.iso,hdc:cdrom,r' ]" > $(REPO_ROOT)/misc/xen-vms/windows.cfg; \
+	sudo lvcreate -V 1T --thin -n windows vg-root/thinpool; \
 	xl create $(REPO_ROOT)/misc/xen-vms/windows.cfg
 
 modify_windows:
@@ -482,14 +482,14 @@ modify_ubuntu:
 
 
 setup_hooks_windows:
-	kpartx -a /dev/vg-root/windows_test; \
-	mount -o ro /dev/mapper/vg--root-windows_test2 /mnt/; \
+	kpartx -a /dev/vg-root/windows; \
+	mount -o ro /dev/mapper/vg--root-windows2 /mnt/; \
 	cd $(REPO_ROOT); \
 	python3 drakvuf/volatility3/volatility3/framework/symbols/windows/pdbconv.py --guid $$(python3 drakvuf/tools/pdbguid.py /mnt/Windows/System32/ntoskrnl.exe | grep GUID | cut -d' ' -f 2) -p $$(python3 drakvuf/tools/pdbguid.py /mnt/Windows/System32/ntoskrnl.exe | grep Filename | cut -d' ' -f 2) -o $(REPO_ROOT)/profiles/windows.json ; \
 	python3 $(REPO_ROOT)/scripts/windows-symbol-profiles.py; \
 	umount /mnt; \
-	kpartx -d /dev/vg-root/windows_test; \
-	lvcreate -s -kn -n windows_sandbox_test vg-root/windows_test; \
+	kpartx -d /dev/vg-root/windows; \
+	lvcreate -s -kn -n windows_sandbox vg-root/windows; \
 	printf "%s\n" \
 	"arch = 'x86_64'" \
 	"name = 'windows_analysis_sandbox'" \
@@ -513,7 +513,7 @@ setup_hooks_windows:
 	"altp2m = 2" \
 	"shadow_memory = 32" \
 	"vif = [ 'type=ioemu,model=e1000,bridge=xenbr0' ]" \
-	"disk = [ 'phy:/dev/vg-root/windows_sandbox_test,hda,w' ]" > $(REPO_ROOT)/misc/xen-vms/windows_sandbox.cfg; \
+	"disk = [ 'phy:/dev/vg-root/windows_sandbox,hda,w' ]" > $(REPO_ROOT)/misc/xen-vms/windows_sandbox.cfg; \
 	xl create $(REPO_ROOT)/misc/xen-vms/windows_sandbox.cfg; \
 	sleep 30; \
 	INJECTION_PID=$$(vmi-process-list -d $$(xl domid ubuntu_analysis_sandbox) -j $(REPO_ROOT)/profiles/windows.json \
@@ -523,12 +523,12 @@ setup_hooks_windows:
 	sed -Ei "s/INJECTION_PID_WINDOWS = .*/INJECTION_PID_WINDOWS = $$INJECTION_PID/g" $(REPO_ROOT)/sandboxd/config.py
 
 setup_hooks_ubuntu:
-	kpartx -a /dev/vg-root/ubuntu_test; \
-	kpartx -a /dev/mapper/vg--root-ubuntu_test3; \
+	kpartx -a /dev/vg-root/ubuntu; \
+	kpartx -a /dev/mapper/vg--root-ubuntu3; \
 	vgchange -ay ubuntu-vg; \
 	lvchange -ay ubuntu-vg/ubuntu-lv; \
 	mount /dev/mapper/ubuntu--vg-ubuntu--lv /mnt; \
-	mount /dev/mapper/vg--root-ubuntu_test2 /mnt/boot/; \
+	mount /dev/mapper/vg--root-ubuntu2 /mnt/boot/; \
 	cd $(REPO_ROOT)/drakvuf/dwarf2json; \
 	go build; \
 	./dwarf2json linux --system-map /mnt/boot/System.map-*-generic --elf /mnt/usr/lib/debug/boot/vmlinux-*-generic > $(REPO_ROOT)/profiles/linux.json; \
@@ -536,9 +536,9 @@ setup_hooks_ubuntu:
 	umount /mnt; \
 	lvchange -an ubuntu-vg/ubuntu-lv; \
 	vgchange -an ubuntu-vg; \
-	kpartx -d /dev/mapper/vg--root-ubuntu_test3; \
-	kpartx -d /dev/vg-root/ubuntu_test; \
-	lvcreate -s -kn -n ubuntu_sandbox_test vg-root/ubuntu_test; \
+	kpartx -d /dev/mapper/vg--root-ubuntu3; \
+	kpartx -d /dev/vg-root/ubuntu; \
+	lvcreate -s -kn -n ubuntu_sandbox vg-root/ubuntu; \
 	printf "%s\n" \
 	"arch = 'x86_64'" \
 	"name = 'ubuntu_analysis_sandbox'" \
@@ -562,12 +562,9 @@ setup_hooks_ubuntu:
 	"altp2m = 2" \
 	"shadow_memory = 32" \
 	"vif = [ 'type=ioemu,model=e1000,bridge=xenbr0' ]" \
-	"disk = ['phy:/dev/vg-root/ubuntu_sandbox_test,hda,w' ]" \
+	"disk = ['phy:/dev/vg-root/ubuntu_sandbox,hda,w' ]" \
 		> $(REPO_ROOT)/misc/xen-vms/ubuntu_sandbox.cfg; \
 	xl create $(REPO_ROOT)/misc/xen-vms/ubuntu_sandbox.cfg; \
 	sleep 30; \
-	INJECTION_PID=$$(vmi-process-list -d $$(xl domid ubuntu_analysis_sandbox) -j $(REPO_ROOT)/profiles/linux.json \
-	    | grep -Eo "\[\s*[0-9]+\]\s*gdm3" | cut -d']' -f1 | grep -Eo "[0-9]+"); \
-	echo "INJECTION_PID=$$INJECTION_PID"; \
 	xl save ubuntu_analysis_sandbox $(REPO_ROOT)/state/ubuntu_sandbox.bak $(REPO_ROOT)/misc/xen-vms/ubuntu_sandbox.cfg; \
-	sed -Ei "s/INJECTION_PID_UBUNTU = .*/INJECTION_PID_UBUNTU = $$INJECTION_PID/g" $(REPO_ROOT)/sandboxd/config.py
+	sed -Ei "s/INJECTION_PID_UBUNTU = .*/INJECTION_PID_UBUNTU = 1/g" $(REPO_ROOT)/sandboxd/config.py

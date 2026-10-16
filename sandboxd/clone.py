@@ -194,7 +194,7 @@ def argv_lvcreate(spec: CloneSpec) -> list[str]:
     # `lvcreate -s` on a thin origin sets the activation-skip flag and the
     # device node never appears.
     return ["lvcreate", "-s", "-kn", "-n", spec.name,
-            f"/dev/{spec.vg}/{spec.origin}_test"]
+            f"/dev/{spec.vg}/{spec.origin}"]
 
 
 def argv_xl_domid(name: str) -> list[str]:
