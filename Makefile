@@ -366,7 +366,7 @@ ubuntu_analysis_vm:
 	"    - python3" \
 	"  timezone: \"Europe/Madrid\"" \
 	"  updates: all" \
-	"  shutdown: reboot" \
+	"  shutdown: poweroff" \
 	"  late-commands:" \
 	"    - curtin in-target --target=/target -- apt-get install -y ubuntu-dbgsym-keyring" \
 	"    - curtin in-target --target=/target -- sh -c 'printf \"Types\072 deb\nURIs\072 http://ddebs.ubuntu.com/\nSuites\072 \$$(lsb_release -cs) \$$(lsb_release -cs)-updates \$$(lsb_release -cs)-proposed\nComponents\072 main restricted universe multiverse\nSigned-By\072 /usr/share/keyrings/ubuntu-dbgsym-keyring.gpg\n\" | tee /etc/apt/sources.list.d/ddebs.sources'" \
@@ -382,9 +382,10 @@ ubuntu_analysis_vm:
 		"$(REPO_ROOT)/misc/iso/cidata/user-data" \
 		"$(REPO_ROOT)/misc/iso/cidata/meta-data"; \
 	\
-	wget "https://releases.ubuntu.com/jammy/ubuntu-22.04.5-desktop-amd64.iso" -O $(REPO_ROOT)/misc/iso/ubuntu-22.04.5-desktop-amd64.iso ; \
-	mount $(REPO_ROOT)/misc/iso/ubuntu-24.04.4-desktop-amd64.iso  /mnt; \
+	wget "https://releases.ubuntu.com/jammy/ubuntu-22.04.5-live-server-amd64.iso" -O $(REPO_ROOT)/misc/iso/ubuntu-22.04.5-live-server-amd64.iso ; \
+	mount $(REPO_ROOT)/misc/iso/ubuntu-22.04.5-desktop-amd64.iso  /mnt; \
 	cp /mnt/casper/initrd /mnt/casper/vmlinuz $(REPO_ROOT)/misc/iso/; \
+	umount /mnt; \
 	printf "%s\n" \
 	"arch = 'x86_64'" \
 	"name = 'ubuntu_analysis'" \
@@ -408,13 +409,14 @@ ubuntu_analysis_vm:
 	"altp2m = 2" \
 	"shadow_memory = 32" \
 	"vif = [ 'type=ioemu,model=e1000,bridge=xenbr0' ]" \
-	"disk = ['phy:/dev/vg-root/ubuntu_test,hda,w','file:$(REPO_ROOT)/misc/iso/seed.iso,hdb:cdrom,r','file:$(REPO_ROOT)/misc/iso/ubuntu-22.04.5-desktop-amd64.iso,hdc:cdrom,r']" \
+	"disk = ['phy:/dev/vg-root/ubuntu_test,hda,w','file:$(REPO_ROOT)/misc/iso/seed.iso,hdb:cdrom,r','file:$(REPO_ROOT)/misc/iso/ubuntu-22.04.5-live-server-amd64.iso,hdc:cdrom,r']" \
 	"kernel = '$(REPO_ROOT)/misc/iso/vmlinuz'" \
 	"ramdisk = '$(REPO_ROOT)/misc/iso/initrd'" \
 	"extra = 'autoinstall'" \
 		> $(REPO_ROOT)/misc/xen-vms/ubuntu.cfg; \
 	sudo lvcreate -V 1T --thin -n ubuntu_test vg-root/thinpool; \
-	xl create $(REPO_ROOT)/misc/xen-vms/ubuntu.cfg
+	xl create $(REPO_ROOT)/misc/xen-vms/ubuntu.cfg; \
+	sed -Ei 's/^kernel.*|^ramdisk.*|^extra.*//g' $(REPO_ROOT)/misc/xen-vms/ubuntu.cfg;
 	# TODO "/etc/lvm/lvm.conf" 12-baremetal-trial
 	# thin_pool_autoextend_threshold = 80
 	# thin_pool_autoextend_percent   = 20
@@ -434,7 +436,9 @@ windows_analysis_vm:
 	sed -i 's|<Name>carlos</Name>|<Name>$(ANALYSIS_VM_USER)</Name>|g' /tmp/win11iso/autounattend.xml; \
 	sed -i 's|<DisplayName>carlos</DisplayName>|<DisplayName>$(ANALYSIS_VM_USER)</DisplayName>|g' /tmp/win11iso/autounattend.xml; \
 	sed -i 's|<Username>carlos</Username>|<Username>$(ANALYSIS_VM_USER)</Username>|g' /tmp/win11iso/autounattend.xml; \
-	sed -i 's|<Value>malware</Value>|<Value>$(ANALYSIS_VM_PASS)</Value>|g' /tmp/win11iso/autounattend.xml;
+	sed -i "s|'carlos'|'$(ANALYSIS_VM_USER)'|g" /tmp/win11iso/autounattend.xml; \
+	sed -i 's|<Value>malware</Value>|<Value>$(ANALYSIS_VM_PASS)</Value>|g' /tmp/win11iso/autounattend.xml; \
+	sed -i "s|'malware'|'$(ANALYSIS_VM_PASS)'|g" /tmp/win11iso/autounattend.xml; \
 	genisoimage -o $(REPO_ROOT)/misc/iso/Win11_modified.iso \
 	  -b boot/etfsboot.com -no-emul-boot -boot-load-seg 0x07C0 -boot-load-size 8 \
 	  -eltorito-alt-boot -e efi/microsoft/boot/efisys.bin -no-emul-boot \

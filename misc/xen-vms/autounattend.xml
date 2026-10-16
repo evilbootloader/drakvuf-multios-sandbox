@@ -386,6 +386,12 @@ set "IMG_PARAM=/Name:"Windows %OS_VERSION% Pro N""
 call :print "Applying Windows image to target disk"
 dism.exe /Apply-Image /ImageFile:%IMAGE_FILE% %SWM_PARAM% %IMG_PARAM% /ApplyDir:W:\ /CheckIntegrity /Verify || call :fail "dism.exe encountered an error."
 
+call :print "Enabling .NET Framework 3.5 offline"
+for %%I in ("%IMAGE_FILE%") do set "SXS_PATH=%%~dpIsxs"
+if not exist "%SXS_PATH%" call :fail ".NET Framework 3.5 source not found."
+dism.exe /Image:W:\ /Enable-Feature /FeatureName:NetFx3 /All /Source:"%SXS_PATH%" /LimitAccess || call :fail "Failed to enable .NET Framework 3.5."
+
+
 call :print "Making system partition bootable"
 bcdboot.exe W:\Windows /s S: || call :fail "bcdboot.exe encountered an error."
 if %LAYOUT% == GPT (
@@ -639,8 +645,16 @@ $scripts = @(
 <File path="C:\Windows\Setup\Scripts\FirstLogon.ps1">
 $scripts = @(
 	{
-		# --- Reset auto-logon counter (security) ---
-		Set-ItemProperty -LiteralPath 'Registry::HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon' -Name 'AutoLogonCount' -Type 'DWord' -Force -Value 0;
+		# --- Enable permanent automatic logon ---
+		$Winlogon = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon'
+		
+		Set-ItemProperty -Path $Winlogon -Name 'AutoAdminLogon' -Value '1' -Type String -Force
+		Set-ItemProperty -Path $Winlogon -Name 'DefaultUserName' -Value 'carlos' -Type String -Force
+		Set-ItemProperty -Path $Winlogon -Name 'DefaultDomainName' -Value $env:COMPUTERNAME -Type String -Force
+		Set-ItemProperty -Path $Winlogon -Name 'DefaultPassword' -Value 'malware' -Type String -Force
+		
+		# Remove the automatic logon limit
+		Remove-ItemProperty -Path $Winlogon -Name 'AutoLogonCount' -ErrorAction SilentlyContinue
 	};
 	{
 		# --- Software installs ---
@@ -668,9 +682,6 @@ $scripts = @(
 		# .NET Framework 4.8
 		Invoke-WebRequest -Uri 'https://go.microsoft.com/fwlink/?linkid=2088631' -OutFile "$TempDir\ndp48.exe" -UseBasicParsing;
 		Start-Process "$TempDir\ndp48.exe" -ArgumentList '/q /norestart' -Wait;
-
-		# .NET Framework 3.5
-		Start-Process dism.exe -ArgumentList '/Online /Enable-Feature /FeatureName:NetFx3 /All' -Wait;
 
 		# .NET 8.0 runtimes
 		Invoke-WebRequest -Uri 'https://aka.ms/dotnet/8.0/dotnet-runtime-win-x64.exe' -OutFile "$TempDir\net8x64.exe" -UseBasicParsing;
