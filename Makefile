@@ -306,6 +306,8 @@ sandboxd:
 		echo 'export LD_LIBRARY_PATH=/usr/local/lib' >> ~/.bashrc; \
 	fi; \
 	cd $(REPO_ROOT)/drakvuf/volatility3; \
+	git fetch origin pull/650/head; \
+	git switch -C pr-650 FETCH_HEAD; \
 	python3 ./setup.py build; \
 	sudo python3 ./setup.py install; \
 	cd $(REPO_ROOT)/drakvuf; \
@@ -380,7 +382,9 @@ ubuntu_analysis_vm:
 		"$(REPO_ROOT)/misc/iso/cidata/user-data" \
 		"$(REPO_ROOT)/misc/iso/cidata/meta-data"; \
 	\
-	wget "https://releases.ubuntu.com/jammy/ubuntu-22.04.5-desktop-amd64.iso" -O $(REPO_ROOT)/misc/iso/ubuntu-22.04.5-desktop-amd64.iso ; \
+	wget "https://releases.ubuntu.com/24.04/ubuntu-24.04.4-desktop-amd64.iso" -O $(REPO_ROOT)/misc/iso/ubuntu-24.04.4-desktop-amd64.iso ; \
+	mount $(REPO_ROOT)/misc/iso/ubuntu-24.04.4-desktop-amd64.iso  /mnt; \
+	cp /mnt/casper/initrd /mnt/casper/vmlinuz $(REPO_ROOT)/misc/iso/; \
 	printf "%s\n" \
 	"arch = 'x86_64'" \
 	"name = 'ubuntu_analysis'" \
@@ -404,7 +408,10 @@ ubuntu_analysis_vm:
 	"altp2m = 2" \
 	"shadow_memory = 32" \
 	"vif = [ 'type=ioemu,model=e1000,bridge=xenbr0' ]" \
-	"disk = ['phy:/dev/vg-root/ubuntu_test,hda,w','file:$(REPO_ROOT)/misc/iso/seed.iso,hdb:cdrom,r','file:$(REPO_ROOT)/misc/iso/ubuntu-22.04.5-desktop-amd64.iso,hdc:cdrom,r']" \
+	"disk = ['phy:/dev/vg-root/ubuntu_test,hda,w','file:$(REPO_ROOT)/misc/iso/seed.iso,hdb:cdrom,r','file:$(REPO_ROOT)/misc/iso/ubuntu-24.04.4-desktop-amd64.iso,hdc:cdrom,r']" \
+	"kernel = '$(REPO_ROOT)/misc/iso/vmlinuz'" \
+	"ramdisk = '$(REPO_ROOT)/misc/iso/initrd'" \
+	"extra = 'autoinstall'" \
 		> $(REPO_ROOT)/misc/xen-vms/ubuntu.cfg; \
 	sudo lvcreate -V 1T --thin -n ubuntu_test vg-root/thinpool; \
 	xl create $(REPO_ROOT)/misc/xen-vms/ubuntu.cfg
@@ -508,7 +515,7 @@ setup_hooks_windows:
 	INJECTION_PID=$$(vmi-process-list -d $$(xl domid ubuntu_analysis_sandbox) -j $(REPO_ROOT)/profiles/windows.json \
 	    | grep -Eo "\[\s*[0-9]+\]\s*explorer\.exe" | cut -d']' -f1 | grep -Eo "[0-9]+"); \
 	echo "INJECTION_PID=$$INJECTION_PID"; \
-	xl save windows_analysis_sandbox $(REPO_ROOT)/state/windows_sandbox.bak; \
+	xl save windows_analysis_sandbox $(REPO_ROOT)/state/windows_sandbox.bak $(REPO_ROOT)/misc/xen-vms/windows_sandbox.cfg; \
 	sed -Ei "s/INJECTION_PID_WINDOWS = .*/INJECTION_PID_WINDOWS = $$INJECTION_PID/g" $(REPO_ROOT)/sandboxd/config.py
 
 setup_hooks_ubuntu:
@@ -558,5 +565,5 @@ setup_hooks_ubuntu:
 	INJECTION_PID=$$(vmi-process-list -d $$(xl domid ubuntu_analysis_sandbox) -j $(REPO_ROOT)/profiles/linux.json \
 	    | grep -Eo "\[\s*[0-9]+\]\s*gdm3" | cut -d']' -f1 | grep -Eo "[0-9]+"); \
 	echo "INJECTION_PID=$$INJECTION_PID"; \
-	xl save ubuntu_analysis_sandbox $(REPO_ROOT)/state/ubuntu_sandbox.bak; \
+	xl save ubuntu_analysis_sandbox $(REPO_ROOT)/state/ubuntu_sandbox.bak $(REPO_ROOT)/misc/xen-vms/ubuntu_sandbox.cfg; \
 	sed -Ei "s/INJECTION_PID_UBUNTU = .*/INJECTION_PID_UBUNTU = $$INJECTION_PID/g" $(REPO_ROOT)/sandboxd/config.py
