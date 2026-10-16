@@ -4,6 +4,10 @@
 	<settings pass="offlineServicing"></settings>
 	<settings pass="windowsPE">
 		<component name="Microsoft-Windows-Setup" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
+			<DynamicUpdate>
+				<Enable>false</Enable>
+				<WillShowUI>Never</WillShowUI>
+			</DynamicUpdate>
 			<RunSynchronous>
 				<RunSynchronousCommand wcm:action="add">
 					<Order>1</Order>
