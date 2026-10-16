@@ -382,7 +382,7 @@ ubuntu_analysis_vm:
 		"$(REPO_ROOT)/misc/iso/cidata/user-data" \
 		"$(REPO_ROOT)/misc/iso/cidata/meta-data"; \
 	\
-	wget "https://releases.ubuntu.com/24.04/ubuntu-24.04.4-desktop-amd64.iso" -O $(REPO_ROOT)/misc/iso/ubuntu-24.04.4-desktop-amd64.iso ; \
+	wget "https://releases.ubuntu.com/jammy/ubuntu-22.04.5-desktop-amd64.iso" -O $(REPO_ROOT)/misc/iso/ubuntu-22.04.5-desktop-amd64.iso ; \
 	mount $(REPO_ROOT)/misc/iso/ubuntu-24.04.4-desktop-amd64.iso  /mnt; \
 	cp /mnt/casper/initrd /mnt/casper/vmlinuz $(REPO_ROOT)/misc/iso/; \
 	printf "%s\n" \
@@ -408,7 +408,7 @@ ubuntu_analysis_vm:
 	"altp2m = 2" \
 	"shadow_memory = 32" \
 	"vif = [ 'type=ioemu,model=e1000,bridge=xenbr0' ]" \
-	"disk = ['phy:/dev/vg-root/ubuntu_test,hda,w','file:$(REPO_ROOT)/misc/iso/seed.iso,hdb:cdrom,r','file:$(REPO_ROOT)/misc/iso/ubuntu-24.04.4-desktop-amd64.iso,hdc:cdrom,r']" \
+	"disk = ['phy:/dev/vg-root/ubuntu_test,hda,w','file:$(REPO_ROOT)/misc/iso/seed.iso,hdb:cdrom,r','file:$(REPO_ROOT)/misc/iso/ubuntu-22.04.5-desktop-amd64.iso,hdc:cdrom,r']" \
 	"kernel = '$(REPO_ROOT)/misc/iso/vmlinuz'" \
 	"ramdisk = '$(REPO_ROOT)/misc/iso/initrd'" \
 	"extra = 'autoinstall'" \
