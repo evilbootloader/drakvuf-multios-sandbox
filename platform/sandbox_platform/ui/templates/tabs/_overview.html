@@ -135,6 +135,36 @@
   processes. That is an observation about this trace, not a verdict.</p>
 {% endif %}
 
+
+<h2 style="margin-top:1.5rem">
+  YARA matches <span class="count">{{ report.yara | length }}</span>
+</h2>
+
+{% if report.yara %}
+<ul class="yara">
+  {% for t in report.yara %}
+  <li>
+    <div>
+      <strong>{{ t.identifier }} ({{ t.namespace }})</strong>
+
+      {% if t.process_seqids %}
+        {{ procs(t.process_seqids) }}
+      {% endif %}
+    </div>
+    <div>{{ t.filename }}</div>
+  </li>
+  {% endfor %}
+</ul>
+{% else %}
+<p class="dim">
+  YARA matched no rules against the staged samples,
+  extracted files or memory dumps.
+  This is an observation, not a verdict.
+</p>
+{% endif %}
+
+
+
 {% else %}
 <div class="empty" style="margin-top:1rem">
   <strong>No report for this run.</strong>

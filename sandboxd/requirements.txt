@@ -1,110 +1,59 @@
-# sandboxd's runtime dependencies, for the Dom0 venv and for CI.
-#
-# **These existed only as a hand-typed pip line in a runbook until 2026-08-31.**
-# `docs/runbooks/09-verify-sandboxd-and-console.md` carried them inside a
-# transcript, which is evidence of what was installed once and not a thing a
-# fresh Dom0 or a CI job can install from.
-#
-#     python3 -m venv .venv-sandboxd
-#     .venv-sandboxd/bin/pip install -r sandboxd/requirements.txt
-#
-# Deliberately short. `sandboxd` runs on the machine that traces malware as
-# root, so every dependency is attack surface reachable from a compromised
-# guest by way of the platform's responses. The two below are the worker
-# channel and the console; everything under "Postprocessing" is the cost of
-# analysing traces on Dom0 rather than after upload, and is the one place this
-# file stopped being short.
-
-# The worker channel: claim, heartbeat, upload, all over mutual TLS.
-# Pinned to the same version platform/requirements.txt pins, because the two
-# halves of that channel are developed together.
-httpx==0.28.1
-
-# The live console relay (DRAFT-056) only.
-#
-# **`websockets`, not `httpx-ws`**, and `sandboxd/vnc.py:236` records why:
-# httpx-ws would reuse the existing httpx client and so put the console on the
-# same connection path as the worker channel. These are different trust
-# situations -- one is Dom0 talking to the platform, the other carries guest
-# framebuffer bytes out of the machine running malware.
-#
-# **The pin is a Dom0 constraint, not a preference.** Newer releases require a
-# Python this Dom0 does not have -- 3.12.3, confirmed 2026-09-18, see
-# docs/CURRENT-STATE.md 1.2. If a `pip install` here reports
-# `from versions: none`, read docs/TROUBLESHOOTING.md before loosening it --
-# that message means the index returned nothing, not that the pin is wrong.
-websockets==16.1.1
-
-# --- Postprocessing (sandboxd/postprocessing/, Windows traces only) ----------
-#
-# Ported from drakvuf-sandbox's `drakrun/analyzer/postprocessing` in September
-# 2026. These run inside the daemon, after the trace and before upload, over
-# logs whose contents the sample influenced. **Read that sentence again before
-# adding to this list**: it is parsing attacker-influenced input, as root, on
-# the hypervisor host. `analyze_memdumps` stays False for the same reason --
-# it would hand malware memory dumps to vivisect's emulator in this process.
-#
-# Versions are what `pip freeze` reported in the development container on
-# 2026-09-18, which runs Python 3.14. That the set also resolves for Dom0's
-# 3.12 was checked the same day without installing anything:
-#
-#     pip download --only-binary=:all: --python-version 3.12 \
-#         --implementation cp --abi cp312 --platform manylinux2014_x86_64 \
-#         --platform any -d /tmp/w -r sandboxd/requirements.txt
-#
-# 59 wheels, none missing. Re-run it when a pin changes; the container's
-# interpreter is two minor versions ahead and a wheel that exists for 3.14 is
-# not evidence of one for 3.12.
-
-# capa, for the ATT&CK/MBC mapping in ttps.json. **Two versions ahead of the
-# `flare-capa==7.4.0` the upstream code was written against**, and the API
-# moved: `find_capabilities` returns a `Capabilities` dataclass here where
-# 7.x returned a tuple, so capa_processor.py must read `.matches`. The rules
-# checkout under sandboxd/postprocessing/data/capa-rules must be the tag that
-# matches this version (v9.4.0); a rules tree from another major version fails
-# to load with a schema error, not a version message. This one line is most of
-# the list above's growth: it brings vivisect, pefile, dnfile, protobuf, rich
-# and the IDA-integration packages with it -- ~50 packages for one import.
-#
-# **vivisect needs no line of its own.** It is a core dependency of flare-capa
-# (not an extra), so this pin installs it -- 1.3.2 in the development
-# container, 2026-09-19 -- and it is what `analyze_memdumps=True` runs over
-# the sample's memory dumps (capa_processor.static_capa_analysis, BACKEND_VIV).
-# `python -c "import vivisect, viv_utils"` in the Dom0 venv is the check that
-# the pass has what it imports; a missing module there is an incomplete
-# install, not a pin to add.
+annotated-types==0.8.0
+anyio==4.15.1
+certifi==2026.7.22
+click==8.5.0
+colorama==0.4.6
+cxxfilt==0.3.0
+dncil==1.0.2
+dnfile==0.18.0
 flare-capa==9.4.0
-
-# Splitting Windows command lines the way CreateProcess does, for the
-# `args` field of process_tree.json.
-mslex==1.3.0
-
-# The `log_index` format (indexer.py). The consumer is drakvuf-sandbox's web
-# API, which this platform does not have; the index is produced for the day it
-# does.
+funcy==2.1
+h11==0.16.0
+httpcore==1.0.9
+httpx==0.28.1
+humanize==4.16.0
+ida-hcli==0.26.3
+ida-netnode==3.0
+ida-settings==3.5.2
+idapro==0.0.11
+idna==3.20
+intervaltree==3.2.1
+markdown-it-py==4.2.0
+mdurl==0.1.2
 msgpack==1.2.2
-
-# Parsing the per-plugin logs. A plain-`json` fallback would work; this is a
-# speed choice inherited from upstream, kept because syscall.log runs to
-# millions of lines.
+msgspec==0.22.0
+mslex==1.3.0
+networkx==3.7
 orjson==3.12.0
-
-# PostprocessingConfig in plugins/plugin_base.py. `pydantic` itself is already
-# a transitive dependency of capa; pinned here explicitly, to the same version
-# platform/requirements.txt pins, because plugin_base.py imports it directly.
+packaging==26.3
+pefile==2024.8.26
+platformdirs==4.13.3
+prompt_toolkit==3.0.53
+protobuf==7.36.2
+pyasn1==0.6.4
+pyasn1_modules==0.4.2
+pycparser==3.11
 pydantic==2.13.4
-pydantic_core==2.46.4
 pydantic-settings==2.15.0
-
-# --- Running the tests -----------------------------------------------------
-#
-# `pytest`, plus **platform/requirements.txt**. That second one is not a
-# mistake and not needed on Dom0: `sandboxd/tests/test_api.py` validates what
-# this client sends against the SERVER's own pydantic models, imported from
-# `sandbox_platform`, so a shape change fails in CI rather than at 3am on Dom0.
-#
-#     pip install -r sandboxd/requirements.txt -r platform/requirements.txt pytest
-#     python -m pytest sandboxd/tests -q
-#
-# "sandboxd needs no infrastructure" is true of *services* -- no Postgres, no
-# MinIO, no running API -- and not of *packages*.
+pydantic_core==2.46.4
+pyelftools==0.33
+Pygments==2.21.0
+python-dotenv==1.2.4
+python-flirt==0.10.0
+PyYAML==6.0.3
+questionary==2.1.1
+rich==15.0.0
+rich-click==1.9.9
+ruamel.yaml==0.19.1
+semantic-version==2.10.0
+six==1.17.0
+sortedcontainers==2.4.0
+tenacity==9.2.1
+typing-inspection==0.4.4
+typing_extensions==4.16.0
+viv_utils==0.8.1
+vivisect==1.3.2
+wcwidth==0.9.2
+websockets==16.1.1
+xmltodict==1.0.4
+yara-x==1.21.0

@@ -291,7 +291,6 @@ sandboxd:
 	set -e; \
 	xl domid $(VM) || xl create $(CFG) || echo "Run make web_vm and make web_sandbox"; \
 	cd $(REPO_ROOT); \
-	git clone --depth 1 --branch v9.4.0 https://github.com/mandiant/capa-rules sandboxd/postprocessing/data/capa-rules; \
 	git submodule update --init; \
 	cd drakvuf; \
 	git submodule update --init; \
@@ -487,7 +486,7 @@ setup_hooks_windows:
 	mount -o ro /dev/mapper/vg--root-windows2 /mnt/; \
 	cd $(REPO_ROOT); \
 	python3 drakvuf/volatility3/volatility3/framework/symbols/windows/pdbconv.py --guid $$(python3 drakvuf/tools/pdbguid.py /mnt/Windows/System32/ntoskrnl.exe | grep GUID | cut -d' ' -f 2) -p $$(python3 drakvuf/tools/pdbguid.py /mnt/Windows/System32/ntoskrnl.exe | grep Filename | cut -d' ' -f 2) -o $(REPO_ROOT)/profiles/windows.json ; \
-	python3 $(REPO_ROOT)/scripts/windows-symbol-profiles.py; \
+	python3 $(REPO_ROOT)/scripts/windows-symbol-profiles.py	--drakvuf $(REPO_ROOT)/drakvuf; \
 	umount /mnt; \
 	kpartx -d /dev/vg-root/windows; \
 	lvcreate -s -kn -n windows_sandbox vg-root/windows; \

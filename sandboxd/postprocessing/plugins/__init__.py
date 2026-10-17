@@ -21,6 +21,8 @@ from .process_dumps import process_dumps
 from .process_extracted import process_extracted
 from .screenshot_metadata import screenshot_metadata
 from .split_drakvuf_log import split_drakvuf_log
+from .yara_analysis import yara_analysis
+from .get_yara_info import get_yara_info
 
 POSTPROCESS_PLUGINS = [
     PostprocessPlugin(
@@ -109,6 +111,16 @@ POSTPROCESS_PLUGINS = [
     PostprocessPlugin(
         function=get_ttps_info,
         requires=["process_tree.json", "ttps.json"],
+        generates=[],
+    ),
+    PostprocessPlugin(
+        function=yara_analysis,
+        requires=["memdump.log", "fileextractor.log"],
+        generates=["yara.json"],
+    ),
+    PostprocessPlugin(
+        function=get_yara_info,
+        requires=["process_tree.json","yara.json"],
         generates=[],
     ),
     # After every plugin that calls update_report and before index_logs,

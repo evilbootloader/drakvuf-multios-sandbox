@@ -17,13 +17,19 @@ class CapaConfigSection(BaseModel):
     # privileges or bounds their time or memory. Upstream ships this False.
     # It is True here by the operator's decision (2026-09-18); the
     # "Postprocessing" section of sandboxd/requirements.txt has the trade.
-    analyze_memdumps: bool = False
+    analyze_memdumps: bool = True
     # True here where upstream defaults to False: it is what bounds the memory
     # of the capa pass to the sample's own processes (capa_processor.py,
     # decode_json_lines). It needs the `inject` line in trace.log, which
     # DRAKVUF's own -i/-e injection always writes.
     analyze_only_malware_pids: bool = True
     worker_pool_processes: int = 2
+
+class CapaConfigSection(BaseModel):
+    rules_directory: pathlib.Path = pathlib.Path(__file__).parent.parent.absolute() / "data" / "protections-artifacts" / "yara"
+
+    analysis_dir = context.analysis_dir
+    config = context.config.yara
 
 
 class MemdumpConfigSection(BaseModel):
@@ -66,6 +72,7 @@ class PostprocessingConfig(BaseSettings):
     capa: CapaConfigSection = CapaConfigSection()
     memdump: MemdumpConfigSection = MemdumpConfigSection()
     extracted: ExtractedConfigSection = ExtractedConfigSection()
+    yara: YaraConfigSection = YaraConfigSection()
     # Replace syscall.log / sysret.log with .gz copies. On by default where
     # upstream defaults to False: a Windows syscall.log is over 1 GB
     # (trace-windows.log, 2026-09-18; 50 MB gzipped), a quarter of the 4 GiB

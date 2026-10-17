@@ -2,3 +2,9 @@
 	path = drakvuf
 	url = https://github.com/evilbootloader/drakvuf.git
 	ignore = untracked
+[submodule "sandboxd/data/protections-artifacts"]
+	path = sandboxd/data/protections-artifacts
+	url = https://github.com/elastic/protections-artifacts.git
+[submodule "sandboxd/data/capa-rules"]
+	path = sandboxd/data/capa-rules
+	url = https://github.com/mandiant/capa-rules.git

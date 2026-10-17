@@ -475,7 +475,7 @@ a.proc:hover { border-color: var(--fg-faint); }
 .exit { font: 500 0.75rem/1.6 var(--mono); color: var(--fg-muted); }
 .exit.error { color: var(--red); }
 
-.ttps, .requests { list-style: none; margin: 0; padding: 0; }
+.ttps, .requests, .yara { list-style: none; margin: 0; padding: 0; }
 .ttps li, .requests li { padding: 0.5rem 0; border-bottom: 1px solid var(--line-soft); }
 .dl.small { font-size: 0.82rem; margin-top: 0.3rem; }
 
