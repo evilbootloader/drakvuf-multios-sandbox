@@ -26,7 +26,7 @@ class CapaConfigSection(BaseModel):
     worker_pool_processes: int = 2
 
 class YaraConfigSection(BaseModel):
-    rules_directory: pathlib.Path = pathlib.Path(__file__).parent.parent.absolute() / "data" / "protections-artifacts" / "yara"
+    rules_directory: pathlib.Path = pathlib.Path(__file__).parent.parent.absolute() / "data" / "protections-artifacts" / "yara" / "rules"
 
 
 class MemdumpConfigSection(BaseModel):
