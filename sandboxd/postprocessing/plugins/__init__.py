@@ -69,6 +69,16 @@ POSTPROCESS_PLUGINS = [
         ],
         generates=["ttps.json"],
     ),
+    PostprocessPlugin(
+        function=yara_analysis,
+        requires=["memdump.log", "fileextractor.log"],
+        generates=["yara.json"],
+    ),
+    PostprocessPlugin(
+        function=get_yara_info,
+        requires=["process_tree.json","yara.json"],
+        generates=[],
+    ),
 #    PostprocessPlugin(
 #        function=screenshot_metadata,
 #        requires=["screenshots.json"],
@@ -111,16 +121,6 @@ POSTPROCESS_PLUGINS = [
     PostprocessPlugin(
         function=get_ttps_info,
         requires=["process_tree.json", "ttps.json"],
-        generates=[],
-    ),
-    PostprocessPlugin(
-        function=yara_analysis,
-        requires=["memdump.log", "fileextractor.log"],
-        generates=["yara.json"],
-    ),
-    PostprocessPlugin(
-        function=get_yara_info,
-        requires=["process_tree.json","yara.json"],
         generates=[],
     ),
     # After every plugin that calls update_report and before index_logs,
