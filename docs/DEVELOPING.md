@@ -251,18 +251,18 @@ traffic during the migration, and a running listener would do exactly that.
 
 ```bash
 # PLATFORM DOMU
-sudo systemctl stop sandbox-api-browser
-systemctl is-active sandbox-api-browser        # expect: inactive
+sudo systemctl stop sandbox-api
+systemctl is-active sandbox-api        # expect: inactive
 
 cd /opt/platform/src/platform
-sudo -u platform env $(grep -h '^DATABASE_URL=' /etc/sandbox-platform/api.env) \
+sudo -u platform env $(grep -h '^DATABASE_URL=' /etc/sandbox_platform/api.env) \
   .venv/bin/python migrations/run.py --status     # read this before applying
-sudo -u platform env $(grep -h '^DATABASE_URL=' /etc/sandbox-platform/api.env) \
+sudo -u platform env $(grep -h '^DATABASE_URL=' /etc/sandbox_platform/api.env) \
   .venv/bin/python migrations/run.py
 
-sudo systemctl start sandbox-api-browser
-systemctl is-active sandbox-api-browser
-sudo journalctl -u sandbox-api-browser -n 20 --no-pager
+sudo systemctl start sandbox-api
+systemctl is-active sandbox-api
+sudo journalctl -u sandbox-api -n 20 --no-pager
 ```
 
 `--status` first, and read it. **A digest mismatch on an already-applied file

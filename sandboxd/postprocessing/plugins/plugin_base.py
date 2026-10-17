@@ -25,11 +25,8 @@ class CapaConfigSection(BaseModel):
     analyze_only_malware_pids: bool = True
     worker_pool_processes: int = 2
 
-class CapaConfigSection(BaseModel):
+class YaraConfigSection(BaseModel):
     rules_directory: pathlib.Path = pathlib.Path(__file__).parent.parent.absolute() / "data" / "protections-artifacts" / "yara"
-
-    analysis_dir = context.analysis_dir
-    config = context.config.yara
 
 
 class MemdumpConfigSection(BaseModel):
