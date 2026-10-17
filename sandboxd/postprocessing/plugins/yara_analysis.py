@@ -5,6 +5,8 @@ import logging
 import orjson
 import yara_x
 
+from .plugin_base import PostprocessContext
+
 log = logging.getLogger(__name__)
 
 
