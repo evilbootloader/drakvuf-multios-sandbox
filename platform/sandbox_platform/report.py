@@ -115,6 +115,14 @@ class Ttp(_Lenient):
     model_config = ConfigDict(extra="ignore", populate_by_name=True)
 
 
+class Yara(_Lenient):
+    filename: str
+    identifier: str
+    namespace: str
+    process_seqids: list[int] = Field(default_factory=list)
+    metadata: dict = Field(default_factory=dict)
+    model_config = ConfigDict(extra="ignore", populate_by_name=True)
+
 class HttpRequest(_Lenient):
     verb: str | None = None
     path: str | None = None
@@ -211,6 +219,7 @@ class Report(_Lenient):
     startup: Startup = Field(default_factory=Startup)
     processes: list[Process] = Field(default_factory=list)
     ttps: list[Ttp] = Field(default_factory=list)
+    yara: list[Yara] = Field(default_factory=list)
     http_requests: list[HttpRequest] = Field(default_factory=list)
     cracked_urls: list[CrackedUrl] = Field(default_factory=list)
     modified_files: list[FileRef] = Field(default_factory=list)
