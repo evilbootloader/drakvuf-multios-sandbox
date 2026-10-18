@@ -9,7 +9,7 @@ from ...guests import TargetOs
 
 
 class CapaConfigSection(BaseModel):
-    rules_directory: pathlib.Path = pathlib.Path(__file__).parent.parent.absolute() / "data" / "capa-rules"
+    rules_directory: pathlib.Path = pathlib.Path(__file__).parent.parent.parent.absolute() / "data" / "capa-rules"
     analyze_drakvuf_log: bool = True
     # KNOWN GAP (no draft filed yet): True runs vivisect -- a disassembler and
     # x86 emulator -- over the sample's memory dumps in worker processes
@@ -26,7 +26,7 @@ class CapaConfigSection(BaseModel):
     worker_pool_processes: int = 2
 
 class YaraConfigSection(BaseModel):
-    rules_directory: pathlib.Path = pathlib.Path(__file__).parent.parent.absolute() / "data" / "protections-artifacts" / "yara" / "rules"
+    rules_directory: pathlib.Path = pathlib.Path(__file__).parent.parent.parent.absolute() / "data" / "protections-artifacts" / "yara" / "rules"
 
 
 class MemdumpConfigSection(BaseModel):
