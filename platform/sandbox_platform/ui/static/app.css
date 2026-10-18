@@ -476,7 +476,7 @@ a.proc:hover { border-color: var(--fg-faint); }
 .exit.error { color: var(--red); }
 
 .ttps, .requests, .yara { list-style: none; margin: 0; padding: 0; }
-.ttps li, .requests li { padding: 0.5rem 0; border-bottom: 1px solid var(--line-soft); }
+.ttps li, .requests li, .yara li { padding: 0.5rem 0; border-bottom: 1px solid var(--line-soft); }
 .dl.small { font-size: 0.82rem; margin-top: 0.3rem; }
 
 /* The process tree as a list: <details> per parent, no script. */
