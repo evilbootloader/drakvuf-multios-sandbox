@@ -38,6 +38,19 @@ POSTPROCESS_PLUGINS = [
         requires=["procmon.log"],
         generates=[],  # Always regenerate
     ),
+    PostprocessPlugin(
+        function=yara_analysis,
+        requires=["memdump.log", "fileextractor.log"],
+        generates=["yara.json"],
+    ),
+    PostprocessPlugin(
+        function=capa_analysis,
+        requires=[
+            "process_tree.json",
+            "inject.log",
+        ],
+        generates=["ttps.json"],
+    ),
     # Before capa_analysis, not after it as upstream orders them: with
     # analyze_memdumps on, capa's static pass reads DUMPS_ZIP, which this is
     # what produces. Upstream never hit that because it ships the option off.
@@ -60,24 +73,6 @@ POSTPROCESS_PLUGINS = [
         function=process_extracted,
         requires=[EXTRACTED_DIR, "process_tree.json"],
         generates=[EXTRACTED_ZIP],
-    ),
-    PostprocessPlugin(
-        function=capa_analysis,
-        requires=[
-            "process_tree.json",
-            "inject.log",
-        ],
-        generates=["ttps.json"],
-    ),
-    PostprocessPlugin(
-        function=yara_analysis,
-        requires=["memdump.log", "fileextractor.log"],
-        generates=["yara.json"],
-    ),
-    PostprocessPlugin(
-        function=get_yara_info,
-        requires=["process_tree.json","yara.json"],
-        generates=[],
     ),
 #    PostprocessPlugin(
 #        function=screenshot_metadata,
@@ -121,6 +116,11 @@ POSTPROCESS_PLUGINS = [
     PostprocessPlugin(
         function=get_ttps_info,
         requires=["process_tree.json", "ttps.json"],
+        generates=[],
+    ),
+    PostprocessPlugin(
+        function=get_yara_info,
+        requires=["process_tree.json","yara.json"],
         generates=[],
     ),
     # After every plugin that calls update_report and before index_logs,
