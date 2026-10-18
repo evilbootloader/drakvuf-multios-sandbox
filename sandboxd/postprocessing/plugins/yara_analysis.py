@@ -30,8 +30,9 @@ def yara_analysis(context: PostprocessContext):
     scanner.set_timeout(60)
 
     def load_logs(filename, key):
+        if not (analysis_dir / filename).exists():
+            return None
         entries = defaultdict(deque)
-
         with (analysis_dir / filename).open("rb") as f:
             for line in f:
                 if not line.strip():

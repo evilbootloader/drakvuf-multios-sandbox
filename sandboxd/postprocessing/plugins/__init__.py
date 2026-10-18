@@ -40,7 +40,7 @@ POSTPROCESS_PLUGINS = [
     ),
     PostprocessPlugin(
         function=yara_analysis,
-        requires=["memdump.log", "fileextractor.log"],
+        requires=[],
         generates=["yara.json"],
     ),
     PostprocessPlugin(
