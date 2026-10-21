@@ -883,6 +883,32 @@ def _windows_launch(paths: GuestPaths, target: str) -> list[str]:
     return ["-e", paths.shell, "-f", f'/c {paths.delay} & "{target}"']
 
 
+# `--wait-stop-plugins`, in seconds: "Wait for plugins to stop before
+# termination loop" (`drakvuf --help`). Without it DRAKVUF asks each plugin to
+# stop ONCE at `-t` and exits even when one answers that it cannot yet, removing
+# that plugin's traps with a call it injected still running in the guest.
+# fileextractor extracts a Windows file through a chain of kernel calls injected
+# into the writing thread; a call whose return trap is gone returns into a frame
+# nothing restores, and the guest bugchecks 0x1e (execute at address 0) after
+# the trace. Measured on Dom0 2026-10-21, 60s traces of the Windows default set
+# plus a file-writing workload, drakvuf with that day's fileextractor fix:
+# 16 of 16 crashed at the end without the wait, 0 of 16 with 30s.
+#
+# A ceiling, not a delay: DRAKVUF stops waiting as soon as every plugin has
+# stopped, and does not wait at all when they all stop on the first request --
+# the case for every plugin of the Ubuntu and Android defaults, so their traces
+# end as before. Passed on every OS anyway: the option belongs to the engine,
+# and whichever plugin has a call in flight, the guest is the one that pays.
+# `timing.budgets` adds it to the trace phase guard, which would otherwise kill
+# DRAKVUF mid-wait.
+#
+# **The trace goes on during the wait.** syscalls' stop() leaves the hooks of its
+# per-OS plugin in place until DRAKVUF exits (upstream too), so a Windows job can
+# carry up to this many seconds of records past `-t` -- of the sample still
+# running, which is real behaviour rather than noise.
+PLUGIN_STOP_WAIT = 30
+
+
 def argv_trace(job: Job, component: str | None = None) -> list[str]:
     """The DRAKVUF invocation.
 
@@ -935,6 +961,7 @@ def argv_trace(job: Job, component: str | None = None) -> list[str]:
 
     argv += job.options.drakvuf_flags()
     argv += ["-o", "json", "-t", str(job.options.timeout)]
+    argv += ["--wait-stop-plugins", str(PLUGIN_STOP_WAIT)]
     for plugin in job.options.plugins:
         argv += ["-a", plugin]
     # The names are the postprocessing package's, not literals: process_dumps

@@ -83,6 +83,18 @@ def test_the_trace_budget_covers_drakvufs_own_timeout():
         assert budgets(os_, kind).trace > t
 
 
+def test_the_trace_budget_covers_the_plugin_stop_wait():
+    """DRAKVUF may run `--wait-stop-plugins` seconds past `-t`. A phase guard
+    firing inside that wait kills DRAKVUF with an injected call still in the
+    guest -- the crash the wait exists to prevent."""
+    for os_, kind in [(TargetOs.UBUNTU, SampleKind.ELF),
+                      (TargetOs.ANDROID, SampleKind.ELF),
+                      (TargetOs.ANDROID, SampleKind.APK),
+                      (TargetOs.WINDOWS, SampleKind.PE)]:
+        t = 150 if kind is SampleKind.APK else 120
+        assert budgets(os_, kind).trace >= t + T.PLUGIN_STOP_WAIT + 30, os_.value
+
+
 def test_the_apk_path_leaves_more_headroom_than_the_c_watcher_did():
     """The C watcher used a flat 180s against `-t 150`, leaving ~20s once process
     startup is counted -- and `-t` could not be raised without a recompile,

@@ -79,7 +79,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from .guests import SampleKind, TargetOs
+from .guests import PLUGIN_STOP_WAIT, SampleKind, TargetOs
 
 # --- individual waits --------------------------------------------------------
 
@@ -242,7 +242,10 @@ def budgets(os_: TargetOs, kind: SampleKind, trace_timeout: int,
         # The trace's own -t plus the settle, plus 30s for process startup and
         # DRAKVUF's own teardown. The old watcher used a flat 180 against -t 120,
         # leaving 55s unused on Ubuntu and ~20s on the Android APK path.
-        trace=trace_floor + 30.0,
+        # Plus the ceiling DRAKVUF may wait past -t for plugins with a call
+        # still injected (`--wait-stop-plugins`): a guard firing inside that
+        # wait kills DRAKVUF with the call in flight, the crash it prevents.
+        trace=trace_floor + PLUGIN_STOP_WAIT + 30.0,
         collect=COLLECT_BUDGET,
         cleanup=CLEANUP_BUDGET,
     )

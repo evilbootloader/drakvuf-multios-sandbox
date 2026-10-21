@@ -576,6 +576,20 @@ def test_every_trace_hides_the_hypervisor_from_cpuid(tmp_path):
         assert "-s" in argv[:argv.index("-e")], f"{os_.value}: -s is DRAKVUF's, not the sample's"
 
 
+def test_every_trace_waits_for_plugins_with_a_call_in_flight(tmp_path):
+    """`--wait-stop-plugins`, from `drakvuf --help`. Without it DRAKVUF removes
+    the traps of a plugin that still has a call injected into the guest, and
+    the guest bugchecks when that call returns -- fileextractor on Windows,
+    measured 2026-10-21. Every OS: the option is the engine's, and DRAKVUF
+    does not wait at all when every plugin stops on the first request."""
+    for os_, kind, component in ((TargetOs.UBUNTU, SampleKind.ELF, None),
+                                 (TargetOs.ANDROID, SampleKind.APK, "com.x/.Main"),
+                                 (TargetOs.ANDROID, SampleKind.ELF, None),
+                                 (TargetOs.WINDOWS, SampleKind.PE, None)):
+        argv = G.argv_trace(job(tmp_path, os_, kind), component)
+        assert argv[argv.index("--wait-stop-plugins") + 1] == str(G.PLUGIN_STOP_WAIT), os_.value
+
+
 def test_the_apk_path_gets_the_longer_timeout(tmp_path):
     """`-t 150`, not the ELF path's 120: the C watcher armed a 180s timer over
     this phase, so 150 leaves ~20s of headroom where 120 left 55s unused -- and

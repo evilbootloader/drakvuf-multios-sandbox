@@ -888,20 +888,54 @@ installed on Dom0 2026-10-19, procedure `make xen`. The fix is
 (XEN) d96v2 VIRIDIAN GUEST_CRASH: 0x1e 0xffffffffc0000005 0 0x8 0
 ```
 
-— `KMODE_EXCEPTION_NOT_HANDLED`, an access violation in kernel mode — on the
-Windows 11 23H2 sandbox, with every plugin loaded. DRAKVUF itself usually keeps
+— `KMODE_EXCEPTION_NOT_HANDLED`, an access violation in kernel mode, here an
+execute at address 0 — on the Windows 11 23H2 sandbox. Also `0x7f` (double
+fault, kernel stack overflow), `0x139` and a bugcheck code that is not one
+(`0x7d615f8c`, the low half of a kernel address). DRAKVUF itself usually keeps
 running and exits at its timeout; once, 6 s in, it hung instead until killed.
+The trace log ends normally and shows nothing: check `xl dmesg` for
+`GUEST_CRASH` after every Windows run.
 
-**Cause.** **Not diagnosed.** What is established, 2026-10-20: it happens with
-upstream DRAKVUF (`52df0bc8`) on upstream's libvmi **and** on
-`evilbootloader/libvmi`, and with the parallel-events build. None of the
-recorded `-a syscalls` runs crashed, so another plugin's hook is the suspect —
-and the guest also crashed in a run with everything but fileextractor, so not
-that one.
+**Cause.** **Two DRAKVUF defects with the `sandboxd` Windows default set**
+(syscalls, filetracer, fileextractor, memdump, apimon), diagnosed 2026-10-21 by
+ablation, a crash preserved with `on_crash = 'preserve'` and fileextractor's
+debug output. Both need fileextractor; apimon only slows the guest enough to
+widen the windows, and leaving out filetracer or memdump made it worse.
 
-**Fix.** None yet. Narrow it by leaving plugins out one at a time (`-x`), and
-check `xl dmesg` for `GUEST_CRASH` after every Windows run: the trace log ends
-normally and shows nothing.
+- **During the trace** (`0x7f`, `0x139`, the bogus code; the records stop
+  early). fileextractor reads a written file through a chain of kernel calls
+  injected into the writing thread. When another thread of the process wrote
+  to or closed the same handle mid-chain, fileextractor found the task by its
+  handle and took that call for the return of its injected call: it read the
+  result from the wrong registers — `ZwQueryInformationFile failed with status
+  0xfffff8047db02a40`, an address, in `fileextractor_fail` — and restored or
+  reused the registers saved on the other thread, moving this thread onto that
+  thread's stack.
+- **At the end of the trace** (`0x1e`; the records run to `-t`). Without
+  `--wait-stop-plugins`, DRAKVUF asks each plugin to stop once and exits while
+  fileextractor still has a call in the guest. The call returns to the hooked
+  function's entry with no trap left to restore the thread, the function runs
+  on the injected frame and returns into its zeroed home space.
+
+The second hid behind the first: fixing the first let more chains run to the
+end, and the default set went from crashing in 3 of 13 runs to every run.
+
+**Fix.** Both. Measured on Dom0 2026-10-21, 60 s traces with a file-writing
+workload, 8 runs each of the default set and the set without filetracer:
+16 of 16 crashed with the first fix alone, 0 of 16 with both.
+
+- fileextractor, `drakvuf` submodule at `76cf830` (three commits): a task
+  whose injected call is in flight only advances on that call's return; another
+  thread's write on the handle is replayed over the extracted copy afterwards,
+  its close finishes the task afterwards. Also fixed on the way: a failed
+  `ZwMapViewOfSection` left the thread on the injected frame.
+- `sandboxd` passes `--wait-stop-plugins` (`guests.PLUGIN_STOP_WAIT`), and the
+  trace phase budget covers the wait.
+
+**Still open: the full plugin set.** On 2026-10-20 the guest also crashed with
+every plugin but fileextractor, and leaving procdump or cpuidmon out changed
+the crash rate. Not diagnosed; procdump and codemon inject calls without
+registering them.
 
 ### Admission holds forever — one line per second, no clone, no error
 
