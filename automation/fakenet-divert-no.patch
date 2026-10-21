@@ -2,9 +2,9 @@ Make FakeNet-NG v3.5 survive `DivertTraffic: No`, and stop a sample choosing a
 filename on Dom0.  DRAFT-057 Phase 3.
 
 Pinned to upstream tag v3.5, read 2026-09-01; change 6 read 2026-09-04.
-Reference copy: nothing in this repository deploys it, because the development
-container is not Dom0.  The runbook that applies it is
-`docs/runbooks/13-verify-egress-modes.md`, step 6.
+`make sandboxd` applies it on Dom0, to a freshly reinstalled FakeNet, and
+checks each change landed.  By hand: `docs/runbooks/13-verify-egress-modes.md`,
+step 6.
 
 WHY THIS EXISTS
 ===============

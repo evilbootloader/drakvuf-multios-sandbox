@@ -1,8 +1,8 @@
 # Tor as the analysis network's transparent proxy. DRAFT-057 Phase 2.
 #
-# Reference copy. Install on Dom0 as /etc/tor/torrc (or an include under
-# /etc/tor/torrc.d/) and `systemctl restart tor`. Nothing in this repository
-# deploys it -- the development container is not Dom0.
+# `make sandboxd` installs it on Dom0 as /etc/tor/torrc and restarts tor. By
+# hand, install it there (or as an include under /etc/tor/torrc.d/) and
+# `systemctl restart tor`.
 #
 # WHAT THIS IS FOR, AND WHAT IT COSTS
 #

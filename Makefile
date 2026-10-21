@@ -364,6 +364,28 @@ sandboxd:
 	meson setup build --native-file llvm.ini -Dthreadsafety=true; \
 	ninja -C build; \
 	ninja -C build install; \
+	# Egress responders: tor for `tor`, FakeNet-NG for `simulated`, docs/runbooks/13-verify-egress-modes.md \
+	apt-get install -y tor python3-pip python3-venv; \
+	install -m 0644 $(REPO_ROOT)/automation/torrc /etc/tor/torrc; \
+	python3 -m venv /opt/fakenet-ng; \
+	/opt/fakenet-ng/bin/pip install -r $(REPO_ROOT)/automation/fakenet-requirements.txt; \
+	# Reinstalled before patching, every time: patch --forward skips a file it finds partly patched \
+	/opt/fakenet-ng/bin/pip install --no-deps --force-reinstall 'git+https://github.com/mandiant/flare-fakenet-ng@v3.5'; \
+	install -m 0644 $(REPO_ROOT)/automation/fakenet.ini /etc/fakenet.ini; \
+	mkdir -p /var/lib/fakenet/root; \
+	SP="$$(/opt/fakenet-ng/bin/python -c 'import fakenet, os; print(os.path.dirname(os.path.dirname(fakenet.__file__)))')"; \
+	patch -p1 --forward -d "$$SP" < $(REPO_ROOT)/automation/fakenet-divert-no.patch; \
+	# The patch can fail silently, each count below is one of its changes \
+	test "$$(grep -c "conn.setblocking(0)" "$$SP/fakenet/listeners/ProxyListener.py")" -eq 1; \
+	test "$$(grep -c "fn_addr = '0.0.0.0'" "$$SP/fakenet/fakenet.py")" -eq 2; \
+	test "$$(grep -c "self.__diverter is None" "$$SP/fakenet/diverters/diverterbase.py")" -eq 3; \
+	test "$$(grep -c "Inadmissible SNI" "$$SP/fakenet/listeners/ssl_utils/__init__.py")" -eq 1; \
+	install -m 0644 $(REPO_ROOT)/automation/fakenet.service /etc/systemd/system/; \
+	install -m 0644 $(REPO_ROOT)/automation/drakvuf-egress.target /etc/systemd/system/; \
+	systemctl daemon-reload; \
+	systemctl enable --now drakvuf-egress.target; \
+	systemctl restart tor fakenet; \
+	systemctl is-active tor fakenet; \
 	mkdir /etc/sandboxd/tls -p; \
 	scp $(VMIP):/etc/sandbox_platform/tls/ca.crt /etc/sandboxd/tls/; \
 	scp $(VMIP):/etc/sandbox_platform/tls/dom0-lab.crt /etc/sandboxd/tls/; \

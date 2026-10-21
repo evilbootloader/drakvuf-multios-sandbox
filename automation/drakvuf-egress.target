@@ -1,11 +1,11 @@
 # One handle for every responder an egress mode depends on. DRAFT-057.
 #
-# Reference copy. Install on Dom0:
+# `make sandboxd` installs and enables it on Dom0. By hand:
 #
 #     install -m 0644 automation/drakvuf-egress.target /etc/systemd/system/
 #     install -m 0644 automation/fakenet.service        /etc/systemd/system/
 #     systemctl daemon-reload
-#     systemctl start drakvuf-egress.target
+#     systemctl enable --now drakvuf-egress.target
 #
 # ==========================================================================
 # WHAT THIS IS FOR, AND WHAT IT IS DELIBERATELY NOT

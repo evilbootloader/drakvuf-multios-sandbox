@@ -1,8 +1,7 @@
 # FakeNet-NG as a service — the `simulated` egress responder. DRAFT-057.
 #
-# Reference copy. Install on Dom0; nothing in this repository deploys it, the
-# development container is not Dom0. Runbook: docs/runbooks/13-verify-egress-modes.md
-# step 6c.
+# `make sandboxd` installs it on Dom0, with drakvuf-egress.target. By hand:
+# docs/runbooks/13-verify-egress-modes.md step 6c.
 #
 #     install -m 0644 automation/fakenet.service /etc/systemd/system/
 #     systemctl daemon-reload && systemctl start fakenet
