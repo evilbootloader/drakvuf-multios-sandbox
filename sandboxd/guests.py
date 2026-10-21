@@ -74,6 +74,7 @@ log = logging.getLogger("sandboxd.guests")
 IPT_PLUGIN = "ipt"
 UNIXSOCKETMON_PLUGIN = "unixsocketmon"
 MEMDUMP_PLUGIN = "memdump"
+FILEEXTRACTOR_PLUGIN = "fileextractor"
 APIMON_PLUGIN = "apimon"
 RPCMON_PLUGIN = "rpcmon"
 # The Linux counterpart of apimon, from the DRAKVUF fork (`drakvuf/` submodule,
@@ -908,6 +909,16 @@ def _windows_launch(paths: GuestPaths, target: str) -> list[str]:
 # running, which is real behaviour rather than noise.
 PLUGIN_STOP_WAIT = 30
 
+# `--fileextractor-timeout`: "Timeout (in seconds) to finish file extractions".
+# Once fileextractor has been stopping this long it ends a Windows extraction at
+# the return of its current injected call instead of injecting the next one, so
+# it must run out before `PLUGIN_STOP_WAIT` does. Without it a large file still
+# being copied outlasts any wait: Edge's msedge.dll did in 5 of 6 traces with
+# every plugin, and DRAKVUF exited with the call in the guest (Dom0 2026-10-21).
+# The file is then reported as a `Timeout` failure. Linux fileextractor injects
+# nothing and does not read the option.
+FILEEXTRACTOR_STOP_TIMEOUT = 20
+
 
 def argv_trace(job: Job, component: str | None = None) -> list[str]:
     """The DRAKVUF invocation.
@@ -982,6 +993,8 @@ def argv_trace(job: Job, component: str | None = None) -> list[str]:
         argv += ["--ipt-dir", str(job.result_dir / IPT_DIR), "--ipt-trace-user"]
     if UNIXSOCKETMON_PLUGIN in job.options.plugins:
         argv += ["--unixsocketmon-max-size-print", "2048"]
+    if FILEEXTRACTOR_PLUGIN in job.options.plugins:
+        argv += ["--fileextractor-timeout", str(FILEEXTRACTOR_STOP_TIMEOUT)]
     if MEMDUMP_PLUGIN in job.options.plugins or APIMON_PLUGIN in job.options.plugins or RPCMON_PLUGIN in job.options.plugins:
         argv += ["--dll-hooks-list", (Path(__file__).parent.absolute() / "data" / "hooks.txt").as_posix()]
     # libmon's own option and its own file. **Not `--dll-hooks-list`**: the

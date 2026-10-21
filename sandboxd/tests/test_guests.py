@@ -590,6 +590,18 @@ def test_every_trace_waits_for_plugins_with_a_call_in_flight(tmp_path):
         assert argv[argv.index("--wait-stop-plugins") + 1] == str(G.PLUGIN_STOP_WAIT), os_.value
 
 
+def test_fileextractor_ends_its_extractions_before_drakvuf_stops_waiting(tmp_path):
+    """`--fileextractor-timeout` below `--wait-stop-plugins`: fileextractor ends
+    a Windows extraction at the return of its current injected call once the
+    timeout has passed, and DRAKVUF exiting with a call in the guest is what
+    crashes it. A timeout at or past the wait would leave no room for that call."""
+    assert G.FILEEXTRACTOR_STOP_TIMEOUT < G.PLUGIN_STOP_WAIT
+
+    argv = G.argv_trace(job(tmp_path, TargetOs.WINDOWS, SampleKind.PE))
+    assert G.FILEEXTRACTOR_PLUGIN in argv[argv.index("-a"):], "the Windows default extracts files"
+    assert argv[argv.index("--fileextractor-timeout") + 1] == str(G.FILEEXTRACTOR_STOP_TIMEOUT)
+
+
 def test_the_apk_path_gets_the_longer_timeout(tmp_path):
     """`-t 150`, not the ELF path's 120: the C watcher armed a 180s timer over
     this phase, so 150 leaves ~20s of headroom where 120 left 55s unused -- and

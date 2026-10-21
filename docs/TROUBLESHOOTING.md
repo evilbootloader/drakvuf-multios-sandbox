@@ -924,18 +924,26 @@ end, and the default set went from crashing in 3 of 13 runs to every run.
 workload, 8 runs each of the default set and the set without filetracer:
 16 of 16 crashed with the first fix alone, 0 of 16 with both.
 
-- fileextractor, `drakvuf` submodule at `76cf830` (three commits): a task
-  whose injected call is in flight only advances on that call's return; another
-  thread's write on the handle is replayed over the extracted copy afterwards,
-  its close finishes the task afterwards. Also fixed on the way: a failed
-  `ZwMapViewOfSection` left the thread on the injected frame.
+- fileextractor, `drakvuf` submodule at `b63f466`: a task whose injected call
+  is in flight only advances on that call's return; another thread's write on
+  the handle is replayed over the extracted copy afterwards, its close finishes
+  the task afterwards. Also fixed on the way: a failed `ZwMapViewOfSection`
+  left the thread on the injected frame.
 - `sandboxd` passes `--wait-stop-plugins` (`guests.PLUGIN_STOP_WAIT`), and the
   trace phase budget covers the wait.
 
-**Still open: the full plugin set.** On 2026-10-20 the guest also crashed with
-every plugin but fileextractor, and leaving procdump or cpuidmon out changed
-the crash rate. Not diagnosed; procdump and codemon inject calls without
-registering them.
+**With every plugin, the wait alone was not enough** (2026-10-21): Edge's
+`msedge.dll` was still being copied, 64 KiB per three injected calls, when the
+30 s ran out. DRAKVUF exits with status 7 and the guest bugchecks with the same
+`0x1e`, in 5 of 6 runs. `--fileextractor-timeout` was documented as the time to
+finish extractions but only checked at the next `NtClose`. In `b63f466` it ends
+a running extraction at the return of its current call, and files are copied in
+1 MiB chunks. `sandboxd` passes it below the wait
+(`guests.FILEEXTRACTOR_STOP_TIMEOUT`). Every plugin, 12 runs on two guests:
+0 crashes, and with 1 MiB chunks no extraction reached the timeout.
+
+**Not reproduced since:** on 2026-10-20, older builds, the guest also crashed
+with every plugin but fileextractor. Not diagnosed.
 
 ### Admission holds forever — one line per second, no clone, no error
 
