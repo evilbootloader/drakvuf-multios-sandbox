@@ -64,7 +64,7 @@ one grep instead of reading a 3,000-line checklist or guessing at keywords.
 
 | | |
 |---|---|
-| `automation/` | **not the pipeline** — host provisioning and deployment assets: `network-setup.sh` (run by `sandboxd` at every daemon start), host-global `platform.env`, and the egress configs. The shell/C pipeline that lived here was deleted 2026-09-15 |
+| `automation/` | **not the pipeline** — host provisioning and deployment assets: `network-setup.sh` (run by `sandboxd` at every daemon start), host-global `platform.env`, the egress configs, and the Xen patch and GRUB config `make xen` installs. The shell/C pipeline that lived here was deleted 2026-09-15 |
 | `sandboxd/` | **the pipeline**, and the Dom0 orchestrator: clone, preconfig, trace, collect, destroy. Python, with its own tests |
 | `misc/` | **the Xen guest `.cfg` files** — golden, `_sandbox` templates, and `platform.cfg`. Not in `automation/` |
 | `platform/` | the FastAPI service, migrations, MinIO provisioning, UI, tests |

@@ -549,6 +549,49 @@ lvchange -ay -K vg-root/ubuntu-1-clone               # or override at activation
 **Fix.** `sudo`. Worth knowing because it appears mid-sequence in a chain of
 real errors and reads like another symptom of the same fault.
 
+### `update-grub2` exits 0 and `grub.cfg` does not change
+
+**Symptom.** `update-grub2` (or `update-grub`, the same `grub-mkconfig -o
+/boot/grub/grub.cfg`) returns 0, and `grub.cfg` keeps its old timestamp and
+its old Xen boot line. Run as `grub-mkconfig` to stdout, it prints only:
+
+```
+Sourcing file `/etc/default/grub'
+Sourcing file `/etc/default/grub.d/xen.cfg'
+```
+
+and no menu entry at all — observed 2026-10-20, four lines in total.
+
+**Cause.** `/etc/default/grub.d/xen.cfg` from the drakvuf-builds
+`xen-hypervisor` package checks for `drak-find-xen-defaults` and runs `exit 0`
+when it is missing. The file is *sourced*, so that `exit` ends `grub-mkconfig`
+before it writes anything, with status 0. Removing `xen-hypervisor` to install a
+Xen built from source removed `drak-find-xen-defaults` and kept `xen.cfg`, a
+conffile, which is exactly this state.
+
+**Fix.** Drop the check from `xen.cfg` — the operator commented it out on
+2026-10-21 — or install `automation/xen-grub.cfg` there, which `make xen` does.
+**Do not purge `xen-hypervisor` instead**: that deletes `xen.cfg`, and with it
+the line that makes GRUB boot Xen by default, so the next boot comes up as plain
+Ubuntu. Afterwards `sudo grep -c multiboot2 /boot/grub/grub.cfg` should be
+non-zero and the timestamp current.
+
+**Why it went unnoticed.** The old `grub.cfg` kept booting the new Xen, because
+its entries load `/xen.gz` and the new package replaced that file. Only a
+change to the boot line would have shown it.
+
+### `git apply` of the altp2m fix: `patch failed: xen/arch/x86/mm/altp2m.c:220`
+
+**Symptom.** The patch posted to xen-devel does not apply to the `xen`
+submodule at `RELEASE-4.20.1`.
+
+**Cause.** It was written against Xen's development branch, where
+`p2m_switch_vcpu_altp2m_by_id()` checks `idx >= d->nr_altp2m`; 4.20.1 checks
+`idx >= MAX_ALTP2M`. The change itself is identical.
+
+**Fix.** Apply `automation/xen-altp2m-pause-vcpu.patch`, the 4.20.1 backport,
+which is what `make xen` does.
+
 ### `~/drakvuf` did not exist, but the build continued anyway
 
 **Symptom.**
@@ -782,11 +825,56 @@ address appears in no config — but if the mTLS client certificate
 `/etc/default/grub.d/` says.
 
 **Cause.** `drakvuf-bundle` can rewrite the Xen command line on any
-`update-grub`.
+`update-grub`: its `xen.cfg` sources `drak-find-xen-defaults`, which computes
+Dom0's resources. Only while the bundle is installed — removed, the same file
+stops `update-grub` from writing anything, see
+[`update-grub2` exits 0 and `grub.cfg` does not change](#update-grub2-exits-0-and-grubcfg-does-not-change).
 
 **Fix.** Re-read the live boot line after **any** package operation that could
 trigger `update-grub`, not just after editing grub config. `CURRENT-STATE.md`
 §1.2 carries this as a standing WATCH.
+
+### Dom0 stops responding while DRAKVUF runs with `--parallel-events`
+
+**Symptom.** Dom0 hangs mid-trace: its vCPUs spin inside Xen and stop
+handling interrupts, so SSH, the console and the trace all stop together. Seen
+on a Linux HVM guest while a VNC client was connected to it.
+
+**Cause.** A deadlock in Xen 4.20.1's altp2m code. A vm_event response that
+switches a vCPU's altp2m view (`VM_EVENT_FLAG_ALTERNATE_P2M`, which DRAKVUF
+sends constantly) waits for that vCPU to be descheduled while holding the
+altp2m list lock. The vCPU needs the p2m lock to get off its pCPU, and a
+log-dirty write fault on a third vCPU holds the p2m lock while it waits for the
+altp2m list lock. QEMU tracking dirty VRAM for the VNC client is what produces
+the log-dirty faults. Parallel event processing answers far more responses
+while other vCPUs run, which is why it shows up there.
+
+**Fix.** Xen with the fix, `automation/xen-altp2m-pause-vcpu.patch` —
+installed on Dom0 2026-10-19, procedure `make xen`. The fix is
+[posted to xen-devel](https://lists.xenproject.org/archives/html/xen-devel/2026-10/msg01125.html).
+
+### The Windows guest bugchecks `0x1e` within a minute of tracing with all plugins
+
+**Symptom.** `xl dmesg` shows
+
+```
+(XEN) d96v2 VIRIDIAN GUEST_CRASH: 0x1e 0xffffffffc0000005 0 0x8 0
+```
+
+— `KMODE_EXCEPTION_NOT_HANDLED`, an access violation in kernel mode — on the
+Windows 11 23H2 sandbox, with every plugin loaded. DRAKVUF itself usually keeps
+running and exits at its timeout; once, 6 s in, it hung instead until killed.
+
+**Cause.** **Not diagnosed.** What is established, 2026-10-20: it happens with
+upstream DRAKVUF (`52df0bc8`) on upstream's libvmi **and** on
+`evilbootloader/libvmi`, and with the parallel-events build. None of the
+recorded `-a syscalls` runs crashed, so another plugin's hook is the suspect —
+and the guest also crashed in a run with everything but fileextractor, so not
+that one.
+
+**Fix.** None yet. Narrow it by leaving plugins out one at a time (`-x`), and
+check `xl dmesg` for `GUEST_CRASH` after every Windows run: the trace log ends
+normally and shows nothing.
 
 ### Admission holds forever — one line per second, no clone, no error
 
@@ -2141,6 +2229,35 @@ patch -p1 --forward -d "$SP" < automation/fakenet-divert-no.patch
 Then verify by content rather than by the patch's own output, since that output
 is what misled in the first place — the three `grep -c` checks are in the patch
 header and in runbook 13 step 6b.
+
+### `Hunk #1 FAILED at 137 (different line endings)` on `ssl_utils/__init__.py`
+
+**Symptom.** `fakenet-divert-no.patch` applies to three files and fails the
+fourth, change 6 — the SNI fix:
+
+```
+patching file fakenet/listeners/ssl_utils/__init__.py
+Hunk #1 FAILED at 137 (different line endings).
+```
+
+and `grep -c "Inadmissible SNI"` on the installed file is 0. Seen 2026-10-21
+in the development container, after the patch's header text was edited.
+
+**Cause.** Upstream's `ssl_utils/__init__.py` has CRLF line endings, so that
+hunk's 45 lines end in `\r\n` in the patch. An editor that normalises line
+endings when it saves rewrites them as `\n`, anywhere in the file — editing only
+the header was enough. The other three files are LF, so their hunks still apply
+and the run looks almost right.
+
+**Fix.** Restore the file from git and make the change byte for byte, or with
+an editor set to keep line endings. Check before committing:
+
+```sh
+grep -c $'\r' automation/fakenet-divert-no.patch    # 45
+```
+
+`make sandboxd` fails on the fourth `grep -c` if this slips through, which is
+why those counts are hard checks there rather than output to read.
 
 ### `OSError: [Errno 9] Bad file descriptor` from FakeNet's proxy, on HTTPS only
 

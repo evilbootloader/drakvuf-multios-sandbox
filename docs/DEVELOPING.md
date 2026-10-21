@@ -308,9 +308,16 @@ pin moved:
 ```bash
 # DOM0 -- Candidate: not yet run there
 cd /root/drakvuf-multios-sandbox
+git submodule sync --recursive
 git submodule update --init --recursive
 git -C drakvuf log --oneline -1
 ```
+
+**`sync` first, since 2026-10-21.** DRAKVUF's own `libvmi` submodule moved from
+upstream `libvmi/libvmi` to `evilbootloader/libvmi`, and an existing checkout
+keeps fetching from the URL it was cloned with — where the pinned commit does
+not exist. `sync` copies the new URL from `.gitmodules`; a fresh clone does not
+need it, and `make sandboxd` runs it either way.
 
 `--recursive` is required, not tidiness: DRAKVUF carries `xen`, `libvmi`,
 `volatility3` and `dwarf2json` of its own, and without them the tree does not
@@ -481,10 +488,14 @@ Candidate must never appear inside an `EVIDENCE` block.
   evens, so a CPU range written for the old nested topology resolves to a
   sparse set overlapping Dom0. Confirm with `xl cpupool-list -c` before
   changing a pinning.
-- **`update-grub` can silently rewrite the Xen boot line.** `drakvuf-bundle`
-  installs `/etc/default/grub.d/xen.cfg`, which computes Dom0's resources and
-  replaces what was set by hand. Re-read `xl info xen_commandline` after any
-  `update-grub`, including one run for an unrelated reason.
+- **`/etc/default/grub.d/xen.cfg` decides the Xen boot line, and has failed
+  silently both ways.** With `drakvuf-bundle` installed it computed Dom0's
+  resources and replaced what was set by hand; with the bundle removed it made
+  `update-grub2` write nothing and still exit 0. `make xen` installs
+  `automation/xen-grub.cfg` there instead. Re-read `xl info xen_commandline`
+  after any `update-grub2`, including one run for an unrelated reason, and
+  never purge `xen-hypervisor` — that deletes the file. `CURRENT-STATE.md` §1.2
+  has the WATCH.
 - **The DomU boots a kernel that lives on Dom0.** `apt upgrade` inside the
   guest updates `/boot` and the modules but not what Xen boots, so the domain
   comes back on the old kernel against new modules. Re-copy procedure:

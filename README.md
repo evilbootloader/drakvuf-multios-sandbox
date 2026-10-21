@@ -29,7 +29,7 @@ what replaced it.
 
 | | |
 |---|---|
-| **`automation/`** | host provisioning and deployment assets — `network-setup.sh` (the per-VLAN isolated networks), `platform.env`, and the egress configs. Not the pipeline; that is `sandboxd/` |
+| **`automation/`** | host provisioning and deployment assets — `network-setup.sh` (the per-VLAN isolated networks), `platform.env`, the egress configs, and the Xen patch and GRUB config `make xen` installs. Not the pipeline; that is `sandboxd/` |
 | **`sandboxd/`** | the Dom0 orchestrator. Claims jobs from the platform, admits them against real host capacity, runs the pipeline, uploads artifacts, and reports state. Python; runs in the foreground with **no systemd unit** |
 | **`platform/`** | the web tier: FastAPI, Postgres job queue, MinIO object store, server-rendered UI, Cloudflare Access at the edge and an internal CA inward. Runs in its own PVH DomU and **never executes a sample** — that asymmetry is what the whole trust boundary rests on |
 
@@ -70,7 +70,9 @@ guest state in `state/`; neither is git-tracked. See `profiles/README.md`,
 
 - `automation/` — host provisioning and deployment assets: `network-setup.sh`
   (executed by `sandboxd` at every daemon start), host-global `platform.env`,
-  and the egress configs (`torrc`, `fakenet.*`, `drakvuf-egress.target`). The
+  the egress configs (`torrc`, `fakenet.*`, `drakvuf-egress.target`) that
+  `make sandboxd` installs, and the Xen fix and GRUB config that `make xen`
+  installs (`xen-altp2m-pause-vcpu.patch`, `xen-grub.cfg`). The
   shell and C pipeline that used to live here was deleted 2026-09-15 — see
   `docs/architecture/automation-files.md`.
 - `sandboxd/` — the Dom0 orchestrator and its tests. **This is the analysis

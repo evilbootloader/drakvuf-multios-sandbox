@@ -51,7 +51,12 @@ Three files in `automation/` were **not** deleted and are live:
 - The egress assets — `torrc`, `fakenet.ini`, `fakenet.service`,
   `fakenet-requirements.txt`, `fakenet-divert-no.patch`,
   `drakvuf-egress.target`. `sandboxd/egress.py` names the first two as operator
-  config hints.
+  config hints, and `make sandboxd` installs all six.
+
+Added since, 2026-10-21, and not part of the old pipeline: the Xen install
+assets **`xen-altp2m-pause-vcpu.patch`**, the 4.20.1 backport of the altp2m
+deadlock fix, and **`xen-grub.cfg`**, the GRUB settings that boot it. `make xen`
+applies and installs both.
 
 ---
 
