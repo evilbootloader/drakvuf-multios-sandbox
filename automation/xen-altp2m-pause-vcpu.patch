@@ -1,0 +1,83 @@
+From 28c12e96da4266068d3cb02a0e739f8a8ba1c151 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Llu=C3=ADs=20Bessa?= <evilbootloader@proton.me>
+Date: Mon, 19 Oct 2026 23:10:23 +0000
+Subject: [PATCH] x86/altp2m: pause the vCPU before taking the altp2m list lock
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+p2m_switch_vcpu_altp2m_by_id() takes the altp2m list lock and then
+updates the vCPU's EPTP. For a vCPU other than current,
+vmx_vcpu_update_eptp() -> vmx_vmcs_enter() pauses it and waits in
+vcpu_sleep_sync() until it is off its pCPU, with the lock still held.
+
+A vCPU on its way off its pCPU may need the p2m lock: context_switch()
+updates its runstate area, which for an area registered by guest virtual
+address (VCPUOP_register_runstate_memory_area, as Linux does) is a copy
+to guest memory and needs a p2m lookup. A vCPU handling a log-dirty
+write fault holds the host p2m lock in p2m_change_type_one() and waits
+for the altp2m list lock in p2m_altp2m_propagate_change(). That closes
+a cycle:
+
+  dom0 vCPU, vm_event_resume() -> p2m_altp2m_check():
+    holds the altp2m list lock, waits for vCPU X to be descheduled
+  vCPU X, context_switch() -> update_runstate_area():
+    waits for the host p2m lock
+  vCPU Y, hvm_hap_nested_page_fault() -> p2m_change_type_one():
+    holds the host p2m lock, waits for the altp2m list lock
+
+A vm_event consumer switching views in its responses
+(VM_EVENT_FLAG_ALTERNATE_P2M) hits it with a Linux HVM guest while QEMU
+tracks dirty VRAM for a VNC client. The dom0 vCPUs involved spin in Xen
+and stop handling interrupts, and dom0 hangs.
+
+Pause the vCPU before taking the lock, like
+p2m_switch_domain_altp2m_by_id() does with domain_pause_except_self().
+The pause in vmx_vmcs_enter() then finds the vCPU already descheduled.
+Only vm_event_resume() switches another vCPU's view, the other callers
+switch current and are unaffected.
+
+Signed-off-by: Lluís Bessa <evilbootloader@proton.me>
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+Backport to RELEASE-4.20.1 of the patch posted to xen-devel:
+https://lists.xenproject.org/archives/html/xen-devel/2026-10/msg01125.html
+Only the context differs: 4.20.1 checks idx against MAX_ALTP2M where the
+development branch checks d->nr_altp2m.
+
+ xen/arch/x86/mm/altp2m.c | 15 +++++++++++++++
+ 1 file changed, 15 insertions(+)
+
+diff --git a/xen/arch/x86/mm/altp2m.c b/xen/arch/x86/mm/altp2m.c
+index 6fe1e9ed6b..25a82cedd7 100644
+--- a/xen/arch/x86/mm/altp2m.c
++++ b/xen/arch/x86/mm/altp2m.c
+@@ -203,6 +203,17 @@ bool p2m_switch_vcpu_altp2m_by_id(struct vcpu *v, unsigned int idx)
+     if ( idx >= MAX_ALTP2M )
+         return rc;
+ 
++    /*
++     * Updating another vCPU's EPTP (vmx_vmcs_enter()) waits until that vCPU
++     * is off its pCPU. Wait for it before taking the altp2m list lock: the
++     * vCPU may need the p2m lock to get off its pCPU (to update its runstate
++     * area in guest memory), while a vCPU handling a log-dirty fault holds the
++     * p2m lock and waits for the altp2m list lock in
++     * p2m_altp2m_propagate_change().
++     */
++    if ( v != current )
++        vcpu_pause(v);
++
+     altp2m_list_lock(d);
+ 
+     if ( d->arch.altp2m_eptp[idx] != mfn_x(INVALID_MFN) )
+@@ -213,6 +224,10 @@ bool p2m_switch_vcpu_altp2m_by_id(struct vcpu *v, unsigned int idx)
+     }
+ 
+     altp2m_list_unlock(d);
++
++    if ( v != current )
++        vcpu_unpause(v);
++
+     return rc;
+ }
+ 

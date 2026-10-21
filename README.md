@@ -175,6 +175,9 @@ ssh-keygen # Don't add a password to the key
 # Update Makefile lines with the key between the quotes and the domain.
 # RSA_KEY	:= 
 # SANDBOX_WEB :=
+cd ~/path/to/repo/
+make xen
+reboot
 make web_vm
 make web_sandbox
 make sandboxd

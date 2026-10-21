@@ -15,8 +15,55 @@ SANDBOXDIP := 192.168.1.6
 ANALYSIS_VM_PASS := malware
 ANALYSIS_VM_USER := user
 REPO_ROOT := $(shell pwd)
+# Xen boot line, see docs/CURRENT-STATE.md §1.2
+XEN_CMDLINE := dom0_mem=8192M,max:8192M dom0_max_vcpus=6 dom0_vcpus_pin=1 force-ept=1 ept=ad=0 hap_1gb=0 hap_2mb=0 altp2m=1 hpet=legacy-replacement smt=0 sched=credit
+# Parallel vm_event processing deadlocks dom0 without it:
+# https://lists.xenproject.org/archives/html/xen-devel/2026-10/msg01125.html
+XEN_PATCH := $(REPO_ROOT)/automation/xen-altp2m-pause-vcpu.patch
+# OVMF is built from tianocore's edk2 instead of the xenbits mirror Config.mk names
+OVMF_URL := https://github.com/tianocore/edk2.git
+OVMF_REVISION := 4dfdca63a93497203f197ec98ba20e2327e4afe4
 
-.PHONY: web_vm web_sandbox sandboxd
+.PHONY: xen web_vm web_sandbox sandboxd
+
+xen:
+	@echo "Building and installing Xen with the altp2m deadlock fix, then reboot into it"
+	set -e; \
+	sudo apt-get install -y wget git bcc bin86 gawk bridge-utils iproute2 libcurl4-openssl-dev bzip2 libpci-dev build-essential make gcc clang libc6-dev linux-libc-dev zlib1g-dev libncurses5-dev patch libvncserver-dev libssl-dev libsdl-dev iasl libbz2-dev e2fslibs-dev git-core uuid-dev ocaml libx11-dev bison flex ocaml-findlib xz-utils gettext libyajl-dev libpixman-1-dev libaio-dev libfdt-dev cabextract libglib2.0-dev autoconf automake libtool libjson-c-dev libfuse-dev liblzma-dev autoconf-archive kpartx python3-dev python3-pip golang libsystemd-dev nasm ninja-build llvm lld; \
+	sudo apt-get install -y python3-pefile python3-construct; \
+	cd $(REPO_ROOT); \
+	git submodule update --init drakvuf; \
+	cd drakvuf; \
+	git submodule update --init xen; \
+	cd xen; \
+	git apply --reverse --check $(XEN_PATCH) 2>/dev/null || git apply $(XEN_PATCH); \
+	sed -i -e 's|^OVMF_UPSTREAM_URL ?= .*|OVMF_UPSTREAM_URL ?= $(OVMF_URL)|' \
+		-e 's|^OVMF_UPSTREAM_REVISION ?= .*|OVMF_UPSTREAM_REVISION ?= $(OVMF_REVISION)|' Config.mk; \
+	grep -qx 'OVMF_UPSTREAM_REVISION ?= $(OVMF_REVISION)' Config.mk; \
+	./configure --enable-githttp --enable-systemd --enable-ovmf --disable-pvshim; \
+	make -j$$(nproc) dist-xen; \
+	make -j$$(nproc) dist-tools; \
+	make -j$$(nproc) debball; \
+	sudo apt-get remove -y 'xen*' 'libxen*' || true; \
+	sudo dpkg -i dist/xen*.deb; \
+	# The boot line and Xen as the default entry, in the file grub-mkconfig reads last \
+	sudo install -d /etc/default/grub.d; \
+	sed 's|@XEN_CMDLINE@|$(XEN_CMDLINE)|' $(REPO_ROOT)/automation/xen-grub.cfg | sudo tee /etc/default/grub.d/xen.cfg >/dev/null; \
+	sudo sed -i '/^GRUB_CMDLINE_XEN_DEFAULT=/d' /etc/default/grub; \
+	echo "/usr/local/lib" | sudo tee /etc/ld.so.conf.d/xen.conf >/dev/null; \
+	sudo ldconfig; \
+	grep -qxF "none /proc/xen xenfs defaults,nofail 0 0" /etc/fstab || \
+		echo "none /proc/xen xenfs defaults,nofail 0 0" | sudo tee -a /etc/fstab >/dev/null; \
+	for m in xen-evtchn xen-privcmd xen-gntdev; do \
+		grep -qx "$$m" /etc/modules || echo "$$m" | sudo tee -a /etc/modules >/dev/null; \
+	done; \
+	sudo systemctl enable xencommons.service; \
+	sudo systemctl enable xen-qemu-dom0-disk-backend.service; \
+	sudo systemctl enable xen-init-dom0.service; \
+	sudo systemctl enable xenconsoled.service; \
+	sudo update-grub2; \
+	sudo grep -q "multiboot2.*altp2m=1" /boot/grub/grub.cfg || { echo "update-grub2 wrote no Xen entry"; exit 1; }; \
+	echo "Xen installed, reboot to start it"
 
 web_vm:
 	@echo "Installing $(VM)..."
