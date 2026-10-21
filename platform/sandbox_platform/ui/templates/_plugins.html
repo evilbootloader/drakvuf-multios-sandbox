@@ -54,8 +54,8 @@
     <input type="number" name="timeout" value="{{ budget.timeout }}" min="10" max="600">
   </label>
   <label>
-    <input type="checkbox" name="disable_sysret" {% if budget.disable_sysret %}checked{% endif %}>
-    <code>--disable-sysret</code> — faster, but loses syscall return values
+    <input type="checkbox" name="disable_sysret">
+    <code>--disable-sysret</code> — It was faster, now is not needed
   </label>
   <p class="note">
     With this on you see that the sample called <code>openat</code> and with

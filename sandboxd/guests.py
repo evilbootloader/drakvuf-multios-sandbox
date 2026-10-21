@@ -905,7 +905,8 @@ def argv_trace(job: Job, component: str | None = None) -> list[str]:
     # this makes the answer the one bare metal gives. Every OS, every trace.
     argv = [
         "drakvuf", "-r", str(job.profile), "-s", "-d", str(job.domid),
-        "-i", str(job.injection_pid), "-m", mode,
+        "-i", str(job.injection_pid), "-m", mode, "--parallel-events",
+        "--sysret-mode", "kernel", 
     ]
 
     if job.kind is SampleKind.APK:
