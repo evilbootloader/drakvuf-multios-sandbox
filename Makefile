@@ -338,12 +338,15 @@ sandboxd:
 	set -e; \
 	xl domid $(VM) || xl create $(CFG) || echo "Run make web_vm and make web_sandbox"; \
 	cd $(REPO_ROOT); \
+	git submodule sync; \
 	git submodule update --init; \
 	cd drakvuf; \
+	# libvmi moved to the evilbootloader fork, sync brings an existing checkout along \
+	git submodule sync; \
 	git submodule update --init; \
 	cd libvmi; \
 	autoreconf -vif; \
-	./configure --disable-kvm --disable-bareflank --disable-file; \
+	./configure --enable-page-cache=8192 --disable-kvm --disable-bareflank --disable-file; \
 	make; \
 	make install; \
 	if [ -n "$$LD_LIBRARY_PATH" ]; then \
@@ -357,7 +360,8 @@ sandboxd:
 	python3 ./setup.py build; \
 	sudo python3 ./setup.py install; \
 	cd $(REPO_ROOT)/drakvuf; \
-	meson setup build --native-file llvm.ini; \
+	# threadsafety: required by --parallel-events \
+	meson setup build --native-file llvm.ini -Dthreadsafety=true; \
 	ninja -C build; \
 	ninja -C build install; \
 	mkdir /etc/sandboxd/tls -p; \

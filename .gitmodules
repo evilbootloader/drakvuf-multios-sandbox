@@ -2,6 +2,7 @@
 	path = drakvuf
 	url = https://github.com/evilbootloader/drakvuf.git
 	ignore = untracked
+	branch = main
 [submodule "sandboxd/data/protections-artifacts"]
 	path = sandboxd/data/protections-artifacts
 	url = https://github.com/elastic/protections-artifacts.git
