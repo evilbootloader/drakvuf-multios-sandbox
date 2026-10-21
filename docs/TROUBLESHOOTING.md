@@ -85,6 +85,33 @@ rather than the cleaner severity floor. Re-test on a shellcheck upgrade; if it
 starts working it is strictly better, because it keeps checks live for code
 written after the baseline.
 
+### `git push` refused with `SECRET DETECTED`, and the re-run shows nothing
+
+**Symptom.** The pre-push hook prints `SECRET DETECTED in the working tree.
+Re-run for detail:` and a `trufflehog filesystem … --exclude-paths=/tmp/tmp.…`
+command. Running that command fails on the exclude file, so the finding is
+never seen. 2026-10-21, the first push after trufflehog was installed in the
+development container — until then the generic pass had been skipped.
+
+**Cause.** Three things in `scripts/check-secrets.sh`:
+
+- trufflehog's output went to `/dev/null`, and the suggested re-run named the
+  exclude list's temp file, which the script's `trap` deletes on exit;
+- any non-zero exit read as a finding, so a scanner that crashed would have
+  produced the same message;
+- the finding itself was a false positive: line 226 of
+  `misc/Artifacts/source-manifest.xml`, a public git revision in the BlissOS
+  repo manifest. Its line names the `ag-github` remote, and the first 20 hex
+  digits of the revision match GitHub's OAuth client id format — 14 unverified
+  `GitHubOauth2` hits, all on that line. The history scan does not flag it.
+
+**Fix.** The script now prints each finding as detector and `file:line`, plus
+the commit for history — never the value, since CI logs the same run. It tells
+a scanner failure (`trufflehog FAILED (exit N) … it was not checked`) apart
+from exit 183, a finding, and it excludes that manifest from both scans. To see
+the raw result by hand, run `trufflehog filesystem . --results=verified,unknown`
+without the exclusions.
+
 ### `cd platform && .venv/bin/python -m pytest -q` fails or hangs in the dev container
 
 **Symptom.** The command `CLAUDE.md` documents does not work. Postgres refuses

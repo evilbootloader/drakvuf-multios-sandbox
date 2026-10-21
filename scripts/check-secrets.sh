@@ -66,6 +66,15 @@ if [ -z "$TH" ]; then
     note "        | tar xz -C \"\$HOME/.local/bin\" trufflehog"
 else
     EXCLUDES="$(mktemp)"
+    THOUT="$(mktemp)"
+    # Every line below is compiled as a regex, comments included, so explain an
+    # exclusion here rather than there.
+    #
+    # misc/Artifacts/source-manifest.xml is the BlissOS build's repo manifest:
+    # 1,488 public git revisions and nothing else. One of them sits on a line
+    # naming the `ag-github` remote, and its first 20 hex digits read as a GitHub
+    # OAuth client id -- 14 unverified GitHubOauth2 hits on 2026-10-21, every one
+    # line 226. The history scan does not flag it.
     cat > "$EXCLUDES" <<'EOF'
 ^\.git/
 ^platform/\.venv/
@@ -80,23 +89,45 @@ __pycache__/
 # Excluded for time, not coverage -- *.iso is in .gitignore, so git cannot
 # take them however carefully they are scanned.
 \.iso$
+^misc/Artifacts/source-manifest\.xml$
 EOF
 
+    # What was found, as detector and file:line -- never the value. CI runs this
+    # too, and a real secret must not be copied into its log on the way to being
+    # reported. The "Re-run for detail" this replaces named $EXCLUDES, which the
+    # trap below had deleted by the time anyone ran it, so the finding was never
+    # shown at all.
+    report() {
+        sed -n \
+            -e 's/.*"commit":"\([0-9a-f]*\)".*"file":"\([^"]*\)".*"line":\([0-9]*\).*"DetectorName":"\([^"]*\)".*/    \4  \2:\3  commit \1/p' \
+            -e 's/.*"file":"\([^"]*\)".*"line":\([0-9]*\).*"DetectorName":"\([^"]*\)".*/    \3  \1:\2/p' \
+            "$THOUT" | sort -u >&2
+    }
+
+    # --fail exits 183 on a finding. Anything else non-zero is trufflehog itself
+    # failing, which used to be reported as a secret too.
+    trufflehog_result() {
+        case "$1" in
+            0) ;;
+            183) fail "SECRET DETECTED in $2:"; report ;;
+            *) fail "trufflehog FAILED (exit $1) scanning $2 -- it was not checked." ;;
+        esac
+    }
+
     note "trufflehog: scanning the working tree..."
-    if ! "$TH" filesystem . --exclude-paths="$EXCLUDES" \
-            --results=verified,unknown --no-update --fail >/dev/null 2>&1; then
-        fail "SECRET DETECTED in the working tree. Re-run for detail:"
-        fail "  $TH filesystem . --exclude-paths=$EXCLUDES --results=verified,unknown"
-    fi
+    rc=0
+    "$TH" filesystem . --exclude-paths="$EXCLUDES" \
+        --results=verified,unknown --no-update --fail --json >"$THOUT" 2>/dev/null || rc=$?
+    trufflehog_result "$rc" "the working tree"
 
     if [ "$MODE" != "--tree" ]; then
         note "trufflehog: scanning git history..."
-        if ! "$TH" git "file://$REPO_ROOT" \
-                --results=verified,unknown --no-update --fail >/dev/null 2>&1; then
-            fail "SECRET DETECTED in git history. Re-run for detail:"
-            fail "  $TH git file://$REPO_ROOT --results=verified,unknown"
+        rc=0
+        "$TH" git "file://$REPO_ROOT" --exclude-paths="$EXCLUDES" \
+            --results=verified,unknown --no-update --fail --json >"$THOUT" 2>/dev/null || rc=$?
+        trufflehog_result "$rc" "git history"
+        [ "$rc" -ne 183 ] ||
             fail "  A secret already in history needs a rewrite AND rotation, not an edit."
-        fi
     fi
 fi
 
@@ -140,7 +171,7 @@ note "project patterns: scanning what git would take..."
 ALLOWED='REDACTED|<TEAM>|<AUD>|EXAMPLE|example\.com|xxxx|devrootkey|devrootpassphrase'
 
 FILES="$(mktemp)"
-trap 'rm -f "$FILES" "${EXCLUDES:-}"' EXIT INT TERM
+trap 'rm -f "$FILES" "${EXCLUDES:-}" "${THOUT:-}"' EXIT INT TERM
 # NUL-separated: filenames here contain spaces on purpose -- `benign sample.sh`
 # is a deliberate test case for the hostile-filename path.
 git ls-files --cached --others --exclude-standard -z | tr '\0' '\n' > "$FILES"
