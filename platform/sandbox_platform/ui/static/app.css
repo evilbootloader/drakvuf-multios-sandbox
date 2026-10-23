@@ -475,8 +475,16 @@ a.proc:hover { border-color: var(--fg-faint); }
 .exit { font: 500 0.75rem/1.6 var(--mono); color: var(--fg-muted); }
 .exit.error { color: var(--red); }
 
-.ttps, .requests, .yara { list-style: none; margin: 0; padding: 0; }
-.ttps li, .requests li, .yara li { padding: 0.5rem 0; border-bottom: 1px solid var(--line-soft); }
+.ttps, .requests, .yara, .falco { list-style: none; margin: 0; padding: 0; }
+.ttps li, .requests li, .yara li, .falco li { padding: 0.5rem 0; border-bottom: 1px solid var(--line-soft); }
+/* A Falco rule's rendered output: a path or command line the sample chose,
+   which can be one unbroken string of any length. */
+.falco-output { word-break: break-all; margin-top: 0.2rem; }
+.tag[data-kind="priority"] { color: var(--fg); }
+.tag[data-priority="emergency"], .tag[data-priority="alert"],
+.tag[data-priority="critical"], .tag[data-priority="error"] { border-color: var(--red-dim); }
+.falco-coverage { margin-top: 0.75rem; }
+.falco-coverage table { margin-top: 0.5rem; }
 .dl.small { font-size: 0.82rem; margin-top: 0.3rem; }
 
 /* The process tree as a list: <details> per parent, no script. */

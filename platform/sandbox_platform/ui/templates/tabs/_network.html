@@ -29,11 +29,13 @@
   {{ unreadable() }}
 {% elif not report %}
   {% include "tabs/_pending.html" %}
-{% elif not (report.dns_queries or report.connections or report.http_requests or report.cracked_urls) %}
+{% elif not (report.dns_queries or report.connections or report.http_requests or report.cracked_urls
+             or report.unix_sockets or report.falco_network) %}
 <div class="empty">
   <strong>The report attributes no network activity to any process.</strong>
-  Connections and DNS come from <code>socketmon</code>, HTTP requests from
-  <code>apimon</code>; neither was among this run's plugins, or the sample made
+  Connections and DNS come from <code>socketmon</code> on Windows and
+  <code>unixsocketmon</code> on Linux, HTTP requests from <code>apimon</code>
+  or <code>libmon</code>; none was among this run's plugins, or the sample made
   no such call. The capture above is unaffected.
 </div>
 {% else %}
@@ -50,6 +52,22 @@
 </table></div>
 {% endif %}
 
+{% if report.falco_network %}
+<h2 style="margin-top:1.5rem">Falco network findings <span class="count">{{ report.falco_network | length }}</span></h2>
+<ul class="falco">
+  {% for f in report.falco_network %}
+  <li>
+    <div>
+      <span class="tag" data-kind="priority" data-priority="{{ f.priority | lower }}">{{ f.priority }}</span>
+      <strong>{{ f.rule }}</strong> {{ procs(f.process_seqids) }}
+      {% if f.count > 1 %}<span class="count">×{{ f.count }}</span>{% endif %}
+    </div>
+    <div class="mono dim falco-output">{{ f.output }}</div>
+  </li>
+  {% endfor %}
+</ul>
+{% endif %}
+
 {% if report.connections %}
 <h2 style="margin-top:1.5rem">Connections <span class="count">{{ report.connections | length }}</span></h2>
 <div class="scroll-x"><table class="rows">
@@ -58,7 +76,25 @@
   {% for c in report.connections %}
     <tr>
       <td class="mono">{{ c.protocol }}</td>
-      <td class="mono">{{ c.remote_ip }}{% if c.remote_port is not none %}:{{ c.remote_port }}{% endif %}</td>
+      <td class="mono">{{ c.remote_ip }}{% if c.remote_port is not none %}:{{ c.remote_port }}{% endif %}
+
+{% if report.unix_sockets %}
+<h2 style="margin-top:1.5rem">Unix sockets <span class="count">{{ report.unix_sockets | length }}</span></h2>
+<div class="scroll-x"><table class="rows">
+  <thead><tr><th>Peer</th><th>Own</th><th>Messages</th><th>Bytes</th><th>By</th></tr></thead>
+  <tbody>
+  {% for u in report.unix_sockets %}
+    <tr>
+      <td class="mono filename">{{ u.peer_path or 'unnamed' }}</td>
+      <td class="mono dim">{{ u.path or 'unnamed' }}</td>
+      <td class="mono">{{ u.messages }}</td>
+      <td class="mono">{{ u.bytes }}</td>
+      <td>{{ procs(u.process_seqids) }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table></div>
+{% endif %}</td>
       <td class="dim">{{ c.service or '' }}</td>
       <td class="mono dim">{{ c.local_ip }}{% if c.local_port is not none %}:{{ c.local_port }}{% endif %}</td>
       <td>{{ procs(c.process_seqids) }}</td>

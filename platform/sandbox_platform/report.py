@@ -175,6 +175,16 @@ class Connection(_Lenient):
         return PORT_NAMES.get(self.remote_port, "") if self.remote_port else ""
 
 
+class UnixSocket(_Lenient):
+    """Messages a process sent on a Unix-domain socket (unixsocketmon):
+    its own path and the peer's, either of which may be unnamed."""
+    path: str = ""
+    peer_path: str = ""
+    messages: int = 0
+    bytes: int = 0
+    process_seqids: list[int] = Field(default_factory=list)
+
+
 class DnsQuery(_Lenient):
     domain: str
     process_seqids: list[int] = Field(default_factory=list)
@@ -214,6 +224,51 @@ class RegistryKey(_Lenient):
     process_seqids: list[int | None] = Field(default_factory=list)
 
 
+class FalcoFinding(_Lenient):
+    """A Falco rule that matched, once per process: the first match's
+    rendered output and how many times it matched there."""
+    rule: str
+    priority: str = ""
+    source: str = ""
+    tags: list[str] = Field(default_factory=list)
+    output: str = ""
+    count: int = 1
+    first_seen: float | None = None
+    pid: int | None = None
+    process_seqids: list[int] = Field(default_factory=list)
+
+    @property
+    def network(self) -> bool:
+        return "network" in self.tags
+
+    @property
+    def attck(self) -> list[str]:
+        """Technique ids among the tags (`T1059`, `T1059.004`); the rest
+        are Falco's own categories."""
+        return [t for t in self.tags if t[:1] == "T" and t[1:2].isdigit()]
+
+
+class FalcoUndetermined(_Lenient):
+    rule: str
+    count: int = 0
+    missing: list[str] = Field(default_factory=list)
+
+
+class FalcoCoverage(_Lenient):
+    """What the Falco pass could evaluate. A rule that is undetermined did
+    not fire because the trace could not answer it, which is not the same as
+    the behaviour not happening."""
+    rules_evaluated: int = 0
+    rules_unsupported: int = 0
+    rules_disabled: int = 0
+    alerts_dropped: int = 0
+    scope: str | None = None
+    sysret: bool | None = None
+    procmon: bool | None = None
+    libmon: bool | None = None
+    undetermined: list[FalcoUndetermined] = Field(default_factory=list)
+
+
 class Report(_Lenient):
     schema_version: int = 1
     startup: Startup = Field(default_factory=Startup)
@@ -225,14 +280,21 @@ class Report(_Lenient):
     modified_files: list[FileRef] = Field(default_factory=list)
     deleted_files: list[FileRef] = Field(default_factory=list)
     connections: list[Connection] = Field(default_factory=list)
+    unix_sockets: list[UnixSocket] = Field(default_factory=list)
     dns_queries: list[DnsQuery] = Field(default_factory=list)
     memdumps: list[MemdumpGroup] = Field(default_factory=list)
     registry_set_values: list[RegistryValue] = Field(default_factory=list)
     registry_created_keys: list[RegistryKey] = Field(default_factory=list)
     registry_deleted_keys: list[RegistryKey] = Field(default_factory=list)
     registry_deleted_values: list[RegistryValue] = Field(default_factory=list)
+    falco: list[FalcoFinding] = Field(default_factory=list)
+    falco_coverage: FalcoCoverage | None = None
 
     # -- derived, for the templates ------------------------------------------
+
+    @property
+    def falco_network(self) -> list[FalcoFinding]:
+        return [f for f in self.falco if f.network]
 
     @property
     def registry_autostart(self) -> list[RegistryValue | RegistryKey]:
@@ -323,7 +385,7 @@ class Report(_Lenient):
         if self.processes or self.modified_files or self.deleted_files:
             filled.add("behaviour")
         if (self.connections or self.dns_queries or self.http_requests
-                or self.cracked_urls):
+                or self.cracked_urls or self.unix_sockets or self.falco_network):
             filled.add("network")
         if self.memdumps:
             filled.add("memory")

@@ -163,6 +163,62 @@
 </p>
 {% endif %}
 
+{#
+  Falco's rules (falcosecurity/rules, stable and incubating, plus the
+  sandbox's own over libmon) evaluated against the trace of the sample's
+  process subtree by sandboxd's postprocessing. One line per rule and process.
+  The output is the rule's own format filled from the trace -- paths and
+  command lines the sample chose, so escaped like everything else.
+
+  Undetermined is the part to read before "nothing matched": a rule the trace
+  could not answer (no return values, a process older than the trace) is
+  counted there, never reported as a match.
+#}
+{% if report.falco or report.falco_coverage %}
+<h2 style="margin-top:1.5rem">Falco rules <span class="count">{{ report.falco | length }}</span></h2>
+{% if report.falco %}
+<ul class="falco">
+  {% for f in report.falco %}
+  <li>
+    <div>
+      <span class="tag" data-kind="priority" data-priority="{{ f.priority | lower }}">{{ f.priority }}</span>
+      <strong>{{ f.rule }}</strong>
+      {{ procs(f.process_seqids) }}
+      {% if f.count > 1 %}<span class="count">×{{ f.count }}</span>{% endif %}
+    </div>
+    <div class="mono dim falco-output">{{ f.output }}</div>
+    <div>{{ tags(f.attck, 'attck') }}</div>
+  </li>
+  {% endfor %}
+</ul>
+{% else %}
+<p class="dim">No Falco rule matched the sample's processes. That is an
+  observation about this trace, not a verdict.</p>
+{% endif %}
+{% set cov = report.falco_coverage %}
+{% if cov %}
+<details class="falco-coverage">
+  <summary class="dim">
+    {{ cov.rules_evaluated }} rules evaluated{% if cov.undetermined %},
+    {{ cov.undetermined | length }} undetermined for lack of data{% endif %}
+    {%- if cov.sysret is false %} · this run had no syscall return values{% endif %}
+    {%- if cov.procmon is false %} · procmon did not run, so no exec rule could match{% endif %}
+  </summary>
+  {% if cov.undetermined %}
+  <table class="rows">
+    <thead><tr><th>Rule</th><th>Times</th><th>Missing</th></tr></thead>
+    <tbody>
+    {% for u in cov.undetermined %}
+      <tr><td>{{ u.rule }}</td><td class="mono">{{ u.count }}</td>
+          <td class="mono dim">{{ u.missing | join(' ') }}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+</details>
+{% endif %}
+{% endif %}
+
 
 
 {% else %}

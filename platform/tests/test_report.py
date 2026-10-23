@@ -283,9 +283,60 @@ def test_the_capture_alone_fills_the_network_tab(client, conn, put_object):
     assert "capture.pcap" in body and "attributes no network activity" in body
 
 
+def falco_sections() -> dict:
+    """What get_falco_info and get_socket_info add for a Linux run."""
+    return {
+        "falco": [
+            {"rule": "Read sensitive file untrusted", "priority": "WARNING", "source": "syscall",
+             "tags": ["maturity_stable", "host", "filesystem", "mitre_credential_access", "T1555"],
+             "output": "Sensitive file opened for reading | file=/etc/shadow process=cat",
+             "first_seen": 1.5, "count": 3, "pid": 7208, "process_seqids": [4]},
+            {"rule": "Unexpected UDP Traffic", "priority": "NOTICE", "source": "syscall",
+             "tags": ["maturity_incubating", "network", "mitre_exfiltration", "TA0011"],
+             "output": "Unexpected UDP Traffic Seen | connection=172.16.3.10:5353->198.51.100.7:53",
+             "first_seen": 2.0, "count": 1, "pid": 7208, "process_seqids": [4]},
+        ],
+        "falco_coverage": {"rules_evaluated": 60, "rules_unsupported": 0, "rules_disabled": 0,
+                           "scope": "sample", "sysret": True, "procmon": True, "libmon": True,
+                           "undetermined": [{"rule": "Run shell untrusted", "count": 2,
+                                             "missing": ["proc.pexe", "proc.pcmdline"]}]},
+        "unix_sockets": [{"path": "", "peer_path": "/run/dbus/system_bus_socket",
+                          "messages": 12, "bytes": 4096, "process_seqids": [4]}],
+    }
+
+
+def test_falco_findings_and_unix_sockets_render(client, conn, put_object):
+    job_id = _job_with_report(conn, put_object, sample_report(**falco_sections()), target_os="ubuntu")
+
+    overview = client.get(f"/ui/jobs/{job_id}/tabs?tab=overview").text
+    assert "Read sensitive file untrusted" in overview and "file=/etc/shadow" in overview
+    assert "×3" in overview and "T1555" in overview
+    # Falco's own categories are not technique tags
+    assert ">maturity_stable<" not in overview
+    assert "60 rules evaluated" in overview and "Run shell untrusted" in overview
+
+    network = client.get(f"/ui/jobs/{job_id}/tabs?tab=network").text
+    assert "Falco network findings" in network and "Unexpected UDP Traffic" in network
+    assert "Read sensitive file untrusted" not in network
+    assert "/run/dbus/system_bus_socket" in network
+
+
+def test_unix_sockets_alone_fill_the_network_tab(client, conn, put_object):
+    doc = sample_report(unix_sockets=falco_sections()["unix_sockets"])
+    for key in ("connections", "dns_queries", "http_requests", "cracked_urls"):
+        doc[key] = []
+    job_id = _job_with_report(conn, put_object, doc, with_capture=False)
+    page = client.get(f"/ui/jobs/{job_id}").text
+    start = page.index('<nav class="tabs"')
+    nav = page[start:page.index("</nav>", start)]
+    anchor = {chunk.split(">", 1)[1].split("<", 1)[0]: chunk
+              for chunk in nav.split("<a ")[1:]}
+    assert "data-empty" not in anchor["Network"]
+
+
 @pytest.mark.parametrize("where", [
     "process_name", "process_args", "ttp", "domain", "url", "path", "header",
-    "filename", "dump_reason", "exit_code_str", "registry",
+    "filename", "dump_reason", "exit_code_str", "registry", "falco", "unix_socket",
 ])
 def test_hostile_report_text_renders_inert(client, conn, put_object, where):
     """Every string in the report is the sample's. The name reaches the page
@@ -319,6 +370,14 @@ def test_hostile_report_text_renders_inert(client, conn, put_object, where):
         doc["registry_set_values"][0]["key"] = HOSTILE
         doc["registry_set_values"][0]["value_name"] = HOSTILE
         doc["registry_set_values"][0]["value"] = HOSTILE
+    elif where == "falco":
+        doc.update(falco_sections())
+        for finding in doc["falco"]:
+            finding["output"] = HOSTILE
+        doc["falco"][0]["rule"] = HOSTILE
+    elif where == "unix_socket":
+        doc.update(falco_sections())
+        doc["unix_sockets"][0]["peer_path"] = HOSTILE
     job_id = _job_with_report(conn, put_object, doc)
 
     pages = "".join(client.get(f"/ui/jobs/{job_id}/tabs?tab={t}").text
