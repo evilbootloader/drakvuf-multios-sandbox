@@ -25,7 +25,7 @@
     <tr>
       <td>
         <input type="checkbox" name="plugins" value="{{ plugin.name }}"
-               {% if plugin.default %}checked{% endif %}>
+               {% if plugin.name in defaults %}checked{% endif %}>
       </td>
       <td class="mono">{{ plugin.name }}{% if plugin.heavy %} <span title="slow; may not finish inside the trace window">▲</span>{% endif %}</td>
       <td>{{ plugin.describes }}</td>

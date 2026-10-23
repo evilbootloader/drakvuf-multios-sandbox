@@ -19,8 +19,9 @@ reason attached:
     that had been there and confirming runs still traced. The injector help
     does not say this. If a sample ever traces empty with a successful
     WriteFile, check the staged file's mode first -- that is the assumption.
-  * **Android traces with `-F --disable-sysret`; Ubuntu does not.** A property
-    of the guest, not a preference: every binder IPC is an `ioctl()` and every
+  * **Android traces with `-F --disable-sysret`; Ubuntu does not** (it did
+    from 2026-08-29 to 2026-10-23, `default_trace_options` says why it
+    stopped). On Android it is a property of the guest, not a preference: every binder IPC is an `ioctl()` and every
     system service runs a Looper on `epoll_pwait`, so an idle BlissOS clone
     emits thousands of events before anything is analysed. Without these an
     APK installed and launched correctly and still could not finish drawing
@@ -64,7 +65,7 @@ from enum import Enum
 from pathlib import Path
 from . import config
 
-from .postprocessing.paths import DUMPS_DIR, EXTRACTED_DIR, IPT_DIR
+from .postprocessing.paths import DUMPS_DIR, EXTRACTED_DIR, IPT_DIR, PROCDUMPS_DIR
 
 log = logging.getLogger("sandboxd.guests")
 
@@ -73,6 +74,8 @@ log = logging.getLogger("sandboxd.guests")
 # platform's catalogue spells it (`catalogue.PLUGINS`).
 IPT_PLUGIN = "ipt"
 UNIXSOCKETMON_PLUGIN = "unixsocketmon"
+PROCMON_PLUGIN = "procmon"
+PROCDUMP2_PLUGIN = "procdump2"
 MEMDUMP_PLUGIN = "memdump"
 FILEEXTRACTOR_PLUGIN = "fileextractor"
 APIMON_PLUGIN = "apimon"
@@ -83,6 +86,9 @@ RPCMON_PLUGIN = "rpcmon"
 # option and the file format are its own: `--so-hooks-list`, keyed by shared
 # object rather than by DLL.
 LIBMON_PLUGIN = "libmon"
+# `--procmon-envs-list`, read by `argv_trace` and by falco_analysis's config,
+# which must agree on which variables procmon printed.
+PROCMON_ENVS_LIST = Path(__file__).parent.absolute() / "data" / "procmon-envs.txt"
 
 
 class TargetOs(str, Enum):
@@ -152,21 +158,33 @@ class TraceOptions:
         return flags
 
 
-# The literals the per-OS trace scripts passed, carried across verbatim.
-# Identical; kept per-OS rather than shared because the plugin matrix is per-guest
+# Per guest, rather than shared, because the plugin matrix is per-guest
 # (`drakvuf_plugin_os_support` in plugins.h) and a shared tuple would invite a
-# Windows-only plugin into a Linux list.
+# Windows-only plugin into a Linux list. They began as the literals the per-OS
+# trace scripts passed.
 #
 # **Still load-bearing after DRAFT-052.** A job now carries its own selection
 # (`Lease.plugins`), but these remain what a job that selected nothing gets --
 # a row queued before migration 0010, or a submitter who ticked no boxes. See
 # `stages._trace_options`, which overlays the selection onto these rather than
 # replacing them.
-_LINUX_PLUGINS = ("syscalls", "filetracer", "fileextractor", "memdump")
+#
+# **Every plugin the platform offers but `ipt` and `hidsim`, on every guest**
+# (operator, 2026-10-23) -- the submit form pre-ticks the same set
+# (`catalogue.Plugin.default`). `ipt` records every instruction and is
+# selected per job; `hidsim` moves the desktop's mouse, and under it most of
+# the trace is the desktop handling that input rather than the sample.
+# procmon is what the process tree and every Falco exec rule rest on, and
+# unixsocketmon what fills the Linux Network tab; neither costs measurable
+# throughput (CURRENT-STATE, 2026-10-23).
+_LINUX_PLUGINS = ("syscalls", "filetracer", "fileextractor", "memdump",
+                  "procmon", "procdump2", "cpuidmon", "debugmon",
+                  "ptracemon", "ebpfmon", "unixsocketmon")
 
 # Ubuntu's set is the shared Linux one plus `libmon`, added 2026-09-26.
 #
-# **Android is excluded on evidence, not on suspicion** (operator, 2026-09-26).
+# **Android is excluded on evidence, not on suspicion** (operator, 2026-09-26),
+# and stays so under "every plugin" (2026-10-23): libmon is for glibc Linux.
 # The guest is BlissOS, so the linker is bionic. `readelf --dyn-syms` on its
 # bootstrap linker (`system/bin/bootstrap/linker64`, inside `system_a.img`)
 # returns 27 entries and **`_r_debug` is not one of them**:
@@ -209,8 +227,12 @@ _ANDROID_PLUGINS = _LINUX_PLUGINS
 # **It is `heavy` in `catalogue.py` and this is the change that makes ~1,330
 # hooks start firing for real.** Cost on a Windows trace is unmeasured; see the
 # CURRENT-STATE row.
+#
+# The rest from 2026-10-23, as on Linux: every plugin offered but `ipt` and
+# `hidsim`.
 _WINDOWS_PLUGINS = ("syscalls", "filetracer", "fileextractor", "memdump",
-                    "apimon")
+                    "apimon", "procmon", "procdump2", "cpuidmon", "debugmon",
+                    "regmon", "socketmon", "tlsmon", "rootkitmon")
 
 
 # A plugin name as `-a` will accept it. Restrictive on purpose: this value
@@ -300,32 +322,31 @@ def default_trace_options(os_: TargetOs, kind: SampleKind) -> TraceOptions:
         # 4.14+; Dom0 runs 4.20.1, and Android has run it evidenced since
         # 2026-08-17.
         #
-        # **`--disable-sysret` DOES cost information, and was adopted anyway on
-        # 2026-08-29.** It stops hooking syscall returns, so the trace still
-        # shows that a sample called openat/connect/execve and with what
-        # arguments, but not whether any of it succeeded and not the fd or
-        # handle that came back. Attempted behaviour stays visible; outcomes do
-        # not.
+        # **Return values are kept again, from 2026-10-23.** `--disable-sysret`
+        # stops hooking syscall returns: the trace still shows that a sample
+        # called openat/connect/execve and with what arguments, but not
+        # whether any of it succeeded, nor the fd that came back. It was
+        # adopted 2026-08-29 for 2.06x (415 -> 856 syscalls/s,
+        # baremetal-trial.md Part H) on one stated condition: that nothing
+        # consumed return values.
         #
-        # What bought it: 2.06x on this host -- 415 -> 856 syscalls/s -- and
-        # Dom0 coming off saturation entirely, against four levers that do NOT
-        # remove events (CPU placement, -F, compiler hardening) which moved
-        # nothing beyond 0.6%. Full series in baremetal-trial.md Part H.
+        # Two things changed. The Falco rules (`postprocessing/falco`) consume
+        # them -- `fd.num >= 0`, `evt.res`, the fd table behind every
+        # `fd.name` -- and without them most file rules can only report
+        # "undetermined". And the price fell: on the parallel-events build,
+        # this plugin set ran 557k-603k syscalls and 49-55 workload loops a
+        # minute with returns, against 720k-776k and 67-73 without (3 runs
+        # each, 2026-10-23), about a quarter rather than half.
         #
-        # §F7a declined this trade on the grounds that it costs return values.
-        # What overturned it is that nothing consumes them: `disable_sysret`
-        # appears in the platform only as a UI default and a template, the
-        # trace JSONL is collected and uploaded as an artifact, and no code in
-        # this repository parses it. **That is the condition of the trade, not
-        # a footnote** -- a return-value consumer added later (CAPA is on
-        # ideas.md) makes this silent data loss, and whoever adds one owns
-        # revisiting this line.
+        # The returns were also all 0x0 until drakvuf 44b6a19 -- the Linux
+        # dispatchers return void and the result is in pt_regs->ax -- so a
+        # trace from an older pin has sysret records with no information in
+        # them, whichever way this flag was set.
         #
-        # DRAFT-052's syscall filter is strictly better and would replace it:
-        # it removes syscall ENTRIES too while keeping returns for the calls
-        # actually analysed. Blocked on a curated list of what detection needs.
+        # DRAFT-052's syscall filter is still the better lever: it removes
+        # syscall ENTRIES too while keeping returns for the calls analysed.
         return TraceOptions(plugins=_UBUNTU_PLUGINS, timeout=120,
-                            fast_singlestep=True, disable_sysret=True)
+                            fast_singlestep=True, disable_sysret=False)
 
     if os_ is TargetOs.ANDROID:
         return TraceOptions(
@@ -367,11 +388,10 @@ def default_trace_options(os_: TargetOs, kind: SampleKind) -> TraceOptions:
     #                     Ubuntu clone, so this is the value most likely to
     #                     cut a trace short.
     #
-    # `_WINDOWS_PLUGINS` is deliberately its own name even though it currently
-    # equals `_LINUX_PLUGINS`. The equality is a starting point that should be
-    # free to change; sharing the tuple would make an edit to the Linux set
-    # silently become an edit to this one. `test_guests.py` pins that this
-    # branch reads its own name.
+    # `_WINDOWS_PLUGINS` is deliberately its own name: sharing a tuple with
+    # the Linux set would make an edit to one silently an edit to the other,
+    # and their Windows-only and Linux-only plugins would cross.
+    # `test_guests.py` pins that this branch reads its own name.
     if os_ is TargetOs.WINDOWS:
         return TraceOptions(
             plugins=_WINDOWS_PLUGINS, timeout=120,
@@ -991,6 +1011,15 @@ def argv_trace(job: Job, component: str | None = None) -> list[str]:
         # was selected -- an `--ipt-dir` with no `-a ipt` is a directory
         # nothing writes and compress_ipt would pack empty.
         argv += ["--ipt-dir", str(job.result_dir / IPT_DIR), "--ipt-trace-user"]
+    # How many bytes of each message's payload unixsocketmon prints ("Max
+    # message size (in bytes) to print", `drakvuf --help`). It does not limit
+    # what the guest sends: `Size` is still the whole request, every buffer of
+    # it, and only the printed `Value` is cut. DRAKVUF's default is 0, which
+    # prints no payload at all. 2048 holds a request line and its headers, and
+    # on the Ubuntu desktop's 2,300-4,900 messages a minute keeps the log
+    # under ~20 MB a minute even if every one were full. Before drakvuf
+    # bfab6ba the plugin hooked nothing on Ubuntu 22.04's kernel, and Size
+    # was only the first buffer's length.
     if UNIXSOCKETMON_PLUGIN in job.options.plugins:
         argv += ["--unixsocketmon-max-size-print", "2048"]
     if FILEEXTRACTOR_PLUGIN in job.options.plugins:
@@ -1007,6 +1036,23 @@ def argv_trace(job: Job, component: str | None = None) -> list[str]:
         argv += ["--so-hooks-list",
                  (Path(__file__).parent.absolute() / "data"
                   / "so-hooks-linux.txt").as_posix()]
+    # The environment variables procmon prints at each exec. Without a list
+    # it prints LD_PRELOAD, PWD and OLDPWD only (`configure_filter` in
+    # procmon/linux.cpp), and a list REPLACES those, so the file names them
+    # too. The rest are what Falco's rules test (`proc.env icontains
+    # GLIBC_TUNABLES`, `... HTTP_PROXY`): a variable outside the list is
+    # unknown to `falco_analysis`, not unset. One name per line and nothing
+    # else -- DRAKVUF reads every line, a comment included, as a name. Only
+    # Linux procmon reads it; Windows procmon ignores the option.
+    if PROCMON_PLUGIN in job.options.plugins:
+        argv += ["--procmon-envs-list", PROCMON_ENVS_LIST.as_posix()]
+    # procdump2 dumps the injected process's whole memory when the trace ends
+    # (`main.cpp`: procdump_on_finish = injected_pid), and needs somewhere to
+    # put it: without --procdump-dir it has no output at all. Compressed,
+    # because a GUI process's memory runs to hundreds of MB against the job's
+    # 4 GiB result budget. `stages._trace` creates the directory.
+    if PROCDUMP2_PLUGIN in job.options.plugins:
+        argv += ["--procdump-dir", str(job.result_dir / PROCDUMPS_DIR), "--compress-procdumps"]
     for option, name in SYMBOL_PROFILES[job.target_os]:
         argv += [option, str(job.profile.parent / name)]
     return argv

@@ -29,6 +29,12 @@ DUMPS_ZIP = "dumps.zip"
 IPT_DIR = "ipt"
 IPT_ZIP = "ipt.zip"
 
+# procdump2's output directory: `--procdump-dir`, which `argv_trace` passes
+# only when `procdump2` is among the job's plugins, and `stages._trace`
+# creates on the same condition. Not packed: DRAKVUF already gzips each dump
+# (`--compress-procdumps`), so `stages._collect` uploads them as they are.
+PROCDUMPS_DIR = "procdumps"
+
 # fileextractor's output directory: DRAKVUF's `-D`. Upstream never passes -D
 # and has no plugin for it; the name is result-schema.md's, chosen there
 # because these are the files the SAMPLE wrote, with names the sample chose.

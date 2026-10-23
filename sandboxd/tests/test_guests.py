@@ -521,36 +521,26 @@ def test_the_handoff_file_is_removed_before_the_sample_runs(tmp_path):
 
 # --- the trace budget -------------------------------------------------------
 
-def test_ubuntu_trades_syscall_return_values_for_2x(tmp_path):
-    """**This test used to assert the opposite**, and the reversal is the
-    point: until 2026-08-29 Ubuntu kept every return value, because §F7a
-    declined the trade on the grounds that `--disable-sysret` costs them.
+def test_ubuntu_keeps_syscall_return_values_for_the_falco_rules(tmp_path):
+    """**This test has asserted both ways, and each reversal had a reason.**
 
-    It does. The trace still shows that a sample called
-    `openat`/`connect`/`execve` and with what arguments, but not whether any of
-    it succeeded, and not the fd or handle that came back. Attempted behaviour
-    stays visible; outcomes do not.
+    Until 2026-08-29 Ubuntu kept every return value. Then it traded them for
+    2.06x (415 -> 856 syscalls/s, baremetal-trial.md Part H) on the stated
+    condition that nothing consumed them -- and that whoever added a consumer
+    would revisit the trade.
 
-    What bought the reversal: 2.06x on this host -- 415 -> 856 syscalls/s --
-    and Dom0 off saturation entirely, where four levers that do NOT remove
-    events moved nothing beyond 0.6% (baremetal-trial.md Part H). And the
-    claim that overturned §F7a: nothing consumes the return values.
-    `disable_sysret` appears in the platform only as a UI default and a
-    template, the trace JSONL is uploaded as an artifact, and no code here
-    parses it.
-
-    **That condition is load-bearing.** Add a consumer of syscall returns --
-    CAPA is on ideas.md -- and this becomes silent data loss. Whoever adds one
-    owns revisiting this. DRAFT-052's syscall filter is the strictly better
-    replacement: it removes entries too, while keeping returns for the calls
-    actually analysed.
+    The Falco rules are that consumer (2026-10-23): `fd.num >= 0`, `evt.res`
+    and the fd table behind `fd.name` all come from returns, and without them
+    most file rules are undetermined. The price has also fallen, to about a
+    quarter of the throughput on the parallel-events build (557k-603k against
+    720k-776k syscalls a minute), `guests.default_trace_options` has the runs.
 
     `-F` is separate and still free: same events, same data, cheaper delivery.
     """
     argv = G.argv_trace(job(tmp_path))
 
     assert "-F" in argv, "fast singlestep is free and Ubuntu should have it"
-    assert "--disable-sysret" in argv
+    assert "--disable-sysret" not in argv
     assert argv[argv.index("-t") + 1] == "120"
 
 
@@ -627,8 +617,35 @@ def test_the_default_plugin_set_matches_the_scripts(tmp_path):
     """
     argv = G.argv_trace(job(tmp_path))
     got = [argv[i + 1] for i, a in enumerate(argv) if a == "-a"]
+    # Every plugin offered but ipt and hidsim (operator, 2026-10-23)
     assert sorted(got) == sorted(
-        ["syscalls", "filetracer", "fileextractor", "memdump", "libmon"])
+        ["syscalls", "filetracer", "fileextractor", "memdump", "procmon",
+         "procdump2", "cpuidmon", "debugmon", "ptracemon", "ebpfmon",
+         "unixsocketmon", "libmon"])
+
+
+def test_the_defaults_are_the_submit_forms_on_every_guest():
+    """A job that selected nothing gets these sets; the submit form pre-ticks
+    `catalogue.defaults_for`. Two services, two copies -- sandboxd cannot read
+    the platform's catalogue at run time -- so they are held equal here:
+    every plugin the platform offers on that guest but `ipt` and `hidsim`,
+    and libmon on Ubuntu alone."""
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "platform"))
+    from sandbox_platform import catalogue
+
+    for os_, got in ((TargetOs.UBUNTU, G._UBUNTU_PLUGINS), (TargetOs.ANDROID, G._ANDROID_PLUGINS),
+                     (TargetOs.WINDOWS, G._WINDOWS_PLUGINS)):
+        expected = catalogue.defaults_for(catalogue.TargetOs(os_.value))
+        assert frozenset(got) == expected, os_
+        assert not {"ipt", "hidsim"} & set(got)
+    assert "libmon" not in G._ANDROID_PLUGINS
+
+
+def test_procdump2_is_given_its_directory(tmp_path):
+    """Without --procdump-dir procdump2 writes nothing at all."""
+    argv = G.argv_trace(job(tmp_path))
+    assert argv[argv.index("--procdump-dir") + 1].endswith("/procdumps")
+    assert "--compress-procdumps" in argv
 
 
 def test_android_does_not_get_libmon(tmp_path):

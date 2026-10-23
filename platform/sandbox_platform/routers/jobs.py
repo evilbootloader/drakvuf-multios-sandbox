@@ -46,7 +46,7 @@ from ..enums import (
     Visibility,
 )
 
-from ..catalogue import PLUGINS
+from ..catalogue import PLUGINS, sysret_disabled_by_default
 
 import logging
 log = logging.getLogger(__name__)
@@ -218,7 +218,10 @@ class CreateJobRequest(BaseModel):
     size_bytes: int = Field(gt=0)
     plugins: list["str"]
     timeout: int = Field(gt=0, lt=600)
-    disable_sysret: bool = True
+    # Absent means the guest's default (`catalogue.sysret_disabled_by_default`),
+    # resolved in `create_job` -- what the submit form would have sent, not a
+    # blanket True that switched return values off for every API client.
+    disable_sysret: bool | None = None
 
     # The second untrusted routing input (DRAFT-057), validated at this same
     # boundary and for the same reasons. Two fields rather than one because
@@ -529,6 +532,8 @@ def create_job(req: CreateJobRequest,
             f"timeout goes from 0 to 600",
         )
     
+    if req.disable_sysret is None:
+        req.disable_sysret = sysret_disabled_by_default(req.target_os)
     if not isinstance(req.disable_sysret, bool):
         raise HTTPException(
             status.HTTP_406_NOT_ACCEPTABLE,

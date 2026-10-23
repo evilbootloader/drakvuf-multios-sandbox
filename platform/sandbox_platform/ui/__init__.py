@@ -139,6 +139,7 @@ def submit_view(request: Request) -> HTMLResponse:
         target_oses=[o.value for o in TargetOs],
         os=first.value,
         plugins=catalogue.for_os(first),
+        defaults=catalogue.defaults_for(first),
         budget=_budget(first),
         egress_offers=_egress_offers(),
     )
@@ -172,13 +173,10 @@ def _egress_offers() -> list[egress.Offer]:
 def _budget(os_: TargetOs) -> dict:
     """Trace-budget defaults for this guest.
 
-    `disable_sysret` defaults ON for both Linux guests, for different reasons.
-    On Android it is not optional: an idle BlissOS clone emits thousands of
-    binder ioctls and Looper polls before anything is analysed, and without it
-    an APK could not finish drawing inside the trace window. Ubuntu adopted it
-    on 2026-08-29 for throughput -- 2.06x, 415 -> 856 syscalls/s -- accepting
-    that syscall return values are lost. See `guests.default_trace_options`
-    for the full trade and the condition it rests on.
+    `disable_sysret` defaults ON for Android only, for the reasons
+    `catalogue.sysret_disabled_by_default` gives. Ubuntu had it on from
+    2026-08-29 to 2026-10-23, until the Falco rules became a consumer of the
+    return values it threw away.
 
     **No longer decorative.** `disable_sysret` and `timeout` are columns on
     the jobs table since migration 0011, ride `Lease`, and are overlaid onto
@@ -203,7 +201,7 @@ def _budget(os_: TargetOs) -> dict:
     return {
         "timeout": 150 if TargetOs.ANDROID else 120,
         "linux": os_ is not TargetOs.WINDOWS,
-        "disable_sysret": os_ is not TargetOs.WINDOWS,
+        "disable_sysret": catalogue.sysret_disabled_by_default(os_),
     }
 
 
@@ -219,6 +217,7 @@ def plugin_picker(request: Request,
     return _render(request, "_plugins.html",
                    os=target_os.value,
                    plugins=catalogue.for_os(target_os),
+                   defaults=catalogue.defaults_for(target_os),
                    budget=_budget(target_os))
 
 

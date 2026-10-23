@@ -46,7 +46,7 @@ from .egress import EgressUnavailable, Exit
 from .guests import Interaction, Job, SampleKind, TargetOs, TraceOptions
 from .proc import CommandError
 from .postprocessing.paths import (DUMPS_DIR, DUMPS_ZIP, EXTRACTED_DIR,
-                                   EXTRACTED_ZIP, IPT_DIR, IPT_ZIP)
+                                   EXTRACTED_ZIP, IPT_DIR, IPT_ZIP, PROCDUMPS_DIR)
 from .postprocessing.postprocess import postprocess_analysis_dir
 from .postprocessing.plugins.plugin_base import load_postprocessing_config
 
@@ -846,6 +846,8 @@ class Analysis:
             subdirs = [EXTRACTED_DIR, DUMPS_DIR]
             if guests.IPT_PLUGIN in job.options.plugins:
                 subdirs.append(IPT_DIR)
+            if guests.PROCDUMP2_PLUGIN in job.options.plugins:
+                subdirs.append(PROCDUMPS_DIR)
             for sub in subdirs:
                 (job.result_dir / sub).mkdir(parents=True, exist_ok=True)
 

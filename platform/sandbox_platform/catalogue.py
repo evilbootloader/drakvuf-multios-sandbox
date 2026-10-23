@@ -73,10 +73,12 @@ class Plugin:
     describes: str
     linux: bool
     windows: bool
-    # Pre-ticked on the submit form. Separate from evidence: these are what
-    # drakvuf-<os>.sh enables today, which on Windows is a plan rather than a
-    # record.
+    # Pre-ticked on the submit form, on every guest that supports it but those
+    # in `not_default_on`. Separate from evidence. Since 2026-10-23 that is
+    # every plugin but `ipt` and `hidsim` (operator), the same sets
+    # `sandboxd/guests.py` gives a job that selected none.
     default: bool = False
+    not_default_on: frozenset[TargetOs] = frozenset()
     # Guests this has actually run against. Never inferred from `linux`.
     proven_on: frozenset[TargetOs] = frozenset()
     # Rough run-time cost. `ipt` and `apimon` are heavy enough to matter
@@ -107,24 +109,27 @@ PLUGINS: tuple[Plugin, ...] = (
            linux=True, windows=True, default=True, proven_on=_EVIDENCED),
 
     Plugin("procmon", "Process creation and exit -- the process tree",
-           linux=True, windows=True),
+           linux=True, windows=True, default=True),
     Plugin("procdump2", "Dumps whole process memory",
-           linux=True, windows=True),
+           linux=True, windows=True, default=True),
     Plugin("cpuidmon", "The sample's own checks for a hypervisor",
-           linux=True, windows=True),
+           linux=True, windows=True, default=True),
     Plugin("debugmon", "Debug registers and breakpoint use",
-           linux=True, windows=True),
+           linux=True, windows=True, default=True),
     Plugin("ipt", "Instruction-level trace (Intel PT)",
            linux=True, windows=True, heavy=True),
     Plugin("hidsim", "Injects synthetic mouse and keyboard input",
            linux=True, windows=True),
 
     Plugin("ptracemon", "Anti-debugging via ptrace",
-           linux=True, windows=False),
+           linux=True, windows=False, default=True),
     Plugin("ebpfmon", "eBPF programs loaded into the kernel",
-           linux=True, windows=False),
-    Plugin("unixsocketmon", "Unix-domain socket messages",
-           linux=True, windows=False),
+           linux=True, windows=False, default=True),
+    # Every socket send and connect, IP and Unix alike, despite the name: the
+    # fork's plugin (drakvuf e58c13a) prints both ends and fills the Network
+    # tab's connections and Unix sockets on Linux.
+    Plugin("unixsocketmon", "Socket sends and connects, with both ends",
+           linux=True, windows=False, default=True),
     # The Linux counterpart of `apimon`, from our DRAKVUF fork. `heavy` for
     # the same reason apimon is: a breakpoint per hooked function, and the
     # hook list decides the cost (`sandboxd/data/so-hooks-linux.txt`).
@@ -135,18 +140,19 @@ PLUGINS: tuple[Plugin, ...] = (
     # left empty, which renders it Candidate on both; see the
     # `_ANDROID_PLUGINS` comment in `sandboxd/guests.py`.
     Plugin("libmon", "Linux shared-library calls, with arguments",
-           linux=True, windows=False, heavy=True),
+           linux=True, windows=False, heavy=True, default=True,
+           not_default_on=frozenset({TargetOs.ANDROID})),
 
     Plugin("apimon", "Windows API calls and DLL loads",
-           linux=False, windows=True, heavy=True),
+           linux=False, windows=True, heavy=True, default=True),
     Plugin("regmon", "Registry reads and writes",
-           linux=False, windows=True),
+           linux=False, windows=True, default=True),
     Plugin("socketmon", "Network connections, from inside the guest",
-           linux=False, windows=True),
+           linux=False, windows=True, default=True),
     Plugin("tlsmon", "TLS keys -- lets captured HTTPS be decrypted",
-           linux=False, windows=True),
+           linux=False, windows=True, default=True),
     Plugin("rootkitmon", "Kernel structures altered by rootkits",
-           linux=False, windows=True),
+           linux=False, windows=True, default=True),
 )
 
 BY_NAME = {p.name: p for p in PLUGINS}
@@ -159,6 +165,32 @@ def for_os(os_: TargetOs) -> list[tuple[Plugin, Support]]:
     rated.sort(key=lambda r: (r[1] is Support.UNSUPPORTED,
                               r[1] is not Support.PROVEN, r[0].name))
     return rated
+
+
+def defaults_for(os_: TargetOs) -> frozenset[str]:
+    """The plugins the submit form pre-ticks for this guest."""
+    return frozenset(p.name for p in PLUGINS
+                     if p.default and os_ not in p.not_default_on
+                     and p.support(os_) is not Support.UNSUPPORTED)
+
+
+def sysret_disabled_by_default(os_: TargetOs) -> bool:
+    """Whether a job that does not say traces with `--disable-sysret`.
+
+    Android only. There it is not optional: an idle BlissOS clone emits
+    thousands of binder ioctls and Looper polls before anything is analysed,
+    and without it an APK could not finish drawing inside the trace window.
+    Ubuntu had it on from 2026-08-29 for throughput, on the condition that
+    nothing read syscall return values; the Falco rules
+    (`sandboxd/postprocessing/falco`) read them, so Ubuntu keeps them again
+    -- `guests.default_trace_options` has the measurement. Windows never had
+    it on by default.
+
+    The submit form's checkbox and the API's default for an absent field
+    both read this, so a client that never sends the field gets what the
+    form would have sent.
+    """
+    return os_ is TargetOs.ANDROID
 
 
 # `defaults(os_)` was removed 2026-09-17 with DRAFT-052. It existed to tell a
