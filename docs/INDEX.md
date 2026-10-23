@@ -20,14 +20,14 @@ It maps **headings, not content**: a fact stated in the middle of a section is n
   - `docs/CURRENT-STATE.md:250` — [1.4 Per-OS names](CURRENT-STATE.md#14-per-os-names)
   - `docs/CURRENT-STATE.md:271` — [1.5 What is evidenced, and what is not](CURRENT-STATE.md#15-what-is-evidenced-and-what-is-not)
     - `docs/CURRENT-STATE.md:283` — [On bare metal, since 2026-08-28](CURRENT-STATE.md#on-bare-metal-since-2026-08-28)
-- `docs/CURRENT-STATE.md:315` — [2. Superseded facts — do not cite these](CURRENT-STATE.md#2-superseded-facts--do-not-cite-these)
-  - `docs/CURRENT-STATE.md:321` — [2a. Superseded by the bare-metal migration, 2026-08-28](CURRENT-STATE.md#2a-superseded-by-the-bare-metal-migration-2026-08-28)
-  - `docs/CURRENT-STATE.md:342` — [2b. Superseded for other reasons](CURRENT-STATE.md#2b-superseded-for-other-reasons)
-- `docs/CURRENT-STATE.md:371` — [3. Derived from the repository](CURRENT-STATE.md#3-derived-from-the-repository)
-    - `docs/CURRENT-STATE.md:377` — [Runbooks, oldest to newest](CURRENT-STATE.md#runbooks-oldest-to-newest)
-    - `docs/CURRENT-STATE.md:401` — [How components are started](CURRENT-STATE.md#how-components-are-started)
-    - `docs/CURRENT-STATE.md:407` — [Environment read by `sandboxd.daemon`](CURRENT-STATE.md#environment-read-by-sandboxddaemon)
-    - `docs/CURRENT-STATE.md:411` — [Repository size](CURRENT-STATE.md#repository-size)
+- `docs/CURRENT-STATE.md:319` — [2. Superseded facts — do not cite these](CURRENT-STATE.md#2-superseded-facts--do-not-cite-these)
+  - `docs/CURRENT-STATE.md:325` — [2a. Superseded by the bare-metal migration, 2026-08-28](CURRENT-STATE.md#2a-superseded-by-the-bare-metal-migration-2026-08-28)
+  - `docs/CURRENT-STATE.md:346` — [2b. Superseded for other reasons](CURRENT-STATE.md#2b-superseded-for-other-reasons)
+- `docs/CURRENT-STATE.md:375` — [3. Derived from the repository](CURRENT-STATE.md#3-derived-from-the-repository)
+    - `docs/CURRENT-STATE.md:381` — [Runbooks, oldest to newest](CURRENT-STATE.md#runbooks-oldest-to-newest)
+    - `docs/CURRENT-STATE.md:405` — [How components are started](CURRENT-STATE.md#how-components-are-started)
+    - `docs/CURRENT-STATE.md:411` — [Environment read by `sandboxd.daemon`](CURRENT-STATE.md#environment-read-by-sandboxddaemon)
+    - `docs/CURRENT-STATE.md:415` — [Repository size](CURRENT-STATE.md#repository-size)
 
 ## `docs/DEVELOPING.md`
 
@@ -174,28 +174,33 @@ It maps **headings, not content**: a fact stated in the middle of a section is n
     - `docs/TROUBLESHOOTING.md:2597` — [`bash: !xenbr0: event not found`](TROUBLESHOOTING.md#bash-xenbr0-event-not-found)
     - `docs/TROUBLESHOOTING.md:2610` — [`iptables -S` says a chain is "incompatible", and the chain is simply absent](TROUBLESHOOTING.md#iptables--s-says-a-chain-is-incompatible-and-the-chain-is-simply-absent)
     - `docs/TROUBLESHOOTING.md:2626` — [An analysis left evidence of itself inside the guest](TROUBLESHOOTING.md#an-analysis-left-evidence-of-itself-inside-the-guest)
-- `docs/TROUBLESHOOTING.md:2642` — [The object store — Garage](TROUBLESHOOTING.md#the-object-store--garage)
-    - `docs/TROUBLESHOOTING.md:2650` — [`garage key create` ran twice and now two keys have the same name](TROUBLESHOOTING.md#garage-key-create-ran-twice-and-now-two-keys-have-the-same-name)
-    - `docs/TROUBLESHOOTING.md:2671` — [`garage bucket info` or `key info` exits 1 and the thing does exist](TROUBLESHOOTING.md#garage-bucket-info-or-key-info-exits-1-and-the-thing-does-exist)
-    - `docs/TROUBLESHOOTING.md:2684` — [`nginx -t` fails with `Address already in use` and the config is fine](TROUBLESHOOTING.md#nginx--t-fails-with-address-already-in-use-and-the-config-is-fine)
-    - `docs/TROUBLESHOOTING.md:2702` — [The store refuses a presigned URL with `400`, not `403`](TROUBLESHOOTING.md#the-store-refuses-a-presigned-url-with-400-not-403)
-    - `docs/TROUBLESHOOTING.md:2718` — [A wrong `S3_REGION` seems not to matter](TROUBLESHOOTING.md#a-wrong-s3_region-seems-not-to-matter)
-    - `docs/TROUBLESHOOTING.md:2734` — [A setting in `garage.toml` has no effect and nothing complains](TROUBLESHOOTING.md#a-setting-in-garagetoml-has-no-effect-and-nothing-complains)
-    - `docs/TROUBLESHOOTING.md:2748` — [`/health` returns 503 on a store that just started](TROUBLESHOOTING.md#health-returns-503-on-a-store-that-just-started)
-    - `docs/TROUBLESHOOTING.md:2767` — [`mc` does nothing useful against Garage](TROUBLESHOOTING.md#mc-does-nothing-useful-against-garage)
-    - `docs/TROUBLESHOOTING.md:2780` — [The browser upload fails only in the development container](TROUBLESHOOTING.md#the-browser-upload-fails-only-in-the-development-container)
-    - `docs/TROUBLESHOOTING.md:2795` — [An object's ETag changed after a store migration](TROUBLESHOOTING.md#an-objects-etag-changed-after-a-store-migration)
-- `docs/TROUBLESHOOTING.md:2815` — [Reading the project record itself](TROUBLESHOOTING.md#reading-the-project-record-itself)
-    - `docs/TROUBLESHOOTING.md:2817` — [A fact from a runbook turned out to be superseded](TROUBLESHOOTING.md#a-fact-from-a-runbook-turned-out-to-be-superseded)
-    - `docs/TROUBLESHOOTING.md:2832` — [A performance measurement did not reproduce](TROUBLESHOOTING.md#a-performance-measurement-did-not-reproduce)
-    - `docs/TROUBLESHOOTING.md:2847` — [An upstream DRAKVUF build passed a casual check and was the wrong binary](TROUBLESHOOTING.md#an-upstream-drakvuf-build-passed-a-casual-check-and-was-the-wrong-binary)
-    - `docs/TROUBLESHOOTING.md:2871` — [`libzstd found: NO` and the build succeeded anyway](TROUBLESHOOTING.md#libzstd-found-no-and-the-build-succeeded-anyway)
-    - `docs/TROUBLESHOOTING.md:2882` — [A regenerated `profiles/linux.json` silently does not work](TROUBLESHOOTING.md#a-regenerated-profileslinuxjson-silently-does-not-work)
-    - `docs/TROUBLESHOOTING.md:2894` — [Reasoning from upstream capability tables gave the wrong answer](TROUBLESHOOTING.md#reasoning-from-upstream-capability-tables-gave-the-wrong-answer)
-    - `docs/TROUBLESHOOTING.md:2908` — [A containment claim was written up without being tested](TROUBLESHOOTING.md#a-containment-claim-was-written-up-without-being-tested)
-    - `docs/TROUBLESHOOTING.md:2930` — [A measured constant was used directly as a resource guard](TROUBLESHOOTING.md#a-measured-constant-was-used-directly-as-a-resource-guard)
-    - `docs/TROUBLESHOOTING.md:2943` — [Baseline measured against throttled code](TROUBLESHOOTING.md#baseline-measured-against-throttled-code)
-    - `docs/TROUBLESHOOTING.md:2976` — [A capa rule that should obviously match produces nothing](TROUBLESHOOTING.md#a-capa-rule-that-should-obviously-match-produces-nothing)
+    - `docs/TROUBLESHOOTING.md:2640` — [Every Linux `sysret` record says `"Ret":"0x0"`](TROUBLESHOOTING.md#every-linux-sysret-record-says-ret0x0)
+    - `docs/TROUBLESHOOTING.md:2657` — [`unixsocketmon` was selected and wrote nothing](TROUBLESHOOTING.md#unixsocketmon-was-selected-and-wrote-nothing)
+    - `docs/TROUBLESHOOTING.md:2676` — [`split_drakvuf_log` warns of thousands of unparsable `syscall` lines](TROUBLESHOOTING.md#split_drakvuf_log-warns-of-thousands-of-unparsable-syscall-lines)
+    - `docs/TROUBLESHOOTING.md:2686` — [A process run from `/dev/shm` shows `proc_exepath=/falco-true`](TROUBLESHOOTING.md#a-process-run-from-devshm-shows-proc_exepathfalco-true)
+    - `docs/TROUBLESHOOTING.md:2695` — [Falco rules show as "undetermined" instead of matching or not](TROUBLESHOOTING.md#falco-rules-show-as-undetermined-instead-of-matching-or-not)
+- `docs/TROUBLESHOOTING.md:2711` — [The object store — Garage](TROUBLESHOOTING.md#the-object-store--garage)
+    - `docs/TROUBLESHOOTING.md:2719` — [`garage key create` ran twice and now two keys have the same name](TROUBLESHOOTING.md#garage-key-create-ran-twice-and-now-two-keys-have-the-same-name)
+    - `docs/TROUBLESHOOTING.md:2740` — [`garage bucket info` or `key info` exits 1 and the thing does exist](TROUBLESHOOTING.md#garage-bucket-info-or-key-info-exits-1-and-the-thing-does-exist)
+    - `docs/TROUBLESHOOTING.md:2753` — [`nginx -t` fails with `Address already in use` and the config is fine](TROUBLESHOOTING.md#nginx--t-fails-with-address-already-in-use-and-the-config-is-fine)
+    - `docs/TROUBLESHOOTING.md:2771` — [The store refuses a presigned URL with `400`, not `403`](TROUBLESHOOTING.md#the-store-refuses-a-presigned-url-with-400-not-403)
+    - `docs/TROUBLESHOOTING.md:2787` — [A wrong `S3_REGION` seems not to matter](TROUBLESHOOTING.md#a-wrong-s3_region-seems-not-to-matter)
+    - `docs/TROUBLESHOOTING.md:2803` — [A setting in `garage.toml` has no effect and nothing complains](TROUBLESHOOTING.md#a-setting-in-garagetoml-has-no-effect-and-nothing-complains)
+    - `docs/TROUBLESHOOTING.md:2817` — [`/health` returns 503 on a store that just started](TROUBLESHOOTING.md#health-returns-503-on-a-store-that-just-started)
+    - `docs/TROUBLESHOOTING.md:2836` — [`mc` does nothing useful against Garage](TROUBLESHOOTING.md#mc-does-nothing-useful-against-garage)
+    - `docs/TROUBLESHOOTING.md:2849` — [The browser upload fails only in the development container](TROUBLESHOOTING.md#the-browser-upload-fails-only-in-the-development-container)
+    - `docs/TROUBLESHOOTING.md:2864` — [An object's ETag changed after a store migration](TROUBLESHOOTING.md#an-objects-etag-changed-after-a-store-migration)
+- `docs/TROUBLESHOOTING.md:2884` — [Reading the project record itself](TROUBLESHOOTING.md#reading-the-project-record-itself)
+    - `docs/TROUBLESHOOTING.md:2886` — [A fact from a runbook turned out to be superseded](TROUBLESHOOTING.md#a-fact-from-a-runbook-turned-out-to-be-superseded)
+    - `docs/TROUBLESHOOTING.md:2901` — [A performance measurement did not reproduce](TROUBLESHOOTING.md#a-performance-measurement-did-not-reproduce)
+    - `docs/TROUBLESHOOTING.md:2916` — [An upstream DRAKVUF build passed a casual check and was the wrong binary](TROUBLESHOOTING.md#an-upstream-drakvuf-build-passed-a-casual-check-and-was-the-wrong-binary)
+    - `docs/TROUBLESHOOTING.md:2940` — [`libzstd found: NO` and the build succeeded anyway](TROUBLESHOOTING.md#libzstd-found-no-and-the-build-succeeded-anyway)
+    - `docs/TROUBLESHOOTING.md:2951` — [A regenerated `profiles/linux.json` silently does not work](TROUBLESHOOTING.md#a-regenerated-profileslinuxjson-silently-does-not-work)
+    - `docs/TROUBLESHOOTING.md:2963` — [Reasoning from upstream capability tables gave the wrong answer](TROUBLESHOOTING.md#reasoning-from-upstream-capability-tables-gave-the-wrong-answer)
+    - `docs/TROUBLESHOOTING.md:2977` — [A containment claim was written up without being tested](TROUBLESHOOTING.md#a-containment-claim-was-written-up-without-being-tested)
+    - `docs/TROUBLESHOOTING.md:2999` — [A measured constant was used directly as a resource guard](TROUBLESHOOTING.md#a-measured-constant-was-used-directly-as-a-resource-guard)
+    - `docs/TROUBLESHOOTING.md:3012` — [Baseline measured against throttled code](TROUBLESHOOTING.md#baseline-measured-against-throttled-code)
+    - `docs/TROUBLESHOOTING.md:3045` — [A capa rule that should obviously match produces nothing](TROUBLESHOOTING.md#a-capa-rule-that-should-obviously-match-produces-nothing)
 
 ## `docs/android_setup.md`
 
@@ -340,6 +345,16 @@ It maps **headings, not content**: a fact stated in the middle of a section is n
   - `docs/architecture/automation-files.md:269` — [Evidence status at the time of deletion](architecture/automation-files.md#evidence-status-at-the-time-of-deletion)
     - `docs/architecture/automation-files.md:288` — [The Dom0 checkout](architecture/automation-files.md#the-dom0-checkout)
   - `docs/architecture/automation-files.md:309` — [Where the Xen guest configs live](architecture/automation-files.md#where-the-xen-guest-configs-live)
+
+## `docs/architecture/falco-rules.md`
+
+- `docs/architecture/falco-rules.md:1` — [Falco rules over the Linux trace](architecture/falco-rules.md#falco-rules-over-the-linux-trace)
+  - `docs/architecture/falco-rules.md:12` — [Why not Falco itself](architecture/falco-rules.md#why-not-falco-itself)
+  - `docs/architecture/falco-rules.md:20` — [What it reads](architecture/falco-rules.md#what-it-reads)
+  - `docs/architecture/falco-rules.md:41` — [Three-valued evaluation](architecture/falco-rules.md#three-valued-evaluation)
+  - `docs/architecture/falco-rules.md:60` — [Fields](architecture/falco-rules.md#fields)
+  - `docs/architecture/falco-rules.md:84` — [Rules](architecture/falco-rules.md#rules)
+  - `docs/architecture/falco-rules.md:101` — [Checked against](architecture/falco-rules.md#checked-against)
 
 ## `docs/architecture/licensing.md`
 
@@ -1474,4 +1489,4 @@ It maps **headings, not content**: a fact stated in the middle of a section is n
 
 ---
 
-*1344 headings across 40 documents.*
+*1356 headings across 41 documents.*
