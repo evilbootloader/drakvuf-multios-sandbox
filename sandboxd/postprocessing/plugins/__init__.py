@@ -5,6 +5,7 @@ from ..paths import (
 from .build_process_tree import build_process_tree
 from .capa_plugin.capa_processor import capa_analysis
 from .compress_ipt import compress_ipt
+from .falco_analysis import FALCO_ALERTS, falco_analysis
 #from .generate_html_report import generate_html_report
 from .generate_report import generate_report
 from .generate_wireshark_key_file import generate_wireshark_key_file
@@ -23,6 +24,7 @@ from .screenshot_metadata import screenshot_metadata
 from .split_drakvuf_log import split_drakvuf_log
 from .yara_analysis import yara_analysis
 from .get_yara_info import get_yara_info
+from .get_falco_info import get_falco_info
 
 POSTPROCESS_PLUGINS = [
     PostprocessPlugin(
@@ -83,6 +85,12 @@ POSTPROCESS_PLUGINS = [
     # `ipt` plugin (`stages._trace` creates it, `argv_trace` passes it as
     # `--ipt-dir`); every other job skips this.
     PostprocessPlugin(function=compress_ipt, requires=[IPT_DIR], generates=[IPT_ZIP]),
+    # Before gzip_syscalls, which replaces the syscall and sysret logs this
+    # reads, and after build_process_tree -- though it does not need the tree:
+    # a job without procmon still has a sample scope (falco/events.py,
+    # sample_scope). Requires nothing for the same reason get_http_info
+    # requires no log: what it reads is per-OS (falco_analysis.FALCO_PROFILES).
+    PostprocessPlugin(function=falco_analysis, requires=[], generates=[FALCO_ALERTS]),
     PostprocessPlugin(
         function=gzip_syscalls,
         requires=["syscall.log"],
@@ -103,9 +111,12 @@ POSTPROCESS_PLUGINS = [
         requires=["process_tree.json", "filetracer.log"],
         generates=[],
     ),
+    # The log is per-OS -- socketmon on Windows, unixsocketmon on Linux
+    # (get_socket_info.SOCKET_SOURCES) -- so it is checked there, for
+    # get_http_info's reason.
     PostprocessPlugin(
         function=get_socket_info,
-        requires=["process_tree.json", "socketmon.log"],
+        requires=["process_tree.json"],
         generates=[],
     ),
     PostprocessPlugin(
@@ -123,6 +134,9 @@ POSTPROCESS_PLUGINS = [
         requires=["process_tree.json","yara.json"],
         generates=[],
     ),
+    # Not gated on process_tree.json: alerts from a job without procmon are
+    # still alerts, reported by PID with no process to link to.
+    PostprocessPlugin(function=get_falco_info, requires=[FALCO_ALERTS], generates=[]),
     # After every plugin that calls update_report and before index_logs,
     # which adds nothing to it. Always regenerated: the report is a function
     # of the files above it, and a stale one would describe a different run.

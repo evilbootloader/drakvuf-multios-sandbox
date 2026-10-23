@@ -1,5 +1,6 @@
 import logging
 import pathlib
+from typing import Optional
 
 from .plugins import POSTPROCESS_PLUGINS
 from .plugins.plugin_base import PostprocessContext, PostprocessPlugin, PostprocessingConfig
@@ -39,7 +40,8 @@ def run_postprocessing(context: PostprocessContext):
 
 
 def postprocess_analysis_dir(
-    analysis_dir: pathlib.Path, config: PostprocessingConfig, os_: TargetOs) -> None:
+    analysis_dir: pathlib.Path, config: PostprocessingConfig, os_: TargetOs,
+    vlan: Optional[int] = None) -> None:
     """Run every plugin whose inputs exist. Never raises.
 
     Called from `Analysis.run` between the trace and `_collect`, inside the
@@ -51,6 +53,7 @@ def postprocess_analysis_dir(
         analysis_dir=analysis_dir,
         config=config,
         target_os=os_,
+        vlan=vlan,
     )
     try:
         run_postprocessing(context)

@@ -9,3 +9,6 @@
 [submodule "sandboxd/data/capa-rules"]
 	path = sandboxd/data/capa-rules
 	url = https://github.com/mandiant/capa-rules.git
+[submodule "sandboxd/data/falco-rules"]
+	path = sandboxd/data/falco-rules
+	url = https://github.com/falcosecurity/rules.git

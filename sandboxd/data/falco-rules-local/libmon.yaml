@@ -1,0 +1,75 @@
+# Falco rules over libmon's library calls, in Falco's own syntax.
+#
+# `source: libmon` is this sandbox's, not Falco's: an event is one libmon
+# `api_called` record. `evt.type` is the function's name; `api.arg[Name]` an
+# argument by the name the hook list gives it (sandboxd/data/so-hooks-linux.txt),
+# `api.arg[N]` by position; `api.ret` the return value; `api.lib` the library
+# and `api.from_module` the caller's module. `proc.*` and `user.*` are the same
+# fields the syscall rules read. A function that is not hooked is never seen,
+# so a rule here names only functions that list hooks.
+#
+# Loaded after the vendored falcosecurity/rules files, in name order, with
+# every file in this directory (sandboxd/postprocessing/falco/rules.py).
+
+- rule: Library loaded from a temporary directory
+  desc: >
+    dlopen of a shared object under a world-writable temporary directory,
+    where a dropped payload usually lands before it is loaded.
+  condition: >
+    evt.type = dlopen and
+    (api.arg[Path] startswith /tmp/ or api.arg[Path] startswith /var/tmp/ or
+     api.arg[Path] startswith /dev/shm/)
+  output: >
+    Shared object loaded from a temporary directory | path=%api.arg[Path]
+    result=%api.ret process=%proc.name proc_exepath=%proc.exepath
+    parent=%proc.pname command=%proc.cmdline
+  priority: WARNING
+  source: libmon
+  tags: [libmon, process, mitre_execution, T1129]
+
+# memfds the Ubuntu desktop makes on its own: GTK's Wayland cursor buffers
+# (update-notifier and its helpers, every run of the 2026-10-23 idle-guest
+# trace). Executing from a memfd is the stable rule "Fileless execution via
+# memfd_create"; this one is about creating one at all.
+- list: sandbox_known_memfd_names
+  items: [wayland-cursor]
+
+- rule: Anonymous in-memory file created
+  desc: >
+    memfd_create makes a file that has no path, the usual first step of
+    running a payload without writing it to disk.
+  condition: >
+    evt.type = memfd_create and api.ret >= 0 and
+    not api.arg[Name] in (sandbox_known_memfd_names)
+  output: >
+    In-memory file created | name=%api.arg[Name] flags=%api.arg[Flags]
+    process=%proc.name proc_exepath=%proc.exepath parent=%proc.pname
+    command=%proc.cmdline
+  priority: NOTICE
+  source: libmon
+  tags: [libmon, process, mitre_defense_evasion, T1620]
+
+- rule: Process checks for a debugger with PTRACE_TRACEME
+  desc: >
+    ptrace(PTRACE_TRACEME) through libc. It fails when a debugger is already
+    attached, which is why malware calls it on itself.
+  condition: evt.type = ptrace and api.arg[Request] = 0
+  output: >
+    PTRACE_TRACEME requested | result=%api.ret process=%proc.name
+    proc_exepath=%proc.exepath parent=%proc.pname command=%proc.cmdline
+  priority: NOTICE
+  source: libmon
+  tags: [libmon, process, mitre_defense_evasion, T1622]
+
+- rule: Command run through the shell by system or popen
+  desc: >
+    system() and popen() hand a command line to /bin/sh -c. The exec rules
+    see the shell; this sees the command as the program wrote it.
+  condition: evt.type in (system, popen)
+  output: >
+    Command run through the shell | command_run=%api.arg[Command]
+    function=%evt.type process=%proc.name proc_exepath=%proc.exepath
+    parent=%proc.pname command=%proc.cmdline
+  priority: NOTICE
+  source: libmon
+  tags: [libmon, process, mitre_execution, T1059.004]

@@ -1,7 +1,7 @@
 import pathlib
-from typing import Any, Dict, List, NamedTuple, Optional, Protocol
+from typing import Any, Dict, List, Literal, NamedTuple, Optional, Protocol
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from ..process_tree import ProcessTree
@@ -27,6 +27,43 @@ class CapaConfigSection(BaseModel):
 
 class YaraConfigSection(BaseModel):
     rules_directory: pathlib.Path = pathlib.Path(__file__).parent.parent.parent.absolute() / "data" / "protections-artifacts" / "yara" / "rules"
+
+
+_DATA = pathlib.Path(__file__).parent.parent.parent.absolute() / "data"
+
+
+def _procmon_envs() -> List[str]:
+    from ...guests import PROCMON_ENVS_LIST
+    try:
+        return [n.strip() for n in PROCMON_ENVS_LIST.read_text().splitlines() if n.strip()]
+    except OSError:
+        return ["LD_PRELOAD", "PWD", "OLDPWD"]
+
+
+class FalcoConfigSection(BaseModel):
+    """Falco rules over the Linux trace (`falco_analysis`).
+
+    The vendored files are falcosecurity/rules at the submodule's pinned tag;
+    stable and incubating only, the sandbox file's rules being both noisier and
+    largely about containers. The local directory is read after them, in name
+    order, so it can append to and override their lists, macros and rules.
+    """
+    enabled: bool = True
+    rules_files: List[pathlib.Path] = [
+        _DATA / "falco-rules" / "rules" / "falco_rules.yaml",
+        _DATA / "falco-rules" / "rules" / "falco-incubating_rules.yaml",
+    ]
+    local_rules_directory: pathlib.Path = _DATA / "falco-rules-local"
+    # "sample": the injected process and its descendants, as capa's
+    # analyze_only_malware_pids. "all": every process, for tuning the
+    # overrides against what an idle guest does on its own.
+    scope: Literal["sample", "all"] = "sample"
+    # falco.json holds at most this many alerts; the coverage file still
+    # counts every match.
+    max_alerts: int = 10000
+    # The variables procmon prints: the list `argv_trace` passes as
+    # --procmon-envs-list. `proc.env` is unknown outside them.
+    procmon_env_filter: List[str] = Field(default_factory=_procmon_envs)
 
 
 class MemdumpConfigSection(BaseModel):
@@ -70,6 +107,7 @@ class PostprocessingConfig(BaseSettings):
     memdump: MemdumpConfigSection = MemdumpConfigSection()
     extracted: ExtractedConfigSection = ExtractedConfigSection()
     yara: YaraConfigSection = YaraConfigSection()
+    falco: FalcoConfigSection = FalcoConfigSection()
     # Replace syscall.log / sysret.log with .gz copies. On by default where
     # upstream defaults to False: a Windows syscall.log is over 1 GB
     # (trace-windows.log, 2026-09-18; 50 MB gzipped), a quarter of the 4 GiB
@@ -88,9 +126,14 @@ class PostprocessContext:
         analysis_dir: pathlib.Path,
         config: PostprocessingConfig,
         target_os: TargetOs,
+        vlan: Optional[int] = None,
     ) -> None:
         self.analysis_dir = analysis_dir
         self.config = config
+        # The clone's VLAN, which names its /24 (`egress.vlan_subnet`): what
+        # the Falco rules count as the local network. None when postprocessing
+        # runs outside a job, as in the tests.
+        self.vlan = vlan
         # Here and not on `config`: that is a BaseSettings of daemon-wide
         # knobs, and this is the job's. It picks the procmon events that
         # build the process tree (process_tree.METHOD_PARSERS).

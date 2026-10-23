@@ -409,7 +409,7 @@ class Analysis:
 
 
                 postprocessing_config = load_postprocessing_config()
-                postprocess_analysis_dir(job_dir, postprocessing_config, os_)
+                postprocess_analysis_dir(job_dir, postprocessing_config, os_, vlan)
 
                 outcome = self._collect(lease, job_dir)
 
