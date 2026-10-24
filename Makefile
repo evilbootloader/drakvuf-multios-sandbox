@@ -23,6 +23,14 @@ XEN_PATCH := $(REPO_ROOT)/automation/xen-altp2m-pause-vcpu.patch
 # OVMF is built from tianocore's edk2 instead of the xenbits mirror Config.mk names
 OVMF_URL := https://github.com/tianocore/edk2.git
 OVMF_REVISION := 4dfdca63a93497203f197ec98ba20e2327e4afe4
+# volatility3 PR #650 (pdbconv with C++ types) is unmerged and its head is a
+# personal fork's branch, so it is fetched by commit: a push there installs nothing
+VOLATILITY3_PR650 := 7fe200e5f4611a676299dd67fd435a8dd9bec6e7
+# Microsoft only serves the current Windows 11, so 23H2 comes from a mirror.
+# Microsoft's SHA-256 for 23H2 English International x64, as reproduced at
+# release by ginjfo.com and iguru.gr; Dom0's copy matched it 2026-10-24
+WIN_ISO_URL := https://archive.org/download/win-11-23-h-2-english-international-x-64/Win11_23H2_EnglishInternational_x64.iso
+WIN_ISO_SHA256 := 0eea13c537e39cd1631b1758cd98847cf0d88bd0c32a8d69d9a02723ae79a612
 
 .PHONY: xen web_vm web_sandbox sandboxd
 
@@ -355,8 +363,8 @@ sandboxd:
 		echo 'export LD_LIBRARY_PATH=/usr/local/lib' >> ~/.bashrc; \
 	fi; \
 	cd $(REPO_ROOT)/drakvuf/volatility3; \
-	git fetch origin pull/650/head; \
-	git switch -C pr-650 FETCH_HEAD; \
+	git fetch origin $(VOLATILITY3_PR650); \
+	git switch -C pr-650 $(VOLATILITY3_PR650); \
 	python3 ./setup.py build; \
 	sudo python3 ./setup.py install; \
 	cd $(REPO_ROOT)/drakvuf; \
@@ -501,7 +509,9 @@ windows_analysis_vm:
 	apt install wget genisoimage -y; \
 	rm -rf /tmp/win11iso/; \
 	mkdir /tmp/win11iso/; \
-	wget https://archive.org/download/win-11-23-h-2-english-international-x-64/Win11_23H2_EnglishInternational_x64.iso -O $(REPO_ROOT)/misc/iso/Win11_23H2_EnglishInternational_x64.iso ; \
+	wget $(WIN_ISO_URL) -O $(REPO_ROOT)/misc/iso/Win11_23H2_EnglishInternational_x64.iso ; \
+	# Checked before anything reads it: the mirror can replace the file \
+	echo "$(WIN_ISO_SHA256)  $(REPO_ROOT)/misc/iso/Win11_23H2_EnglishInternational_x64.iso" | sha256sum -c -; \
 	sudo mount -o loop,ro $(REPO_ROOT)/misc/iso/Win11_23H2_EnglishInternational_x64.iso /mnt; \
 	sudo cp -r /mnt/* /tmp/win11iso/; \
 	sudo umount /mnt; \
