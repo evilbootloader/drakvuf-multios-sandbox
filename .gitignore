@@ -106,5 +106,6 @@ samples/*
 # Cloned onto Dom0 by the step in docs/DEVELOPING.md 6, never committed.
 sandboxd/postprocessing/data/
 
-misc
+misc/iso
+misc/Artifacts
 .venv-sandboxd
