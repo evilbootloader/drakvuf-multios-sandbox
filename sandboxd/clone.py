@@ -268,7 +268,6 @@ class CloneBuilder:
         name = spec.name  # validates origin charset and vlan range
         self._check_tools()
         deadline = (time.monotonic() + self._budget) if self._budget else None
-
         with self._clone_lock(name):
             self._destroy_stale(name)
             self._precheck(spec)
@@ -336,7 +335,6 @@ class CloneBuilder:
                                   name, removed.returncode, spec.vlan)
                 config_path.unlink(missing_ok=True)
                 raise
-
         return Clone(name=name, domid=domid, vlan=spec.vlan,
                      config_path=config_path)
 

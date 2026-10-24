@@ -595,7 +595,7 @@ setup_hooks_windows:
 	"viridian = 1" \
 	"altp2m = 2" \
 	"shadow_memory = 32" \
-	"vif = [ 'type=ioemu,model=e1000,bridge=xenbr0' ]" \
+	"vif = [ 'type=ioemu,model=e1000,script=vif-openvswitch,bridge=xenbr1' ]" \
 	"disk = [ 'phy:/dev/vg-root/windows_sandbox,hda,w' ]" > $(REPO_ROOT)/misc/xen-vms/windows_sandbox.cfg; \
 	xl create $(REPO_ROOT)/misc/xen-vms/windows_sandbox.cfg; \
 	sleep 30; \
@@ -644,7 +644,7 @@ setup_hooks_ubuntu:
 	"viridian = 1" \
 	"altp2m = 2" \
 	"shadow_memory = 32" \
-	"vif = [ 'type=ioemu,model=e1000,bridge=xenbr0' ]" \
+	"vif = [ 'type=ioemu,model=e1000,script=vif-openvswitch,bridge=xenbr1' ]" \
 	"disk = ['phy:/dev/vg-root/ubuntu_sandbox,hda,w' ]" \
 		> $(REPO_ROOT)/misc/xen-vms/ubuntu_sandbox.cfg; \
 	xl create $(REPO_ROOT)/misc/xen-vms/ubuntu_sandbox.cfg; \

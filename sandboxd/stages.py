@@ -345,7 +345,6 @@ class Analysis:
         console = None
         outcome = Outcome(state="failed")
 
-
         with Heartbeat(self._api, lease.job_id,
                        self._cfg.heartbeat_interval) as beat:
             try:
@@ -364,7 +363,6 @@ class Analysis:
                                        expected_sha256=lease.sha256,
                                        timeout=timing.FETCH_BUDGET)
                 kind = guests.classify(sample)
-
                 clone = self._clone(os_, vlan, lease)
                 job = self._job(lease, os_, kind, clone, vlan, job_dir, sample)
 

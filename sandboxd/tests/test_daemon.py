@@ -115,11 +115,11 @@ def settings(tmp_path, **kw) -> D.Settings:
 
 def config(tmp_path) -> Config:
     repo = tmp_path / "repo"
-    (repo / "misc").mkdir(parents=True)
+    (repo / "misc" / "xen-vms").mkdir(parents=True)
     (repo / "state").mkdir(parents=True)
-    for os_ in ("ubuntu", "android"):
-        (repo / "misc" / f"{os_}_sandbox.cfg").write_text(
-            (ROOT / "misc" / f"{os_}_sandbox.cfg").read_text())
+    for os_ in ("ubuntu", "windows"):
+        (repo / "misc" / "xen-vms" / f"{os_}_sandbox.cfg").write_text(
+            (ROOT / "misc" / "xen-vms" / f"{os_}_sandbox.cfg").read_text())
         (repo / "state" / f"{os_}_sandbox.bak").write_bytes(b"saved")
     (tmp_path / "cfg").mkdir(exist_ok=True)
     return Config(staging_dir=tmp_path / "staging",
@@ -178,7 +178,7 @@ def test_capacity_is_registered_from_the_templates_own_configs(tmp_path):
     api = FakeApi()
     daemon(tmp_path, api).start()
 
-    assert api.registered["pipelines"] == {"ubuntu": 4246, "android": 4246}
+    assert api.registered["pipelines"] == {"ubuntu": 8342, "windows": 8342}
     assert api.registered["total_vlans"] == 4
 
 
@@ -188,14 +188,14 @@ def test_a_guest_with_no_template_is_not_offered(tmp_path):
     api = FakeApi()
     daemon(tmp_path, api).start()
 
-    assert "windows" not in api.registered["pipelines"]
+    assert "android" not in api.registered["pipelines"]
 
 
 def test_a_host_with_no_templates_refuses_to_start(tmp_path):
     """Better a refusal than a worker that registers, claims, and fails every
     job it is given."""
     cfg = config(tmp_path)
-    for f in (cfg.repo_root / "misc").iterdir():
+    for f in (cfg.repo_root / "misc" / "xen-vms").iterdir():
         f.unlink()
 
     d = D.Daemon(settings(tmp_path), cfg, runner(), FakeApi())

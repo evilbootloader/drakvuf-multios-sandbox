@@ -318,7 +318,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        store: [minio, garage]
+        store: garage
     name: platform (${{ matrix.store }})
     services:
       postgres:

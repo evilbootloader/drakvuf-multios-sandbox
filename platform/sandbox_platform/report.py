@@ -284,6 +284,7 @@ class Report(_Lenient):
     read_files: list[FileRef] = Field(default_factory=list)
     modified_files: list[FileRef] = Field(default_factory=list)
     deleted_files: list[FileRef] = Field(default_factory=list)
+    
     connections: list[Connection] = Field(default_factory=list)
     unix_sockets: list[UnixSocket] = Field(default_factory=list)
     dns_queries: list[DnsQuery] = Field(default_factory=list)

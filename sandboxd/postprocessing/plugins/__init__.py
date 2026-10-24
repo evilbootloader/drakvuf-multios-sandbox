@@ -45,14 +45,6 @@ POSTPROCESS_PLUGINS = [
         requires=[],
         generates=["yara.json"],
     ),
-    PostprocessPlugin(
-        function=capa_analysis,
-        requires=[
-            "process_tree.json",
-            "inject.log",
-        ],
-        generates=["ttps.json"],
-    ),
     # Before capa_analysis, not after it as upstream orders them: with
     # analyze_memdumps on, capa's static pass reads DUMPS_ZIP, which this is
     # what produces. Upstream never hit that because it ships the option off.
@@ -60,6 +52,14 @@ POSTPROCESS_PLUGINS = [
         function=process_dumps,
         requires=[DUMPS_DIR, "memdump.log", "process_tree.json"],
         generates=[DUMPS_ZIP],
+    ),
+    PostprocessPlugin(
+        function=capa_analysis,
+        requires=[
+            "process_tree.json",
+            "inject.log",
+        ],
+        generates=["ttps.json"],
     ),
     # inject.log is the `"Plugin": "inject"` line of the trace, split out
     # above -- DRAKVUF's own -i/-e launch, whose InjectedPid is the sample's
@@ -87,7 +87,7 @@ POSTPROCESS_PLUGINS = [
     PostprocessPlugin(function=compress_ipt, requires=[IPT_DIR], generates=[IPT_ZIP]),
     # Before gzip_syscalls, which replaces the syscall and sysret logs this
     # reads, and after build_process_tree -- though it does not need the tree:
-    # a job without procmon still has a sample scope (falco/events.py,
+    # a job without procmon still has a sample scope (falco/events.py,  
     # sample_scope). Requires nothing for the same reason get_http_info
     # requires no log: what it reads is per-OS (falco_analysis.FALCO_PROFILES).
     PostprocessPlugin(function=falco_analysis, requires=[], generates=[FALCO_ALERTS]),

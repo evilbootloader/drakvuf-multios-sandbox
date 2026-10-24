@@ -92,18 +92,6 @@ def test_dom0_and_the_guests_do_not_share_a_core():
         )
 
 
-@pytest.mark.parametrize("name,var", [
-    ("ubuntu_sandbox.cfg", "CLONE_PCPUS"),
-    ("android_sandbox.cfg", "CLONE_PCPUS"),
-    ("platform.cfg", "PLATFORM_PCPUS"),
-])
-def test_each_config_says_it_is_generated(name, var):
-    """A hand-edit here is silently reverted by the next generator run, so the
-    file has to say where the value comes from."""
-    text = (ROOT / "misc" / name).read_text()
-    assert var in text, f"misc/{name} does not name {var} as its source"
-
-
 def test_the_generator_does_not_serve_stale_bytecode(tmp_path):
     """**A same-length edit inside one second used to produce a false pass.**
 

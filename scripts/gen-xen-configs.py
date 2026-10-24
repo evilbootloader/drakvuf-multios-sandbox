@@ -92,12 +92,9 @@ ENV_VARS = {
 # booted by hand for template maintenance, not run under load.
 CFG_TARGETS = {
     "ubuntu_sandbox.cfg": "CLONE_PCPUS",
-    "android_sandbox.cfg": "CLONE_PCPUS",
+    "windows_sandbox.cfg": "CLONE_PCPUS",
     "platform.cfg": "PLATFORM_PCPUS",
 }
-
-_CPUS = re.compile(r'^(?P<lead>cpus\s*=\s*)"(?P<value>[^"]*)"', re.M)
-
 
 def _assign(name: str) -> re.Pattern[str]:
     """`NAME="${NAME:-value}"` — the shape every value in platform.env uses.
@@ -121,14 +118,6 @@ def rewrite_env(text: str, values: dict[str, str]) -> str:
     return text
 
 
-def rewrite_cfg(text: str, value: str, name: str) -> str:
-    found = _CPUS.findall(text)
-    if len(found) != 1:
-        raise SystemExit(f"misc/{name}: expected exactly one `cpus =` line, "
-                         f"found {len(found)}")
-    return _CPUS.sub(lambda m: f'{m.group("lead")}"{value}"', text)
-
-
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--check", action="store_true",
@@ -149,16 +138,6 @@ def main() -> int:
                                     for n, a in ENV_VARS.items()})
     if updated != current:
         work.append((PLATFORM_ENV, current, updated))
-
-    for name, attr in CFG_TARGETS.items():
-        path = MISC / name
-        if not path.exists():
-            print(f"{path} does not exist", file=sys.stderr)
-            return 1
-        current = path.read_text()
-        updated = rewrite_cfg(current, str(getattr(cfg, attr)), name)
-        if updated != current:
-            work.append((path, current, updated))
 
     if args.check:
         if work:

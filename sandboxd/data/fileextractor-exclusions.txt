@@ -1,1 +1,1 @@
-\\Program Files (x86)\\Microsoft\\EdgeCore\\.*
+\\Program Files \(x86\)\\Microsoft\\EdgeCore\\.*

@@ -88,13 +88,14 @@
     {{ group_summary(g.seqid, g.in_sample, g.kinds) }}
     <div class="group-body">
     <table class="rows compact">
-      <thead><tr><th>Op</th><th class="fill">Path</th>{% if g.shared %}<th>Also by</th>{% endif %}</tr></thead>
+      <thead><tr><th>Op</th><th class="fill">Path</th>{% if g.shared %}<th>Also by</th><th>Extracted id</th>{% endif %}</tr></thead>
       <tbody>
       {% for r in g.rows %}
         <tr>
           <td><span class="kind" data-kind="{{ r.kind }}">{{ r.kind }}</span></td>
           <td class="filename">{{ r.item.filename }}</td>
           {% if g.shared %}<td>{{ procs(r.others) }}</td>{% endif %}
+          <td>{{ r.extracted }}</td>
         </tr>
       {% endfor %}
       </tbody>
@@ -103,9 +104,7 @@
   </details>
   {% endfor %}
 </div>
-<p class="dim small">Written: opens for write that were then written to, by
-  any process, minus the prefetch directory. Read: opens that were then read
-  from, on the same terms.</p>
+<p class="dim small">Files read, written and deleted. With some exclusion paths to avoid noise</p>
 {% else %}
 <p class="dim">None recorded. <code>filetracer</code> was not among this
   run's plugins, or no process wrote, read or deleted a file it opened.</p>

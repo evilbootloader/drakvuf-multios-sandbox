@@ -30,28 +30,22 @@ def get_modified_files_info(context: PostprocessContext) -> None:
                 for access in desired_access_raw.split(" | ")
             }
 
-            write_access = {
-                "GENERIC_WRITE",
-                "GENERIC_ALL",
-                "FILE_WRITE_DATA",
-                "FILE_APPEND_DATA",
-                "FILE_WRITE_ATTRIBUTES",
-                "FILE_WRITE_EA",
-                "DELETE",
-            }
-
-            read_access = {
-                "GENERIC_READ",
-                "GENERIC_ALL",
-                "FILE_READ_DATA",
-            }
-
-            if desired_access.intersection(write_access):
-                method = "write"
-            elif desired_access.intersection(read_access):
-                method = "read"
-            else:
+            if not any(
+                access
+                in ["GENERIC_WRITE", "FILE_WRITE_DATA", "FILE_APPEND_DATA", "DELETE"]
+                for access in desired_access
+            ):
                 return None
+
+            filename = data.get("FileName").lower()
+            if not filename.startswith("\\??\\"):
+                return None
+
+            path = pathlib.PureWindowsPath(filename[len("\\??\\") :])
+            if not path.drive:
+                return None
+                
+            method = "open"
 
         elif method_name == "NtWriteFile":
             method = "write"
@@ -76,12 +70,6 @@ def get_modified_files_info(context: PostprocessContext) -> None:
         if not filename_lower.startswith(nt_prefix):
             return None
 
-        windows_path_str = filename[len(nt_prefix):]
-        path = pathlib.PureWindowsPath(windows_path_str)
-
-        if not path.drive:
-            return None
-
         normalized = str(path)
         normalized_lower = normalized.lower()
 
@@ -94,16 +82,6 @@ def get_modified_files_info(context: PostprocessContext) -> None:
             excluded in normalized_lower
             for excluded in excluded_paths
         ):
-            return None
-
-        excluded_files = {
-            "pagefile.sys",
-            "swapfile.sys",
-            "hiberfil.sys",
-            "memory.dmp",
-        }
-
-        if path.name.lower() in excluded_files:
             return None
 
         try:
@@ -290,6 +268,24 @@ def get_modified_files_info(context: PostprocessContext) -> None:
             "method": method,
         }
 
+    def find_extracted_files(data: dict) -> Optional[dict]:
+        try:
+            event_uid = int(data["EventUID"], 16)
+            pid = data["PID"]
+        except (KeyError, TypeError, ValueError):
+            return None
+
+        process = process_tree.get_process_for_evtid(
+                pid,
+                event_uid,
+            )
+
+        return {
+            "process": process,
+            "file_name": data.get("FileName"),
+            "seq_num": data.get("SeqNum"),
+        }
+
     if context.target_os == TargetOs.WINDOWS:
         modified_files_log = parse_log(
             analysis_dir / "filetracer.log", filter_modified_files_windows
@@ -299,10 +295,15 @@ def get_modified_files_info(context: PostprocessContext) -> None:
             analysis_dir / "filetracer.log", filter_modified_files_linux
         )
 
+    extracted_files_log = parse_log(
+            analysis_dir / "filetracer.log", find_extracted_files
+        )
+
     opened_files = {}
     modified_files = defaultdict(set)
     deleted_files = defaultdict(set)
     read_files = defaultdict(set)
+    extracted_files = defaultdict(set)
 
     for data in modified_files_log:
         seqid = data["process"].seqid
@@ -327,6 +328,7 @@ def get_modified_files_info(context: PostprocessContext) -> None:
             "modified_files": [
                 {
                     "filename": filename,
+                    "extracted": sorted([extracted_files.pop(data)[seq_num] for data in list(extracted_files) if data["process"].seqid in modified_files[filename]]),
                     "process_seqids": sorted(list(modified_files[filename])),
                 }
                 for filename in sorted(modified_files.keys())
@@ -334,9 +336,18 @@ def get_modified_files_info(context: PostprocessContext) -> None:
             "deleted_files": [
                 {
                     "filename": filename,
+                    "extracted": sorted([extracted_files.pop(data) for data in list(extracted_files) if data["process"].seqid in modified_files[filename]]),
                     "process_seqids": sorted(list(deleted_files[filename])),
                 }
                 for filename in sorted(deleted_files.keys())
+            ],
+            "read_files": [
+                {
+                    "filename": filename,
+                    "extracted": sorted([extracted_files.pop(data) for data in list(extracted_files) if data["process"].seqid in modified_files[filename]]),
+                    "process_seqids": sorted(list(read_files[filename])),
+                }
+                for filename in sorted(read_files.keys())
             ],
         }
     )

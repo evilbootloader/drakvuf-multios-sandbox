@@ -117,7 +117,7 @@ def test_missing_sections_are_empty_not_errors():
 
 
 def test_an_unknown_key_is_ignored_and_a_wrong_type_is_refused():
-    ok = R.parse(json.dumps(sample_report(yara=[{"rule": "x"}])).encode())
+    ok = R.parse(json.dumps(sample_report(yara=[{"rule": "x", "filename":"mal.exe", "identifier": "x", "namespace": "default"}])).encode())
     assert ok.error is None
     bad = R.parse(json.dumps(sample_report(processes=[{"seqid": "one", "pid": 1}])).encode())
     assert bad.report is None and "processes.0.seqid" in bad.error
