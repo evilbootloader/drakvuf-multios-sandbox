@@ -7,6 +7,15 @@
   data-active is read by job.js: an SSE refresh must ask for the tab you are
   looking at, not the one the URL was rendered with.
 #}
+{#
+  The count beside a label, where one number means something -- see
+  Report.tab_counts -- plus the artifact count, which is the job's own.
+  Written straight after the label: a tab's accessible name and the tests
+  that read the bar both expect the label first. The space is inside the
+  span, where a screen reader hears it and the badge's padding swallows it.
+#}
+{% set counts = report.tab_counts() if report else {} %}
+{% if job.artifacts %}{% set counts = dict(counts, artifacts=job.artifacts | length) %}{% endif %}
 <nav class="tabs" data-active="{{ active }}">
   {% for tab in tabs %}
   {# Tabs with no data yet are dimmed and marked, rather than looking
@@ -26,7 +35,7 @@
      hx-push-url="/ui/jobs/{{ job.id }}?tab={{ tab.slug }}"
      {% if tab.slug not in filled %}data-empty="1"
        title="No data collected for this tab yet{% if tab.owner %} — {{ tab.owner }}{% endif %}"{% endif %}
-     {% if tab.slug == active %}aria-selected="true"{% endif %}>{{ tab.label }}</a>
+     {% if tab.slug == active %}aria-selected="true"{% endif %}>{{ tab.label }}{% if counts.get(tab.slug) %}<span class="n"> {{ counts[tab.slug] }}</span>{% endif %}</a>
   {% endfor %}
 </nav>
 

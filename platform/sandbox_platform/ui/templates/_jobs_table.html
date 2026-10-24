@@ -14,7 +14,7 @@
   polled for the life of the tab. Carried by the swapped markup, the server's
   answer actually reaches the filter.
 #}
-<div class="scroll-x" data-live="{{ '1' if live else '0' }}">
+<div class="table-card" data-live="{{ '1' if live else '0' }}">
 <table class="rows">
   <thead>
     <tr>
@@ -29,7 +29,7 @@
   {% for job in jobs %}
     <tr>
       <td class="mono"><a href="/ui/jobs/{{ job.id }}">{{ job.created_at.strftime('%Y-%m-%d %H:%M') }}</a></td>
-      <td>{{ job.target_os.value }}</td>
+      <td><span class="chip">{{ job.target_os.value }}</span></td>
       {#
         Attacker-controlled, rendered verbatim and autoescaped. `.filename`
         isolates bidi overrides so a name containing U+202E cannot reverse the
@@ -51,8 +51,8 @@
         <a href="/ui/jobs?q={{ job.sha256 }}" title="{{ job.sha256 }}">{{ job.sha256[:12] }}…</a>
         {% else %}—{% endif %}
       </td>
-      <td>{{ job.owner_email or '—' }}</td>
-      <td>{{ job.visibility.value }}</td>
+      <td class="dim">{{ job.owner_email or '—' }}</td>
+      <td><span class="chip" data-vis="{{ job.visibility.value }}">{{ job.visibility.value }}</span></td>
     </tr>
   {% endfor %}
   </tbody>

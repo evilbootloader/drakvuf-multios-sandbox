@@ -41,10 +41,18 @@
 {#
   The process tree. `<details>` rather than script: it collapses, it is
   keyboard-accessible, and it costs nothing when a run has 146 processes.
-  Open by default -- the reader is here to see the sample's subtree, and the
-  page jumps to it via the `proc-<seqid>` anchor.
+
+  Open where something happened -- the sample's ancestors, its subtree, and
+  any branch holding a process that started during the trace (see
+  Report.expanded). The rest were already running and did nothing new, and
+  on a Windows run they were most of the page; they close to one line that
+  says how many processes it holds. A report with nothing to go on opens
+  everything, which is how the tree always rendered. A `proc-<seqid>` link
+  into a closed branch opens it: browsers do for a fragment, and disclose.js
+  does for those that do not.
 #}
 {% macro tree(nodes) -%}
+{%- set expanded = report.expanded %}
 <ul class="ptree">
 {%- for node in nodes recursive %}
   {%- set p = node.process %}
@@ -52,8 +60,8 @@
       {% if report.startup.process == p.seqid %}data-sample="1"{% endif %}
       {% if p.exited_at is not none or p.exit_code is not none %}data-exited="1"{% endif %}>
     {%- if node.children %}
-    <details open>
-      <summary>{{ node_line(p) }}</summary>
+    <details{% if not expanded or p.seqid in expanded %} open{% endif %}>
+      <summary>{{ node_line(p) }} <span class="hidden-n" title="processes under this one">+{{ node.descendants }}</span></summary>
       <ul>{{ loop(node.children) }}</ul>
     </details>
     {%- else %}
@@ -64,10 +72,18 @@
 </ul>
 {%- endmacro %}
 
+{#
+  One node's line. The command line is cut to fit and is a link to the whole
+  of it, on a page of its own in a new tab (cmdline.html) -- the place to
+  read, select and copy one. Hovering it shows the whole line in place; that
+  copy is the same text again, autoescaped like the first, and hidden from
+  assistive technology, which already reads the whole line from the link.
+#}
 {% macro node_line(p) -%}
   <span class="pname" title="{{ p.name }}">{{ p.basename }}</span>
   <span class="dim">({{ p.pid }})</span>
-  {%- if p.command_line %} <code class="cmd" title="{{ p.command_line }}">{{ p.command_line }}</code>{% endif %}
+  {%- if p.command_line %} <a class="cmd" href="/ui/jobs/{{ job.id }}/process/{{ p.seqid }}/cmdline"
+       target="_blank" rel="noopener"><code>{{ p.command_line }}</code><span class="cmd-full" aria-hidden="true">{{ p.command_line }}</span></a>{% endif %}
   {%- if p.exit_code_str %} <span class="exit{% if p.exited_with_error %} error{% endif %}"
        title="exit code 0x{{ '%08x' | format(p.exit_code) }}">{{ p.exit_code_str }}</span>
   {%- elif p.exited_at is not none %} <span class="exit">exited</span>{% endif %}
@@ -76,6 +92,49 @@
   <a class="logs" href="/ui/jobs/{{ job.id }}/process/{{ p.seqid }}"
      hx-get="/ui/jobs/{{ job.id }}/process/{{ p.seqid }}"
      hx-target="#process-panel" hx-swap="innerHTML show:#process-panel:top">logs</a>
+{%- endmacro %}
+
+{#
+  One process's share of a per-process list (Report.file_activity,
+  registry_activity, the memory tab's dump groups): the line a closed group
+  shows. The sample's own groups are marked, and open -- see `group_open`.
+#}
+{% macro group_summary(seqid, in_sample, kinds, extra='') -%}
+<summary>
+  {{ proc(seqid) }}
+  {%- if seqid is not none and seqid == report.startup.process %} <span class="chip" data-kind="sample">sample</span>
+  {%- elif in_sample %} <span class="chip" data-kind="sample-tree" title="started by the sample, directly or not">from sample</span>{% endif %}
+  {%- if extra %} <span class="dim small">{{ extra }}</span>{% endif %}
+  <span class="kinds">
+    {%- for kind, n in kinds.items() %}<span class="kind" data-kind="{{ kind }}">{{ kind }}<b>{{ n }}</b></span>{% endfor -%}
+  </span>
+</summary>
+{%- endmacro %}
+
+{#
+  Which groups render open: the sample's, or the only one there is. Anything
+  else is one closed line until asked for -- or found with the browser's own
+  find-in-page, which searches closed <details> too.
+#}
+{% macro group_attrs(in_sample, total) -%}
+{%- if in_sample %} data-sample="1"{% endif %}{% if in_sample or total == 1 %} open{% endif -%}
+{%- endmacro %}
+
+{#
+  The counts beside a block's title: `written 72 · deleted 55`.
+#}
+{% macro kind_totals(groups) -%}
+{%- set totals = {} %}
+{%- for g in groups %}{% for kind, n in g.kinds.items() %}{% set _ = totals.update({kind: totals.get(kind, 0) + n}) %}{% endfor %}{% endfor %}
+{%- for kind, n in totals.items() %}{{ kind }} <span class="mono">{{ n }}</span>{% if not loop.last %} · {% endif %}{% endfor -%}
+{%- endmacro %}
+
+{# Expand/collapse every group in the enclosing `[data-disclose-scope]`. #}
+{% macro disclose_tools() -%}
+<span class="tools">
+  <button type="button" class="ghost" data-disclose="open">expand all</button>
+  <button type="button" class="ghost" data-disclose="close">collapse all</button>
+</span>
 {%- endmacro %}
 
 {#

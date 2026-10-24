@@ -22,6 +22,22 @@
 #}
 <dl class="facts">
   <div>
+  <dt>State</dt>
+  <dd>
+    <span class="state" data-state="{{ job.state.value }}">{{ job.state.value }}</span>
+    {% if job.attempt and job.attempt > 1 %}<span class="mono">attempt {{ job.attempt }}</span>{% endif %}
+  </dd>
+  </div>
+  <div><dt>Target</dt><dd><span class="chip">{{ job.target_os.value }}</span></dd></div>
+  <div><dt>Type</dt><dd>{{ job.detected_type or '—' }}</dd></div>
+  <div><dt>SHA-256</dt><dd class="mono">{{ job.sha256 or '—' }}</dd></div>
+  <div>
+  <dt>Size</dt>
+  <dd class="mono">{% if job.size_bytes is not none %}{{ job.size_bytes | filesizeformat(binary=True) }}{% if job.size_bytes >= 1024 %} <span class="dim">({{ "{:,}".format(job.size_bytes) }} bytes)</span>{% endif %}{% else %}—{% endif %}</dd>
+  </div>
+  <div><dt>Submitted</dt><dd class="mono">{{ job.created_at.strftime('%Y-%m-%d %H:%M:%S') }}</dd></div>
+  <div><dt>Owner</dt><dd>{{ job.owner_email or '—' }}</dd></div>
+  <div>
   <dt>Visibility</dt>
   <dd>
     <span class="mono" data-visibility="{{ job.visibility.value }}">{{ job.visibility.value }}</span>
@@ -67,22 +83,6 @@
     <span class="mono" data-publish-error></span>
   </dd>
   </div>
-  <div>
-  <dt>State</dt>
-  <dd>
-    <span class="state" data-state="{{ job.state.value }}">{{ job.state.value }}</span>
-    {% if job.attempt and job.attempt > 1 %}<span class="mono">attempt {{ job.attempt }}</span>{% endif %}
-  </dd>
-  </div>
-  <div><dt>Target</dt><dd>{{ job.target_os.value }}</dd></div>
-  <div><dt>Type</dt><dd>{{ job.detected_type or '—' }}</dd></div>
-  <div><dt>SHA-256</dt><dd class="mono">{{ job.sha256 or '—' }}</dd></div>
-  <div>
-  <dt>Size</dt>
-  <dd class="mono">{% if job.size_bytes is not none %}{{ job.size_bytes | filesizeformat(binary=True) }}{% if job.size_bytes >= 1024 %} <span class="dim">({{ "{:,}".format(job.size_bytes) }} bytes)</span>{% endif %}{% else %}—{% endif %}</dd>
-  </div>
-  <div><dt>Submitted</dt><dd class="mono">{{ job.created_at.strftime('%Y-%m-%d %H:%M:%S') }}</dd></div>
-  <div><dt>Owner</dt><dd>{{ job.owner_email or '—' }}</dd></div>
 </dl>
 
 {#

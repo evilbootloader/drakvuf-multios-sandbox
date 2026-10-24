@@ -16,7 +16,9 @@
   <a class="dim small" href="#proc-{{ seqid }}" title="back to the tree">↑ tree</a></h2>
 <dl class="dl">
   <dt>Image</dt><dd class="filename">{{ process.name }}</dd>
-  {% if process.command_line %}<dt>Command line</dt><dd class="filename">{{ process.command_line }}</dd>{% endif %}
+  {% if process.command_line %}<dt>Command line</dt><dd><span class="filename">{{ process.command_line }}</span>
+    <a class="dim small" href="/ui/jobs/{{ job.id }}/process/{{ seqid }}/cmdline" target="_blank"
+       rel="noopener" title="argv element by element, in a new tab">↗ argv</a></dd>{% endif %}
   <dt>PID</dt><dd class="mono">{{ process.pid }}
     {% if process.parent_seqid is not none %}<span class="dim">child of</span> {{ proc(process.parent_seqid) }}{% endif %}</dd>
   <dt>Lifetime</dt>
@@ -30,14 +32,14 @@
 </dl>
 
 {% if not plugins %}
-<div class="empty" style="margin-top:1rem">
+<div class="empty spaced-top">
   <strong>No log lines indexed for this process.</strong>
   Either no plugin recorded an event from it, or this run has no
   <code>log_index</code> (runs before postprocessing shipped).
 </div>
 {% endif %}
 
-<nav class="plugins" style="margin-top:1rem">
+<nav class="plugins spaced-top">
   {% for p in plugins %}
   <a href="/ui/jobs/{{ job.id }}/process/{{ seqid }}?plugin={{ p }}"
      hx-get="/ui/jobs/{{ job.id }}/process/{{ seqid }}?plugin={{ p }}"

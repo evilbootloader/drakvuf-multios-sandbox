@@ -56,6 +56,20 @@ templates = Jinja2Templates(directory=str(_HERE / "templates"))
 static = StaticFiles(directory=str(_HERE / "static"))
 
 
+def _by_directory(artifacts: dict[str, str]) -> list[tuple[str, list[tuple[str, str]]]]:
+    """Artifact names and links grouped by their first path segment, the
+    top level ("") first and then each directory in name order -- the
+    Artifacts tab's groups. Order within a group is the manifest's."""
+    groups: dict[str, list[tuple[str, str]]] = {}
+    for name, url in artifacts.items():
+        head, sep, _ = name.partition("/")
+        groups.setdefault(head if sep else "", []).append((name, url))
+    return sorted(groups.items(), key=lambda kv: (kv[0] != "", kv[0]))
+
+
+templates.env.filters["by_directory"] = _by_directory
+
+
 def _asset_version() -> str:
     """A cache key that changes when the assets do, and not otherwise.
 
@@ -492,6 +506,41 @@ def job_tabs(request: Request,
     return _render(request, "_job_tabs.html", **ctx)
 
 
+def _report_process(job_id: UUID, seqid: int, identity):
+    """The job, its report and one process of it, or a 404. Tenancy first:
+    `_detail` refuses a job the caller may not read before anything here
+    touches the store."""
+    with connection() as conn:
+        job = _detail(conn, job_id, identity)
+        key_prefix = _key_prefix(conn, job_id)
+    loaded = report_store.for_job(job.id, job.manifest, key_prefix,
+                                  expired=job.artifacts_expired)
+    process = loaded.report.by_seqid.get(seqid) if loaded.report else None
+    if process is None:
+        raise HTTPException(404, "no such process in this run's report")
+    return job, key_prefix, loaded.report, process
+
+
+@router.get("/jobs/{job_id}/process/{seqid}/cmdline", response_class=HTMLResponse)
+def cmdline_view(request: Request,
+                 job_id: UUID = PathParam(),
+                 seqid: int = PathParam(ge=0, le=10_000_000),
+                 identity: auth.Identity = None) -> HTMLResponse:
+    """One process's whole command line, on a page of its own.
+
+    What a command line in the Behaviour tab's tree opens, in a new tab: the
+    tree cuts each one to fit a line, and a command line is read, selected
+    and copied -- none of which a tooltip allows. A whole page rather than a
+    fragment so it stands alone in that tab, and argv element by element as
+    well as joined, because the joined line cannot show where one argument
+    ends and the next begins. Text from the report, autoescaped like the
+    tree it came from.
+    """
+    job, _, report, process = _report_process(job_id, seqid, identity)
+    return _render(request, "cmdline.html", view="jobs",
+                   job=job, report=report, process=process, seqid=seqid)
+
+
 @router.get("/jobs/{job_id}/process/{seqid}", response_class=HTMLResponse)
 def process_view(request: Request,
                  job_id: UUID = PathParam(),
@@ -510,14 +559,7 @@ def process_view(request: Request,
     whole panel. Nothing here is a tab: the URL is fetched into the panel by
     htmx and works as a plain page without it.
     """
-    with connection() as conn:
-        job = _detail(conn, job_id, identity)
-        key_prefix = _key_prefix(conn, job_id)
-    loaded = report_store.for_job(job.id, job.manifest, key_prefix,
-                                  expired=job.artifacts_expired)
-    process = loaded.report.by_seqid.get(seqid) if loaded.report else None
-    if process is None:
-        raise HTTPException(404, "no such process in this run's report")
+    job, key_prefix, report, process = _report_process(job_id, seqid, identity)
 
     available = logview.for_job(job.id, job.manifest, key_prefix,
                                 expired=job.artifacts_expired)
@@ -530,7 +572,7 @@ def process_view(request: Request,
     page = logview.page(available, seqid, selected, method or None, skip) \
         if selected else None
 
-    ctx = dict(job=job, report=loaded.report, process=process, seqid=seqid,
+    ctx = dict(job=job, report=report, process=process, seqid=seqid,
                plugins=plugins, compressed=available.compressed_for(seqid),
                selected=selected, methods=sorted(methods), method=method,
                page=page, page_bytes=logview.PAGE_BYTES)

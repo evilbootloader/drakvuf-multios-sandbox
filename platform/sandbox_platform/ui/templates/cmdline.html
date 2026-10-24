@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+{% from "tabs/_report_macros.html" import proc with context %}
+{% block title %}{{ process.basename }} ({{ process.pid }}) — command line — DRAKVUF MultiOS Sandbox{% endblock %}
+
+{#
+  One process's command line, whole: what a command line in the Behaviour
+  tab's tree opens in a new tab (ui/__init__.py, cmdline_view). Every string
+  here is the sample's, autoescaped; nothing is a link but the way back.
+#}
+{% block content %}
+
+<p class="crumbs">
+  <a href="/ui/jobs">History</a> ›
+  <a class="filename" href="/ui/jobs/{{ job.id }}?tab=behaviour#proc-{{ seqid }}">{{ job.submitted_filename }}</a> ›
+  command line
+</p>
+
+<div class="page-head">
+  <h2>{{ proc(seqid) }}</h2>
+  {% if report.startup.process == seqid %}<span class="chip" data-kind="sample">sample</span>
+  {% elif seqid in report.sample_tree %}<span class="chip" data-kind="sample-tree">from sample</span>{% endif %}
+</div>
+
+<dl class="dl card spaced">
+  <dt>Image</dt><dd class="filename">{{ process.name }}</dd>
+  <dt>PID</dt><dd class="mono">{{ process.pid }}
+    {% if process.parent_seqid is not none %}<span class="dim">child of</span> {{ proc(process.parent_seqid) }}{% endif %}</dd>
+</dl>
+
+<section class="block">
+<header class="block-head">
+  <h2>Command line</h2>
+  {% if process.args %}<span class="summary">{{ process.command_line | length }} characters — the arguments below joined with single spaces</span>{% endif %}
+</header>
+{% if process.args %}
+<pre class="cmdline">{{ process.command_line }}</pre>
+{% else %}
+<p class="dim">No command line recorded for this process.</p>
+{% endif %}
+</section>
+
+{% if process.args %}
+<section class="block">
+<header class="block-head">
+  <h2>Arguments <span class="count">{{ process.args | length }}</span></h2>
+  <span class="summary">argv as recorded, one element per row, spaces inside an element kept</span>
+</header>
+<div class="table-card"><table class="rows compact">
+  <thead><tr><th>#</th><th class="fill">Argument</th></tr></thead>
+  <tbody>
+  {% for a in process.args %}
+    <tr><td class="mono argn">{{ loop.index0 }}</td><td class="filename arg">{{ a }}</td></tr>
+  {% endfor %}
+  </tbody>
+</table></div>
+</section>
+{% endif %}
+
+{% endblock %}

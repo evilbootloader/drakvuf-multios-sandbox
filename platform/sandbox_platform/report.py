@@ -277,6 +277,11 @@ class Report(_Lenient):
     yara: list[Yara] = Field(default_factory=list)
     http_requests: list[HttpRequest] = Field(default_factory=list)
     cracked_urls: list[CrackedUrl] = Field(default_factory=list)
+    # Not written by generate_report.py yet -- get_modified_files_info
+    # collects reads and drops them -- but the Behaviour tab has listed them
+    # since it was built. Declared so that tab reads a real, empty list rather
+    # than an undefined attribute, and fills the day the generator writes it.
+    read_files: list[FileRef] = Field(default_factory=list)
     modified_files: list[FileRef] = Field(default_factory=list)
     deleted_files: list[FileRef] = Field(default_factory=list)
     connections: list[Connection] = Field(default_factory=list)
@@ -379,10 +384,116 @@ class Report(_Lenient):
         roots = self.tree if everything else (self.lineage() or self.tree)
         return layout(roots, self.startup.process, len(self.processes))
 
+    @property
+    def sample_tree(self) -> set[int]:
+        """The sample's process and everything under it -- the boxes the
+        diagram outlines, and the groups the tabs open first."""
+        target = self.startup.process
+        for root in self.tree:
+            for node in root.walk():
+                if node.process.seqid == target:
+                    return {n.process.seqid for n in node.walk()}
+        return set()
+
+    @property
+    def expanded(self) -> set[int]:
+        """Tree nodes to render open: those whose subtree holds the sample or
+        a process that started while the trace ran.
+
+        Everything else was already running when the trace began and spawned
+        nothing during it -- on a Windows run, a hundred-odd services that
+        filled the tree above the five processes the page is opened for. They
+        collapse to one line each rather than vanish, so the shape of the
+        guest stays readable. Started-ness is `started_at` being set and
+        non-zero, the same test the process panel uses for "already running".
+
+        Iterative, post-order: a report is untrusted, and a chain several
+        thousand deep would exhaust Python's recursion limit here."""
+        keep: set[int] = set()
+        sample = self.startup.process
+        for root in self.tree:
+            stack: list[tuple[Node, bool]] = [(root, False)]
+            while stack:
+                node, visited = stack.pop()
+                if not visited:
+                    stack.append((node, True))
+                    stack.extend((c, False) for c in node.children)
+                    continue
+                p = node.process
+                if (p.seqid == sample or p.started_at
+                        or any(c.process.seqid in keep for c in node.children)):
+                    keep.add(p.seqid)
+        return keep
+
+    def file_activity(self) -> list[Activity]:
+        """Files read, written and deleted, under the process that did it."""
+        return self._by_process((("written", self.modified_files),
+                                 ("deleted", self.deleted_files),
+                                 ("read", self.read_files)))
+
+    def registry_activity(self) -> list[Activity]:
+        """Every registry write, under the process that made it. A deleted
+        key and a deleted value share a kind; the template tells them apart
+        by whether the row has a value name at all."""
+        return self._by_process((("set", self.registry_set_values),
+                                 ("created", self.registry_created_keys),
+                                 ("deleted", self.registry_deleted_keys),
+                                 ("deleted", self.registry_deleted_values)))
+
+    def _by_process(self, sections) -> list[Activity]:
+        """Regroup per-item lists under the processes they credit.
+
+        The report keeps one entry per path with the processes that touched
+        it, which on a Windows run is several hundred rows dominated by the
+        guest's own services. Turned inside out, the sample's share is a few
+        groups at the top and the rest is one line per process.
+
+        An item credited to two processes appears in both groups, each naming
+        the other, so neither process's group is missing anything it did. An
+        item credited to nobody groups under None -- kept, never dropped, as
+        everywhere else in this module. Order: the sample's subtree, then the
+        tree's own order, then seqids the tree does not list, then None."""
+        sample = self.sample_tree
+        groups: dict[int | None, Activity] = {}
+        for kind, items in sections:
+            for item in items:
+                seqids = list(dict.fromkeys(item.process_seqids)) or [None]
+                for s in seqids:
+                    group = groups.get(s)
+                    if group is None:
+                        group = groups[s] = Activity(s, s in sample)
+                    group.rows.append(
+                        Row(kind, item, tuple(o for o in seqids if o != s)))
+        key = self._group_order(sample)
+        return sorted(groups.values(), key=lambda g: key(g.seqid))
+
+    def memdump_groups(self) -> list[tuple[MemdumpGroup, bool]]:
+        """The report's own dump groups, each with whether it is the
+        sample's, in the order `_by_process` gives its groups."""
+        sample = self.sample_tree
+        key = self._group_order(sample)
+        return sorted(((g, g.process_seqid in sample) for g in self.memdumps),
+                      key=lambda pair: key(pair[0].process_seqid))
+
+    def _group_order(self, sample: set[int]):
+        order = {n.process.seqid: i
+                 for i, n in enumerate(n for root in self.tree for n in root.walk())}
+        return lambda seqid: (seqid not in sample, seqid is None,
+                              order.get(seqid, len(order)), seqid or 0)
+
+    def tab_counts(self) -> dict[str, int]:
+        """The number beside a tab's label, where one number means something:
+        processes, dumps, registry writes. Network has no such number -- a
+        sum of connections, names and URLs counts nothing in particular."""
+        return {"behaviour": len(self.processes),
+                "memory": self.dump_count,
+                "registry": self.registry_count}
+
     def filled_tabs(self) -> set[str]:
         """Which of the report-driven tabs have something to show."""
         filled: set[str] = set()
-        if self.processes or self.modified_files or self.deleted_files:
+        if (self.processes or self.modified_files or self.deleted_files
+                or self.read_files):
             filled.add("behaviour")
         if (self.connections or self.dns_queries or self.http_requests
                 or self.cracked_urls or self.unix_sockets or self.falco_network):
@@ -403,6 +514,47 @@ class Node:
         yield self
         for child in self.children:
             yield from child.walk()
+
+    @property
+    def descendants(self) -> int:
+        """How many processes a collapsed node hides. A stack rather than
+        `walk()`, which recurses, for the reason `Report.expanded` gives."""
+        count, stack = 0, list(self.children)
+        while stack:
+            count += 1
+            stack.extend(stack.pop().children)
+        return count
+
+
+@dataclass(frozen=True)
+class Row:
+    """One line of a per-process group: which list it came from (`kind`),
+    the report's own entry, and the other processes that entry credits."""
+    kind: str
+    item: FileRef | RegistryValue | RegistryKey
+    others: tuple[int | None, ...] = ()
+
+
+@dataclass
+class Activity:
+    """One process's share of a list the report keeps per path."""
+    seqid: int | None
+    in_sample: bool
+    rows: list[Row] = field(default_factory=list)
+
+    @property
+    def kinds(self) -> dict[str, int]:
+        """Rows per kind, in the order the kinds were first seen."""
+        out: dict[str, int] = {}
+        for row in self.rows:
+            out[row.kind] = out.get(row.kind, 0) + 1
+        return out
+
+    @property
+    def shared(self) -> bool:
+        """Whether any row is also credited to another process, which is
+        what decides if the group's table needs an "also by" column."""
+        return any(row.others for row in self.rows)
 
 
 # --- the diagram --------------------------------------------------------------

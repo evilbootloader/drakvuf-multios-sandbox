@@ -40,20 +40,60 @@
 </div>
 {% else %}
 
-{% if report.dns_queries %}
-<h2>DNS queries <span class="count">{{ report.dns_queries | length }}</span></h2>
-<div class="scroll-x"><table class="rows">
-  <thead><tr><th>Name</th><th>By</th></tr></thead>
+{#
+  Names and connections side by side when there are both: a DNS table is two
+  narrow columns, and at full width it was a strip of names along the left
+  edge of an empty screen. Each block is written once, as a macro, and placed
+  in the grid or on its own.
+#}
+{% macro dns_block() -%}
+<section class="block">
+<header class="block-head"><h2>DNS queries <span class="count">{{ report.dns_queries | length }}</span></h2></header>
+<div class="table-card"><table class="rows compact">
+  <thead><tr><th class="fill">Name</th><th>By</th></tr></thead>
   <tbody>
   {% for q in report.dns_queries %}
     <tr><td class="filename">{{ q.domain }}</td><td>{{ procs(q.process_seqids) }}</td></tr>
   {% endfor %}
   </tbody>
 </table></div>
+</section>
+{%- endmacro %}
+
+{% macro connections_block() -%}
+<section class="block">
+<header class="block-head"><h2>Connections <span class="count">{{ report.connections | length }}</span></h2></header>
+<div class="table-card"><table class="rows compact">
+  <thead><tr><th>Proto</th><th>Remote</th><th>Service</th><th>Local</th><th>By</th></tr></thead>
+  <tbody>
+  {% for c in report.connections %}
+    <tr>
+      <td class="mono">{{ c.protocol }}</td>
+      <td class="mono">{{ c.remote_ip }}{% if c.remote_port is not none %}:{{ c.remote_port }}{% endif %}</td>
+      <td class="dim">{{ c.service or '' }}</td>
+      <td class="mono dim">{{ c.local_ip }}{% if c.local_port is not none %}:{{ c.local_port }}{% endif %}</td>
+      <td>{{ procs(c.process_seqids) }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table></div>
+</section>
+{%- endmacro %}
+
+{% if report.dns_queries and report.connections %}
+<div class="cols wide-right block">
+  {{ dns_block() }}
+  {{ connections_block() }}
+</div>
+{% elif report.dns_queries %}
+  {{ dns_block() }}
+{% elif report.connections %}
+  {{ connections_block() }}
 {% endif %}
 
 {% if report.falco_network %}
-<h2 style="margin-top:1.5rem">Falco network findings <span class="count">{{ report.falco_network | length }}</span></h2>
+<section class="block">
+<header class="block-head"><h2>Falco network findings <span class="count">{{ report.falco_network | length }}</span></h2></header>
 <ul class="falco">
   {% for f in report.falco_network %}
   <li>
@@ -66,22 +106,19 @@
   </li>
   {% endfor %}
 </ul>
+</section>
 {% endif %}
 
-{% if report.connections %}
-<h2 style="margin-top:1.5rem">Connections <span class="count">{{ report.connections | length }}</span></h2>
-<div class="scroll-x"><table class="rows">
-  <thead><tr><th>Proto</th><th>Remote</th><th>Service</th><th>Local</th><th>By</th></tr></thead>
-  <tbody>
-  {% for c in report.connections %}
-    <tr>
-      <td class="mono">{{ c.protocol }}</td>
-      <td class="mono">{{ c.remote_ip }}{% if c.remote_port is not none %}:{{ c.remote_port }}{% endif %}
-
+{#
+  Until 2026-10-23 this block sat inside the Connections table's Remote
+  cell -- a paste that landed inside an open <td> -- so it rendered once per
+  connection row, and not at all on a run with sockets and no connections.
+#}
 {% if report.unix_sockets %}
-<h2 style="margin-top:1.5rem">Unix sockets <span class="count">{{ report.unix_sockets | length }}</span></h2>
-<div class="scroll-x"><table class="rows">
-  <thead><tr><th>Peer</th><th>Own</th><th>Messages</th><th>Bytes</th><th>By</th></tr></thead>
+<section class="block">
+<header class="block-head"><h2>Unix sockets <span class="count">{{ report.unix_sockets | length }}</span></h2></header>
+<div class="table-card"><table class="rows compact">
+  <thead><tr><th class="wide">Peer</th><th>Own</th><th>Messages</th><th>Bytes</th><th>By</th></tr></thead>
   <tbody>
   {% for u in report.unix_sockets %}
     <tr>
@@ -94,18 +131,12 @@
   {% endfor %}
   </tbody>
 </table></div>
-{% endif %}</td>
-      <td class="dim">{{ c.service or '' }}</td>
-      <td class="mono dim">{{ c.local_ip }}{% if c.local_port is not none %}:{{ c.local_port }}{% endif %}</td>
-      <td>{{ procs(c.process_seqids) }}</td>
-    </tr>
-  {% endfor %}
-  </tbody>
-</table></div>
+</section>
 {% endif %}
 
 {% if report.http_requests %}
-<h2 style="margin-top:1.5rem">HTTP requests <span class="count">{{ report.http_requests | length }}</span></h2>
+<section class="block">
+<header class="block-head"><h2>HTTP requests <span class="count">{{ report.http_requests | length }}</span></h2></header>
 <ul class="requests">
   {% for r in report.http_requests %}
   <li>
@@ -124,19 +155,22 @@
   </li>
   {% endfor %}
 </ul>
+</section>
 {% endif %}
 
 {% if report.cracked_urls %}
-<h2 style="margin-top:1.5rem">URLs parsed <span class="count">{{ report.cracked_urls | length }}</span></h2>
-<p class="dim">Passed to <code>InternetCrackUrl</code> / <code>InternetCreateUrl</code>: what the sample handled, not necessarily what it fetched.</p>
-<div class="scroll-x"><table class="rows">
-  <thead><tr><th>URL</th><th>By</th></tr></thead>
+<section class="block">
+<header class="block-head"><h2>URLs parsed <span class="count">{{ report.cracked_urls | length }}</span></h2>
+  <span class="summary">Passed to <code>InternetCrackUrl</code> / <code>InternetCreateUrl</code>: what the sample handled, not necessarily what it fetched.</span></header>
+<div class="table-card"><table class="rows compact">
+  <thead><tr><th class="fill">URL</th><th>By</th></tr></thead>
   <tbody>
   {% for u in report.cracked_urls %}
     <tr><td class="filename">{{ u.url }}</td><td>{{ procs(u.process_seqids) }}</td></tr>
   {% endfor %}
   </tbody>
 </table></div>
+</section>
 {% endif %}
 
 {% endif %}

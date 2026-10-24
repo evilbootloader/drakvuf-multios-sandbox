@@ -862,7 +862,19 @@ def test_hostile_report_text_does_not_execute(strict_page, server, seed, name):
     pname = strict_page.locator("li#proc-4 .pname").first
     assert pname.get_attribute("title") == name
     assert pname.inner_text() == name.replace("\\", "/").rsplit("/", 1)[-1]
-    assert name in strict_page.locator("li#proc-4 .cmd").first.get_attribute("title")
+    # The command line is cut to fit and shown whole on hover, as text in a
+    # box of its own rather than in a `title` -- byte-exact either way.
+    assert name in strict_page.locator("li#proc-4 .cmd .cmd-full").first.text_content()
+    # Clicked, it opens the whole of it on a page of its own: escaped there
+    # too, and nothing on that page runs.
+    href = strict_page.locator("li#proc-4 .cmd").first.get_attribute("href")
+    assert strict_page.locator("li#proc-4 .cmd").first.get_attribute("target") == "_blank"
+    strict_page.goto(f"{server}{href}")
+    assert strict_page.fired == [], strict_page.fired
+    assert strict_page.evaluate("window.__xss") is False
+    assert strict_page.locator("script:not([src])").count() == 0
+    assert strict_page.locator("pre.cmdline").inner_text() == name
+    strict_page.goto(f"{server}/ui/jobs/{job_id}?tab=behaviour")
     # The diagram's box for the sample carries the same name as SVG text and
     # links to the tree node, never to anything the sample named.
     box = strict_page.locator("svg.pdiagram a[href='#proc-4']").first

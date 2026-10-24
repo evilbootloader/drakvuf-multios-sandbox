@@ -3,7 +3,8 @@
 
 {% block content %}
 
-<h2 class="filename">{{ job.submitted_filename }}</h2>
+<p class="crumbs"><a href="/ui/jobs">History</a> › <span class="mono">{{ job.target_os.value }}</span></p>
+<h2 class="filename job-title">{{ job.submitted_filename }}</h2>
 
 {#
   Outside the live region deliberately: only this div's CHILDREN are swapped,
@@ -21,5 +22,8 @@
    tab's fragment: it is swapped on every tab click, and a script that ships
    with the fragment would register its listeners again each time. #}
 <script src="/ui/static/pan.js?v={{ asset_version }}" defer></script>
+{# Expand/collapse-all for the per-process groups, and opening the groups a
+   `#proc-N` link lands inside. Here for the same reason as pan.js. #}
+<script src="/ui/static/disclose.js?v={{ asset_version }}" defer></script>
 
 {% endblock %}

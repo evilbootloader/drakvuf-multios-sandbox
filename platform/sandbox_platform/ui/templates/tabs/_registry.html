@@ -1,4 +1,5 @@
-{% from "tabs/_report_macros.html" import procs, unreadable with context %}
+{% from "tabs/_report_macros.html" import procs, unreadable,
+     group_summary, group_attrs, kind_totals, disclose_tools with context %}
 {#
   Registry WRITES, from regmon via get_registry_info.py: values set, keys
   created, keys and values deleted, each attributed to the processes that did
@@ -21,15 +22,23 @@
 </div>
 {% else %}
 
+{#
+  Autostart first and flat, whoever wrote it: it is what a reader scans a
+  registry section for, it is short, and splitting it across process groups
+  would hide the one list that should never need opening.
+#}
 {% set autostart = report.registry_autostart %}
 {% if autostart %}
-<h2>Autostart locations <span class="count">{{ autostart | length }}</span></h2>
+<section class="block">
+<header class="block-head">
+  <h2>Autostart locations <span class="count">{{ autostart | length }}</span></h2>
+</header>
 <p class="note danger">
   Writes under keys that survive a reboot or a logon — Run, Winlogon,
   Services, Image File Execution Options and the like. The guest's own
   services write here too, so this is where to look, not a verdict.
 </p>
-<div class="scroll-x"><table class="rows">
+<div class="table-card"><table class="rows compact">
   <thead><tr><th>Key</th><th>Value</th><th>Data</th><th>By</th></tr></thead>
   <tbody>
   {% for r in autostart %}
@@ -42,71 +51,56 @@
   {% endfor %}
   </tbody>
 </table></div>
+</section>
 {% endif %}
 
-<h2 {% if autostart %}style="margin-top:1.5rem"{% endif %}>Values set
-  <span class="count">{{ report.registry_set_values | length }}</span></h2>
-{% if report.registry_set_values %}
-<div class="scroll-x"><table class="rows">
-  <thead><tr><th>Key</th><th>Value</th><th>Data</th><th>By</th></tr></thead>
-  <tbody>
-  {% for r in report.registry_set_values %}
-    <tr{% if r.autostart %} data-autostart="1"{% endif %}>
-      <td class="filename">{{ r.key }}</td>
-      <td class="filename">{{ r.value_name if r.value_name is not none else '(Default)' }}</td>
-      <td class="filename data">{{ r.value if r.value is not none else '' }}</td>
-      <td>{{ procs(r.process_seqids) }}</td>
-    </tr>
+{#
+  Everything else, one group per process: values set, keys created, keys and
+  values deleted, in one table per process with the operation as a column.
+  Four flat tables of a hundred-odd rows each put the sample's few writes
+  wherever the key path sorted them; grouped, they are the open groups at the
+  top. Autostart rows are in their groups too, marked as in the list above.
+#}
+{% set groups = report.registry_activity() %}
+<section class="block" data-disclose-scope>
+<header class="block-head">
+  <h2>Writes by process <span class="count">{{ report.registry_count }}</span></h2>
+  <span class="summary">{{ kind_totals(groups) }} across
+    {{ groups | length }} process{{ 'es' if groups | length != 1 }}</span>
+  {{ disclose_tools() }}
+</header>
+<div class="groups">
+  {% for g in groups %}
+  <details class="group"{{ group_attrs(g.in_sample, groups | length) }}>
+    {{ group_summary(g.seqid, g.in_sample, g.kinds) }}
+    <div class="group-body">
+    <table class="rows compact">
+      <thead><tr><th>Op</th><th class="wide">Key</th><th>Value</th><th>Data</th>{% if g.shared %}<th>Also by</th>{% endif %}</tr></thead>
+      <tbody>
+      {% for r in g.rows %}
+        {% set v = r.item %}
+        <tr{% if v.autostart %} data-autostart="1"{% endif %}>
+          <td><span class="kind" data-kind="{{ r.kind }}">{{ r.kind }}</span></td>
+          <td class="filename">{{ v.key }}</td>
+          {% if v.value_name is not defined %}
+          {# A key, not a value: created, or deleted whole. #}
+          <td class="dim">{{ 'whole key' if r.kind == 'deleted' else '' }}</td>
+          <td></td>
+          {% else %}
+          <td class="filename">{{ v.value_name if v.value_name is not none else '(Default)' }}</td>
+          <td class="filename data">{{ v.value if v.value is not none else '' }}</td>
+          {% endif %}
+          {% if g.shared %}<td>{{ procs(r.others) }}</td>{% endif %}
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    </div>
+  </details>
   {% endfor %}
-  </tbody>
-</table></div>
-{% else %}
-<p class="dim">None recorded.</p>
-{% endif %}
-
-<h2 style="margin-top:1.5rem">Keys created
-  <span class="count">{{ report.registry_created_keys | length }}</span></h2>
-<p class="dim"><code>NtCreateKey</code> opens a key and creates it if absent; regmon does not say which happened.</p>
-{% if report.registry_created_keys %}
-<div class="scroll-x"><table class="rows">
-  <thead><tr><th>Key</th><th>By</th></tr></thead>
-  <tbody>
-  {% for r in report.registry_created_keys %}
-    <tr{% if r.autostart %} data-autostart="1"{% endif %}>
-      <td class="filename">{{ r.key }}</td>
-      <td>{{ procs(r.process_seqids) }}</td>
-    </tr>
-  {% endfor %}
-  </tbody>
-</table></div>
-{% else %}
-<p class="dim">None recorded.</p>
-{% endif %}
-
-<h2 style="margin-top:1.5rem">Deleted
-  <span class="count">{{ (report.registry_deleted_keys | length) + (report.registry_deleted_values | length) }}</span></h2>
-{% if report.registry_deleted_keys or report.registry_deleted_values %}
-<div class="scroll-x"><table class="rows">
-  <thead><tr><th>Key</th><th>Value</th><th>By</th></tr></thead>
-  <tbody>
-  {% for r in report.registry_deleted_keys %}
-    <tr>
-      <td class="filename">{{ r.key }}</td>
-      <td class="dim">whole key</td>
-      <td>{{ procs(r.process_seqids) }}</td>
-    </tr>
-  {% endfor %}
-  {% for r in report.registry_deleted_values %}
-    <tr>
-      <td class="filename">{{ r.key }}</td>
-      <td class="filename">{{ r.value_name if r.value_name is not none else '(Default)' }}</td>
-      <td>{{ procs(r.process_seqids) }}</td>
-    </tr>
-  {% endfor %}
-  </tbody>
-</table></div>
-{% else %}
-<p class="dim">None recorded.</p>
-{% endif %}
+</div>
+<p class="dim small"><code>created</code> is <code>NtCreateKey</code>, which
+  opens a key and creates it if absent; regmon does not say which happened.</p>
+</section>
 
 {% endif %}

@@ -9,6 +9,11 @@
  * states, and anything that hands over live malware. It is never decoration,
  * because a page where red means "heading" cannot also use red to mean
  * "this download is a live sample".
+ *
+ * Two exceptions, both older than this note and both about position rather
+ * than decoration: the active tab's underline, and the SAMPLE -- its process
+ * and everything it started -- which the tree, the diagram and the
+ * per-process groups all outline in red so it is found at a glance.
  */
 
 :root {
@@ -16,6 +21,7 @@
 
     --bg:        #0b0b0c;
     --bg-raised: #141416;
+    --bg-hover:  #18181b;
     --bg-inset:  #1b1b1e;
     --line:      #2a2a2e;
     --line-soft: #212125;
@@ -28,11 +34,16 @@
     --red-dim:   #7d2226;
     --red-wash:  #1e0f11;
 
+    --shadow:    0 1px 0 rgb(0 0 0 / 0.35), 0 10px 28px -14px rgb(0 0 0 / 0.75);
+
     --mono: ui-monospace, "SFMono-Regular", "JetBrains Mono", Menlo, monospace;
     --sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
 
     --gap: 1rem;
     --radius: 3px;
+    /* Cards and grouped lists. Still square-ish: the console's identity is
+     * thin lines and hard edges, and a 12px pill would read as another app. */
+    --radius-lg: 5px;
 
     /* The page's side gutter, shared by the masthead and <main> so their
      * left edges line up. Never below 1rem: a phone needs the margin. */
@@ -51,6 +62,7 @@
         color-scheme: light;
         --bg:        #f6f6f7;
         --bg-raised: #ffffff;
+        --bg-hover:  #f1f1f3;
         --bg-inset:  #eeeef0;
         --line:      #d4d4d8;
         --line-soft: #e4e4e7;
@@ -60,6 +72,7 @@
         --red:       #c62a2f;
         --red-dim:   #f0b4b6;
         --red-wash:  #fdf0f0;
+        --shadow:    0 1px 0 rgb(0 0 0 / 0.04), 0 10px 24px -14px rgb(0 0 0 / 0.25);
     }
 }
 
@@ -67,6 +80,7 @@
     color-scheme: light;
     --bg:        #f6f6f7;
     --bg-raised: #ffffff;
+    --bg-hover:  #f1f1f3;
     --bg-inset:  #eeeef0;
     --line:      #d4d4d8;
     --line-soft: #e4e4e7;
@@ -76,6 +90,7 @@
     --red:       #c62a2f;
     --red-dim:   #f0b4b6;
     --red-wash:  #fdf0f0;
+    --shadow:    0 1px 0 rgb(0 0 0 / 0.04), 0 10px 24px -14px rgb(0 0 0 / 0.25);
 }
 
 * { box-sizing: border-box; }
@@ -85,10 +100,12 @@ body {
     background: var(--bg);
     color: var(--fg);
     font: 15px/1.55 var(--sans);
+    accent-color: var(--fg-muted);
 }
 
 a { color: var(--fg); text-decoration-color: var(--fg-faint); }
 a:hover { text-decoration-color: var(--red); }
+:focus-visible { outline: 1px solid var(--fg-muted); outline-offset: 2px; }
 
 code, .mono, pre { font-family: var(--mono); font-size: 0.9em; }
 /* Timestamps, sizes and PIDs sit in columns; digits of equal width keep
@@ -100,9 +117,9 @@ code, .mono, pre { font-family: var(--mono); font-size: 0.9em; }
 .masthead {
     display: flex;
     flex-wrap: wrap;
-    align-items: baseline;
+    align-items: center;
     gap: 0.5rem var(--gap);
-    padding: 0.85rem var(--gutter);
+    padding: 0.7rem var(--gutter);
     background: var(--bg-raised);
     border-bottom: 1px solid var(--line);
 }
@@ -115,42 +132,72 @@ code, .mono, pre { font-family: var(--mono); font-size: 0.9em; }
      * over three lines beside the nav; now the nav drops below it instead. */
     white-space: nowrap;
 }
+.masthead h1 a { text-decoration: none; }
 .masthead h1 .mark { color: var(--red); }
-.masthead nav { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.5rem 1rem; margin-left: auto; }
-.masthead nav a { color: var(--fg-muted); text-decoration: none; font-size: 0.9rem; }
-.masthead nav a:hover, .masthead nav a[aria-current="page"] { color: var(--fg); }
+.masthead h1 .sub { color: var(--fg-muted); font-weight: 400; }
+.masthead nav { display: flex; flex-wrap: wrap; align-items: center; gap: 0.35rem 0.25rem; margin-left: auto; }
+.masthead nav a {
+    color: var(--fg-muted);
+    text-decoration: none;
+    font-size: 0.9rem;
+    padding: 0.25rem 0.6rem;
+    border-radius: var(--radius);
+}
+.masthead nav a:hover { color: var(--fg); background: var(--bg-inset); }
+.masthead nav a[aria-current="page"] { color: var(--fg); background: var(--bg-inset); }
 
 /* Remaining analysis seconds. Empty until balance.js fills it, and left empty
    if that fails -- see the note there. `cursor: default` because it is the one
    thing in this nav that is not a link. */
-#balance { cursor: default; font-variant-numeric: tabular-nums; }
-#balance:hover { color: var(--fg-muted); }
+#balance { cursor: default; font: 0.8rem var(--mono); font-variant-numeric: tabular-nums; }
+#balance:empty { display: none; }
+#balance:hover { color: var(--fg-muted); background: none; }
 #balance.balance-low { color: var(--red); }
 
-#theme-toggle {
+#theme-toggle, #sign-out {
     background: none;
     border: 1px solid var(--line);
     color: var(--fg-muted);
-    padding: 0.15rem 0.5rem;
-    font-size: 0.85rem;
+    padding: 0.2rem 0.6rem;
+    font-size: 0.82rem;
     line-height: 1.4;
 }
-#theme-toggle:hover { color: var(--fg); border-color: var(--fg-faint); }
+#theme-toggle { font-family: var(--mono); margin-left: 0.5rem; }
+#theme-toggle:hover, #sign-out:hover { color: var(--fg); border-color: var(--fg-faint); }
 
 /* Sized for a 1920px screen, which is where this console is read. It was
  * 76rem, a measure chosen for prose, and at 1920px a third of the screen sat
  * empty either side of tables, trees and logs -- content that is scanned,
  * not read, and only gets better with room. What IS prose (`.note`, `.empty`)
  * is capped on its own below, so a sentence never runs the full width. */
-main { max-width: 112rem; margin: 0 auto; padding: 1.5rem var(--gutter) 4rem; }
+main { max-width: 112rem; margin: 0 auto; padding: 1.25rem var(--gutter) 4rem; }
 
 /* The submit, sign-in and account views are forms, not tables, so they do
  * not want the full measure. Centred rather than left-aligned inside it --
  * at 2560px a 34rem form pinned to the left edge reads as a rendering
  * fault. */
 .narrow, .panel { max-width: 48rem; margin-inline: auto; }
+.panel {
+    background: var(--bg-raised);
+    border: 1px solid var(--line);
+    border-radius: var(--radius-lg);
+    padding: 1.25rem 1.5rem 1.5rem;
+    box-shadow: var(--shadow);
+}
+.panel.slim { max-width: 28rem; margin-top: 3rem; }
+.panel input[type="email"], .panel input[type="password"], .panel input[type="text"] {
+    display: block;
+    width: 100%;
+    margin: 0.25rem 0 0.9rem;
+}
+.panel label { color: var(--fg-muted); font-size: 0.85rem; }
 
 h2 { font-size: 1.05rem; font-weight: 600; margin: 0 0 0.75rem; }
+h3 { font-size: 0.95rem; font-weight: 600; margin: 0 0 0.5rem; }
+
+/* A page's title row: the heading, and what is counted or offered beside it. */
+.page-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.5rem 0.75rem; margin: 0 0 0.9rem; }
+.page-head h2 { margin: 0; font-size: 1.2rem; }
 
 /* --- state ------------------------------------------------------------- */
 /*
@@ -161,15 +208,32 @@ h2 { font-size: 1.05rem; font-weight: 600; margin: 0 0 0.75rem; }
  */
 
 .state {
-    display: inline-block;
-    padding: 0.1rem 0.5rem;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    padding: 0.05rem 0.5rem;
     border: 1px solid var(--line);
     border-radius: var(--radius);
     background: var(--bg-inset);
     color: var(--fg-muted);
     font: 500 0.78rem/1.6 var(--mono);
     text-transform: lowercase;
+    vertical-align: baseline;
+    white-space: nowrap;
 }
+/* A dot in the badge's own colour: state is read from across the table by
+ * shape and position before anyone reads the word. Drawn by CSS, so the
+ * badge's text -- which tests and screen readers read -- is only the state. */
+.state::before {
+    content: "";
+    width: 0.4rem;
+    height: 0.4rem;
+    border-radius: 50%;
+    background: currentColor;
+    opacity: 0.8;
+    flex: none;
+}
+.state[data-state=""]::before { display: none; }
 .state[data-state="completed"] { color: var(--fg); border-color: var(--fg-faint); }
 .state[data-state="failed"],
 .state[data-state="rejected"],
@@ -183,6 +247,33 @@ h2 { font-size: 1.05rem; font-weight: 600; margin: 0 0 0.75rem; }
 .state[data-state="preparing"],
 .state[data-state="collecting"],
 .state[data-state="cleaning"] { color: var(--fg); }
+/* Work in progress pulses; nothing else on the page moves. */
+.state[data-state="executing"]::before,
+.state[data-state="cloning"]::before,
+.state[data-state="preparing"]::before,
+.state[data-state="collecting"]::before,
+.state[data-state="cleaning"]::before { animation: pulse 1.6s ease-in-out infinite; }
+@keyframes pulse { 50% { opacity: 0.2; } }
+@media (prefers-reduced-motion: reduce) {
+    .state::before { animation: none !important; }
+}
+
+/* A label that is not a state: a guest OS, a visibility, "sample". Same
+ * shape as `.state`, no dot, so the two are never confused -- and a
+ * different class, because tests find a job's state as THE `.state`. */
+.chip {
+    display: inline-block;
+    padding: 0 0.45rem;
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    color: var(--fg-muted);
+    font: 500 0.75rem/1.6 var(--mono);
+    white-space: nowrap;
+    vertical-align: baseline;
+}
+.chip[data-vis="public"] { color: var(--fg); border-color: var(--fg-faint); }
+.chip[data-kind="sample"] { color: var(--red); border-color: var(--red-dim); background: var(--red-wash); }
+.chip[data-kind="sample-tree"] { color: var(--fg); border-color: var(--red-dim); }
 
 .note {
     border-left: 2px solid var(--line);
@@ -194,7 +285,96 @@ h2 { font-size: 1.05rem; font-weight: 600; margin: 0 0 0.75rem; }
      * notes -- the inline `span.note` inside a <dd> is unaffected. */
     max-width: 100ch;
 }
-.note.danger { border-left-color: var(--red); color: var(--fg); }
+.note.danger { border-left-color: var(--red); color: var(--fg); background: linear-gradient(90deg, var(--red-wash), transparent 60%); }
+span.note { border-left: 0; padding: 0; }
+
+/* --- cards and blocks ---------------------------------------------------- */
+/*
+ * A `.card` is a raised box for a few facts. A `.block` is a section of a
+ * tab: a header row -- title, count, a one-line summary, controls -- and its
+ * content. Blocks stack with a fixed rhythm instead of each <h2> carrying
+ * its own inline margin, which is how the tabs used to space themselves.
+ */
+
+.card {
+    background: var(--bg-raised);
+    border: 1px solid var(--line);
+    border-radius: var(--radius-lg);
+    padding: 0.85rem 1rem;
+}
+.card > h2 { font-size: 0.72rem; font-weight: 500; color: var(--fg-faint); text-transform: uppercase; letter-spacing: 0.05em; margin: 0 0 0.6rem; }
+
+.block + .block { margin-top: 2rem; }
+.block-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 0.35rem 0.75rem;
+    margin: 0 0 0.75rem;
+    padding-bottom: 0.45rem;
+    border-bottom: 1px solid var(--line-soft);
+}
+.block-head h2 { margin: 0; }
+.block-head .summary { color: var(--fg-muted); font-size: 0.85rem; }
+.block-head .tools { margin-left: auto; display: flex; gap: 0.35rem; }
+.block > .dim:first-of-type { margin-top: 0; }
+
+/* Two columns once there is room for two; one before that. */
+.cols { display: grid; grid-template-columns: minmax(0, 1fr); gap: 2rem 2.5rem; align-items: start; }
+.cols > .block + .block { margin-top: 0; }
+@media (min-width: 75rem) {
+    .cols { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+    .cols.wide-right { grid-template-columns: minmax(0, 2fr) minmax(0, 3fr); }
+    .cols.wide-left { grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); }
+}
+.stack { display: flex; flex-direction: column; gap: 1rem; min-width: 0; }
+
+/* Expand-all / collapse-all. Only drawn once disclose.js has loaded, which
+ * marks <html> -- without it they would be buttons that do nothing, and an
+ * inert control reads as a fault (see the console block in _job_status). */
+button.ghost {
+    display: none;
+    background: none;
+    border: 1px solid var(--line);
+    color: var(--fg-muted);
+    padding: 0.1rem 0.55rem;
+    font-size: 0.78rem;
+}
+.has-disclose button.ghost { display: inline-block; }
+button.ghost:hover { color: var(--fg); border-color: var(--fg-faint); }
+
+/* --- at a glance (Overview) --------------------------------------------- */
+/*
+ * One tile per thing the other tabs count. Counts, not a score -- the
+ * Overview template's opening comment holds here too -- and each tile is the
+ * tab that explains its number.
+ */
+
+.tiles {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(11rem, 1fr));
+    gap: 0.6rem;
+    margin: 0 0 1.5rem;
+}
+.tile {
+    display: flex;
+    flex-direction: column;
+    gap: 0.1rem;
+    padding: 0.7rem 0.9rem 0.75rem;
+    border: 1px solid var(--line);
+    border-radius: var(--radius-lg);
+    background: var(--bg-raised);
+    color: inherit;
+    text-decoration: none;
+    transition: border-color 0.15s, background-color 0.15s;
+}
+a.tile:hover { border-color: var(--fg-faint); background: var(--bg-hover); }
+.tile .k { color: var(--fg-faint); font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.05em; }
+.tile .n { font: 600 1.55rem/1.2 var(--mono); font-variant-numeric: tabular-nums; }
+.tile .sub { color: var(--fg-muted); font-size: 0.78rem; }
+.tile[data-zero] .n { color: var(--fg-faint); }
+.tile[data-alert] { border-color: var(--red-dim); }
+.tile[data-alert] .sub { color: var(--red); }
 
 /* --- filters ----------------------------------------------------------- */
 
@@ -203,9 +383,10 @@ h2 { font-size: 1.05rem; font-weight: 600; margin: 0 0 0.75rem; }
     flex-wrap: wrap;
     align-items: flex-end;
     gap: 0.75rem;
-    margin: 0 0 1.25rem;
+    margin: 0 0 1rem;
     max-width: 100%;
 }
+.filters.card { padding: 0.7rem 0.9rem; }
 /* `max-width: 100%` because a flex item is otherwise as wide as its content,
  * and the 34rem search field below made its label wider than a phone. */
 .filters label { display: flex; flex-direction: column; gap: 0.25rem; margin: 0; min-width: 0; max-width: 100%; }
@@ -222,7 +403,8 @@ h2 { font-size: 1.05rem; font-weight: 600; margin: 0 0 0.75rem; }
     max-width: 100%;
     font-family: var(--mono);
 }
-.filters input, .filters select {
+input[type="search"], input[type="text"], input[type="email"], input[type="password"],
+input[type="number"], select {
     background: var(--bg-inset);
     color: var(--fg);
     border: 1px solid var(--line);
@@ -230,7 +412,7 @@ h2 { font-size: 1.05rem; font-weight: 600; margin: 0 0 0.75rem; }
     padding: 0.4rem 0.5rem;
     font-size: 0.9rem;
 }
-.filters input:focus, .filters select:focus { outline: 1px solid var(--fg-faint); }
+input:focus, select:focus { outline: 1px solid var(--fg-faint); outline-offset: 0; }
 .filters .clear { color: var(--fg-muted); font-size: 0.85rem; padding-bottom: 0.5rem; }
 
 /* --- tables ------------------------------------------------------------ */
@@ -240,16 +422,29 @@ th {
     text-align: left;
     font-weight: 500;
     color: var(--fg-faint);
-    font-size: 0.78rem;
+    font-size: 0.72rem;
     text-transform: uppercase;
-    letter-spacing: 0.04em;
+    letter-spacing: 0.05em;
     padding: 0 0.6rem 0.4rem;
     border-bottom: 1px solid var(--line);
 }
-td { padding: 0.5rem 0.6rem; border-bottom: 1px solid var(--line-soft); }
+td { padding: 0.4rem 0.6rem; border-bottom: 1px solid var(--line-soft); vertical-align: top; }
+tbody tr:last-child td { border-bottom: 0; }
 tr:hover td { background: var(--bg-raised); }
 
 .scroll-x { overflow-x: auto; }
+
+/* A table in a box of its own: the history list, the artifact list. */
+.table-card {
+    background: var(--bg-raised);
+    border: 1px solid var(--line);
+    border-radius: var(--radius-lg);
+    overflow-x: auto;
+}
+.table-card th { padding-top: 0.6rem; background: var(--bg-raised); }
+.table-card tr:hover td { background: var(--bg-hover); }
+.table-card td:first-child, .table-card th:first-child { padding-left: 0.9rem; }
+.table-card td:last-child, .table-card th:last-child { padding-right: 0.9rem; }
 
 /* Filenames are attacker-controlled and rendered verbatim. They may contain
  * RTL overrides, tabs and very long runs without spaces, so they are boxed
@@ -259,6 +454,7 @@ tr:hover td { background: var(--bg-raised); }
     unicode-bidi: isolate;
     word-break: break-all;
 }
+td.filename { font-size: 0.85rem; }
 
 .sample-banner { margin: 0 0 1rem; }
 .sample-banner .mono { color: var(--fg-faint); word-break: break-all; }
@@ -269,12 +465,15 @@ tr:hover td { background: var(--bg-raised); }
  * spread evenly across a 1792px table. */
 table.rows th.wide { width: 45%; }
 th, td.mono { white-space: nowrap; }
+th.fill { width: 100%; }
 
 /* Every row opens a report, so the whole row reacts rather than only the one
  * cell that happens to hold a link. */
-table.rows tr:hover td { background: var(--bg-raised); }
 table.rows td a { text-decoration: none; }
 table.rows tr:hover td a { text-decoration: underline; text-decoration-color: var(--red); }
+table.rows tr:hover td a.proc { text-decoration: none; }
+table.compact td { padding: 0.28rem 0.6rem; }
+table.compact th { padding-top: 0.45rem; }
 
 /* --- pager ------------------------------------------------------------- */
 
@@ -282,41 +481,62 @@ table.rows tr:hover td a { text-decoration: underline; text-decoration-color: va
     display: flex;
     align-items: center;
     gap: 0.4rem;
-    margin: 1rem 0 0;
+    margin: 0.9rem 0 0;
     font-size: 0.85rem;
     flex-wrap: wrap;
 }
 .pager .range { color: var(--fg-faint); margin-right: auto; font-family: var(--mono); }
 .pager a, .pager .here {
+    min-width: 2rem;
+    text-align: center;
     padding: 0.2rem 0.55rem;
     border: 1px solid var(--line);
     border-radius: var(--radius);
     text-decoration: none;
     color: var(--fg-muted);
+    background: var(--bg-raised);
 }
 .pager a:hover { color: var(--fg); border-color: var(--fg-faint); }
 .pager .here { color: var(--fg); border-color: var(--red-dim); background: var(--red-wash); }
 .pager .gap { color: var(--fg-faint); padding: 0 0.1rem; }
 
+/* --- the job header ------------------------------------------------------ */
+
+h2.job-title { margin: 0 0 0.75rem; font-size: 1.3rem; line-height: 1.3; }
+
 /* --- tabs -------------------------------------------------------------- */
 
 .tabs {
     display: flex;
-    gap: 0.25rem;
+    gap: 0.15rem;
     border-bottom: 1px solid var(--line);
     margin: 1.25rem 0 0;
     overflow-x: auto;
 }
 .tabs a {
-    padding: 0.45rem 0.8rem;
+    display: inline-flex;
+    align-items: center;
+    padding: 0.5rem 0.85rem;
     color: var(--fg-muted);
     text-decoration: none;
     font-size: 0.9rem;
     border-bottom: 2px solid transparent;
+    border-radius: var(--radius) var(--radius) 0 0;
     white-space: nowrap;
 }
-.tabs a:hover { color: var(--fg); }
-.tabs a[aria-selected="true"] { color: var(--fg); border-bottom-color: var(--red); }
+.tabs a:hover { color: var(--fg); background: var(--bg-raised); }
+.tabs a[aria-selected="true"] { color: var(--fg); border-bottom-color: var(--red); background: var(--bg-raised); }
+/* How much is behind a tab, beside its name. Inside the <a> with no space
+ * before it, so the link's text still begins with the tab's own label. */
+.tabs .n {
+    margin-left: 0.45rem;
+    padding: 0 0.4rem;
+    border-radius: 999px;
+    background: var(--bg-inset);
+    color: var(--fg-faint);
+    font: 500 0.7rem/1.5 var(--mono);
+}
+.tabs a[aria-selected="true"] .n { color: var(--fg-muted); }
 /* A tab with nothing behind it yet. Still reachable -- the empty state names
  * the issue that will fill it -- but visibly distinct, so the shell reads as
  * unfinished rather than broken. */
@@ -334,8 +554,8 @@ table.rows tr:hover td a { text-decoration: underline; text-decoration-color: va
 
 .empty {
     border: 1px dashed var(--line);
-    border-radius: var(--radius);
-    padding: 1.5rem;
+    border-radius: var(--radius-lg);
+    padding: 1.25rem 1.5rem;
     color: var(--fg-muted);
     font-size: 0.9rem;
     max-width: 100ch; /* prose; see .note */
@@ -345,10 +565,60 @@ table.rows tr:hover td a { text-decoration: underline; text-decoration-color: va
 /* --- forms ------------------------------------------------------------- */
 
 form { max-width: 100%; }
-fieldset { border: 1px solid var(--line); border-radius: var(--radius); padding: 0.9rem 1rem; margin: 0 0 1rem; }
-legend { padding: 0 0.4rem; color: var(--fg-muted); font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.04em; }
+fieldset { border: 1px solid var(--line); border-radius: var(--radius-lg); padding: 0.9rem 1rem 1rem; margin: 0 0 1rem; background: var(--bg-raised); }
+legend { padding: 0 0.4rem; color: var(--fg-muted); font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em; }
 label { display: block; margin: 0.3rem 0; }
 input[type="file"] { color: var(--fg-muted); font-size: 0.9rem; }
+
+/* The sample picker: a dashed target as wide as the form. The input itself
+ * is the target -- a file dropped on it is taken natively, with no script. */
+input[type="file"].drop {
+    display: block;
+    width: 100%;
+    padding: 1.1rem 1rem;
+    border: 1px dashed var(--fg-faint);
+    border-radius: var(--radius-lg);
+    background: var(--bg-inset);
+    cursor: pointer;
+}
+input[type="file"].drop:hover { border-color: var(--fg-muted); }
+input[type="file"]::file-selector-button {
+    margin-right: 0.9rem;
+    background: var(--bg-raised);
+    color: var(--fg);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    padding: 0.35rem 0.8rem;
+    font: 500 0.85rem var(--sans);
+    cursor: pointer;
+}
+
+/* Radios as cards: the whole card is the label, so the whole card is the
+ * hit target, and the chosen one is visibly chosen. The radio stays visible
+ * -- it is the control a keyboard and a screen reader actually use. */
+.choices { display: grid; gap: 0.5rem; }
+.choices.row { grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr)); }
+label.choice {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    column-gap: 0.6rem;
+    align-items: baseline;
+    margin: 0;
+    padding: 0.6rem 0.8rem;
+    border: 1px solid var(--line);
+    border-radius: var(--radius-lg);
+    background: var(--bg);
+    cursor: pointer;
+    transition: border-color 0.15s, background-color 0.15s;
+}
+label.choice:hover { border-color: var(--fg-faint); }
+label.choice:has(input:checked) { border-color: var(--fg-muted); background: var(--bg-inset); }
+/* A live mode, chosen: this is the one choice on the form that lets a sample
+ * reach the Internet, and it should look like it. */
+label.choice[data-live]:has(input:checked) { border-color: var(--red-dim); background: var(--red-wash); }
+label.choice > input { margin: 0; }
+label.choice .title { font-weight: 600; }
+label.choice .note { grid-column: 2; display: block; border: 0; padding: 0.15rem 0 0; max-width: none; font-size: 0.84rem; }
 
 button {
     background: var(--bg-inset);
@@ -360,8 +630,10 @@ button {
     cursor: pointer;
 }
 button:hover { border-color: var(--fg-faint); }
+button:disabled { opacity: 0.55; cursor: progress; }
 button[type="submit"] { border-color: var(--red-dim); }
 button[type="submit"]:hover { background: var(--red-wash); border-color: var(--red); }
+button.primary { padding: 0.55rem 1.6rem; }
 
 details.advanced { margin: 0 0 1rem; }
 details.advanced > summary {
@@ -371,12 +643,13 @@ details.advanced > summary {
     padding: 0.3rem 0;
 }
 details.advanced > summary:hover { color: var(--fg); }
+details.advanced[open] > summary { margin-bottom: 0.6rem; }
 
 /* `minmax(0, 1fr)`, not `1fr`: a grid track's minimum is its content's
  * min-content width, and a 64-character digest with no break opportunity
  * made the value column wider than a phone, so the whole page scrolled
  * sideways. Zero lets the track shrink and `overflow-wrap` breaks the digest. */
-.dl { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 0.35rem 1rem; font-size: 0.9rem; }
+.dl { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 0.4rem 1rem; font-size: 0.9rem; margin: 0; }
 .dl dt { color: var(--fg-faint); }
 .dl dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
 
@@ -386,21 +659,36 @@ details.advanced > summary:hover { color: var(--fg); }
 .facts {
     display: flex;
     flex-wrap: wrap;
-    gap: 0.9rem 2.25rem;
-    margin: 0 0 1.25rem;
+    gap: 0.75rem 2.25rem;
+    margin: 0 0 1rem;
+    padding: 0.75rem 1rem;
+    background: var(--bg-raised);
+    border: 1px solid var(--line);
+    border-radius: var(--radius-lg);
     font-size: 0.9rem;
 }
 .facts > div { display: flex; flex-direction: column; gap: 0.2rem; min-width: 0; max-width: 100%; }
 .facts dt {
     color: var(--fg-faint);
-    font-size: 0.72rem;
+    font-size: 0.7rem;
     text-transform: uppercase;
-    letter-spacing: 0.04em;
+    letter-spacing: 0.05em;
 }
 .facts dd { margin: 0; overflow-wrap: anywhere; }
 /* The controls beside the visibility value: on the value's baseline, and not
  * taller than the row they sit in. */
-.facts dd button { padding: 0.15rem 0.6rem; font-size: 0.82rem; vertical-align: baseline; }
+.facts dd button { padding: 0.05rem 0.55rem; font-size: 0.8rem; vertical-align: baseline; margin-left: 0.35rem; }
+dialog {
+    max-width: 38rem;
+    background: var(--bg-raised);
+    color: var(--fg);
+    border: 1px solid var(--line);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow);
+}
+dialog::backdrop { background: rgb(0 0 0 / 0.6); }
+dialog menu { display: flex; justify-content: flex-end; gap: 0.5rem; padding: 0; margin: 1rem 0 0; }
+
 /* --- the live console (DRAFT-056) ------------------------------------- */
 /*
    Above the tab bar and full width: it is the one thing on this page an
@@ -409,7 +697,7 @@ details.advanced > summary:hover { color: var(--fg); }
 .console {
   margin: 0 0 1.5rem;
   border: 1px solid var(--red);
-  border-radius: 3px;
+  border-radius: var(--radius-lg);
   padding: 0.75rem;
   background: var(--bg-raised);
 }
@@ -441,7 +729,7 @@ details.advanced > summary:hover { color: var(--fg); }
 /* A process reference, `Notepad.exe (7208)`, linking into the tree. */
 .proc {
     display: inline-block;
-    font: 0.82rem/1.5 var(--mono);
+    font: 0.8rem/1.5 var(--mono);
     padding: 0 0.4rem;
     border: 1px solid var(--line);
     border-radius: var(--radius);
@@ -460,7 +748,7 @@ a.proc:hover { border-color: var(--fg-faint); }
 /* ATT&CK and MBC identifiers beside a technique. */
 .tag {
     display: inline-block;
-    font: 500 0.74rem/1.6 var(--mono);
+    font: 500 0.72rem/1.6 var(--mono);
     padding: 0 0.4rem;
     margin: 0.15rem 0.15rem 0 0;
     border: 1px solid var(--line);
@@ -470,50 +758,211 @@ a.proc:hover { border-color: var(--fg-faint); }
 .tag[data-kind="attck"] { border-color: var(--red-dim); }
 .tag[data-kind="verb"] { color: var(--fg); background: var(--bg-inset); }
 
-.count { font: 500 0.75rem/1.6 var(--mono); color: var(--fg-faint); margin-left: 0.35rem; }
+.count {
+    display: inline-block;
+    margin-left: 0.35rem;
+    padding: 0 0.45rem;
+    border-radius: 999px;
+    background: var(--bg-inset);
+    border: 1px solid var(--line-soft);
+    color: var(--fg-muted);
+    font: 500 0.72rem/1.55 var(--mono);
+    vertical-align: middle;
+}
 .note-inline { font-weight: 400; font-size: 0.85rem; color: var(--fg-muted); }
 .exit { font: 500 0.75rem/1.6 var(--mono); color: var(--fg-muted); }
 .exit.error { color: var(--red); }
 
 .ttps, .requests, .yara, .falco { list-style: none; margin: 0; padding: 0; }
 .ttps li, .requests li, .yara li, .falco li { padding: 0.5rem 0; border-bottom: 1px solid var(--line-soft); }
+.ttps li:first-child, .requests li:first-child, .yara li:first-child, .falco li:first-child { padding-top: 0; }
+.ttps li:last-child, .requests li:last-child, .yara li:last-child, .falco li:last-child { border-bottom: 0; }
 /* A Falco rule's rendered output: a path or command line the sample chose,
    which can be one unbroken string of any length. */
-.falco-output { word-break: break-all; margin-top: 0.2rem; }
+.falco-output { word-break: break-all; margin-top: 0.2rem; font-size: 0.8rem; }
 .tag[data-kind="priority"] { color: var(--fg); }
 .tag[data-priority="emergency"], .tag[data-priority="alert"],
-.tag[data-priority="critical"], .tag[data-priority="error"] { border-color: var(--red-dim); }
+.tag[data-priority="critical"], .tag[data-priority="error"] { border-color: var(--red-dim); color: var(--red); }
 .falco-coverage { margin-top: 0.75rem; }
+.falco-coverage > summary { cursor: pointer; font-size: 0.85rem; }
 .falco-coverage table { margin-top: 0.5rem; }
 .dl.small { font-size: 0.82rem; margin-top: 0.3rem; }
 
+/* --- per-process groups -------------------------------------------------- */
+/*
+ * Files, registry writes, dumps: lists that run to hundreds of rows on a
+ * Windows run, nearly all of them the guest's own services. Each process's
+ * share is a <details> -- one line, closed, until asked for -- and the
+ * sample's own are open and outlined, so the page opens on what the sample
+ * did and the rest is one line per process.
+ */
+
+.groups {
+    border: 1px solid var(--line);
+    border-radius: var(--radius-lg);
+    background: var(--bg-raised);
+    overflow: hidden;
+}
+details.group + details.group { border-top: 1px solid var(--line-soft); }
+details.group > summary {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.35rem 0.6rem;
+    padding: 0.45rem 0.9rem 0.45rem 0.75rem;
+    cursor: pointer;
+    list-style: none;
+}
+details.group > summary::-webkit-details-marker { display: none; }
+details.group > summary:hover { background: var(--bg-hover); }
+details.group[data-sample] > summary { box-shadow: inset 2px 0 0 var(--red); }
+details.group[open] > summary { border-bottom: 1px solid var(--line-soft); }
+.group-body { background: var(--bg); padding: 0.15rem 0 0.25rem; overflow-x: auto; }
+.group-body td:first-child, .group-body th:first-child { padding-left: 2.05rem; }
+.group-body td:last-child, .group-body th:last-child { padding-right: 0.9rem; }
+
+/* The disclosure triangle, drawn rather than the browser's own, so the tree
+ * and the groups share one and it turns rather than swaps glyphs. */
+details.group > summary::before,
+.ptree summary::before {
+    content: "";
+    flex: none;
+    width: 0.38rem;
+    height: 0.38rem;
+    margin: 0 0.35rem 0 0.15rem;
+    border-right: 1.5px solid var(--fg-faint);
+    border-bottom: 1.5px solid var(--fg-faint);
+    transform: rotate(-45deg);
+    transition: transform 0.12s;
+}
+details[open] > summary::before { transform: rotate(45deg); }
+summary:hover::before { border-color: var(--fg-muted); }
+
+/* Rows per kind, on the right of the group's line. */
+.kinds { display: inline-flex; flex-wrap: wrap; gap: 0.3rem; margin-left: auto; }
+.kind {
+    display: inline-block;
+    padding: 0 0.4rem;
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    color: var(--fg-muted);
+    font: 0.72rem/1.6 var(--mono);
+    white-space: nowrap;
+}
+.kind b { color: var(--fg); font-weight: 600; margin-left: 0.2rem; }
+td .kind { min-width: 4.5rem; text-align: center; }
+.kind[data-kind="deleted"] { color: var(--fg); border-color: var(--fg-faint); }
+.kind[data-kind="written"], .kind[data-kind="set"], .kind[data-kind="created"] { color: var(--fg); }
+
 /* The process tree as a list: <details> per parent, no script. */
 .ptree, .ptree ul { list-style: none; margin: 0; padding: 0; }
-.ptree ul { padding-left: 1.25rem; border-left: 1px solid var(--line-soft); margin-left: 0.4rem; }
-.ptree li { margin: 0.1rem 0; font-size: 0.9rem; }
-.ptree summary { cursor: pointer; }
-.ptree summary:hover { color: var(--fg); }
+.ptree ul { padding-left: 1.1rem; border-left: 1px solid var(--line-soft); margin-left: 0.45rem; }
+.ptree li { margin: 0.05rem 0; font-size: 0.86rem; }
+/* One line per node, always. Every part keeps its own width except the
+ * command line, which takes what is left (`flex: 1 1 0`, up to its natural
+ * width) and ends in an ellipsis; only when even its last 3ch do not fit
+ * does the name give way too. Left to wrap, a node four levels down put its
+ * command line and its "logs" on a second line, and the tree read as twice
+ * as many processes as it had. Shrinking the two together instead clipped a
+ * fraction of a pixel off every name, which `text-overflow` draws as an
+ * ellipsis on a name that fitted. */
+.ptree summary, .ptree .leaf {
+    position: relative;
+    display: flex;
+    align-items: baseline;
+    gap: 0 0.35rem;
+    flex-wrap: nowrap;
+    min-width: 0;
+    padding: 0.08rem 0.25rem;
+    border-radius: var(--radius);
+}
+.ptree summary { cursor: pointer; list-style: none; }
+/* Except on a phone, where a node four levels down with an exit status has
+ * more fixed parts than the line has room for, and one line ran past the
+ * viewport and scrolled the page sideways. There, a second line is cheaper. */
+@media (max-width: 40rem) {
+    .ptree summary, .ptree .leaf { flex-wrap: wrap; }
+}
+.ptree summary > *, .ptree .leaf > * { flex: none; }
+.ptree summary::-webkit-details-marker { display: none; }
+.ptree summary::before { align-self: center; margin: 0 0.15rem 0 0.1rem; }
+.ptree summary:hover, .ptree .leaf:hover { background: var(--bg-raised); }
 .ptree .leaf { padding-left: 1.05rem; }
-.ptree .pname { font-family: var(--mono); unicode-bidi: isolate; }
+.ptree .pname {
+    font-family: var(--mono);
+    unicode-bidi: isolate;
+    flex: 0 1 auto;
+    min-width: 4ch;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
 .ptree li[data-sample] > details > summary .pname,
 .ptree li[data-sample] > .leaf .pname { color: var(--red); font-weight: 600; }
 .ptree li[data-exited] > details > summary .pname,
 .ptree li[data-exited] > .leaf .pname { color: var(--fg-muted); }
-.ptree .cmd {
-    color: var(--fg-muted);
-    display: inline-block;
-    /* Never wider than the node's own line: four levels deep on a phone,
-     * 44ch alone ran past the viewport and the whole page scrolled sideways. */
-    max-width: min(44ch, 100%);
+/* How many processes a closed node holds. Said only while it is closed. */
+.ptree .hidden-n { font: 0.72rem var(--mono); color: var(--fg-faint); }
+.ptree details[open] > summary .hidden-n { display: none; }
+
+/* The command line beside a node: one line, cut with an ellipsis, and a
+ * link -- to the whole of it, on a page of its own, in a new tab.
+ *
+ * Hovering it shows the whole line in place, in a box laid OVER the lines
+ * below rather than reflowing them: a tree that grew a paragraph under the
+ * pointer would move the next node out from under it. The box is positioned
+ * against the node's line (`summary`/`.leaf` above are `position:
+ * relative`), not against the link, so it can be as wide as the tree column
+ * and never wider -- anchored to the link it ran off the right edge of the
+ * screen. A short delay keeps a pointer passing over the tree from flashing
+ * a box per line. */
+.ptree a.cmd { flex: 1 1 0; min-width: 3ch; max-width: max-content; text-decoration: none; color: var(--fg-muted); }
+.ptree a.cmd > code {
+    display: block;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    vertical-align: bottom;
     unicode-bidi: isolate;
+    font-size: 0.8rem;
+}
+.ptree a.cmd:hover > code { color: var(--fg); }
+.ptree .cmd-full {
+    position: absolute;
+    left: 1rem;
+    right: 0;
+    top: 100%;
+    z-index: 20;
+    padding: 0.45rem 0.6rem;
+    background: var(--bg-raised);
+    border: 1px solid var(--fg-faint);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow);
+    color: var(--fg);
+    font: 0.8rem/1.5 var(--mono);
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    unicode-bidi: isolate;
+    cursor: pointer;
+    visibility: hidden;
+    opacity: 0;
+    transition: opacity 0.1s, visibility 0s linear 0.1s;
+}
+.ptree .cmd-full::after {
+    content: "↗ opens in a new tab";
+    display: block;
+    margin-top: 0.35rem;
+    color: var(--fg-faint);
+    font: 0.72rem var(--sans);
+}
+.ptree a.cmd:hover > .cmd-full,
+.ptree a.cmd:focus-visible > .cmd-full {
+    visibility: visible;
+    opacity: 1;
+    transition-delay: 0.25s, 0.25s;
 }
 /* The node a badge or a diagram box jumped to. */
 .ptree li:target > details > summary,
-.ptree li:target > .leaf { background: var(--red-wash); border-radius: var(--radius); }
+.ptree li:target > .leaf { background: var(--red-wash); box-shadow: inset 2px 0 0 var(--red); }
 
 /* The process diagram: inline SVG, laid out by report.py. The box scrolls,
  * and pan.js turns a mouse drag into that scroll -- so the cursor says
@@ -524,8 +973,10 @@ a.proc:hover { border-color: var(--fg-faint); }
     max-height: min(30rem, 60vh);
     margin: 0 0 1rem;
     border: 1px solid var(--line);
-    border-radius: var(--radius);
-    background: var(--bg-raised);
+    border-radius: var(--radius-lg);
+    background:
+        radial-gradient(circle, var(--line-soft) 1px, transparent 1px) 0 0 / 16px 16px,
+        var(--bg-raised);
     cursor: grab;
     user-select: none;
     -webkit-user-select: none;
@@ -538,20 +989,19 @@ svg.pdiagram .pnode text { font: 11px var(--mono); fill: var(--fg); }
 svg.pdiagram .pnode .pid { fill: var(--fg-faint); }
 svg.pdiagram .pnode[data-exited] rect { stroke-dasharray: 3 2; }
 svg.pdiagram .pnode[data-exited] text { fill: var(--fg-muted); }
-svg.pdiagram .pnode[data-sample] rect { stroke: var(--red); stroke-width: 1.5; }
+svg.pdiagram .pnode[data-sample] rect { stroke: var(--red); stroke-width: 1.5; fill: var(--red-wash); }
 svg.pdiagram .pnode[data-sample] text { fill: var(--fg); }
 svg.pdiagram a:hover rect { stroke: var(--fg-faint); fill: var(--bg-raised); }
 /* Registry value data: a hex dump can be 512 characters; box it. */
-td.data { max-width: 26rem; }
+td.data { max-width: 26rem; color: var(--fg-muted); }
 /* Registry rows under an autostart location, in the full tables too. */
-table.rows tr[data-autostart] td:first-child { border-left: 2px solid var(--red); }
+table.rows tr[data-autostart] td:first-child { box-shadow: inset 2px 0 0 var(--red); }
 
 /* --- the per-process panel ------------------------------------------------ */
 .ptree a.logs {
-    font-size: 0.75rem;
+    font-size: 0.72rem;
     color: var(--fg-faint);
     text-decoration: none;
-    margin-left: 0.4rem;
     border: 1px solid transparent;
     border-radius: var(--radius);
     padding: 0 0.3rem;
@@ -563,13 +1013,20 @@ table.rows tr[data-autostart] td:first-child { border-left: 2px solid var(--red)
 .process-panel { margin-top: 1.5rem; padding-top: 1rem; border-top: 1px solid var(--line); }
 .process h2 .small { font-size: 0.8rem; font-weight: 400; margin-left: 0.5rem; text-decoration: none; }
 .small { font-size: 0.82rem; }
+.pick {
+    border: 1px dashed var(--line);
+    border-radius: var(--radius-lg);
+    padding: 1rem 1.25rem;
+    margin: 0;
+}
 
 /* The tree beside the panel (tabs/_behaviour.html). Stacked by default;
- * two columns from 90rem, which is where a tree line -- name, PID, a 48ch
- * command line, "logs" -- and a log line both still fit. */
+ * two columns from 80rem, which is where a tree line -- name, PID, a cut
+ * command line, "logs" -- and a log line both still fit. It was 90rem until
+ * the command line's width was capped by its column rather than at 48ch. */
 .split { display: grid; grid-template-columns: minmax(0, 1fr); gap: 1.5rem; }
 .split-tree { min-width: 0; }
-@media (min-width: 90rem) {
+@media (min-width: 80rem) {
     .split { grid-template-columns: minmax(0, 2fr) minmax(0, 3fr); align-items: start; }
     /* Stuck to the viewport while the tree scrolls under it, and never
      * taller than the viewport: the lines box below takes whatever height is
@@ -594,20 +1051,20 @@ table.rows tr[data-autostart] td:first-child { border-left: 2px solid var(--red)
     }
     .split .process { display: flex; flex-direction: column; min-height: 0; }
     .split .loglines.log-box { flex: 1 1 auto; min-height: 14rem; max-height: none; }
-    .split .ptree .cmd { max-width: min(48ch, 100%); }
 }
 
 .plugins { display: flex; flex-wrap: wrap; gap: 0.25rem; margin-bottom: 0.75rem; }
 .plugins a {
-    font: 0.82rem/1.6 var(--mono);
-    padding: 0 0.5rem;
+    font: 0.8rem/1.6 var(--mono);
+    padding: 0.05rem 0.55rem;
     border: 1px solid var(--line);
     border-radius: var(--radius);
     text-decoration: none;
     color: var(--fg-muted);
+    background: var(--bg-raised);
 }
 .plugins a:hover { color: var(--fg); border-color: var(--fg-faint); }
-.plugins a[aria-selected="true"] { color: var(--fg); border-color: var(--red); }
+.plugins a[aria-selected="true"] { color: var(--fg); border-color: var(--red); background: var(--red-wash); }
 
 .logfilter { margin-bottom: 0.5rem; align-items: center; }
 .logfilter select { max-width: 24rem; }
@@ -623,7 +1080,7 @@ table.rows tr[data-autostart] td:first-child { border-left: 2px solid var(--red)
  * the pages inside are plain text that runs on. */
 .loglines.log-box {
     border: 1px solid var(--line);
-    border-radius: var(--radius);
+    border-radius: var(--radius-lg);
     background: var(--bg-raised);
     padding: 0.6rem 0.75rem;
     max-height: max(24rem, 70vh);
@@ -631,8 +1088,8 @@ table.rows tr[data-autostart] td:first-child { border-left: 2px solid var(--red)
 }
 pre.log {
     margin: 0;
-    font-size: 0.78rem;
-    line-height: 1.5;
+    font-size: 0.76rem;
+    line-height: 1.55;
     white-space: pre-wrap;
     overflow-wrap: anywhere;
     unicode-bidi: isolate;
@@ -644,3 +1101,54 @@ pre.log {
 .loglines button.more { display: block; width: 100%; margin: 0.5rem 0 0; font-size: 0.82rem; text-align: left; color: var(--fg-muted); }
 .loglines button.more:hover { color: var(--fg); }
 .loglines .note, .loglines .dim.small { margin: 0.5rem 0 0; }
+
+/* A JSON document shown whole: the manifest. */
+pre.doc {
+    margin: 0;
+    padding: 0.75rem 0.9rem;
+    background: var(--bg-raised);
+    border: 1px solid var(--line);
+    border-radius: var(--radius-lg);
+    font-size: 0.78rem;
+    overflow-x: auto;
+}
+
+/* --- one process's command line (cmdline.html) --------------------------- */
+.crumbs { margin: 0 0 0.6rem; color: var(--fg-faint); font-size: 0.85rem; }
+.crumbs a { color: var(--fg-muted); text-decoration: none; }
+.crumbs a:hover { color: var(--fg); text-decoration: underline; text-decoration-color: var(--red); }
+pre.cmdline {
+    margin: 0;
+    padding: 0.85rem 1rem;
+    background: var(--bg-raised);
+    border: 1px solid var(--line);
+    border-radius: var(--radius-lg);
+    font-size: 0.88rem;
+    line-height: 1.6;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    unicode-bidi: isolate;
+    user-select: all;
+}
+/* One argv element per row, spaces kept: the joined line above cannot show
+ * where one argument ends and the next begins, and that is often the point. */
+td.arg { white-space: pre-wrap; }
+td.argn { width: 1%; color: var(--fg-faint); text-align: right; }
+/* A link that is the one action of its section: "Download all". */
+a.button {
+    display: inline-block;
+    padding: 0.4rem 0.95rem;
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    background: var(--bg-inset);
+    color: var(--fg);
+    text-decoration: none;
+    font-weight: 500;
+    font-size: 0.9rem;
+}
+a.button:hover { border-color: var(--fg-faint); }
+details.manifest { margin-top: 1.5rem; }
+.stack > .block + .block { margin-top: 0.75rem; }
+.spaced { margin-bottom: 1.25rem; }
+.spaced-top { margin-top: 1rem; }
+td.nowrap { white-space: nowrap; }

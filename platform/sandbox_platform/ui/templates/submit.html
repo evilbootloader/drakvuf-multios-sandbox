@@ -3,7 +3,7 @@
 
 {% block content %}
 <div class="narrow">
-<h2>Submit a sample</h2>
+<div class="page-head"><h2>Submit a sample</h2></div>
 
 <form id="submit-form">
   <fieldset>
@@ -15,19 +15,21 @@
       exactly one boundary; the UI matching that shape is what stops someone
       later "improving" it into an autocomplete.
     #}
+    <div class="choices row">
     {% for os in target_oses %}
-    <label>
+    <label class="choice">
       <input type="radio" name="target_os" value="{{ os }}"
              {% if loop.first %}checked{% endif %}
              hx-get="/ui/plugins/{{ os }}" hx-target="#plugin-picker">
-      {{ os }}
+      <span class="title">{{ os }}</span>
     </label>
     {% endfor %}
+    </div>
   </fieldset>
 
   <fieldset>
     <legend>Sample</legend>
-    <label><input type="file" name="file" required></label>
+    <label><input class="drop" type="file" name="file" required></label>
     <p class="note danger">
       Whatever you upload will be executed. Do not submit anything you are not
       willing to detonate.
@@ -49,14 +51,15 @@
   #}
   <fieldset>
     <legend>Network</legend>
+    <div class="choices">
     {% for offer in egress_offers %}
-    <label class="egress-option">
+    <label class="choice egress-option"{% if offer.info.live %} data-live="1"{% endif %}>
       <input type="radio" name="egress" value="{{ offer.name }}"
              data-mode="{{ offer.mode.value }}"
              {% if loop.first %}checked{% endif %}>
-      <strong>{{ offer.info.label }}</strong>
+      <span><span class="title">{{ offer.info.label }}</span>
       {%- if offer.country %} <span class="mono">({{ offer.country }})</span>{% endif %}
-      {%- if offer.info.live %} <span class="state" data-state="failed">live</span>{% endif %}
+      {%- if offer.info.live %} <span class="state" data-state="failed">live</span>{% endif %}</span>
       <span class="note">{{ offer.info.describes }}</span>
       {% if offer.info.caution %}
       <span class="note">{{ offer.info.caution }}</span>
@@ -68,6 +71,7 @@
       {% endif %}
     </label>
     {% endfor %}
+    </div>
 
     {% if egress_offers | length == 1 %}
     <p class="note">
@@ -86,7 +90,7 @@
     </div>
   </details>
 
-  <button type="submit">Submit</button>
+  <button type="submit" class="primary">Submit</button>
 </form>
 
 <div id="result"></div>

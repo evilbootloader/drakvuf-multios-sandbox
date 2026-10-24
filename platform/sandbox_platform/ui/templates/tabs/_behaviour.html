@@ -1,4 +1,5 @@
-{% from "tabs/_report_macros.html" import tree, diagram, procs, unreadable with context %}
+{% from "tabs/_report_macros.html" import tree, diagram, procs, unreadable,
+     group_summary, group_attrs, kind_totals, disclose_tools with context %}
 {#
   What the sample did, as processes and files. From report.json's `processes`
   (procmon, via build_process_tree) and `modified_files` / `deleted_files`
@@ -11,14 +12,16 @@
   {% include "tabs/_pending.html" %}
 {% else %}
 
-<h2>Processes
-  <span class="count">{{ report.processes | length }}</span>
+<section class="block" data-disclose-scope>
+<header class="block-head">
+  <h2>Processes <span class="count">{{ report.processes | length }}</span></h2>
   {% if report.startup_process %}
-  <span class="note-inline">— the sample is
+  <span class="note-inline">the sample is
     <a href="#proc-{{ report.startup.process }}">{{ report.startup_process.basename }}
       ({{ report.startup_process.pid }})</a>, highlighted below</span>
   {% endif %}
-</h2>
+  {% if report.processes %}{{ disclose_tools() }}{% endif %}
+</header>
 {% if report.processes %}
 {#
   Two pictures of the same forest. The first is the sample's lineage -- its
@@ -50,58 +53,63 @@
 {{ tree(report.tree) }}
 </div>
 <section id="process-panel" class="process-panel">
-  <p class="dim small">Pick a process — <em>logs</em> beside a node shows what
-    it did, plugin by plugin, out of the run's logs.</p>
+  <p class="dim small pick">Pick a process — <em>logs</em> beside a node shows what
+    it did, plugin by plugin, out of the run's logs. Its command line opens
+    whole in a new tab.</p>
 </section>
 </div>
 {% else %}
 <div class="empty"><strong>No processes in the report.</strong>
   <code>procmon</code> was not among this run's plugins, or wrote nothing.</div>
 {% endif %}
+</section>
 
-<h2 style="margin-top:1.5rem">Files read
-  <span class="count">{{ report.read_files | length }}</span></h2>
-{% if report.read_files %}
-<div class="scroll-x"><table class="rows">
-  <thead><tr><th>Path</th><th>By</th></tr></thead>
-  <tbody>
-  {% for f in report.read_files %}
-    <tr><td class="filename">{{ f.filename }}</td><td>{{ procs(f.process_seqids) }}</td></tr>
+{#
+  Files, one group per process rather than three flat tables. Those tables
+  were a row per path -- 41 written and 67 deleted on the 2026-09-19 Windows
+  run, nearly all by the guest's services -- and the sample's own handful had
+  to be picked out of them by reading the "By" column. Grouped, the sample's
+  are open at the top and every other process is one closed line with its
+  counts. A path more than one process touched is listed under each, naming
+  the others.
+#}
+{% set groups = report.file_activity() %}
+<section class="block" data-disclose-scope>
+<header class="block-head">
+  <h2>Files</h2>
+  {% if groups %}<span class="summary">{{ kind_totals(groups) }} across
+    {{ groups | length }} process{{ 'es' if groups | length != 1 }}</span>
+  {{ disclose_tools() }}{% endif %}
+</header>
+{% if groups %}
+<div class="groups">
+  {% for g in groups %}
+  <details class="group"{{ group_attrs(g.in_sample, groups | length) }}>
+    {{ group_summary(g.seqid, g.in_sample, g.kinds) }}
+    <div class="group-body">
+    <table class="rows compact">
+      <thead><tr><th>Op</th><th class="fill">Path</th>{% if g.shared %}<th>Also by</th>{% endif %}</tr></thead>
+      <tbody>
+      {% for r in g.rows %}
+        <tr>
+          <td><span class="kind" data-kind="{{ r.kind }}">{{ r.kind }}</span></td>
+          <td class="filename">{{ r.item.filename }}</td>
+          {% if g.shared %}<td>{{ procs(r.others) }}</td>{% endif %}
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    </div>
+  </details>
   {% endfor %}
-  </tbody>
-</table></div>
+</div>
+<p class="dim small">Written: opens for write that were then written to, by
+  any process, minus the prefetch directory. Read: opens that were then read
+  from, on the same terms.</p>
 {% else %}
-<p class="dim">None recorded. Opens for write that were then written to, by any process, minus the prefetch directory.</p>
+<p class="dim">None recorded. <code>filetracer</code> was not among this
+  run's plugins, or no process wrote, read or deleted a file it opened.</p>
 {% endif %}
-
-<h2 style="margin-top:1.5rem">Files written
-  <span class="count">{{ report.modified_files | length }}</span></h2>
-{% if report.modified_files %}
-<div class="scroll-x"><table class="rows">
-  <thead><tr><th>Path</th><th>By</th></tr></thead>
-  <tbody>
-  {% for f in report.modified_files %}
-    <tr><td class="filename">{{ f.filename }}</td><td>{{ procs(f.process_seqids) }}</td></tr>
-  {% endfor %}
-  </tbody>
-</table></div>
-{% else %}
-<p class="dim">None recorded. Opens for write that were then written to, by any process, minus the prefetch directory.</p>
-{% endif %}
-
-<h2 style="margin-top:1.5rem">Files deleted
-  <span class="count">{{ report.deleted_files | length }}</span></h2>
-{% if report.deleted_files %}
-<div class="scroll-x"><table class="rows">
-  <thead><tr><th>Path</th><th>By</th></tr></thead>
-  <tbody>
-  {% for f in report.deleted_files %}
-    <tr><td class="filename">{{ f.filename }}</td><td>{{ procs(f.process_seqids) }}</td></tr>
-  {% endfor %}
-  </tbody>
-</table></div>
-{% else %}
-<p class="dim">None recorded.</p>
-{% endif %}
+</section>
 
 {% endif %}

@@ -1,4 +1,5 @@
-{% from "tabs/_report_macros.html" import proc, unreadable with context %}
+{% from "tabs/_report_macros.html" import proc, unreadable,
+     group_summary, group_attrs, disclose_tools with context %}
 {#
   memdump's output, as report.json describes it: one group per process, each
   dump with the reason DRAKVUF took it, the region and its size. The bytes are
@@ -21,9 +22,20 @@
 </div>
 {% else %}
 
+{#
+  The report already groups dumps by process; each group is a <details>,
+  ordered and opened like the Behaviour and Registry tabs' -- the sample's
+  subtree first and open, the rest one line each with its count and total
+  size. See Report.memdump_groups.
+#}
+{% set groups = report.memdump_groups() %}
+<section class="block" data-disclose-scope>
+<header class="block-head">
+  <h2>Dumps <span class="count">{{ report.dump_count }}</span></h2>
+  <span class="summary">across {{ report.memdumps | length }} process{{ 'es' if report.memdumps | length != 1 }}</span>
+  {{ disclose_tools() }}
+</header>
 <p class="note">
-  {{ report.dump_count }} dump{{ 's' if report.dump_count != 1 }} across
-  {{ report.memdumps | length }} process{{ 'es' if report.memdumps | length != 1 }}.
   {% if 'dumps.zip' in job.artifacts %}
   The bytes are in <a href="{{ job.artifacts['dumps.zip'] }}" rel="noopener nofollow">dumps.zip</a>
   (password <code>infected</code>, like every artifact here).
@@ -34,27 +46,35 @@
   under <code>dumps_ttp/</code> on the Artifacts tab.
 </p>
 
-{% for group in report.memdumps %}
-<h2 style="margin-top:1.25rem">{{ proc(group.process_seqid) }}
-  <span class="count">{{ group.dumps | length }}</span></h2>
-<div class="scroll-x"><table class="rows">
-  <thead><tr><th>#</th>{% if group.process_seqid is none %}<th>PID</th>{% endif %}<th>Reason</th><th>Method</th><th>Address</th><th>Size</th><th>Written into</th><th>File in dumps.zip</th></tr></thead>
-  <tbody>
-  {% for d in group.dumps %}
-    <tr>
-      <td class="dim">{{ d.index if d.index is not none else '' }}</td>
-      {# The tree never saw this process; its PID is all the report has. #}
-      {% if group.process_seqid is none %}<td class="mono">{{ d.pid if d.pid is not none else '' }}</td>{% endif %}
-      <td>{{ d.dump_reason }}</td>
-      <td class="mono">{{ d.method }}</td>
-      <td class="mono">{{ d.address }}</td>
-      <td class="mono">{{ d.size if d.size is not none else '' }}</td>
-      <td>{% if d.target_pid is not none %}{{ proc(d.target_process) }} <span class="dim mono">@ {{ d.target_addr }}</span>{% endif %}</td>
-      <td class="filename">{{ d.filename }}</td>
-    </tr>
-  {% endfor %}
-  </tbody>
-</table></div>
+<div class="groups">
+{% for group, in_sample in groups %}
+{% set sizes = group.dumps | map(attribute='size') | select('number') | list %}
+<details class="group"{{ group_attrs(in_sample, groups | length) }}>
+  {{ group_summary(group.process_seqid, in_sample, {'dumps': group.dumps | length},
+                   (sizes | sum | filesizeformat(binary=True)) if sizes else '') }}
+  <div class="group-body">
+  <table class="rows compact">
+    <thead><tr><th>#</th>{% if group.process_seqid is none %}<th>PID</th>{% endif %}<th>Reason</th><th>Method</th><th>Address</th><th>Size</th><th>Written into</th><th class="fill">File in dumps.zip</th></tr></thead>
+    <tbody>
+    {% for d in group.dumps %}
+      <tr>
+        <td class="dim">{{ d.index if d.index is not none else '' }}</td>
+        {# The tree never saw this process; its PID is all the report has. #}
+        {% if group.process_seqid is none %}<td class="mono">{{ d.pid if d.pid is not none else '' }}</td>{% endif %}
+        <td class="nowrap">{{ d.dump_reason }}</td>
+        <td class="mono">{{ d.method }}</td>
+        <td class="mono">{{ d.address }}</td>
+        <td class="mono" title="{{ d.size if d.size is not none else '' }} bytes">{{ d.size | filesizeformat(binary=True) if d.size is not none else '' }}</td>
+        <td>{% if d.target_pid is not none %}{{ proc(d.target_process) }} <span class="dim mono">@ {{ d.target_addr }}</span>{% endif %}</td>
+        <td class="filename">{{ d.filename }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+</details>
 {% endfor %}
+</div>
+</section>
 
 {% endif %}

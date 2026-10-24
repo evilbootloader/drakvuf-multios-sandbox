@@ -2,7 +2,10 @@
 {% block title %}History — DRAKVUF MultiOS Sandbox{% endblock %}
 
 {% block content %}
-<h2>History</h2>
+<div class="page-head">
+  <h2>History</h2>
+  {% if total %}<span class="count">{{ total }}</span>{% endif %}
+</div>
 
 {#
   A GET form, so a search is a URL: shareable, bookmarkable, and back/forward
@@ -10,7 +13,7 @@
   the hash, and the `%` is applied server-side -- the field accepts hex only,
   so a user cannot type one and cannot turn the query into a match-everything.
 #}
-<form class="filters" method="get" action="/ui/jobs">
+<form class="filters card" method="get" action="/ui/jobs">
   <label>
     <span>SHA-256</span>
     <input type="search" name="q" value="{{ q }}" maxlength="64"

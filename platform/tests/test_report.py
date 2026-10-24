@@ -184,6 +184,80 @@ def test_without_a_known_sample_the_diagram_is_everything():
     assert r.diagram().shown == 6
 
 
+# --- grouped by process -------------------------------------------------------
+
+def _idle(doc: dict, *seqids: int) -> dict:
+    """Mark processes as already running when the trace began."""
+    for p in doc["processes"]:
+        if p["seqid"] in seqids:
+            p["started_at"] = None
+    return doc
+
+
+def test_files_group_under_each_process_that_touched_them():
+    """The Behaviour tab's Files block: one group per process, the sample's
+    subtree first, a path credited to two processes under both -- each naming
+    the other -- and a path credited to nobody kept, last."""
+    doc = sample_report(
+        modified_files=[{"filename": "a.tmp", "process_seqids": [4]},
+                        {"filename": "shared.log", "process_seqids": [1, 5]},
+                        {"filename": "orphan.dat", "process_seqids": []}],
+        deleted_files=[{"filename": "gone.tmp", "process_seqids": [4]}],
+        read_files=[{"filename": "C:\\Windows\\win.ini", "process_seqids": [4]}])
+    r = R.parse(json.dumps(doc).encode()).report
+
+    groups = r.file_activity()
+    assert [g.seqid for g in groups] == [4, 5, 1, None]
+    assert [g.in_sample for g in groups] == [True, True, False, False]
+    sample = groups[0]
+    assert sample.kinds == {"written": 1, "deleted": 1, "read": 1}
+    assert not sample.shared
+    shared = {g.seqid: g for g in groups}
+    assert shared[5].rows[0].others == (1,) and shared[1].rows[0].others == (5,)
+    assert shared[5].shared
+    assert shared[None].rows[0].item.filename == "orphan.dat"
+
+
+def test_registry_writes_group_by_process_with_their_operation():
+    r = R.parse(json.dumps(sample_report()).encode()).report
+    groups = r.registry_activity()
+    # The sample's set, created and deleted value, then the unattributed set.
+    assert [g.seqid for g in groups] == [4, None]
+    assert groups[0].kinds == {"set": 1, "created": 1, "deleted": 1}
+    assert sum(len(g.rows) for g in groups) == r.registry_count
+
+
+def test_dump_groups_put_the_sample_first_and_unattributed_last():
+    doc = sample_report()
+    doc["memdumps"].insert(0, {"process_seqid": 1, "dumps": [
+        {"index": 3, "dump_reason": "x", "method": "x", "address": "0x2",
+         "size": 4096, "filename": "cc.dmp"}]})
+    r = R.parse(json.dumps(doc).encode()).report
+    assert [(g.process_seqid, s) for g, s in r.memdump_groups()] == \
+        [(4, True), (1, False), (None, False)]
+
+
+def test_the_tree_opens_where_something_happened():
+    """Open: the sample's ancestors and subtree, and any branch holding a
+    process that started during the trace. Closed: a branch where everything
+    was already running and nothing new appeared."""
+    doc = _idle(sample_report(), 0, 1, 2, 3, 4, 5)
+    doc["processes"].append(process(6, 900, 1, "late.exe", started_at=5.0))
+    doc["processes"].append(process(7, 901, 0, "idle-child.exe", started_at=None))
+    r = R.parse(json.dumps(doc).encode()).report
+    # winlogon -> explorer -> sample(4) -> cmd(5); csrss(1) -> late(6).
+    assert r.expanded == {2, 3, 4, 1, 6}
+    # System (0) holds only an idle child, so it closes; the template says
+    # how much it hides.
+    system = next(n for n in r.tree if n.process.seqid == 0)
+    assert 0 not in r.expanded and system.descendants == 1
+
+
+def test_counts_beside_the_tabs():
+    r = R.parse(json.dumps(sample_report()).encode()).report
+    assert r.tab_counts() == {"behaviour": 6, "memory": 2, "registry": 4}
+
+
 # --- rendered -----------------------------------------------------------------
 
 HOSTILE = "<script>alert(1)</script>\"'&"
@@ -332,6 +406,60 @@ def test_unix_sockets_alone_fill_the_network_tab(client, conn, put_object):
     anchor = {chunk.split(">", 1)[1].split("<", 1)[0]: chunk
               for chunk in nav.split("<a ")[1:]}
     assert "data-empty" not in anchor["Network"]
+
+
+def test_unix_sockets_render_once_beside_connections(client, conn, put_object):
+    """The Unix-sockets block sat inside the Connections table's Remote cell
+    until 2026-10-23, so a run with both rendered it once per connection."""
+    doc = sample_report(**falco_sections())
+    doc["connections"].append(dict(doc["connections"][0], local_port=49701))
+    job_id = _job_with_report(conn, put_object, doc, target_os="ubuntu")
+    network = client.get(f"/ui/jobs/{job_id}/tabs?tab=network").text
+    assert network.count("/run/dbus/system_bus_socket") == 1
+    assert network.count("<h2>Unix sockets") == 1
+
+
+def test_the_long_lists_are_grouped_by_process_and_the_sample_opens(client, conn, put_object):
+    doc = sample_report(deleted_files=[{"filename": "svc.etl", "process_seqids": [1]}])
+    job_id = _job_with_report(conn, put_object, doc)
+
+    behaviour = client.get(f"/ui/jobs/{job_id}/tabs?tab=behaviour").text
+    groups = behaviour[behaviour.index("<h2>Files"):]
+    # The sample's group is marked and open; csrss's is one closed line.
+    sample = groups.index('href="/ui/jobs/%s?tab=behaviour#proc-4"' % job_id)
+    other = groups.index('href="/ui/jobs/%s?tab=behaviour#proc-1"' % job_id)
+    assert sample < other
+    assert 'class="group" data-sample="1" open>' in groups
+    assert 'class="group">' in groups
+    assert "a.tmp" in groups and "svc.etl" in groups
+
+    registry = client.get(f"/ui/jobs/{job_id}/tabs?tab=registry").text
+    assert "Writes by process" in registry and 'data-kind="created"' in registry
+
+    page = client.get(f"/ui/jobs/{job_id}").text
+    nav = page[page.index('<nav class="tabs"'):]
+    nav = nav[:nav.index("</nav>")]
+    assert '>Behaviour<span class="n"> 6</span>' in nav
+    assert '>Registry<span class="n"> 4</span>' in nav
+
+
+def test_a_command_line_opens_whole_on_a_page_of_its_own(client, conn, put_object):
+    """The tree cuts a command line to fit; a click opens the whole of it,
+    argv element by element, in a new tab."""
+    doc = sample_report()
+    doc["processes"][4]["args"] = ["sample.exe", "/quiet", "two words", HOSTILE]
+    job_id = _job_with_report(conn, put_object, doc)
+
+    behaviour = client.get(f"/ui/jobs/{job_id}/tabs?tab=behaviour").text
+    link = f'href="/ui/jobs/{job_id}/process/4/cmdline"'
+    assert link in behaviour
+    assert 'target="_blank" rel="noopener"' in behaviour[behaviour.index(link):][:120]
+
+    page = client.get(f"/ui/jobs/{job_id}/process/4/cmdline")
+    assert page.status_code == 200
+    assert '<td class="filename arg">two words</td>' in page.text
+    assert str(escape(HOSTILE)) in page.text and HOSTILE not in page.text
+    assert client.get(f"/ui/jobs/{job_id}/process/99/cmdline").status_code == 404
 
 
 @pytest.mark.parametrize("where", [

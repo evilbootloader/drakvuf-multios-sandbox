@@ -1,3 +1,4 @@
+{% from "tabs/_report_macros.html" import disclose_tools with context %}
 {% if not job.artifacts %}
 <div class="empty">
   {#
@@ -51,24 +52,74 @@
   open it in an isolated environment.
 </p>
 <p>
-  <a href="/api/v1/jobs/{{ job.id }}/artifacts.zip" rel="noopener nofollow">
+  <a class="button" href="/api/v1/jobs/{{ job.id }}/artifacts.zip" rel="noopener nofollow">
     Download all {{ job.artifacts | length }} artifacts</a>
-  as a single archive.
+  <span class="dim small">as a single archive.</span>
 </p>
-<table>
-  <thead><tr><th>Artifact</th><th></th></tr></thead>
+{#
+  The top level of the result as one table -- the report, the per-plugin
+  logs, the capture, and the archives: `dumps.zip` and `extracted.zip` are
+  packed on Dom0 (sandboxd/postprocessing/paths.py), so the bulk of a run is
+  two rows here, not a directory each. What is still a directory follows as
+  a group: `dumps_ttp/` (capa per dump), `procdumps/`, and `dumps/` or
+  `extracted/` themselves on a run whose packing step did not run. A group of
+  a handful opens; a bigger one is one line with its count until asked.
+#}
+{% set dirs = job.artifacts | by_directory %}
+{% set top = dirs | selectattr(0, 'equalto', '') | list %}
+{% if top %}
+<div class="table-card"><table class="rows compact">
+  <thead><tr><th class="fill">Artifact</th><th></th></tr></thead>
   <tbody>
-  {% for name, url in job.artifacts.items() %}
+  {% for name, url in top[0][1] %}
     <tr>
       <td class="filename">{{ name }}</td>
       <td><a href="{{ url }}" rel="noopener nofollow">download</a></td>
     </tr>
   {% endfor %}
   </tbody>
-</table>
+</table></div>
+{% endif %}
+{% set subdirs = dirs | rejectattr(0, 'equalto', '') | list %}
+{% if subdirs %}
+<section class="block spaced-top" data-disclose-scope>
+<header class="block-head">
+  <h2>Directories <span class="count">{{ subdirs | length }}</span></h2>
+  {% if subdirs | length > 1 %}{{ disclose_tools() }}{% endif %}
+</header>
+<div class="groups">
+{% for dir, entries in subdirs %}
+<details class="group"{% if entries | length <= 12 or subdirs | length == 1 %} open{% endif %}>
+  <summary>
+    <span class="mono">{{ dir }}/</span>
+    <span class="kinds"><span class="kind">files<b>{{ entries | length }}</b></span></span>
+  </summary>
+  <div class="group-body">
+  <table class="rows compact">
+    <thead><tr><th class="fill">Artifact</th><th></th></tr></thead>
+    <tbody>
+    {% for name, url in entries %}
+      <tr>
+        <td class="filename">{{ name.split('/', 1)[1] }}</td>
+        <td><a href="{{ url }}" rel="noopener nofollow">download</a></td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+</details>
+{% endfor %}
+</div>
+</section>
+{% endif %}
 {% endif %}
 
 {% if job.manifest %}
-<h2 style="margin-top:1.5rem">Manifest</h2>
-<div class="scroll-x"><pre class="mono">{{ job.manifest | tojson(indent=2) }}</pre></div>
+{# What the run said it produced, verbatim. Closed while the list above is
+   there -- it is the record behind that list, read when the list is in
+   doubt, and it can be long -- and open when it is all there is. #}
+<details class="advanced manifest"{% if not job.artifacts %} open{% endif %}>
+  <summary>Manifest — what the run recorded it produced</summary>
+  <div class="scroll-x"><pre class="doc">{{ job.manifest | tojson(indent=2) }}</pre></div>
+</details>
 {% endif %}

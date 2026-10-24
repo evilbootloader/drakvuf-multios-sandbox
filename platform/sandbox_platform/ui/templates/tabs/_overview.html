@@ -5,8 +5,61 @@
   and MBC rule metadata fills the technique list below -- still observations,
   not a judgement.
 #}
+{% from "tabs/_report_macros.html" import proc, procs, tags, unreadable with context %}
+
+{#
+  At a glance: what each of the other tabs holds, as a count, and a way
+  there. Counts are observations like everything else here -- the opening
+  comment's rule against a score is not relaxed by putting numbers in boxes.
+  One tile per tab this guest HAS (catalogue.tabs_for), so an Ubuntu job is
+  not offered a Registry tile it has no tab for.
+
+  Each tile switches tabs the way the tab bar does: the same htmx swap of
+  #job-tabs and the same pushed URL, and a plain link without htmx.
+#}
+{% macro tile(slug, n, label, sub='', alert=false) -%}
+<a class="tile" href="/ui/jobs/{{ job.id }}?tab={{ slug }}"
+   hx-get="/ui/jobs/{{ job.id }}/tabs?tab={{ slug }}" hx-target="#job-tabs"
+   hx-push-url="/ui/jobs/{{ job.id }}?tab={{ slug }}"
+   {%- if not n %} data-zero="1"{% endif %}{% if alert %} data-alert="1"{% endif %}>
+  <span class="k">{{ label }}</span>
+  <span class="n">{{ n }}</span>
+  {%- if sub %}<span class="sub">{{ sub }}</span>{% endif %}
+</a>
+{%- endmacro %}
+
+{% if report %}
+{% set slugs = tabs | map(attribute='slug') | list %}
+<nav class="tiles" aria-label="At a glance">
+  {% if 'behaviour' in slugs %}
+  {% set started = report.processes | selectattr('started_at') | list | length %}
+  {{ tile('behaviour', report.processes | length, 'Processes',
+          (started ~ ' started in the trace') if report.processes else '') }}
+  {{ tile('behaviour', report.modified_files | length, 'Files written',
+          (report.deleted_files | length ~ ' deleted') if report.deleted_files else '') }}
+  {% endif %}
+  {% if 'registry' in slugs %}
+  {% set autostart = report.registry_autostart | length %}
+  {{ tile('registry', report.registry_count, 'Registry writes',
+          (autostart ~ ' under autostart keys') if autostart else '', autostart > 0) }}
+  {% endif %}
+  {% if 'network' in slugs %}
+  {{ tile('network', report.connections | length, 'Connections',
+          (report.dns_queries | length ~ ' DNS names') if report.dns_queries else '') }}
+  {% if report.http_requests %}{{ tile('network', report.http_requests | length, 'HTTP requests') }}{% endif %}
+  {% endif %}
+  {% if 'memory' in slugs %}
+  {{ tile('memory', report.dump_count, 'Memory dumps',
+          ('from ' ~ report.memdumps | length ~ ' process' ~ ('es' if report.memdumps | length != 1 else '')) if report.memdumps else '') }}
+  {% endif %}
+</nav>
+{% endif %}
+
+<div class="cols wide-right">
+<div class="stack">
+<section class="card">
+<h2>Run</h2>
 <dl class="dl">
-  <dt>Detected type</dt><dd>{{ job.detected_type or 'not yet determined' }}</dd>
   <dt>Plugins</dt>
   <dd class="mono">{{ job.plugins | join(' ') if job.plugins else 'pipeline defaults' }}</dd>
 
@@ -60,19 +113,15 @@
   </dd>
   {% endif %}
 </dl>
-
-{% from "tabs/_report_macros.html" import proc, procs, tags, unreadable with context %}
-
-{% if report_error %}
-<div style="margin-top:1rem">{{ unreadable() }}</div>
-{% elif report %}
-
+</section>
+{% if report and not report_error %}
+<section class="card">
+<h2>Startup</h2>
 {#
   How the sample was started, and how that process ended. `startup.process`
   is a seqid into the tree; `startup.pid` is DRAKVUF's own record of what it
   injected, kept even when the tree never saw that PID.
 #}
-<h2 style="margin-top:1.5rem">Startup</h2>
 <dl class="dl">
   <dt>Injection</dt>
   <dd>
@@ -112,6 +161,14 @@
   </dd>
   {% endif %}
 </dl>
+</section>
+{% endif %}
+</div>
+
+<div class="stack">
+{% if report_error %}
+{{ unreadable() }}
+{% elif report %}
 
 {#
   Observations, not a score -- the comment at the top of this file still
@@ -120,7 +177,8 @@
   process subtree (analyze_only_malware_pids), so a technique here is
   something the SAMPLE did, not something the guest did around it.
 #}
-<h2 style="margin-top:1.5rem">Techniques <span class="count">{{ report.ttps | length }}</span></h2>
+<section class="block">
+<header class="block-head"><h2>Techniques <span class="count">{{ report.ttps | length }}</span></h2></header>
 {% if report.ttps %}
 <ul class="ttps">
   {% for t in report.ttps %}
@@ -134,34 +192,9 @@
 <p class="dim">capa matched no ATT&amp;CK-tagged rule against the sample's
   processes. That is an observation about this trace, not a verdict.</p>
 {% endif %}
+</section>
 
 
-<h2 style="margin-top:1.5rem">
-  YARA matches <span class="count">{{ report.yara | length }}</span>
-</h2>
-
-{% if report.yara %}
-<ul class="yara">
-  {% for t in report.yara %}
-  <li>
-    <div>
-      <strong>{{ t.identifier }} ({{ t.namespace }})</strong>
-
-      {% if t.process_seqids %}
-        {{ procs(t.process_seqids) }}
-      {% endif %}
-    </div>
-    <div>{{ t.filename }}</div>
-  </li>
-  {% endfor %}
-</ul>
-{% else %}
-<p class="dim">
-  YARA matched no rules against the staged samples,
-  extracted files or memory dumps.
-  This is an observation, not a verdict.
-</p>
-{% endif %}
 
 {#
   Falco's rules (falcosecurity/rules, stable and incubating, plus the
@@ -175,7 +208,8 @@
   counted there, never reported as a match.
 #}
 {% if report.falco or report.falco_coverage %}
-<h2 style="margin-top:1.5rem">Falco rules <span class="count">{{ report.falco | length }}</span></h2>
+<section class="block">
+<header class="block-head"><h2>Falco rules <span class="count">{{ report.falco | length }}</span></h2></header>
 {% if report.falco %}
 <ul class="falco">
   {% for f in report.falco %}
@@ -217,12 +251,43 @@
   {% endif %}
 </details>
 {% endif %}
+</section>
 {% endif %}
 
+{#
+  Below Falco, as the operator asked on 2026-10-23. Falco is Linux-only --
+  the evaluator has no Windows profile, so a Windows report carries neither
+  `falco` nor `falco_coverage` -- and on a Windows run this follows
+  Techniques directly.
+#}
+<section class="block">
+<header class="block-head"><h2>YARA matches <span class="count">{{ report.yara | length }}</span></h2></header>
+{% if report.yara %}
+<ul class="yara">
+  {% for t in report.yara %}
+  <li>
+    <div>
+      <strong>{{ t.identifier }} ({{ t.namespace }})</strong>
 
+      {% if t.process_seqids %}
+        {{ procs(t.process_seqids) }}
+      {% endif %}
+    </div>
+    <div class="filename dim small">{{ t.filename }}</div>
+  </li>
+  {% endfor %}
+</ul>
+{% else %}
+<p class="dim">
+  YARA matched no rules against the staged samples,
+  extracted files or memory dumps.
+  This is an observation, not a verdict.
+</p>
+{% endif %}
+</section>
 
 {% else %}
-<div class="empty" style="margin-top:1rem">
+<div class="empty">
   <strong>No report for this run.</strong>
   Startup, techniques, the process tree, files, network and memory tabs are
   filled from <code>report.json</code>, which postprocessing writes for Windows
@@ -230,3 +295,5 @@
   today, have the artifacts and no report.
 </div>
 {% endif %}
+</div>
+</div>
