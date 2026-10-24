@@ -1954,6 +1954,38 @@ space — a vfork child shares it; CR3 is compared without its PCID bits — and
 `Child process pid:` names an existing `systemd --user` instead of a new
 process.
 
+### Linux memory dumps say `DumpPID: 0`
+
+**Symptom.** Every record in a Linux job's `memdump.log` has `"DumpPID": 0`
+while its `PID` is the real process — all 15 in job `728fc4a8`, 2026-10-24 —
+and each dump's `.metadata` file has PID 0, PPID 0 and no `ProcessName`.
+
+**Cause.** DRAKVUF fills `attached_proc_data` in only on Windows, where it is
+the process a thread is attached to; on Linux it is left empty, and the thread
+is in `proc_data`. memdump took the dump's process from it on both. The same
+mistake sat in two places with no symptom in the logs, found by the same
+review:
+
+- **fileextractor** keyed the Linux files it tracks by `(0, fd)`, so every
+  process shared one table by descriptor number: a write was appended to the
+  dump of another process's file with the same number, and a pipe or socket
+  written on that number by anyone made it skipped everywhere for a second. No
+  merged dump in jobs `728fc4a8` and `8a1ae0ff` (1,456 and 494 dumps); a skipped
+  write leaves nothing to find.
+- **`make_hook_id`** keyed procmon's and filetracer's Linux return hooks by
+  `(0, return address)`, so two threads in the same hooked function at once
+  replaced each other's hook and one return was lost. None lost in those two
+  jobs: every successful `execve` and user mode `clone` in `sysret.log` has its
+  procmon record.
+
+sandboxd's results were not affected by the dump PIDs: `process_dumps` and
+capa read the record's `PID`, not `DumpPID` or the metadata file.
+
+**Fix.** drakvuf `07d3f9c`, `3197c74` and `6a3c1b0` on `develop` (2026-10-24),
+**not yet pushed, pinned or deployed**: Linux takes the process from
+`proc_data` in all three, as the output formats already did. Code that keys on
+a thread should do the same — `return_tracker.h` `thread_proc` is the pattern.
+
 ### An empty `FORWARD` chain read as proof a rule was rejected
 
 **Symptom.** No DROP rules present, taken as evidence that an isolation rule had
