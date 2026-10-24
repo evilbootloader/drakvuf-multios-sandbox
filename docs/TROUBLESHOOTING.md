@@ -1912,6 +1912,48 @@ command with `sudo`).
 happens to run a second `nano` gets the wrong process injected, and `injector`
 does not warn.
 
+### The trace's injection fails with `Could not create argv arrays`
+
+**Symptom.** An Ubuntu job's `trace.stderr` is the banner and four lines:
+
+```
+1792822558.358529 DRAKVUF v1.1-3886574 Copyright (C) 2014-2024 Tamas K Lengyel
+Could not create argv arrays
+Could not create envp arrays
+Doing premature cleanup
+Process startup failed
+```
+
+`inject.log` reads `"Status": "PrematureBreak"`, at the trace's whole budget
+from DRAKVUF's start (214.997 s, twice, with `-t 120`), and no plugin wrote
+anything. DRAKVUF arms its plugins after the injection, so nothing else ran:
+no procmon `Environment`, no Falco data, no sample. Seen in 2 of 4 jobs on Dom0
+2026-10-24; the preconfig `injector` execproc of the same four jobs succeeded
+every time.
+
+**Cause — probable, not yet confirmed by a debug run.** After the injector
+issues `vfork` it takes as the child the first process to reach its user mode
+breakpoint whose parent is the anchor and whose name is the anchor's
+(`libinjector/linux/linux_injector.c`, the `injector->fork` branch of
+`check_userspace_int3_trap`). It checks neither RIP nor the address space. The
+breakpoint is on the physical page of the code PID 1 was returning through, so
+every process returning through that code hits it. The Ubuntu anchor is PID 1, and the user's `systemd --user` has
+PPID 1, the same name (`/usr/lib/systemd/systemd`) and the same event loop: in
+procmon of job `728fc4a8` it is PID 910, beside the injected child 1696 with
+the identical PPID and name. On the 3-vCPU guest it can get there first. The
+argv and envp writes then go to the buffer PID 1 mapped, which that process does
+not have, and `cleanup()` gives it PID 1's registers. The real child is never
+matched again, so the injection waits until `sandboxd` kills the trace — which
+is why both failures ended at the same instant. Upstream has a FIXME on it
+(`linux_execve.c`, "other child process for the parent").
+
+**Fix.** drakvuf `2e7960e` on `develop` (2026-10-24), **not yet pushed,
+pinned or deployed**: the fork branch also requires the target's address
+space — a vfork child shares it; CR3 is compared without its PCID bits — and
+`rax == 0`. Until it is deployed, a debug build (`-v`) confirms the cause:
+`Child process pid:` names an existing `systemd --user` instead of a new
+process.
+
 ### An empty `FORWARD` chain read as proof a rule was rejected
 
 **Symptom.** No DROP rules present, taken as evidence that an isolation rule had
