@@ -11,7 +11,7 @@ def get_modified_files_info(context: PostprocessContext) -> None:
     analysis_dir = context.analysis_dir
     process_tree = context.process_tree
 
-    def filter_files_windows(data: dict) -> Optional[dict]:
+    def filter_modified_files_windows(data: dict) -> Optional[dict]:
         method_name = data.get("Method")
 
         if method_name == "NtSetInformationFile":

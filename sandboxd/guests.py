@@ -1023,7 +1023,7 @@ def argv_trace(job: Job, component: str | None = None) -> list[str]:
     if UNIXSOCKETMON_PLUGIN in job.options.plugins:
         argv += ["--unixsocketmon-max-size-print", "2048"]
     if FILEEXTRACTOR_PLUGIN in job.options.plugins:
-        argv += ["--fileextractor-timeout", str(FILEEXTRACTOR_STOP_TIMEOUT)]
+        argv += ["--fileextractor-timeout", str(FILEEXTRACTOR_STOP_TIMEOUT), "--fileextractor-exclude-list",  (Path(__file__).parent.absolute() / "data" / "fileextractor-exclusions.txt").as_posix()]
     if MEMDUMP_PLUGIN in job.options.plugins or APIMON_PLUGIN in job.options.plugins or RPCMON_PLUGIN in job.options.plugins:
         argv += ["--dll-hooks-list", (Path(__file__).parent.absolute() / "data" / "hooks.txt").as_posix()]
     # libmon's own option and its own file. **Not `--dll-hooks-list`**: the
