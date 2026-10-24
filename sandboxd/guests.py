@@ -1051,8 +1051,9 @@ def argv_trace(job: Job, component: str | None = None) -> list[str]:
     # put it: without --procdump-dir it has no output at all. Compressed,
     # because a GUI process's memory runs to hundreds of MB against the job's
     # 4 GiB result budget. `stages._trace` creates the directory.
-    if PROCDUMP2_PLUGIN in job.options.plugins:
-        argv += ["--procdump-dir", str(job.result_dir / PROCDUMPS_DIR), "--compress-procdumps"]
+    #
+    #if PROCDUMP2_PLUGIN in job.options.plugins:
+    #    argv += ["--procdump-dir", str(job.result_dir / PROCDUMPS_DIR), "--compress-procdumps"]
     for option, name in SYMBOL_PROFILES[job.target_os]:
         argv += [option, str(job.profile.parent / name)]
     return argv
