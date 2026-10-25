@@ -599,7 +599,7 @@ setup_hooks_windows:
 	"disk = [ 'phy:/dev/vg-root/windows_sandbox,hda,w' ]" > $(REPO_ROOT)/misc/xen-vms/windows_sandbox.cfg; \
 	xl create $(REPO_ROOT)/misc/xen-vms/windows_sandbox.cfg; \
 	sleep 120; \
-	INJECTION_PID=$$(vmi-process-list -d $$(xl domid ubuntu_analysis_sandbox) -j $(REPO_ROOT)/profiles/windows.json \
+	INJECTION_PID=$$(vmi-process-list -d $$(xl domid windows_analysis_sandbox) -j $(REPO_ROOT)/profiles/windows.json \
 	    | grep -Eo "\[\s*[0-9]+\]\s*explorer\.exe" | cut -d']' -f1 | grep -Eo "[0-9]+"); \
 	echo "INJECTION_PID=$$INJECTION_PID"; \
 	xl save windows_analysis_sandbox $(REPO_ROOT)/state/windows_sandbox.bak $(REPO_ROOT)/misc/xen-vms/windows_sandbox.cfg; \
