@@ -211,7 +211,7 @@ def get_modified_files_info(context: PostprocessContext) -> None:
                 normalize_filename(data["file_name"]),
                 data["process"].seqid,
             )
-            extracted_files[key].append(data["seq_num"])
+            extracted_files[key].append(int(data["seq_num"]))
 
         def build_report(files):
             return [
@@ -253,7 +253,7 @@ def get_modified_files_info(context: PostprocessContext) -> None:
                 seq_num = stem
 
             extractor_by_event[(data["pid"], data["event_uid"])].append(
-                (str(seq_num), data.get("file_name"))
+                (int(seq_num), data.get("file_name"))
             )
 
         excluded_paths = (
@@ -321,7 +321,7 @@ def get_modified_files_info(context: PostprocessContext) -> None:
 
             if extracted:
                 extracted_by_filename[filename].update(
-                    seq_num for seq_num, _ in extracted
+                    int(seq_num) for seq_num, _ in extracted
                 )
 
         def build_report(files):
