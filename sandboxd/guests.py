@@ -902,7 +902,7 @@ def _windows_launch(paths: GuestPaths, target: str) -> list[str]:
 
     execute_string = target
 
-    if target.lower().ends_with(".ps1"):
+    if target.lower().endswith(".ps1"):
         execute_string = f"powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"{target}\""
 
     if not paths.delay or _CMD_UNSAFE & set(execute_string):
