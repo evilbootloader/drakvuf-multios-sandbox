@@ -95,7 +95,7 @@
           <td><span class="kind" data-kind="{{ r.kind }}">{{ r.kind }}</span></td>
           <td class="filename">{{ r.item.filename }}</td>
           {% if g.shared %}<td>{{ procs(r.others) }}</td>{% endif %}
-          <td>{{ r.extracted }}</td>
+          <td>{{ r.extracted | join(' ') | safe }}</td>
         </tr>
       {% endfor %}
       </tbody>
