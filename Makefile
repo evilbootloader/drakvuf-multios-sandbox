@@ -598,7 +598,7 @@ setup_hooks_windows:
 	"vif = [ 'type=ioemu,model=e1000,script=vif-openvswitch,bridge=xenbr1' ]" \
 	"disk = [ 'phy:/dev/vg-root/windows_sandbox,hda,w' ]" > $(REPO_ROOT)/misc/xen-vms/windows_sandbox.cfg; \
 	xl create $(REPO_ROOT)/misc/xen-vms/windows_sandbox.cfg; \
-	sleep 30; \
+	sleep 120; \
 	INJECTION_PID=$$(vmi-process-list -d $$(xl domid ubuntu_analysis_sandbox) -j $(REPO_ROOT)/profiles/windows.json \
 	    | grep -Eo "\[\s*[0-9]+\]\s*explorer\.exe" | cut -d']' -f1 | grep -Eo "[0-9]+"); \
 	echo "INJECTION_PID=$$INJECTION_PID"; \
@@ -648,6 +648,6 @@ setup_hooks_ubuntu:
 	"disk = ['phy:/dev/vg-root/ubuntu_sandbox,hda,w' ]" \
 		> $(REPO_ROOT)/misc/xen-vms/ubuntu_sandbox.cfg; \
 	xl create $(REPO_ROOT)/misc/xen-vms/ubuntu_sandbox.cfg; \
-	sleep 30; \
+	sleep 120; \
 	xl save ubuntu_analysis_sandbox $(REPO_ROOT)/state/ubuntu_sandbox.bak $(REPO_ROOT)/misc/xen-vms/ubuntu_sandbox.cfg; \
 	sed -Ei "s/INJECTION_PID_UBUNTU = .*/INJECTION_PID_UBUNTU = 1/g" $(REPO_ROOT)/sandboxd/config.py
