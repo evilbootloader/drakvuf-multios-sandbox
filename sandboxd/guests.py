@@ -899,9 +899,15 @@ def _windows_launch(paths: GuestPaths, target: str) -> list[str]:
     not before. And the sample runs with a console attached. Normal for
     Windows, and a closer parent than the anchor process was.
     """
-    if not paths.delay or _CMD_UNSAFE & set(target):
-        return ["-e", target]
-    return ["-e", paths.shell, "-f", f'/c {paths.delay} & "{target}"']
+
+    execute_string = target
+
+    if target.lower().ends_with(".ps1"):
+        execute_string = f"powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"{target}\""
+
+    if not paths.delay or _CMD_UNSAFE & set(execute_string):
+        return ["-e", execute_string]
+    return ["-e", paths.shell, "-f", f'/c {paths.delay} & "{execute_string}"']
 
 
 # `--wait-stop-plugins`, in seconds: "Wait for plugins to stop before
