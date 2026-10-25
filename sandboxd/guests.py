@@ -903,11 +903,20 @@ def _windows_launch(paths: GuestPaths, target: str) -> list[str]:
     execute_string = target
 
     if target.lower().endswith(".ps1"):
-        execute_string = f"powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"{target}\""
+        execute_string = (
+            f'powershell.exe -NoProfile '
+            f'-ExecutionPolicy Bypass -File "{target}"'
+        )
 
     if not paths.delay or _CMD_UNSAFE & set(execute_string):
         return ["-e", execute_string]
-    return ["-e", paths.shell, "-f", f'/c {paths.delay} & "{execute_string}"']
+
+    return [
+        "-e",
+        paths.shell,
+        "-f",
+        f"/c {paths.delay} & {execute_string}",
+    ]
 
 
 # `--wait-stop-plugins`, in seconds: "Wait for plugins to stop before
