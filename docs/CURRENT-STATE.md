@@ -419,7 +419,7 @@ accurate as dated evidence.
 | | |
 |---|---|
 | sandboxd modules | 16 |
-| test files | 18 sandboxd, 28 platform |
+| test files | 17 sandboxd, 28 platform |
 | documents under `docs/` | 42 |
 
 <!-- END GENERATED -->
