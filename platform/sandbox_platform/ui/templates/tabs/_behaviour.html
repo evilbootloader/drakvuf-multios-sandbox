@@ -95,7 +95,7 @@
           <td><span class="kind" data-kind="{{ r.kind }}">{{ r.kind }}</span></td>
           <td class="filename">{{ r.item.filename }}</td>
           {% if g.shared %}<td>{{ procs(r.others) }}</td>{% endif %}
-          <td>{%- for e in r.extracted %}{{ e }}{% if not loop.last %} {% endif %}{% endfor -%}</td>
+          <td>{%- for e in r.item.extracted %}{{ e }}{% if not loop.last %} {% endif %}{% endfor -%}</td>
         </tr>
       {% endfor %}
       </tbody>
