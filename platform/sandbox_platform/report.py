@@ -148,6 +148,7 @@ class CrackedUrl(_Lenient):
 
 class FileRef(_Lenient):
     filename: str
+    extracted: list[int] = Field(default_factory=list)
     process_seqids: list[int] = Field(default_factory=list)
 
 
