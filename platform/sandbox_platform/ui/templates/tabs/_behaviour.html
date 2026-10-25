@@ -88,7 +88,7 @@
     {{ group_summary(g.seqid, g.in_sample, g.kinds) }}
     <div class="group-body">
     <table class="rows compact">
-      <thead><tr><th>Op</th><th class="fill">Path</th>{% if g.shared %}<th>Also by</th><th>Extracted id</th>{% endif %}</tr></thead>
+      <thead><tr><th>Op</th><th class="fill">Path</th>{% if g.shared %}<th>Also by</th>{% endif %}<th>Extracted id</th></tr></thead>
       <tbody>
       {% for r in g.rows %}
         <tr>
