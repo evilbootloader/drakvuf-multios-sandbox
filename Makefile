@@ -488,7 +488,7 @@ ubuntu_analysis_vm:
 	"audio = 1" \
 	"viridian = 1" \
 	"altp2m = 2" \
-	"shadow_memory = 32" \
+	"shadow_memory = 128" \
 	"vif = [ 'type=ioemu,model=e1000,bridge=xenbr0' ]" \
 	"disk = ['phy:/dev/vg-root/ubuntu,hda,w','file:$(REPO_ROOT)/misc/iso/seed.iso,hdb:cdrom,r','file:$(REPO_ROOT)/misc/iso/ubuntu-22.04.5-live-server-amd64.iso,hdc:cdrom,r']" \
 	"kernel = '$(REPO_ROOT)/misc/iso/vmlinuz'" \
@@ -549,7 +549,7 @@ windows_analysis_vm:
 	"audio = 1" \
 	"viridian = 1" \
 	"altp2m = 2" \
-	"shadow_memory = 32" \
+	"shadow_memory = 128" \
 	"vif = [ 'type=ioemu,model=e1000,bridge=xenbr0' ]" \
 	"disk = [ 'phy:/dev/vg-root/windows,hda,w', 'file:$(REPO_ROOT)/misc/iso/Win11_modified.iso,hdc:cdrom,r' ]" > $(REPO_ROOT)/misc/xen-vms/windows.cfg; \
 	sudo lvcreate -V 1T --thin -n windows vg-root/thinpool; \
@@ -594,7 +594,7 @@ setup_hooks_windows:
 	"audio = 1" \
 	"viridian = 1" \
 	"altp2m = 2" \
-	"shadow_memory = 32" \
+	"shadow_memory = 128" \
 	"vif = [ 'type=ioemu,model=e1000,script=vif-openvswitch,bridge=xenbr1' ]" \
 	"disk = [ 'phy:/dev/vg-root/windows_sandbox,hda,w' ]" > $(REPO_ROOT)/misc/xen-vms/windows_sandbox.cfg; \
 	xl create $(REPO_ROOT)/misc/xen-vms/windows_sandbox.cfg; \
@@ -643,7 +643,7 @@ setup_hooks_ubuntu:
 	"audio = 1" \
 	"viridian = 1" \
 	"altp2m = 2" \
-	"shadow_memory = 32" \
+	"shadow_memory = 128" \
 	"vif = [ 'type=ioemu,model=e1000,script=vif-openvswitch,bridge=xenbr1' ]" \
 	"disk = ['phy:/dev/vg-root/ubuntu_sandbox,hda,w' ]" \
 		> $(REPO_ROOT)/misc/xen-vms/ubuntu_sandbox.cfg; \
