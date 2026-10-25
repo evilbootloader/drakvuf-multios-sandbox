@@ -903,10 +903,19 @@ def _windows_launch(paths: GuestPaths, target: str) -> list[str]:
     execute_string = target
 
     if target.lower().endswith(".ps1"):
-        execute_string = (
-            f'powershell.exe -NoProfile '
-            f'-ExecutionPolicy Bypass -File "{target}"'
+        ps_args = (
+            f'-NoProfile -ExecutionPolicy Bypass -File "{target}"'
         )
+
+        if not paths.delay or _CMD_UNSAFE & set(ps_args):
+            return ["-e", "powershell.exe", "-f", ps_args]
+
+        return [
+            "-e",
+            paths.shell,
+            "-f",
+            f"/c {paths.delay} & powershell.exe {ps_args}",
+        ]
 
     if not paths.delay or _CMD_UNSAFE & set(execute_string):
         return ["-e", execute_string]
@@ -915,9 +924,8 @@ def _windows_launch(paths: GuestPaths, target: str) -> list[str]:
         "-e",
         paths.shell,
         "-f",
-        f"/c {paths.delay} & {execute_string}",
+        f'/c {paths.delay} & "{execute_string}"',
     ]
-
 
 # `--wait-stop-plugins`, in seconds: "Wait for plugins to stop before
 # termination loop" (`drakvuf --help`). Without it DRAKVUF asks each plugin to
