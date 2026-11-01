@@ -17,10 +17,11 @@ firmware files the guests are given and the lines of their xl configs:
   xen-identity.py patch-xen XEN_TREE       Xen's own strings in hvmloader and libacpi
   xen-identity.py guest-files OUT_DIR      smbios.bin and ssdt.aml (iasl) for xl
   xen-identity.py xl-cfg OUT_DIR           smbios, firmware, platform device and disk lines
-  xen-identity.py get KEY                  one value, e.g. mac
+  xen-identity.py get KEY                  one value, e.g. bios_vendor
+  xen-identity.py mac GUEST                GUEST's own MAC, drawn the first time it is asked for
 
-`make xen` runs patch-xen on the pristine source after the patches; the Windows targets
-run guest-files and add xl-cfg's lines and the MAC to the configs they write. A guest
+`make xen` runs patch-xen on the pristine source after the patches; the guest targets
+run guest-files and add xl-cfg's lines and their guest's MAC to the configs they write. A guest
 only sees a new identity after a cold boot: a saved state keeps the firmware it booted
 with, and Windows keeps the devices it once saw in its registry, so change it before a
 guest is installed. docs/architecture/guest-identity.md has the details.
@@ -158,24 +159,53 @@ def draw():
         "acpi_creator_id": creator,
         "acpi_creator_revision": creator_rev,
         "eisa_id": p["eisa"] + chars("0123456789ABCDEF", 4),
-        "mac": "%s:%s" % (pick(INTEL_OUIS), ":".join("%02X" % secrets.randbelow(256) for _ in range(3))),
+        "macs": {},  # one per guest, drawn by `mac GUEST`
         "disk_model": disk_model,
         "disk_serial": fill(disk_serial),
         "cdrom_model": pick(OPTICAL),
     }
 
 
-def load(path, create=True):
-    if path.exists():
-        return json.loads(path.read_text())
-    if not create:
-        sys.exit("No identity in %s: run `%s show` first" % (path, sys.argv[0]))
-    identity = draw()
+# Each guest gets its own MAC. The Ubuntu and Windows golden VMs both sit on xenbr0, and
+# with one MAC between them the bridge and DHCP treated them as one machine: each got the
+# other's packets, and Windows' first-logon downloads were reset and timed out
+# (docs/TROUBLESHOOTING.md). A guest's golden VM, template and clones do share its MAC,
+# and may: they are never on the same bridge or vlan.
+GUEST_NAME = re.compile(r"^[a-z][a-z0-9_]*$")
+
+# An identity drawn before that has a single "mac", which every guest was given. Ubuntu
+# keeps it: its golden image and saved state were made with it, and it is the evidenced
+# path. Every other guest draws a new one.
+LEGACY_MAC_OWNER = "ubuntu"
+
+
+def draw_mac(taken):
+    while True:
+        mac = "%s:%s" % (pick(INTEL_OUIS), ":".join("%02X" % secrets.randbelow(256) for _ in range(3)))
+        if mac not in taken:
+            return mac
+
+
+def save(path, identity):
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(".tmp")
     tmp.write_text(json.dumps(identity, indent=2) + "\n")
     os.chmod(tmp, 0o600)
     tmp.replace(path)
+
+
+def load(path, create=True):
+    if path.exists():
+        identity = json.loads(path.read_text())
+        if "mac" in identity:
+            identity.setdefault("macs", {})[LEGACY_MAC_OWNER] = identity.pop("mac")
+            save(path, identity)
+            print("Gave the identity's one MAC to %s in %s" % (LEGACY_MAC_OWNER, path), file=sys.stderr)
+        return identity
+    if not create:
+        sys.exit("No identity in %s: run `%s show` first" % (path, sys.argv[0]))
+    identity = draw()
+    save(path, identity)
     print("Drew a new guest identity into %s" % path, file=sys.stderr)
     return identity
 
@@ -395,6 +425,7 @@ def main():
     sub.add_parser("guest-files").add_argument("out_dir")
     sub.add_parser("xl-cfg").add_argument("out_dir")
     sub.add_parser("get").add_argument("key")
+    sub.add_parser("mac").add_argument("guest")
     args = parser.parse_args()
 
     identity = load(args.state)
@@ -407,9 +438,20 @@ def main():
     elif args.command == "xl-cfg":
         xl_cfg(identity, args.out_dir)
     elif args.command == "get":
+        if args.key == "mac":
+            sys.exit("Each guest has its own MAC: %s mac GUEST" % sys.argv[0])
         if args.key not in identity:
             sys.exit("No %r in the identity: %s" % (args.key, ", ".join(sorted(identity))))
         print(identity[args.key])
+    elif args.command == "mac":
+        if not GUEST_NAME.match(args.guest):
+            sys.exit("Not a guest name: %r" % args.guest)
+        macs = identity.setdefault("macs", {})
+        if args.guest not in macs:
+            macs[args.guest] = draw_mac(set(macs.values()))
+            save(args.state, identity)
+            print("Drew a MAC for %s into %s" % (args.guest, args.state), file=sys.stderr)
+        print(macs[args.guest])
 
 
 if __name__ == "__main__":

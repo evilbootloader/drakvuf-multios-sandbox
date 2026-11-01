@@ -46,7 +46,8 @@ detected the sandbox, and what here answers it:
 models (Dell OptiPlex, HP EliteDesk, Lenovo ThinkCentre, ASUS and MSI boards
 with AMI firmware): vendor, product, BIOS vendor, version and date, board,
 chassis, serial numbers in each vendor's format, OEM strings, ACPI OEM and table
-IDs and creator, an EISA ID, an Intel MAC, a disk and an optical drive model.
+IDs and creator, an EISA ID, a disk and an optical drive model — and an Intel
+MAC for each guest, drawn the first time that guest's targets ask for it.
 
 It is kept in **`state/xen-identity.json`, which is not tracked** (nor are the
 files drawn from it). An identity that is not published cannot be detected by
@@ -59,7 +60,8 @@ scripts/xen-identity.py show              the identity, drawn now if there is no
 scripts/xen-identity.py patch-xen TREE    Xen's own strings in hvmloader and libacpi
 scripts/xen-identity.py guest-files DIR   smbios.bin and ssdt.aml
 scripts/xen-identity.py xl-cfg DIR        the guest config lines
-scripts/xen-identity.py get KEY           one value, e.g. mac
+scripts/xen-identity.py get KEY           one value, e.g. bios_vendor
+scripts/xen-identity.py mac GUEST         GUEST's own MAC, drawn the first time
 ```
 
 ---
@@ -89,7 +91,7 @@ chassis maker, product, version, the type 11 and battery strings).
 ```
 viridian = 0
 cpuid = 'host,hypervisor=0'
-vif = [ '...,model=e1000,mac=<identity>,...' ]
+vif = [ '...,model=e1000,mac=<this guest's MAC>,...' ]
 smbios = [ <identity strings, serial numbers, OEM strings> ]
 smbios_firmware = '<repo>/state/firmware/smbios.bin'
 acpi_firmware = '<repo>/state/firmware/ssdt.aml'
@@ -103,8 +105,20 @@ identity's values. **On Dom0 the four `misc/xen-vms/` configs `make` writes do,*
 and `sandboxd` reads them there. Never commit them from Dom0, whose checkout
 has commits of its own: `git update-index --skip-worktree` on the four keeps a
 `git commit -a` from taking them, and makes a pull that changes them stop.
-`clone.py`'s rewrite keeps `mac=`, so every clone has the guest's MAC, each on its
-own VLAN.
+**Each guest has its own MAC** (`xen-identity.py mac GUEST`). The golden VMs
+share untagged `xenbr0`, and the templates share untagged `xenbr1` while
+`setup_hooks_*` runs. On one bridge, two guests with one MAC are a collision,
+which is how Windows' first-logon downloads failed on 2026-11-01
+(`docs/TROUBLESHOOTING.md`, "Windows first logon"). An identity drawn before
+then had one MAC; Ubuntu keeps it and Windows draws a new one.
+
+`clone.py`'s rewrite keeps `mac=`, so every clone has its guest's MAC. That is
+safe: a clone is alone on its own VLAN, with Dom0's `xenbr1.N` as its only
+neighbour, and OVS learns MACs per VLAN. A per-clone `mac=` would also do
+nothing. A clone is an `xl restore`, and QEMU's e1000 save state carries the
+EEPROM and receive-address registers, so the restored guest keeps answering
+to the MAC it was saved with. `xl network-list` would show the new MAC,
+and the guest would still use the old one.
 
 **DRAKVUF.** With the configs hiding the hypervisor, `sandboxd` no longer passes
 `-s` for Ubuntu and Windows (`TraceOptions.cpuid_stealth`); Android, whose

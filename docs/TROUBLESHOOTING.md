@@ -1333,6 +1333,34 @@ compiled binary and one left installed on a Dom0 from before the migration
 still allocates VLANs the old way. **Migration is a cutover, not
 coexistence.**
 
+### Windows first logon: `forcibly closed by the remote host`, then `The operation has timed out`
+
+**Symptom.** On a fresh Windows golden install, `C:\Windows\Setup\Scripts\FirstLogon.log`
+shows Chrome's `Invoke-WebRequest` failing with `Unable to read data from the
+transport connection: An existing connection was forcibly closed by the remote
+host`. Adobe and 7-Zip fail with `The operation has timed out`, and Adobe's
+installer is then `not a valid application for this OS platform`, which means
+the download was truncated. Python and the .NET downloads later in the same block succeed, the
+block takes 2404 s, and the network works fine by the time anyone looks.
+Chrome is not installed. The log does not say why: it shows `Installing
+Chrome...` and nothing else, because `FirstLogon.ps1` discards `msiexec`'s exit
+code. Seen 2026-11-01.
+
+**Cause.** The Ubuntu and Windows golden VMs had **the same MAC on the same
+bridge**: `mac=68:05:CA:55:6C:A3,bridge=xenbr0` in both Dom0 configs.
+`scripts/xen-identity.py` drew one MAC per deployment and all four guest targets
+used it. Two guests up at once on one bridge, both using one MAC, look like one machine to the bridge and
+to DHCP, so each receives the other's traffic and drops or resets it. **Partly
+diagnosed:** the shared MAC was confirmed on Dom0; that Ubuntu was running
+during Windows' first logon was not checked. Not a DHCP race either: that fails
+with `The remote name could not be resolved`, and these connections had opened.
+
+**Fix.** Each guest has its own MAC, `scripts/xen-identity.py mac GUEST`. An
+identity drawn before this hands its one MAC to Ubuntu, which keeps working
+unchanged, and Windows draws a new one the next time `make windows_analysis_vm`
+or `make setup_hooks_windows` writes its configs. Clones need nothing further:
+see `docs/architecture/guest-identity.md` §3 for why they keep their guest's MAC.
+
 ---
 
 # The platform, TLS and the tunnel

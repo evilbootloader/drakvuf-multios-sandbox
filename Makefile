@@ -484,7 +484,7 @@ ubuntu_analysis_vm:
 	umount /mnt; \
 	# The guest's hardware identity: docs/architecture/guest-identity.md \
 	python3 $(XEN_IDENTITY) guest-files $(GUEST_FIRMWARE); \
-	MAC=$$(python3 $(XEN_IDENTITY) get mac); \
+	MAC=$$(python3 $(XEN_IDENTITY) mac ubuntu); \
 	printf "%s\n" \
 	"arch = 'x86_64'" \
 	"name = 'ubuntu_analysis'" \
@@ -550,7 +550,7 @@ windows_analysis_vm:
 	  /tmp/win11iso/
 	# The guest's hardware identity: docs/architecture/guest-identity.md \
 	python3 $(XEN_IDENTITY) guest-files $(GUEST_FIRMWARE); \
-	MAC=$$(python3 $(XEN_IDENTITY) get mac); \
+	MAC=$$(python3 $(XEN_IDENTITY) mac windows); \
 	printf "%s\n" \
 	"arch = 'x86_64'" \
 	"name = 'windows_analysis'" \
@@ -600,7 +600,7 @@ setup_hooks_windows:
 	lvcreate -s -kn -n windows_sandbox vg-root/windows; \
 	# The guest's hardware identity: docs/architecture/guest-identity.md \
 	python3 $(XEN_IDENTITY) guest-files $(GUEST_FIRMWARE); \
-	MAC=$$(python3 $(XEN_IDENTITY) get mac); \
+	MAC=$$(python3 $(XEN_IDENTITY) mac windows); \
 	printf "%s\n" \
 	"arch = 'x86_64'" \
 	"name = 'windows_analysis_sandbox'" \
@@ -654,7 +654,7 @@ setup_hooks_ubuntu:
 	lvcreate -s -kn -n ubuntu_sandbox vg-root/ubuntu; \
 	# The guest's hardware identity: docs/architecture/guest-identity.md \
 	python3 $(XEN_IDENTITY) guest-files $(GUEST_FIRMWARE); \
-	MAC=$$(python3 $(XEN_IDENTITY) get mac); \
+	MAC=$$(python3 $(XEN_IDENTITY) mac ubuntu); \
 	printf "%s\n" \
 	"arch = 'x86_64'" \
 	"name = 'ubuntu_analysis_sandbox'" \
