@@ -72,7 +72,7 @@ xen:
 	make -j$$(nproc) dist-tools; \
 	make -j$$(nproc) debball; \
 	sudo apt-get remove -y 'xen*' 'libxen*' || true; \
-	sudo dpkg -i dist/xen*.deb; \
+	sudo apt install -y ./dist/xen*.deb; \
 	# The boot line and Xen as the default entry, in the file grub-mkconfig reads last \
 	sudo install -d /etc/default/grub.d; \
 	sed 's|@XEN_CMDLINE@|$(XEN_CMDLINE)|' $(REPO_ROOT)/automation/xen-grub.cfg | sudo tee /etc/default/grub.d/xen.cfg >/dev/null; \
@@ -486,10 +486,10 @@ ubuntu_analysis_vm:
 	printf "%s\n" \
 	"arch = 'x86_64'" \
 	"name = 'ubuntu_analysis'" \
-	"maxmem = 4096" \
-	"memory = 4096" \
-	"vcpus = 2" \
-	"maxvcpus = 2" \
+	"maxmem = 8192" \
+	"memory = 8192" \
+	"vcpus = 4" \
+	"maxvcpus = 4" \
 	"builder = 'hvm'" \
 	"boot = 'cd'" \
 	"hap = 1" \
@@ -552,10 +552,10 @@ windows_analysis_vm:
 	printf "%s\n" \
 	"arch = 'x86_64'" \
 	"name = 'windows_analysis'" \
-	"maxmem = 6144" \
-	"memory = 6144" \
-	"vcpus = 2" \
-	"maxvcpus = 2" \
+	"maxmem = 8192" \
+	"memory = 8192" \
+	"vcpus = 4" \
+	"maxvcpus = 4" \
 	"builder = 'hvm'" \
 	"boot = 'cd'" \
 	"hap = 1" \
