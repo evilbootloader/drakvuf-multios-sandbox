@@ -37,8 +37,8 @@ from sandboxd.api import (  # noqa: E402
 )
 
 from sandbox_platform.routers.worker import (  # noqa: E402
-    ArtifactRequest, ClaimRequest, CompleteRequest, ReconcileRequest,
-    RegisterRequest, StateRequest,
+    ArtifactRequest, ClaimRequest, CompleteRequest, LeaseResponse,
+    ReconcileRequest, RegisterRequest, StateRequest,
 )
 
 
@@ -486,3 +486,25 @@ def test_reconcile_reports_what_was_lost():
               ).reconcile([])
 
     assert got == ["33333333-3333-3333-3333-333333333333"]
+
+
+def test_a_lease_carries_where_to_drop_the_sample_and_what_to_pass_it():
+    got = api(ok(_leased(drop_location="temp", drop_subdir="a/b",
+                         arguments="--x 'y z'"))).claim(
+        free_mib=8192, free_vlans=4, free_slots=2)
+    assert (got.drop_location, got.drop_subdir, got.arguments) == (
+        "temp", "a/b", "--x 'y z'")
+
+
+def test_a_platform_that_sends_no_launch_options_means_the_guests_defaults():
+    """Deployed minutes apart: a missing field is None, never an exception
+    that strands the job."""
+    got = api(ok(_leased())).claim(free_mib=8192, free_vlans=4, free_slots=2)
+    assert (got.drop_location, got.drop_subdir, got.arguments) == (None, None, None)
+
+
+def test_the_servers_lease_and_ours_name_the_same_launch_fields():
+    fields = LeaseResponse.model_fields
+    for name in ("drop_location", "drop_subdir", "arguments"):
+        assert name in fields
+        assert name in Lease.__dataclass_fields__

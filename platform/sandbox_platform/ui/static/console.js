@@ -19,7 +19,7 @@ import RFB from "./novnc/core/rfb.js";
   `job.js` refreshes `#job-live` with `htmx.ajax(..., swap: "innerHTML")` on
   each state change, and the console panel lives inside it. So the panel this
   module binds to is DESTROYED AND REBUILT on every transition through
-  `console_states` -- cloning, preparing, executing, collecting.
+  `console_states` -- cloning, preparing, executing.
 
   The script tag comes back with each swapped fragment, which looks like it
   should re-run this file and does not: a module URL is evaluated ONCE PER

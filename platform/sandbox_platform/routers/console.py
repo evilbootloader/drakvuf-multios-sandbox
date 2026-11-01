@@ -32,7 +32,7 @@ from fastapi import (
 from .. import auth, console
 from ..config import settings
 from ..db import connection
-from ..enums import RUNNING_STATES, JobState
+from ..enums import CONSOLE_STATES, JobState
 
 log = logging.getLogger(__name__)
 
@@ -336,29 +336,29 @@ async def browser_console(websocket: WebSocket, job_id: UUID):
         return
 
     state = JobState(row[0])
-    if state not in RUNNING_STATES:
-        # **Widened from EXECUTING to "a clone exists"** (2026-09-05).
+    if state not in CONSOLE_STATES:
+        # **The window is "a clone exists"**: widened from `executing` on
+        # 2026-09-05, narrowed by `collecting` on 2026-10-30.
         #
         # DRAFT-056 originally scoped a session to `executing`. The real
         # constraint was never the trace, it is the DOMAIN: the relay ends at a
         # VNC port QEMU serves for a live clone, so the window is exactly the
-        # states in which one exists -- which `RUNNING_STATES` already names,
-        # and which now lets an operator watch preconfig and collection rather
-        # than only the trace.
+        # states in which one exists -- `CONSOLE_STATES` -- which lets an
+        # operator watch preconfig rather than only the trace.
         #
-        # Still not before the clone exists and not after teardown. Outside
-        # this window there is no domain, so there is nothing to show and
-        # nothing to drive -- and no amount of authentication changes that.
+        # Not before the clone exists and not after it is destroyed, which
+        # since 2026-10-30 is when the trace ends: sandboxd destroys the domain
+        # BEFORE collection. That closed the collecting half of the gap below
+        # -- a console that typed into the guest while its artifacts were being
+        # pulled, changing what got collected after the trace had ended.
         #
         # **KNOWN GAP (DRAFT-056): input is not restricted to `executing`.**
         # View-only was deferred (`live-console.md`, "view-only is DEFERRED"),
-        # so v1 is interactive-only and widening the window widens what can be
-        # TYPED as well as what can be watched. During `collecting` that
-        # reaches the guest while artifacts are being pulled, which can change
-        # what gets collected after the trace has ended. `interacted` records
-        # that a human was involved, but not that it happened post-trace.
-        # Dropping client->server frames outside `executing` is the fix and is
-        # its own change.
+        # so v1 is interactive-only, and during `cloning` and `preparing` what
+        # can be TYPED is as wide as what can be watched: an operator can act
+        # on the guest before the sample runs. `interacted` records that a
+        # human was involved, but not when. Dropping client->server frames
+        # outside `executing` is the fix and is its own change.
         await websocket.close(
             POLICY,
             f"job is {state.value}; a console needs a job with a live clone")
@@ -402,7 +402,7 @@ async def worker_console(websocket: WebSocket, job_id: UUID):
     # failed to produce an identity, not just this one. The lease check below
     # is what actually scopes this end.
     row = _job_row(job_id, auth.EVERYTHING)
-    if row is None or JobState(row[0]) not in RUNNING_STATES:
+    if row is None or JobState(row[0]) not in CONSOLE_STATES:
         # Same window as the browser end, and it has to be: sandboxd now dials
         # as soon as the clone exists rather than at the start of the trace, so
         # refusing anything but `executing` here would reject its own relay for

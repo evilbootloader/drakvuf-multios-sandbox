@@ -142,6 +142,7 @@ set -a; . /etc/sandboxd/sandboxd.env; set +a
 | Fact | Value | Confirmed |
 |---|---|---|
 | Env file | `/etc/sandboxd/sandboxd.env`, mode 600 | 2026-08-26 |
+| Env file template | **`automation/sandboxd.env.example`** — every variable the daemon reads, documented. `make sandboxd` renders it and **replaces** the file (it used to append, duplicating every line on a re-run); `automation/api.env.example` is the platform's, rendered by `make web_sandbox`. Neither rendering has run on a host yet | 2026-10-30 |
 | Virtualenv | `.venv-sandboxd` inside the checkout | 2026-08-26 |
 | Logging | stderr on the terminal — **no journal, no logfile** | 2026-08-27 |
 
@@ -265,6 +266,10 @@ the filename was never renamed with the rest of the `linux` → `ubuntu` pass.
 | Clone LV size | inherited: **1 T** | inherited: **128 G** | — |
 | Sample dirs | `/malware_{incoming,processing,finished}/ubuntu` | `…/android` | `…/windows` |
 
+Guest staging is each guest's **default** drop location. Since 2026-11-01 a
+job may choose another location from a per-guest list, plus a subfolder
+(`sandboxd/guests.py` `PATHS[os].locations`; §1.5).
+
 Shared by all three: volume group `vg-root`, analysis bridge `xenbr1`.
 
 `profiles/*.json` and `state/*.bak` are **not git-tracked** — a fresh checkout
@@ -280,6 +285,10 @@ has neither.
 | Windows | **evidenced end to end — operator, no transcript.** One job ran through the pipeline; `shellexec` is the working injection mode (`createproc` was tried and reverted as a regression). Clean install plus Chrome and Office, Defender disabled. **No runbook backs this**, and no per-plugin validation has been done — the job completing does not mean all four plugins produced output | operator, 2026-09-05 |
 | `sandboxd` | evidenced against real `xl`/`drakvuf` | 2026-08-26 |
 | Live console | evidenced; off by default on both sides | 2026-08-27 |
+| Screenshots (DRAFT-054) | **implemented and tested here, never run on Dom0. ON by default** (operator, 2026-10-30); `SANDBOXD_SCREENSHOTS_ENABLED=0` turns it off. A read-only RFB client on the clone's loopback console, a PNG every 2 s, shown on a **Screenshots tab** (strip, playback) through `/api/v1/jobs/{id}/screenshot` — the one artifact served raw, for display only; downloads stay wrapped. `docs/architecture/screenshots.md` | 2026-10-30 |
+| Drop location, subfolder and command line | **implemented and tested here, never run on Dom0.** Optional per job: a location key from a per-guest list, a subfolder made in the guest, and the sample's arguments. None chosen means the evidenced `staging_dir` and no arguments. Every location but each guest's default is **Candidate**. `docs/architecture/analysis-pipeline.md`, "Where the sample is dropped" | 2026-11-01 |
+| Results deleted from Dom0 after upload | **implemented and tested here, never run on Dom0.** Once `/complete` has been accepted, `stages.Analysis._remove_results` deletes the job's `/var/lib/sandboxd/results/<job>`. Kept: failed, cancelled and truncated runs, a run whose raw `trace.log` survived its split, and every run when `SANDBOXD_KEEP_RESULTS=1`. Before this, nothing ever removed them (operator, 2026-11-01) | 2026-11-01 |
+| Clone destroyed **before** `collecting` | **implemented and tested here, never run on Dom0.** `stages.run` stops the console and the screenshots and destroys the domain when the trace ends; the staged sample stays until postprocessing has scanned it. The platform no longer pairs a console during `collecting` (`enums.CONSOLE_STATES`). Changes the order of the evidenced Ubuntu path, at the operator's request | 2026-10-30 |
 | Artifact ZIP downloads | implemented + tested here, **never run on the deployment** | 2026-08-27 |
 
 ### On bare metal, since 2026-08-28
@@ -413,14 +422,14 @@ accurate as dated evidence.
 
 ### Environment read by `sandboxd.daemon`
 
-`SANDBOXD_ALLOW_DIRECT`, `SANDBOXD_API`, `SANDBOXD_CACERT`, `SANDBOXD_CLIENT_CERT`, `SANDBOXD_CLIENT_KEY`, `SANDBOXD_CONSOLE_API`, `SANDBOXD_CONSOLE_ENABLED`, `SANDBOXD_LOG_LEVEL`, `SANDBOXD_MAX_CLONES`, `SANDBOXD_MAX_SLOTS`, `SANDBOXD_PLUGINS`, `SANDBOXD_TOTAL_MIB`, `SANDBOXD_WORKER_ID`, `WORKER_TOKEN`
+`SANDBOXD_ALLOW_DIRECT`, `SANDBOXD_API`, `SANDBOXD_CACERT`, `SANDBOXD_CLIENT_CERT`, `SANDBOXD_CLIENT_KEY`, `SANDBOXD_CONSOLE_API`, `SANDBOXD_CONSOLE_ENABLED`, `SANDBOXD_KEEP_RESULTS`, `SANDBOXD_LOG_LEVEL`, `SANDBOXD_MAX_CLONES`, `SANDBOXD_MAX_SLOTS`, `SANDBOXD_PLUGINS`, `SANDBOXD_SCREENSHOTS_ENABLED`, `SANDBOXD_TOTAL_MIB`, `SANDBOXD_WORKER_ID`, `WORKER_TOKEN`
 
 ### Repository size
 
 | | |
 |---|---|
-| sandboxd modules | 16 |
-| test files | 17 sandboxd, 28 platform |
-| documents under `docs/` | 44 |
+| sandboxd modules | 17 |
+| test files | 18 sandboxd, 30 platform |
+| documents under `docs/` | 45 |
 
 <!-- END GENERATED -->

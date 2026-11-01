@@ -121,8 +121,9 @@
   tab would also lose it on every tab change, which is the opposite of what an
   interactive session needs -- watch the screen WHILE reading the syscalls.
 
-  Rendered whenever the job has a LIVE CLONE -- cloning, preparing, executing,
-  collecting -- and absent rather than empty otherwise: a control that looks
+  Rendered whenever the job has a LIVE CLONE -- cloning, preparing, executing;
+  not collecting, since sandboxd destroys the domain when the trace ends
+  (2026-10-30) -- and absent rather than empty otherwise: a control that looks
   available and does nothing reads as a fault, which is the same reason the tab
   bar dims tabs with no data.
 

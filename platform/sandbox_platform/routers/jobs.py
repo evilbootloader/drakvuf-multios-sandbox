@@ -31,9 +31,11 @@ from .. import auth
 from ..auth import Caller
 from .. import events
 from .. import jobs as dal
+from .. import launch
 from .. import manifest as manifest_schema
 from .. import objects
 from .. import packaging
+from .. import screenshots as screenshot_store
 from ..config import settings
 from ..csrf import require_csrf_header
 from ..db import connection
@@ -246,6 +248,17 @@ class CreateJobRequest(BaseModel):
     #: the declared set at admission, not here.
     egress_exit: str | None = Field(default=None, max_length=64)
 
+    # Where the sample is dropped and what it is passed (`launch.py`). All
+    # optional: absent is the guest's default folder and no arguments, which is
+    # what every job ran with before these existed. A location is a KEY from a
+    # closed set, parsed into the enum here; which keys a guest offers, and the
+    # rules for the other two, are checked in `_launch_suits_the_target`.
+    drop_location: launch.DropLocation | None = None
+    drop_subdir: str | None = Field(default=None,
+                                    max_length=launch.MAX_SUBDIR_BYTES)
+    arguments: str | None = Field(default=None,
+                                  max_length=launch.MAX_ARGUMENT_BYTES)
+
     @model_validator(mode="after")
     def _exit_suits_the_mode(self) -> CreateJobRequest:
         """Reject only what is incoherent no matter what any host offers.
@@ -271,6 +284,18 @@ class CreateJobRequest(BaseModel):
     @model_validator(mode="after")
     def _filename_suits_the_target(self) -> CreateJobRequest:
         _reject_unsafe_filename(self.filename, self.target_os)
+        return self
+
+    @model_validator(mode="after")
+    def _launch_suits_the_target(self) -> CreateJobRequest:
+        """Refused, never rewritten, like the filename -- except that the
+        subfolder is stored `/`-joined and empty values are stored as NULL, so
+        the row says "nothing chosen" in one way only."""
+        launch.check_location(self.target_os, self.drop_location)
+        parts = launch.split_subdir(self.target_os, self.drop_subdir)
+        self.drop_subdir = "/".join(parts) or None
+        self.arguments = launch.check_arguments(self.target_os,
+                                                self.arguments) or None
         return self
 
 
@@ -347,6 +372,13 @@ class JobDetail(JobSummary):
     manifest: dict | None
     artifacts: dict[str, str] = {}
     plugins: list[str]
+    # As submitted (`launch.py`): NULL is the guest's default folder and no
+    # command line. No defaults, for `egress_mode`'s reason above -- `_detail`
+    # builds this from a key list, and a default would answer for a column
+    # dropped from it with "nothing was chosen".
+    drop_location: str | None
+    drop_subdir: str | None
+    arguments: str | None
 
     # Set when the manifest could not be read. The job still renders -- state,
     # timings and sample identity are all on the row and all still true -- and
@@ -562,13 +594,16 @@ def create_job(req: CreateJobRequest,
         cur.execute(
             """
             INSERT INTO jobs (id, target_os, submitted_filename, size_bytes,
-                              state, owner, egress_mode, egress_exit, plugins, timeout, disable_sysret, key_prefix)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                              state, owner, egress_mode, egress_exit, plugins, timeout, disable_sysret, key_prefix,
+                              drop_location, drop_subdir, arguments)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             RETURNING id
             """,
             (job_id, req.target_os.value, req.filename, req.size_bytes,
              JobState.RECEIVED.value, owner, egress_mode, egress_exit, req.plugins,
-             req.timeout, req.disable_sysret, key_prefix),
+             req.timeout, req.disable_sysret, key_prefix,
+             req.drop_location.value if req.drop_location else None,
+             req.drop_subdir, req.arguments),
         )
         job_id = cur.fetchone()[0]
 
@@ -815,7 +850,7 @@ def _detail(conn, job_id: UUID, identity: Caller) -> JobDetail:
             "      jobs.state, jobs.sha256, jobs.size_bytes, jobs.detected_type, jobs.queue_reason, "
             "      jobs.failure_stage, jobs.failure_reason, jobs.attempt, jobs.cancel_requested, "
             "      jobs.interacted, jobs.egress_mode, jobs.egress_exit, jobs.egress_applied, jobs.visibility, jobs.manifest, "
-            "      jobs.plugins::text[], "
+            "      jobs.plugins::text[], jobs.drop_location, jobs.drop_subdir, jobs.arguments, "
             # COALESCE, because since DRAFT-061 an identity provisioned by
             # `resolve_tenant` carries its address in `access_subject` and
             # leaves `email` NULL -- the two keyspaces are separate so that a
@@ -882,7 +917,8 @@ def _detail(conn, job_id: UUID, identity: Caller) -> JobDetail:
             "state", "sha256", "size_bytes", "detected_type", "queue_reason",
             "failure_stage", "failure_reason", "attempt", "cancel_requested",
             "interacted",
-            "egress_mode", "egress_exit", "egress_applied", "visibility"
+            "egress_mode", "egress_exit", "egress_applied", "visibility",
+            "drop_location", "drop_subdir", "arguments",
         )},
         # Not in the comprehension above, because this route reads `SELECT *`
         # and cannot cast one column in SQL the way `list_jobs` does. Same
@@ -1178,6 +1214,88 @@ def download_one_artifact(
         packaging.stream([(match.name, objects.chunks(f"{key}{match.name}"))]),
         media_type="application/zip",
         headers=_attachment(match.name.rsplit("/", 1)[-1]),
+    )
+
+
+# --- screenshots: the one artifact served raw ------------------------------
+#
+# **A deliberate, narrow exception to "wrapped, never raw"** (DRAFT-054,
+# operator 2026-10-30). The Screenshots tab is a strip of <img>, and an <img>
+# cannot load a ZIP. The rule exists because an artifact may be a live
+# executable; a frame is a PNG that sandboxd encoded itself from the guest's
+# pixels, so what remains is to make sure that is all this route can ever
+# hand over:
+#
+#   - only a name shaped `screenshots/<digits>.png`, AND declared in the
+#     manifest -- never a key built from the query string;
+#   - only bytes that begin with the PNG signature, checked before anything
+#     is sent;
+#   - `image/png` with `nosniff`, so no browser reinterprets it as anything
+#     else, and a CSP of `default-src 'none'; sandbox` in case one is opened
+#     on its own;
+#   - a filename built from the tick, never from the artifact's name.
+#
+# **Downloading a frame is still wrapped**: the strip's per-frame link is
+# `artifact.zip`, like every other artifact. Displaying is the exception, not
+# handing over the file.
+
+_FRAME_HEADERS = {
+    "X-Content-Type-Options": "nosniff",
+    "Content-Security-Policy": "default-src 'none'; sandbox",
+    # Same-origin only: the page that shows it is this one, and nothing on
+    # another origin has a reason to embed a malware run's screen.
+    "Cross-Origin-Resource-Policy": "same-origin",
+    # A frame never changes once uploaded -- a retried attempt writes a new
+    # job's results -- and the caller is authenticated, so private.
+    "Cache-Control": "private, max-age=86400, immutable",
+}
+
+
+@router.get("/{job_id}/screenshot")
+def screenshot_frame(
+    job_id: Annotated[UUID, Path()],
+    name: Annotated[str, Query(description="a screenshots/NNN.png artifact")],
+    identity: auth.Identity = None,
+) -> StreamingResponse:
+    """One frame of the run's filmstrip, as an image."""
+    # Tenancy, retention and the manifest first -- the same gate the download
+    # routes use, before anything touches the store.
+    artifacts, key_prefix = _for_download(job_id, identity)
+    tick = screenshot_store.frame_tick(name)
+    match = next((a for a in artifacts if a.name == name), None)
+    if tick is None or match is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND,
+                            "no such screenshot for this job")
+    # Unknown on a pre-DRAFT-018 manifest; the stream is not buffered, so an
+    # unknown size costs nothing here.
+    if (match.size_bytes is not None
+            and match.size_bytes > screenshot_store.MAX_FRAME_BYTES):
+        raise HTTPException(status.HTTP_404_NOT_FOUND,
+                            "frame too large to show inline; download it")
+
+    chunks = objects.chunks(objects.result_prefix(job_id, key_prefix)
+                            + match.name)
+    head = b""
+    for chunk in chunks:
+        head += chunk
+        if len(head) >= len(screenshot_store.PNG_SIGNATURE):
+            break
+    if not head.startswith(screenshot_store.PNG_SIGNATURE):
+        chunks.close()
+        # Not a frame sandboxd wrote. Worth a line in the log: either the
+        # worker is broken or it is not ours.
+        log.warning("job %s: %s is not a PNG; refused inline", job_id, name)
+        raise HTTPException(status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+                            "this artifact is not a PNG")
+
+    def body():
+        yield head
+        yield from chunks
+
+    return StreamingResponse(
+        body(), media_type="image/png",
+        headers={**_FRAME_HEADERS,
+                 "Content-Disposition": f'inline; filename="{tick:03d}.png"'},
     )
 
 

@@ -394,6 +394,54 @@ def test_a_filename_the_api_refuses_is_reported_verbatim(strict_page, server):
     assert "path separator" in strict_page.locator("#result .note").inner_text()
 
 
+# --- where it is dropped and what it is passed (launch.py) ------------------
+
+def test_switching_os_swaps_the_drop_locations_and_redraws_the_preview(strict_page, server):
+    """The Execution block is outside the plugin list's swap target and is
+    swapped out of band; the preview is drawn with textContent, so the
+    submitter's own markup stays text."""
+    strict_page.goto(f"{server}/ui/submit")
+    strict_page.get_by_role("radio", name="windows").check()
+    strict_page.wait_for_selector('#launch-options[data-os="windows"]')
+
+    options = strict_page.locator('select[name="drop_location"] option').all_inner_texts()
+    assert any("AppData" in o for o in options)
+    assert not any("/home/" in o for o in options)
+
+    strict_page.select_option('select[name="drop_location"]', "programdata")
+    strict_page.fill('input[name="drop_subdir"]', "Vendor/App")
+    strict_page.fill('input[name="arguments"]', "<img src=x onerror=alert(1)> /S")
+
+    preview = strict_page.locator("[data-launch-preview]")
+    assert preview.inner_text() == \
+        "C:\\ProgramData\\Vendor\\App\\<file name> <img src=x onerror=alert(1)> /S"
+    assert preview.locator("img").count() == 0
+    assert strict_page.fired == [], strict_page.fired
+
+
+def test_the_form_sends_the_location_key_and_reports_a_refusal_verbatim(strict_page, server):
+    """The KEY is sent, never the path shown beside it; and a subfolder the
+    API refuses explains itself on the page."""
+    strict_page.goto(f"{server}/ui/submit")
+    strict_page.set_input_files("input[type=file]", {
+        "name": "a.bin", "mimeType": "application/octet-stream",
+        "buffer": b"\x7fELF" + b"\x00" * 60,
+    })
+    strict_page.select_option('select[name="drop_location"]', "temp")
+    strict_page.fill('input[name="drop_subdir"]', "../x")
+    strict_page.fill('input[name="arguments"]', "--x 'y z'")
+
+    with strict_page.expect_request(
+            lambda r: r.url.endswith("/api/v1/jobs") and r.method == "POST") as req:
+        strict_page.get_by_role("button", name="Submit").click()
+    sent = req.value.post_data_json
+    assert (sent["drop_location"], sent["drop_subdir"], sent["arguments"]) == (
+        "temp", "../x", "--x 'y z'")
+
+    strict_page.wait_for_selector("#result .note.danger", timeout=20000)
+    assert "not a plain relative path" in strict_page.locator("#result .note").inner_text()
+
+
 # --- the form, driven as a person drives it --------------------------------
 
 def test_searching_with_every_filter_on_any_works(strict_page, server, seed):
@@ -880,3 +928,128 @@ def test_hostile_report_text_does_not_execute(strict_page, server, seed, name):
     box = strict_page.locator("svg.pdiagram a[href='#proc-4']").first
     assert box.locator("g.pnode[data-sample]").count() == 1
     assert name in box.locator("title").first.text_content()
+
+
+# --- the Screenshots tab (DRAFT-054) -----------------------------------------
+
+def _seed_frames(job_id: uuid.UUID, ticks, **index_kw) -> None:
+    """Frames and their index behind an existing job, as sandboxd uploads
+    them: real PNGs, a capability envelope, a DRAFT-018 manifest."""
+    import hashlib
+    import json
+
+    import boto3
+    from botocore.config import Config
+
+    from test_screenshots import index_doc, png
+
+    objects = {f"screenshots/{t:03d}.png": png() for t in ticks}
+    objects["screenshots.json"] = json.dumps(
+        index_doc(job_id, frames=list(ticks), **index_kw)).encode()
+    manifest = {"schema_version": 1, "truncated": False,
+                "documents": ["screenshots.json"],
+                "artifacts": [{"name": n, "size_bytes": len(b),
+                               "sha256": hashlib.sha256(b).hexdigest()}
+                              for n, b in objects.items()]}
+    with psycopg.connect(DSN, autocommit=True) as c:
+        c.execute("UPDATE jobs SET manifest = %s WHERE id = %s",
+                  (json.dumps(manifest), job_id))
+    s3 = boto3.client(
+        "s3",
+        endpoint_url=os.environ.get("S3_INTERNAL_ENDPOINT", "http://127.0.0.1:9000"),
+        aws_access_key_id=os.environ.get("S3_ACCESS_KEY", "devrootkey"),
+        aws_secret_access_key=os.environ.get("S3_SECRET_KEY", "devrootpassphrase"),
+        region_name=os.environ.get("S3_REGION", "eu-central-1"),
+        config=Config(signature_version="s3v4", s3={"addressing_style": "path"}))
+    for name, body in objects.items():
+        s3.put_object(Bucket=os.environ.get("S3_BUCKET", "analysis"),
+                      Key=f"results/{job_id}/{name}", Body=body)
+
+
+@pytest.mark.parametrize("name", HOSTILE)
+def test_a_hostile_capture_reason_does_not_execute(strict_page, server, seed,
+                                                    name):
+    """`status_reason` is the one string on the tab a worker wrote, and it can
+    quote what QEMU sent. A real parser, nothing runs, and the frames still
+    load as images."""
+    job_id = seed("x.bin")
+    _seed_frames(job_id, [0, 1], status="partial", reason=name)
+
+    strict_page.goto(f"{server}/ui/jobs/{job_id}?tab=screenshots")
+
+    assert strict_page.fired == [], strict_page.fired
+    assert strict_page.evaluate("window.__xss") is False
+    assert strict_page.locator("script:not([src])").count() == 0
+    assert strict_page.locator("img[onerror], svg[onload]").count() == 0
+    assert name in strict_page.locator(".tab-body p.note").first.text_content()
+    loaded = strict_page.locator("[data-filmstrip-main]").evaluate(
+        "img => img.complete && img.naturalWidth > 0")
+    assert loaded, "the frame did not load as an image"
+
+
+def test_the_player_steps_and_plays_through_the_frames(strict_page, server,
+                                                       seed):
+    """Selection, stepping and playback, in a browser. A gap in the ticks
+    holds the frame for the time it covered, which is asserted by giving the
+    gap a playback interval long enough to observe."""
+    job_id = seed("x.bin")
+    _seed_frames(job_id, [0, 1, 2, 4], interval=0.25)
+
+    strict_page.goto(f"{server}/ui/jobs/{job_id}?tab=screenshots")
+    clock = strict_page.locator("[data-filmstrip-clock]")
+    current = "[data-filmstrip-frame][aria-current='true']"
+
+    # The controls exist because the script loaded.
+    assert strict_page.locator("[data-filmstrip-action='play']").is_visible()
+
+    strict_page.locator("[data-filmstrip-action='next']").click()
+    assert strict_page.locator(current).get_attribute("data-tick") == "1"
+    strict_page.locator("[data-filmstrip-frame][data-tick='4']").click()
+    assert strict_page.locator(current).get_attribute("data-tick") == "4"
+    assert clock.text_content() == "0:01"       # tick 4 at 0.25 s
+    assert "screenshots%2F004.png" in strict_page.locator(
+        "[data-filmstrip-main]").get_attribute("src")
+    strict_page.locator("[data-filmstrip-action='prev']").click()
+    assert strict_page.locator(current).get_attribute("data-tick") == "2"
+
+    # Play from the last frame starts again at the first, and runs to the end.
+    strict_page.locator("[data-filmstrip-frame][data-tick='4']").click()
+    play = strict_page.locator("[data-filmstrip-action='play']")
+    play.click()
+    assert play.get_attribute("aria-pressed") == "true"
+    assert strict_page.locator(current).get_attribute("data-tick") == "0"
+    strict_page.wait_for_function(
+        "() => document.querySelector(\"[data-filmstrip-frame][aria-current='true']\")"
+        ".dataset.tick === '4'", timeout=5_000)
+    strict_page.wait_for_function(
+        "() => document.querySelector(\"[data-filmstrip-action='play']\")"
+        ".getAttribute('aria-pressed') === 'false'", timeout=5_000)
+    assert strict_page.fired == [], strict_page.fired
+
+
+def test_leaving_the_tab_stops_playback(strict_page, server, seed):
+    """The tab body is swapped by htmx; a timer that outlived it would keep
+    stepping a strip nobody can see."""
+    job_id = seed("x.bin")
+    _seed_frames(job_id, list(range(20)), interval=0.2)
+    # Count timers: a playback chain still alive after the swap would add one
+    # every 0.2 s.
+    strict_page.add_init_script(
+        "window.__timers = 0; (function (o) { window.setTimeout = function () {"
+        " window.__timers++; return o.apply(this, arguments); }; })(window.setTimeout);")
+
+    strict_page.goto(f"{server}/ui/jobs/{job_id}?tab=screenshots")
+    strict_page.locator("[data-filmstrip-action='play']").click()
+    strict_page.wait_for_function(
+        "() => document.querySelector(\"[data-filmstrip-frame][aria-current='true']\")"
+        ".dataset.tick !== '0'", timeout=5_000)
+    strict_page.locator("nav.tabs a", has_text="Artifacts").click()
+    strict_page.wait_for_selector("[data-filmstrip]", state="detached")
+    # The timer pending at the swap fires once and finds its strip gone.
+    strict_page.wait_for_timeout(400)
+    settled = strict_page.evaluate("window.__timers")
+    strict_page.wait_for_timeout(1_000)
+
+    assert strict_page.evaluate("window.__timers") == settled, \
+        "playback kept scheduling frames for a strip that was swapped out"
+    assert strict_page.fired == [], strict_page.fired

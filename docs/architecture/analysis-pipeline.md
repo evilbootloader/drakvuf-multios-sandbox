@@ -236,10 +236,11 @@ arming happens while it sleeps.
 
 | Guest | How it waits | Then |
 |---|---|---|
-| Ubuntu | `/usr/bin/sleep 5` | `exec "$1"` — same pid, same `argv[0]` |
-| BlissOS (ELF) | `/system/bin/sleep 5` | `exec "$1"` |
+| Ubuntu | `/usr/bin/sleep 5` | `exec "$1"` — same pid, same `argv[0]`; `exec "$@"` when the job has a command line |
+| BlissOS (ELF) | `/system/bin/sleep 5` | `exec "$1"`, or `exec "$@"` as above |
 | BlissOS (APK) | not delayed | `am start -n` is already slower than arming |
 | Windows | `ping.exe -n 5 127.0.0.1 >nul` | `& "<sample>"`, a child of `cmd.exe` |
+| Windows (`.ps1`) | the same | `& powershell.exe -File "<script>"`, by absolute path. **Delayed only since 2026-11-01**: until then the `"` check counted the quotes `guests.py` itself puts round the path, so every script started before the plugins had armed |
 
 Four properties, each of which something depends on:
 
@@ -272,6 +273,63 @@ is measurable from the trace itself now and only now — the sample's own
 staged path), which it could not be while the exec happened before the
 syscalls plugin existed. The span from the run's first event to that one is
 the arming cost on the real plugin set.
+
+### Where the sample is dropped, and its command line (2026-11-01)
+
+**Implemented and tested in the development container; never run on Dom0.**
+Three optional submit options, on the form's Execution fieldset and on the
+API (`CreateJobRequest`); a job that sets none runs exactly as before.
+
+| Option | What is stored | Who resolves it |
+|---|---|---|
+| Drop location | a **key** — `desktop`, `downloads`, `home`, `temp`, `appdata`, `programdata` | sandboxd, from its own per-guest table (`guests.PATHS[os].locations`) |
+| Subfolder | `/`-joined names, created in the guest | sandboxd joins it with the guest's separator |
+| Command line | the text as typed | split into argv words on Ubuntu and Android; passed as one string on Windows |
+
+Per guest, the default first:
+
+| Guest | Locations |
+|---|---|
+| Ubuntu | Desktop, Downloads, home, `/tmp` |
+| Android | `/data/local/tmp` only — shared storage is mounted `noexec` |
+| Windows | Desktop, Downloads, home, `AppData\Local\Temp`, `AppData\Roaming`, `C:\ProgramData` |
+
+The rules, and why each holds:
+
+1. **No submitted text becomes a guest path.** The location is a key from a
+   closed set. The platform's copy of the table, `sandbox_platform/launch.py`,
+   is used only to validate the key and display the path, built with
+   `ANALYSIS_USERNAME` from `api.env`. The Makefile renders both that value
+   and `sandboxd/config.py`'s from `ANALYSIS_VM_USER`, and
+   `sandboxd/tests/test_guests.py` pins that the two tables agree.
+2. **A subfolder is an ASCII allowlist**: letters, digits, space and
+   `. _ - ( ) +`. No `..`, no absolute path, at most eight levels, 128 bytes,
+   and no Windows device names on Windows. Windows has no `mkdir` program, so
+   `cmd.exe /c mkdir "<dir>"` makes the folder there, and the path is shell
+   text. The allowlist is what makes that safe. Both copies of the rule are
+   tested against one table of cases.
+3. **The subfolder is made before the sample is written**, by an extra
+   injection that only a job with a subfolder gets. `writefile` opens with
+   `O_CREAT` only, and the `mkdir` injection returns when the process starts,
+   not when the folder exists. So preconfig retries the `writefile` until it
+   lands, for up to `timing.DROP_DIR_TIMEOUT` (20 s, unmeasured), and that
+   ceiling is added to the job's preconfig budget.
+4. **Linux arguments are argv elements.** `shlex` splits the text on Dom0
+   (quotes group words and nothing expands). Each word is one `-f`, and
+   `exec "$@"` hands the words to the sample, so a `$`, quote or `;` is never
+   parsed by a guest shell. A job with no arguments keeps `exec "$1"`, byte
+   for byte.
+5. **On Windows the text follows the file name**, which is what
+   `ShellExecuteEx` itself does. Text containing any of `"%&<>|^!` goes as
+   `lpParameters` to a direct launch that no shell parses. It arrives
+   byte-exact but without `LAUNCH_DELAY`, and `guests.launch_caveat` writes
+   that on the job's notes. A `.ps1` follows the same rule, through
+   `powershell.exe -File "<path>"` (see the launch-delay table).
+6. **An APK ignores a command line**, since `am start -n` takes none, and the
+   job's notes say so.
+7. **Checked twice, before any clone.** The API refuses with a 422 and no
+   job row. sandboxd calls `guests.resolve_launch` before cloning, so a value
+   that disagrees with this host fails the job without costing a VM.
 
 ### Clone concurrency: fixed slots today, resource-aware admission needed
 
@@ -952,6 +1010,16 @@ behind because the job ended badly. It is the one phase that is *not*
 cancellable, since interrupting cleanup is how clones leak. Cancelling from
 `received`, `admitted` or `queued` skips it because there is nothing to
 clean.
+
+> **Amended 2026-10-30: on the success path the domain is gone before
+> `collecting`.** `sandboxd` stops the console and the screenshot capture and
+> destroys the clone as soon as the trace ends, then reports `collecting` —
+> nothing in collection needs a live guest, and a console left open there
+> could type into a guest whose artifacts were being pulled. `cleaning` still
+> follows on every path; on success what remains for it is the staged sample
+> (kept until postprocessing has scanned it) and the `cleanup_status` report.
+> On every other path the domain is still destroyed there. See
+> `sandboxd/stages.py`, `Analysis.run`.
 
 Reconciliation with the candidate list this replaces:
 

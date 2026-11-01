@@ -122,6 +122,12 @@ class Settings:
     # store but the quota refusing writes.
     retention_days: int = _int("RETENTION_DAYS", 30)
 
+    # The analysis guests' user, for showing where a sample is dropped
+    # (`launch.py`). DISPLAY ONLY: the host resolves the real path from its own
+    # `sandboxd/config.py`. `make web_sandbox` renders it from the Makefile's
+    # ANALYSIS_VM_USER, the same value `make sandboxd` writes there.
+    analysis_username: str = os.environ.get("ANALYSIS_USERNAME", "user")
+
     # --- live console (DRAFT-056) -----------------------------------------
     #
     # OFF by default. This is the feature that lets a human drive a running

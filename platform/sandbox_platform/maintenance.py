@@ -48,7 +48,7 @@ from typing import NamedTuple
 from . import console, jobs, throttle
 from .config import settings
 from .db import connection
-from .enums import RUNNING_STATES
+from .enums import CONSOLE_STATES
 
 log = logging.getLogger(__name__)
 
@@ -197,6 +197,10 @@ def stale_sessions(job_ids: list[str]) -> list[str]:
     widening exists to open. A reaper narrower than the thing it reaps is how a
     feature ends up working only in tests.
 
+    **`collecting` left the window on 2026-10-30** (`enums.CONSOLE_STATES`):
+    sandboxd now destroys the domain when the trace ends, so a session still
+    registered once the job reaches `collecting` points at nothing.
+
     Separated from the loop so a test can call it directly, like `sweep`.
     """
     if not job_ids:
@@ -205,7 +209,7 @@ def stale_sessions(job_ids: list[str]) -> list[str]:
         cur.execute(
             "SELECT id::text FROM jobs "
             "WHERE id = ANY(%s::uuid[]) AND state = ANY(%s)",
-            (job_ids, [s.value for s in RUNNING_STATES]),
+            (job_ids, [s.value for s in CONSOLE_STATES]),
         )
         live = {row[0] for row in cur.fetchall()}
     return [job_id for job_id in job_ids if job_id not in live]

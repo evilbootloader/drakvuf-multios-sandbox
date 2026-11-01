@@ -63,6 +63,13 @@
   <dt>Plugins</dt>
   <dd class="mono">{{ job.plugins | join(' ') if job.plugins else 'pipeline defaults' }}</dd>
 
+  {# As submitted, and the guest's defaults when nothing was chosen. The
+     arguments are the submitter's text; autoescaped like the filename. #}
+  <dt>Dropped in</dt>
+  <dd class="mono filename">{{ drop_dir }}</dd>
+  <dt>Arguments</dt>
+  <dd>{% if job.arguments %}<span class="mono">{{ job.arguments }}</span>{% else %}<span class="dim">none</span>{% endif %}</dd>
+
   {#
     Network egress (DRAFT-057), and it belongs on Overview rather than only on
     the Network tab: it is the fact that decides how every OTHER fact here

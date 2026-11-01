@@ -42,13 +42,14 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.requests import Request
 
-from .. import auth, catalogue, egress
+from .. import auth, catalogue, egress, launch
 from .. import jobs as dal
 from .. import logview
 from .. import report as report_store
+from .. import screenshots as screenshot_store
 from ..config import settings
 from ..db import connection
-from ..enums import RUNNING_STATES, TERMINAL_STATES, EgressMode, JobState, TargetOs
+from ..enums import CONSOLE_STATES, TERMINAL_STATES, EgressMode, JobState, TargetOs
 from ..routers.jobs import _detail, count_jobs, query_jobs
 
 _HERE = Path(__file__).resolve().parent
@@ -156,7 +157,32 @@ def submit_view(request: Request) -> HTMLResponse:
         defaults=catalogue.defaults_for(first),
         budget=_budget(first),
         egress_offers=_egress_offers(),
+        launch=_launch(first),
     )
+
+
+def _launch(os_: TargetOs) -> dict:
+    """The Execution fieldset's options for this guest (`_launch.html`).
+
+    Paths are built with `settings.analysis_username` for display; the value
+    the form sends is the location's key.
+    """
+    user = settings.analysis_username
+    sep = launch.SEP[os_]
+    return {
+        "locations": [{"key": loc.key.value, "label": loc.label,
+                       "path": loc.path(user)}
+                      for loc in launch.locations_for(os_)],
+        "sep": sep,
+        "splits_arguments": launch.SPLITS_ARGUMENTS[os_],
+        "cmd_special": " ".join(launch.CMD_SPECIAL),
+        "max_subdir": launch.MAX_SUBDIR_BYTES,
+        "max_arguments": launch.MAX_ARGUMENT_BYTES,
+        "subdir_example": sep.join(("tools", "x64")),
+        "arguments_example": ("/S --config C:\\setup.ini"
+                              if not launch.SPLITS_ARGUMENTS[os_]
+                              else "--verbose -o 'out file.txt'"),
+    }
 
 
 def _egress_offers() -> list[egress.Offer]:
@@ -232,7 +258,9 @@ def plugin_picker(request: Request,
                    os=target_os.value,
                    plugins=catalogue.for_os(target_os),
                    defaults=catalogue.defaults_for(target_os),
-                   budget=_budget(target_os))
+                   budget=_budget(target_os),
+                   # The Execution fieldset is per guest too; see _launch.html.
+                   launch=_launch(target_os), oob=True)
 
 
 _HEX = re.compile(r"\A[0-9a-f]{1,64}\Z")
@@ -371,6 +399,7 @@ def _tab_body(slug: str) -> str:
     # source and falls through.
     return {
         "overview": "tabs/_overview.html",
+        "screenshots": "tabs/_screenshots.html",
         "artifacts": "tabs/_artifacts.html",
         "behaviour": "tabs/_behaviour.html",
         "network": "tabs/_network.html",
@@ -396,8 +425,22 @@ def _job_context(job_id: UUID, tab: str, identity) -> dict:
     # bookmarked Registry tab on an Ubuntu job is a stale link, not an error.
     active = tab if tab in slugs else "overview"
 
+    # The filmstrip only when it is the tab being drawn: it reads the index
+    # from the store, and every other tab -- and every SSE refresh of one --
+    # would pay for a strip nobody is looking at. The badge needs only names.
+    strip = None
+    if active == "screenshots":
+        strip = screenshot_store.for_job(job.id, job.manifest, key_prefix,
+                                         job.artifacts,
+                                         expired=job.artifacts_expired)
+
     return {
         "job": job,
+        # Where the sample was dropped, for Overview. Display only, from this
+        # platform's username -- see `launch.drop_dir`.
+        "drop_dir": launch.drop_dir(job.target_os, job.drop_location,
+                                    job.drop_subdir,
+                                    settings.analysis_username),
         "tabs": tabs,
         "active": active,
         "tab": next(t for t in tabs if t.slug == active),
@@ -412,6 +455,8 @@ def _job_context(job_id: UUID, tab: str, identity) -> dict:
         # of a run that uploaded no report.json.
         "report": loaded.report,
         "report_error": loaded.error,
+        "strip": strip,
+        "frame_count": screenshot_store.count(job.artifacts),
         # Rendered into data-terminal for job.js, which must know when to stop
         # listening. Passed from here rather than written as a literal in the
         # JS: two definitions of "terminal" would be free to drift, and the
@@ -426,7 +471,7 @@ def _job_context(job_id: UUID, tab: str, identity) -> dict:
         # literal in the template, for the same reason `terminal_states` is:
         # two definitions of the window would be free to drift, and the symptom
         # is a panel offering a session the API then refuses.
-        "console_states": sorted(s.value for s in RUNNING_STATES),
+        "console_states": sorted(s.value for s in CONSOLE_STATES),
     }
 
 
@@ -454,6 +499,10 @@ def _filled(job, loaded: report_store.Loaded) -> set[str]:
     # tcpdump runs on every trace, outside DRAKVUF, and the tab links to it.
     if "capture.pcap" in job.artifacts or "wireshark_key_file.txt" in job.artifacts:
         filled.add("network")
+    # Frames, not the index: an index alone is a capture that took nothing,
+    # which the tab explains but which is not data.
+    if screenshot_store.count(job.artifacts):
+        filled.add("screenshots")
     return filled
 
 

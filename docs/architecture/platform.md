@@ -338,7 +338,8 @@ results/<job_id>/process_tree.json     postprocessing, Windows
 results/<job_id>/ttps.json             postprocessing, Windows
 results/<job_id>/dumps.zip             memdump output, packed -- or dumps/… raw
 results/<job_id>/extracted/…
-results/<job_id>/screenshots/…
+results/<job_id>/screenshots/NNN.png    the guest's screen, one per 2 s tick (DRAFT-054)
+results/<job_id>/screenshots.json      when each frame was taken, and why any is missing
 results/<job_id>/manifest.json
 ```
 
@@ -625,12 +626,13 @@ Candidate. Names and shapes are the design's, not an implementation's.
 
 | Endpoint | Purpose |
 |---|---|
-| `POST /api/v1/jobs` | Create; returns `job_id` + presigned PUT |
+| `POST /api/v1/jobs` | Create; returns `job_id` + presigned PUT. Optional `drop_location` (a key), `drop_subdir` and `arguments` — `sandbox_platform/launch.py`, checked again by sandboxd before cloning |
 | `POST /api/v1/jobs/{id}/uploaded` | Admission checks; `queued` or `rejected` |
 | `GET /api/v1/jobs` | History, filter and search |
 | `GET /api/v1/jobs/{id}` | Status, manifest, artifact download links |
 | `GET /api/v1/jobs/{id}/artifacts.zip` | Every artifact, one encrypted archive |
 | `GET /api/v1/jobs/{id}/artifact.zip?name=` | One artifact, encrypted |
+| `GET /api/v1/jobs/{id}/screenshot?name=` | One screenshot frame, as `image/png` — the one artifact served raw, see below |
 | `GET /api/v1/jobs/{id}/events` | SSE, backed by `LISTEN`/`NOTIFY` |
 | `POST /api/v1/jobs/{id}/cancel` | Cancel |
 
@@ -649,6 +651,14 @@ Candidate. Names and shapes are the design's, not an implementation's.
 > both generators, which keeps the property `objects.inspect` states about
 > samples. The password is packaging, not confidentiality; `packaging.py` says
 > so at length.
+>
+> **Amended 2026-10-30 (DRAFT-054): one narrow exception, for display.** The
+> Screenshots tab is a strip of `<img>`, and an `<img>` cannot load a ZIP, so
+> `/screenshot` serves frames raw. Only a manifest-declared
+> `screenshots/<digits>.png` whose bytes begin with the PNG signature is
+> served, with `nosniff`, a sandboxing CSP and a filename built from the tick.
+> **Downloading a frame is still wrapped** (`artifact.zip`). The full argument
+> is in `docs/architecture/screenshots.md` §2.2.
 
 **Worker, scoped token, Dom0 only:**
 

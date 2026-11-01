@@ -1013,3 +1013,261 @@ def test_dropping_syscalls_warns_but_is_allowed(caplog):
         assert G.parse_plugins_override("memdump") == ("memdump",)
 
     assert "syscalls" in caplog.text
+
+
+# --- drop location, subfolder and command line (2026-11-01) -----------------
+
+def _platform_launch():
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "platform"))
+    from sandbox_platform import launch
+    return launch
+
+
+def test_every_guest_drops_where_it_always_did_by_default():
+    """A job that chose nothing runs exactly as before locations existed."""
+    for os_, paths in G.PATHS.items():
+        got = G.resolve_launch(os_, None, None, None)
+        assert got == G.Launch(drop_dir=paths.staging_dir), os_
+        assert paths.staging_dir in paths.locations.values(), os_
+
+
+def test_the_platform_offers_exactly_the_locations_this_host_resolves():
+    """Two copies of one table -- sandboxd cannot read the platform's at run
+    time -- held equal key for key, path for path, default first, with the
+    same username. A key the form offers and the host refuses fails a job
+    the submitter did nothing wrong in; a path the form shows and the host
+    does not use misleads every report."""
+    launch = _platform_launch()
+    user = G.config.ANALYSIS_USERNAME
+    for os_, paths in G.PATHS.items():
+        offered = launch.LOCATIONS[launch.TargetOs(os_.value)]
+        assert {loc.key.value: loc.path(user) for loc in offered} == {
+            k.value: v for k, v in paths.locations.items()}, os_
+        assert offered[0].path(user) == paths.staging_dir, os_
+        assert launch.SEP[launch.TargetOs(os_.value)] == paths.sep, os_
+        assert (launch.SPLITS_ARGUMENTS[launch.TargetOs(os_.value)]
+                is paths.splits_arguments), os_
+    assert launch.MAX_ARGUMENT_BYTES == G.MAX_ARGUMENT_BYTES
+    assert launch.MAX_SUBDIR_BYTES == G.MAX_SUBDIR_BYTES
+    assert launch.MAX_SUBDIR_DEPTH == G.MAX_SUBDIR_DEPTH
+    assert set(launch.CMD_SPECIAL) == G._CMD_UNSAFE
+
+
+@pytest.mark.parametrize("os_,location", [
+    (TargetOs.UBUNTU, "appdata"),       # a Windows folder
+    (TargetOs.ANDROID, "desktop"),      # Android has one location
+    (TargetOs.WINDOWS, "/etc"),         # a path is never a key
+    (TargetOs.UBUNTU, "../../etc"),
+])
+def test_a_location_the_guest_does_not_offer_is_refused(os_, location):
+    with pytest.raises(ValueError, match="not offered"):
+        G.resolve_launch(os_, location, None, None)
+
+
+def test_a_subfolder_is_joined_with_the_guests_own_separator():
+    got = G.resolve_launch(TargetOs.WINDOWS, "appdata", "Vendor/App 2\\bin", None)
+    assert got.drop_dir == (f"C:\\Users\\{G.config.ANALYSIS_USERNAME}"
+                            f"\\AppData\\Roaming\\Vendor\\App 2\\bin")
+    assert got.subdir == ("Vendor", "App 2", "bin")
+
+    got = G.resolve_launch(TargetOs.UBUNTU, "temp", "a\\b/", None)
+    assert got.drop_dir == "/tmp/a/b"
+
+
+# One table, run through BOTH copies of the rule -- the CLAUDE.md lesson of
+# the three filename checks. (os, text, accepted?)
+SUBDIR_CASES = [
+    (TargetOs.UBUNTU, "tools", True),
+    (TargetOs.UBUNTU, "tools/x64", True),
+    (TargetOs.WINDOWS, "tools\\x64", True),
+    (TargetOs.WINDOWS, "My Stuff (1)/v1.2+beta_x-y", True),
+    (TargetOs.UBUNTU, "trailing/", True),
+    (TargetOs.UBUNTU, "/etc", False),                 # absolute
+    (TargetOs.WINDOWS, "\\Windows", False),
+    (TargetOs.WINDOWS, "C:\\Windows", False),         # ':' is not admitted
+    (TargetOs.UBUNTU, "..", False),
+    (TargetOs.UBUNTU, "a/../../etc", False),
+    (TargetOs.UBUNTU, "a/./b", False),
+    (TargetOs.UBUNTU, "a//b", False),
+    (TargetOs.WINDOWS, 'a" & calc & "', False),       # cmd.exe text on Windows
+    (TargetOs.WINDOWS, "%TEMP%", False),
+    (TargetOs.WINDOWS, "a^b", False),
+    (TargetOs.WINDOWS, "a!b", False),
+    (TargetOs.UBUNTU, "$(id)", False),
+    (TargetOs.UBUNTU, "a`b`", False),
+    (TargetOs.UBUNTU, "a;b", False),
+    (TargetOs.UBUNTU, "new\nline", False),
+    (TargetOs.UBUNTU, "caf\u00e9", False),            # ASCII only
+    (TargetOs.WINDOWS, "dots.", False),               # Windows drops it
+    (TargetOs.WINDOWS, "space /x", False),
+    (TargetOs.WINDOWS, "CON", False),
+    (TargetOs.WINDOWS, "a/nul.txt", False),
+    (TargetOs.UBUNTU, "CON", True),                   # a name on Linux
+    (TargetOs.UBUNTU, "/".join(["d"] * 9), False),    # too deep
+    (TargetOs.UBUNTU, "x" * 129, False),              # too long
+]
+
+
+@pytest.mark.parametrize("os_,text,ok", SUBDIR_CASES)
+def test_both_copies_of_the_subfolder_rule_agree(os_, text, ok):
+    launch = _platform_launch()
+    for split in (lambda: G.split_subdir(os_, text),
+                  lambda: launch.split_subdir(launch.TargetOs(os_.value), text)):
+        if ok:
+            assert split()
+        else:
+            with pytest.raises(ValueError):
+                split()
+    if ok:
+        assert G.split_subdir(os_, text) == launch.split_subdir(
+            launch.TargetOs(os_.value), text)
+
+
+@pytest.mark.parametrize("os_,text", [
+    (TargetOs.UBUNTU, "a\nb"),
+    (TargetOs.WINDOWS, "a\r\nb"),
+    (TargetOs.WINDOWS, "a\x00b"),
+    (TargetOs.UBUNTU, "x" * 1025),
+    (TargetOs.UBUNTU, "'unclosed"),     # cannot be split into words
+])
+def test_an_unusable_command_line_is_refused(os_, text):
+    with pytest.raises(ValueError):
+        G.resolve_launch(os_, None, None, text)
+    launch = _platform_launch()
+    with pytest.raises(ValueError):
+        launch.check_arguments(launch.TargetOs(os_.value), text)
+
+
+def test_windows_takes_a_command_line_linux_could_not_split():
+    """No argv on Windows: the program splits its own command line, so an
+    open quote there is the submitter's business, not a refusal."""
+    got = G.resolve_launch(TargetOs.WINDOWS, None, None, ' "unclosed ')
+    assert got.arguments == '"unclosed'
+
+
+def test_the_sample_is_written_into_the_chosen_folder(tmp_path):
+    launch = G.resolve_launch(TargetOs.UBUNTU, "temp", "x/y", None)
+    argv = G.argv_deliver(job(tmp_path, launch=launch))
+    assert argv[argv.index("-e") + 1] == "/tmp/x/y/sample.bin"
+
+
+def test_a_subfolder_is_made_with_the_path_as_one_argv_element(tmp_path):
+    launch = G.resolve_launch(TargetOs.UBUNTU, None, "a b/c", None)
+    argv = G.argv_make_drop_dir(job(tmp_path, launch=launch))
+    i = argv.index("-m")
+    assert argv[i:] == ["-m", "execproc", "-e", "/usr/bin/mkdir",
+                        "-f", "-p", "-f", "--",
+                        "-f", f"/home/{G.config.ANALYSIS_USERNAME}/Desktop/a b/c"]
+
+
+def test_android_makes_its_subfolder_with_its_own_mkdir(tmp_path):
+    launch = G.resolve_launch(TargetOs.ANDROID, None, "drop", None)
+    argv = G.argv_make_drop_dir(job(tmp_path, os_=TargetOs.ANDROID,
+                                    launch=launch))
+    assert argv[argv.index("-e") + 1] == "/system/bin/mkdir"
+    assert argv[-1] == "/data/local/tmp/drop"
+
+
+def test_windows_makes_its_subfolder_with_cmds_builtin(tmp_path):
+    """No mkdir.exe exists, so the path is cmd.exe text -- which is why the
+    subfolder rule admits nothing cmd treats specially inside quotes."""
+    launch = G.resolve_launch(TargetOs.WINDOWS, "programdata", "Vendor (x86)", None)
+    argv = G.argv_make_drop_dir(job(tmp_path, os_=TargetOs.WINDOWS,
+                                    filename="s.exe", launch=launch))
+    assert argv[argv.index("-m") + 1] == "shellexec"
+    assert argv[-1] == '/c mkdir "C:\\ProgramData\\Vendor (x86)"'
+    assert not G._CMD_UNSAFE & set(launch.drop_dir)
+
+
+def test_linux_arguments_reach_the_sample_as_their_own_argv_elements(tmp_path):
+    """Hostile text stays data: each word is an `execve` element after the
+    sample, handed on by `exec "$@"`, never a string the guest shell parses."""
+    launch = G.resolve_launch(TargetOs.UBUNTU, None, None,
+                              "--name 'a b' '$(id)' ';' \"x\\\"y\"")
+    argv = G.argv_trace(job(tmp_path, launch=launch))
+    i = argv.index("-c")
+    assert argv[i + 2] == f"/usr/bin/sleep {G.LAUNCH_DELAY}; exec \"$@\""
+    assert argv[i + 3:i + 16] == [
+        "-f", "sh", "-f", f"/home/{G.config.ANALYSIS_USERNAME}/Desktop/sample.bin",
+        "-f", "--name", "-f", "a b", "-f", "$(id)", "-f", ";", "-f"]
+    assert argv[i + 16] == 'x"y'
+
+
+def test_no_arguments_keeps_the_evidenced_launch_byte_for_byte(tmp_path):
+    argv = G.argv_trace(job(tmp_path, launch=G.resolve_launch(
+        TargetOs.UBUNTU, None, None, "")))
+    assert argv == G.argv_trace(job(tmp_path))
+    assert f'/usr/bin/sleep {G.LAUNCH_DELAY}; exec "$1"' in argv
+
+
+def test_windows_arguments_follow_the_name_inside_the_delayed_command(tmp_path):
+    launch = G.resolve_launch(TargetOs.WINDOWS, None, None, "/S /D=C:\\x -v")
+    j = job(tmp_path, os_=TargetOs.WINDOWS, filename="setup.exe", launch=launch)
+    argv = G.argv_trace(j)
+    i = argv.index("-e")
+    assert argv[i + 1] == G.PATHS[TargetOs.WINDOWS].shell
+    assert argv[i + 3].endswith(f'& "{j.guest_sample}" /S /D=C:\\x -v')
+    assert G.launch_caveat(j) is None
+
+
+@pytest.mark.parametrize("arguments", [
+    '--out "C:\\a b"', "50%", "a & calc", "a | b", "a > b", "a ^ b", "a!",
+])
+def test_windows_arguments_cmd_would_reparse_go_to_a_direct_launch(tmp_path, arguments):
+    """Byte-exact, as `lpParameters` no shell parses -- losing the delay, and
+    saying so on the job rather than leaving it to be noticed."""
+    launch = G.resolve_launch(TargetOs.WINDOWS, None, None, arguments)
+    j = job(tmp_path, os_=TargetOs.WINDOWS, filename="setup.exe", launch=launch)
+    argv = G.argv_trace(j)
+    i = argv.index("-e")
+    assert argv[i:i + 4] == ["-e", j.guest_sample, "-f", arguments]
+    assert "without the" in G.launch_caveat(j)
+
+
+@pytest.mark.parametrize("arguments", ["", "-Mode quiet"])
+def test_a_powershell_script_waits_like_any_other_sample(tmp_path, arguments):
+    """The `"` round `-File`'s path is this module's own quoting, not a name
+    cmd.exe would re-parse. Until 2026-11-01 the check counted it, and every
+    `.ps1` started before the plugins had armed."""
+    launch = G.resolve_launch(TargetOs.WINDOWS, None, None, arguments)
+    j = job(tmp_path, os_=TargetOs.WINDOWS, filename="run.ps1", launch=launch)
+    argv = G.argv_trace(j)
+    i = argv.index("-e")
+    paths = G.PATHS[TargetOs.WINDOWS]
+    expected = (f"/c {paths.delay} & {G._POWERSHELL} -NoProfile "
+                f'-ExecutionPolicy Bypass -File "{j.guest_sample}"')
+    if arguments:
+        expected += f" {arguments}"
+    assert argv[i:i + 4] == ["-e", paths.shell, "-f", expected]
+    assert G.launch_caveat(j) is None
+
+
+@pytest.mark.parametrize("filename,arguments", [
+    ("50%.ps1", ""),                  # the name cmd would re-parse
+    ("run.ps1", '-Path "C:\\a b"'),   # the command line it would
+])
+def test_a_powershell_script_cmd_would_reparse_starts_directly(tmp_path,
+                                                              filename, arguments):
+    launch = G.resolve_launch(TargetOs.WINDOWS, None, None, arguments)
+    j = job(tmp_path, os_=TargetOs.WINDOWS, filename=filename, launch=launch)
+    argv = G.argv_trace(j)
+    i = argv.index("-e")
+    ps_args = f'-NoProfile -ExecutionPolicy Bypass -File "{j.guest_sample}"'
+    if arguments:
+        ps_args += f" {arguments}"
+    assert argv[i:i + 4] == ["-e", G._POWERSHELL, "-f", ps_args]
+    assert "without the" in G.launch_caveat(j)
+
+
+def test_an_apk_ignores_a_command_line_and_says_so(tmp_path):
+    launch = G.resolve_launch(TargetOs.ANDROID, None, None, "--flag")
+    j = job(tmp_path, os_=TargetOs.ANDROID, kind=SampleKind.APK,
+            filename="a.apk", launch=launch)
+    argv = G.argv_trace(j, component="com.x/.Main")
+    assert "--flag" not in argv
+    assert "APK" in G.launch_caveat(j)
+
+
+def test_a_linux_launch_has_no_caveat(tmp_path):
+    launch = G.resolve_launch(TargetOs.UBUNTU, None, None, "'%&|^!\"'")
+    assert G.launch_caveat(job(tmp_path, launch=launch)) is None

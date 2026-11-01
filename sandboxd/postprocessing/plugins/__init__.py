@@ -20,7 +20,6 @@ from .index_logs import index_logs
 from .plugin_base import PostprocessPlugin
 from .process_dumps import process_dumps
 from .process_extracted import process_extracted
-from .screenshot_metadata import screenshot_metadata
 from .split_drakvuf_log import split_drakvuf_log
 from .yara_analysis import yara_analysis
 from .get_yara_info import get_yara_info
@@ -76,11 +75,10 @@ POSTPROCESS_PLUGINS = [
         requires=[EXTRACTED_DIR, "process_tree.json"],
         generates=[EXTRACTED_ZIP],
     ),
-#    PostprocessPlugin(
-#        function=screenshot_metadata,
-#        requires=["screenshots.json"],
-#        generates=[],
-#    ),
+    # No screenshot plugin. Upstream's `screenshot_metadata` read a JSON-lines
+    # `screenshots.json` that nothing here writes; the file of that name is now
+    # sandboxd/screenshots.py's capability document (DRAFT-054), which the
+    # platform reads directly, so the port was deleted rather than re-enabled.
     # Gated on the directory, which exists only for a job that selected the
     # `ipt` plugin (`stages._trace` creates it, `argv_trace` passes it as
     # `--ipt-dir`); every other job skips this.

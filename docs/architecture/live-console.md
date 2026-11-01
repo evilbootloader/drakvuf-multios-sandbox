@@ -144,11 +144,12 @@ malware VM, not needed to click a button.
 > Scoping it to the trace hid preconfig — where an injector failure happens and
 > where a screen is worth most — for no protection in return.
 
-- **Whenever the clone exists**: `cloning`, `preparing`, `executing`,
-  `collecting`, which is exactly `enums.RUNNING_STATES`. Not before the domain
-  is built, and not after `_teardown` destroys it — including not during
-  `cleaning`, where the worker still holds the lease but the domain is already
-  gone. Outside that window both endpoints refuse.
+- **Whenever the clone exists**: `cloning`, `preparing`, `executing`, which is
+  exactly `enums.CONSOLE_STATES`. Not before the domain is built, and not after
+  `stages._destroy` destroys it — which since 2026-10-30 is **when the trace
+  ends, before `collecting`**, so neither `collecting` nor `cleaning` has a
+  domain although the worker still holds the lease through both. Outside that
+  window both endpoints refuse, and the session reaper ends what is left.
 - **One viewer at a time.** A second concurrent request for the same job is
   refused, not queued. The seat is vacated when a viewer leaves.
 - **A viewer may leave and come back** while the analysis is still running.
@@ -157,21 +158,26 @@ malware VM, not needed to click a button.
   `PEER_ATTACHED`. **Each viewing gets a fresh connection**, because RFB state
   lives in the connection — a second viewer handed the first one's stream would
   receive framebuffer updates for a handshake it never performed.
-- **Ends when the clone is torn down.** `sandboxd` stops the relay in `run`'s
-  `finally`, immediately before `_teardown`, on every path — so there is no
-  orphaned relay to reap and never a socket pointed at a domain being
-  destroyed.
+- **Ends when the clone is destroyed.** `sandboxd` stops the relay
+  immediately before `_destroy` on every path — right after the trace on
+  success, in `run`'s `finally` otherwise — so there is no orphaned relay to
+  reap and never a socket pointed at a domain being destroyed.
 - **A dropped browser connection does not touch the job**, which completes
   normally. The console is an observer of the analysis, never a participant in
   its lifecycle.
 
 > **KNOWN GAP (DRAFT-056): input is not restricted to `executing`.** View-only
 > was deferred (§1), so v1 is interactive-only and widening the window widens
-> what can be *typed* as well as what can be watched. During `collecting` that
-> reaches the guest while artifacts are being pulled, so it can change what is
-> collected after the trace has ended. `interacted` records that a human was
-> involved but not that it happened post-trace. Dropping client→server frames
-> outside `executing` is the fix, and is its own change.
+> what can be *typed* as well as what can be watched — during `cloning` and
+> `preparing`, an operator can act on the guest before the sample runs.
+> `interacted` records that a human was involved but not when. Dropping
+> client→server frames outside `executing` is the fix, and is its own change.
+>
+> **The `collecting` half of this gap is closed (2026-10-30).** The window used
+> to run through `collecting`, which reached the guest while its artifacts were
+> being pulled and could change what was collected after the trace had ended.
+> `sandboxd` now destroys the domain before reporting `collecting`, and
+> `CONSOLE_STATES` leaves that state out at both ends of the relay.
 
 ### 2.2 How a session starts, without Dom0 listening
 
@@ -206,7 +212,7 @@ guest's console is still opened only while someone is actually watching, which
 is the half that mattered.
 
 The two sides therefore wait differently. `sandboxd` holds its end until
-teardown and survives any number of viewers coming and going. The browser's end
+the domain is destroyed and survives any number of viewers coming and going. The browser's end
 keeps a short timeout, because a human is looking at it and should be told
 promptly when nobody is there.
 
@@ -220,18 +226,19 @@ beats on a busy platform no longer eats a quarter of the margin each time.
 The cost is one small row `UPDATE` per beat per running job -- twelve a minute
 at `MAX_CLONES=2`, against a Postgres in the same container.
 
-> **Finding the VNC port is UNVERIFIED and must be tested on Dom0.** Two
-> candidates, neither yet run:
+> **Finding the VNC port: `xenstore-read` is evidenced, `xl list -l` is not.**
+> Runbook 09 §B2 (Dom0, 2026-08-26) ran both against a real clone:
 >
 > ```sh
-> # Candidate A
-> xenstore-read /local/domain/<domid>/console/vnc-port
-> # Candidate B
-> xl list -l <domain>      # JSON; vfb/vnc stanza
+> xenstore-read /local/domain/<domid>/console/vnc-port   # -> 5900
+> xl list -l <domain>      # vnc stanza: only "enable" and "listen"
 > ```
 >
-> Per CLAUDE.md these are **Candidate**, not proven, and must not be treated as
-> working commands until a Dom0 session says otherwise.
+> with `ss -ltnp` showing QEMU bound to `127.0.0.1:5900`, and the relay then
+> ran on that port (§F13). `vnc.resolve_vnc_port` tries xenstore first; its
+> `xl list -l` fallback stays **Candidate** — the evidenced output carries no
+> port its regexes could match. The screenshots (DRAFT-054,
+> `docs/architecture/screenshots.md`) resolve the port the same way.
 
 ### 2.3 Where it sits on the page
 
@@ -327,7 +334,7 @@ What bounds it instead:
   from "consoles may be requested" to **"this host opens a relay socket per
   analysis"**. That is a coherent thing to switch on deliberately, and a
   coherent thing to leave off.
-- The job must have a live clone — `RUNNING_STATES`, per §2.1. Outside that
+- The job must have a live clone — `CONSOLE_STATES`, per §2.1. Outside that
   window both endpoints refuse.
 - The worker token is still required, over mutual TLS on the LAN.
 - **The dialling worker must hold the job's lease**, checked against

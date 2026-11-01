@@ -185,6 +185,37 @@ HEARTBEAT_INTERVAL = 20.0
 #: `SANDBOXD_CONSOLE_ENABLED`, because turning it off is an emergency action.
 CONSOLE_ENABLED = False
 
+#: Screenshots of every clone's console (DRAFT-054), ON by default -- the
+#: operator's decision, 2026-10-30. Read from Dom0's loopback with nothing in
+#: the guest and nothing listening anywhere, so unlike the console it widens no
+#: surface; what it costs is Dom0 CPU per frame and up to SCREENSHOT_MAX_BYTES
+#: of each job's result budget. `SANDBOXD_SCREENSHOTS_ENABLED=0` turns it off.
+SCREENSHOTS_ENABLED = True
+
+#: Keep each job's results directory after its upload succeeded. OFF: once the
+#: platform has accepted `/complete`, every file the run produced is in the
+#: object store and the Dom0 copy is deleted (operator, 2026-11-01).
+#: `SANDBOXD_KEEP_RESULTS=1` keeps them -- for a verification runbook that
+#: reads them on Dom0, or for debugging. A run that did NOT upload everything
+#: is kept regardless; see `stages.Analysis._remove_results`.
+KEEP_RESULTS = False
+
+#: Seconds between frames. Fixed rather than adaptive: every frame is kept and
+#: named by its tick, so elapsed time is `tick * interval` and playback at this
+#: interval is real time (sandboxd/screenshots.py).
+SCREENSHOT_INTERVAL = 2.0
+
+#: Ticks before capture stops: 15 minutes at 2 s. The trace timeout is under
+#: 600 s and preconfig adds minutes at most, so a run reaching this is
+#: pathological -- and the frames are still well inside the platform's 1024
+#: artifact cap, behind every other artifact (stages._collect).
+SCREENSHOT_MAX_FRAMES = 450
+
+#: Bytes of PNG per job before capture stops. A desktop frame is tens to
+#: hundreds of KiB; this bounds a guest drawing noise so frames can never be
+#: what pushes a job over its 4 GiB result budget, where a 413 would fail it.
+SCREENSHOT_MAX_BYTES = 256 * 2**20
+
 
 # ===========================================================================
 # Egress -- where a clone's traffic goes (DRAFT-057)

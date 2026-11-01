@@ -16,6 +16,7 @@
 #}
 {% set counts = report.tab_counts() if report else {} %}
 {% if job.artifacts %}{% set counts = dict(counts, artifacts=job.artifacts | length) %}{% endif %}
+{% if frame_count %}{% set counts = dict(counts, screenshots=frame_count) %}{% endif %}
 <nav class="tabs" data-active="{{ active }}">
   {% for tab in tabs %}
   {# Tabs with no data yet are dimmed and marked, rather than looking

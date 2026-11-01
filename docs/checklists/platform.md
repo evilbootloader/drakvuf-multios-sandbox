@@ -50,7 +50,41 @@
   on, `| safe` greppable. Artifact ZIP downloads implemented and tested here.
 - [x] **The Dom0 orchestrator** (#41) — `sandboxd/`, claiming over mutual TLS,
   with host-global admission instead of fixed clone slots.
-- [x] **Live console** — off by default on both ends.
+- [x] **Live console** — off by default on both ends. Since 2026-10-30 its
+  window closes when the trace ends: the clone is destroyed before
+  `collecting`, and `enums.CONSOLE_STATES` leaves that state out.
+- [ ] **Screenshots (DRAFT-054)** — capture in `sandboxd/screenshots.py`, on by
+  default, `docs/architecture/screenshots.md`. Implemented and tested in the
+  development container; each box below needs the parked runbook
+  `verify-screenshots.md` executed on Dom0.
+  - [ ] A filmstrip from the **Ubuntu** guest, for a sample that opens a window.
+  - [ ] A filmstrip from the **Android** guest.
+  - [ ] A filmstrip from the **Windows** guest.
+  - [ ] The same sample traced with and without capture, syscall counts inside
+        the known run-to-run spread.
+  - [ ] Frames from a run whose guest failed.
+  - [ ] Per-frame capture time against the 2 s interval.
+  - [ ] The viewer on the deployment: strip, playback, the per-frame download
+        arriving wrapped. Implemented and browser-tested here 2026-10-30;
+        never deployed.
+- [ ] **Drop location, subfolder and command line** (2026-11-01) —
+  `sandbox_platform/launch.py`, `sandboxd/guests.py` (`resolve_launch`,
+  `argv_make_drop_dir`), `docs/architecture/analysis-pipeline.md`, "Where the
+  sample is dropped". Implemented and tested here; every box needs the parked
+  runbook `verify-launch-options.md` executed on Dom0.
+  - [ ] **Ubuntu**: a sample dropped in `/tmp/<subfolder>` runs from there
+        with its arguments as separate argv elements.
+  - [ ] **Android**: a native sample in `/data/local/tmp/<subfolder>` with
+        arguments.
+  - [ ] **Windows**: a sample dropped in a non-default location with a
+        subfolder (cmd.exe `mkdir`), plus one command line that keeps the
+        delay and one that loses it, and a `.ps1` that keeps it.
+  - [ ] How long the subfolder took to appear, against the 20 s
+        `DROP_DIR_TIMEOUT`.
+- [ ] **Results deleted from Dom0 after upload** (2026-11-01) —
+  `stages.Analysis._remove_results`, `SANDBOXD_KEEP_RESULTS`. A completed
+  job's directory is gone once `/complete` is accepted; a failed one is kept.
+  Needs `verify-launch-options.md` Part G on Dom0.
 - [ ] Reuse `[preset.x]`-style per-OS configuration presets.
 
 **Not yet evidenced on the deployment:** artifact ZIP downloads have been

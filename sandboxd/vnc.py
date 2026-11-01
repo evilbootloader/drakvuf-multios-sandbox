@@ -54,17 +54,18 @@ class ConsoleUnavailable(RuntimeError):
 def resolve_vnc_port(runner, domid: int, domain: str) -> int:
     """Find the port QEMU is serving this clone's console on.
 
-    > **UNVERIFIED ON DOM0.** Both readings below are *Candidate* per
-    > CLAUDE.md and neither has been run against a real clone. The first Dom0
-    > session that opens a console must confirm which works and record it;
-    > until then this function is untested against anything real.
+    Used by the live console and by the screenshots (DRAFT-054) alike.
 
     Two sources, tried in order:
 
     1. `xenstore-read /local/domain/<domid>/console/vnc-port` -- the port
-       directly, written by the device model when it binds.
-    2. `xl list -l <domain>` -- the JSON dump, which carries a `vfb`/`vnc`
-       stanza. Slower and more to parse, so it is the fallback.
+       directly, written by the device model when it binds. **Evidenced**:
+       it returned `5900` for a real clone, with `ss -ltnp` showing QEMU on
+       `127.0.0.1:5900` (runbook 09 §B2, Dom0 2026-08-26), and the console
+       relay ran on it (§F13).
+    2. `xl list -l <domain>` -- the JSON dump. **Still Candidate**, and
+       probably dead: on that same Dom0 its `vnc` stanza carried only
+       `enable` and `listen`, which neither regex below matches.
 
     Ordered that way because xenstore holds what QEMU actually bound, where
     the domain config holds what was *asked for* -- and with `vncunused` those
@@ -94,9 +95,9 @@ def resolve_vnc_port(runner, domid: int, domain: str) -> int:
             return VNC_PORT_BASE + int(m.group(1))
 
     raise ConsoleUnavailable(
-        f"could not find a VNC port for {domain!r} (domid {domid}). Both "
-        f"readings are Candidate and unverified on Dom0 -- see "
-        f"docs/architecture/live-console.md §2.2."
+        f"could not find a VNC port for {domain!r} (domid {domid}): "
+        f"xenstore-read, the reading evidenced in runbook 09 §B2, gave no "
+        f"port -- see docs/architecture/live-console.md §2.2."
     )
 
 

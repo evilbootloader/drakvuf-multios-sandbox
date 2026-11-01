@@ -121,6 +121,15 @@ class Settings:
     # surface, and the one thing Dom0 does that is not "poll and hang up".
     console_enabled: bool = False
 
+    # SANDBOXD_SCREENSHOTS_ENABLED. ON unless an operator turns it off -- it
+    # reads the clone's console on Dom0's loopback and opens nothing toward the
+    # platform, so the console's fail-closed argument does not carry over.
+    screenshots_enabled: bool = True
+
+    # SANDBOXD_KEEP_RESULTS. Off: a job's results directory is deleted once
+    # its upload succeeded. On keeps every one, for runbooks and debugging.
+    keep_results: bool = False
+
     @classmethod
     def from_env(cls, env=None) -> Settings:
         env = env if env is not None else os.environ
@@ -149,12 +158,26 @@ class Settings:
         console = env.get("SANDBOXD_CONSOLE_ENABLED", "")
         console_enabled = console.strip().lower() in {"1", "true", "yes", "on"}
 
+        # The opposite default, so the opposite parse: only a recognised false
+        # value turns it off. Turning it off is the emergency action, and the
+        # obvious spellings of "off" must all work.
+        screens = env.get("SANDBOXD_SCREENSHOTS_ENABLED", "")
+        screenshots_enabled = screens.strip().lower() not in {"0", "false",
+                                                              "no", "off"}
+
+        # Off unless recognised as on, like the console. Here a typo costs
+        # disk rather than surface: Dom0 deletes what it has already uploaded.
+        keep = env.get("SANDBOXD_KEEP_RESULTS", "")
+        keep_results = keep.strip().lower() in {"1", "true", "yes", "on"}
+
         return cls(
             api=env["SANDBOXD_API"],
             token=env["WORKER_TOKEN"],
             worker_id=env.get("SANDBOXD_WORKER_ID", os.uname().nodename),
             console_api=env.get("SANDBOXD_CONSOLE_API", ""),
             console_enabled=console_enabled,
+            screenshots_enabled=screenshots_enabled,
+            keep_results=keep_results,
             total_mib=int(env["SANDBOXD_TOTAL_MIB"]),
             vlans=range(1, max_clones + 1),
             total_slots=int(env.get("SANDBOXD_MAX_SLOTS", str(max_clones))),
@@ -329,6 +352,14 @@ class Daemon:
         self._cfg.console_api = settings.console_api or settings.api
         self._cfg.worker_token = settings.token
         self._cfg.console_enabled = settings.console_enabled
+        self._cfg.screenshots_enabled = settings.screenshots_enabled
+        if not settings.screenshots_enabled:
+            log.info("screenshots are off on this host "
+                     "(SANDBOXD_SCREENSHOTS_ENABLED)")
+        self._cfg.keep_results = settings.keep_results
+        if settings.keep_results:
+            log.info("results directories are kept after upload "
+                     "(SANDBOXD_KEEP_RESULTS)")
         if settings.cacert or settings.client_cert:
             from .tls import ssl_context
             self._cfg.ssl_context = ssl_context(settings.cacert,
@@ -563,7 +594,7 @@ class Daemon:
             if self._table is not None:
                 # **A dirty teardown does not get its VLAN back.**
                 #
-                # `_teardown` has always returned "dirty: destroy,lvremove"
+                # Teardown has always returned "dirty: destroy,lvremove"
                 # and nothing consumed it, so a domain that survived
                 # `xl destroy`, an LV that would not release, or egress rules
                 # that outlived their revoke all handed the VLAN straight to

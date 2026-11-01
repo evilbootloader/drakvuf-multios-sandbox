@@ -17,9 +17,16 @@ callbacks, as one function with the state reporting the platform expects.
 **Every terminal state is reachable only from `cleaning`.** That is not a
 formality: it is the server refusing to record an analysis as finished by a
 path that did not tear its clone down. So every exit here goes through
-`_teardown`, including the ones that failed before a clone existed -- reporting
+`_destroy`, including the ones that failed before a clone existed -- reporting
 `cleaning` for a job with nothing to clean is honest, and the alternative is a
 409 on the terminal report and a job stuck in `executing` forever.
+
+**The domain is destroyed BEFORE `collecting`, not after it** (2026-10-30).
+Nothing in collection needs a live guest -- postprocessing reads files, the
+upload sends them -- and a guest left running meant a console could still type
+into it while its artifacts were being pulled (the `KNOWN GAP (DRAFT-056)`
+that `routers/console.py` carried). The staged sample is the one thing that
+outlives the domain: `yara_analysis` scans it, so `_remove_staging` runs last.
 
 ## Why the heartbeat is not optional
 
@@ -40,13 +47,14 @@ import time
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
-from . import config, egress, guests, timing, vnc
+from . import config, egress, guests, screenshots, timing, vnc
 from .clone import CloneBuilder, CloneError, CloneSpec
 from .egress import EgressUnavailable, Exit
 from .guests import Interaction, Job, SampleKind, TargetOs, TraceOptions
 from .proc import CommandError
 from .postprocessing.paths import (DUMPS_DIR, DUMPS_ZIP, EXTRACTED_DIR,
-                                   EXTRACTED_ZIP, IPT_DIR, IPT_ZIP, PROCDUMPS_DIR)
+                                   EXTRACTED_ZIP, IPT_DIR, IPT_ZIP, PROCDUMPS_DIR,
+                                   SCREENSHOTS_DIR, SCREENSHOTS_INDEX)
 from .postprocessing.postprocess import postprocess_analysis_dir
 from .postprocessing.plugins.plugin_base import load_postprocessing_config
 
@@ -84,10 +92,18 @@ def _must_stay_inside(path: Path, root: Path, what: str) -> None:
             f"Refusing the job rather than writing outside the tree."
         )
 
-# DRAFT-018 bounds a manifest at 512 artifacts. `extracted/` is named after
-# files the SAMPLE wrote, so the real ceiling is however many it drops; hitting
-# the cap sets `truncated` rather than silently listing a prefix.
-MAX_ARTIFACTS = 2048
+# The platform's `manifest.MAX_ARTIFACTS`, and it must not exceed it.
+# `extracted/` is named after files the SAMPLE wrote, so the real ceiling is
+# however many it drops; hitting the cap sets `truncated` rather than silently
+# listing a prefix.
+#
+# **It was 2048 against the platform's 1024 until 2026-10-30.** A run with
+# 1025-2048 files built a manifest `/complete` refused with a 422, raised as a
+# ProtocolError from `_report_terminal` -- outside `run`'s `try` -- so the job
+# sat in `cleaning` with its artifacts uploaded and no manifest. Screenshots
+# (DRAFT-054) add up to 450 files per job and made that reachable. Lower is
+# safe; higher is that bug.
+MAX_ARTIFACTS = 1024
 
 # **`ArtifactRequest.artifacts` on the platform is capped at 64 names, and that
 # cap is PER CALL rather than per job** -- routers/worker.py says so and invites
@@ -232,6 +248,20 @@ class Config:
     # DEPLOYMENT NOTE: a Dom0 that was relying on the old hard-coded `True`
     # must now set SANDBOXD_CONSOLE_ENABLED=1 to keep serving consoles.
     console_enabled: bool = config.CONSOLE_ENABLED
+
+    # --- screenshots (DRAFT-054), on unless the host turns them off --------
+    #
+    # SANDBOXD_SCREENSHOTS_ENABLED. Unlike the console this opens nothing
+    # toward the platform: it reads the clone's VNC console on Dom0's loopback
+    # and writes PNGs into the job directory. See sandboxd/screenshots.py.
+    screenshots_enabled: bool = config.SCREENSHOTS_ENABLED
+    screenshot_interval: float = config.SCREENSHOT_INTERVAL
+    screenshot_max_frames: int = config.SCREENSHOT_MAX_FRAMES
+    screenshot_max_bytes: int = config.SCREENSHOT_MAX_BYTES
+
+    # SANDBOXD_KEEP_RESULTS. See `_remove_results` for when a results
+    # directory is deleted, and the two cases that keep it anyway.
+    keep_results: bool = config.KEEP_RESULTS
     api_base: str = ""
     # The listener the BROWSER reaches -- see Settings.console_api.
     console_api: str = ""
@@ -319,6 +349,11 @@ class Analysis:
         self._api = api
         self._runner = runner
         self._cfg = config
+        # The filmstrip, while there is one. An attribute rather than an
+        # argument for the same reason `_trace_note` is: `_trace` marks on it,
+        # and threading it through every stage signature would change all of
+        # them for one observer.
+        self._screens: screenshots.Capture | None = None
 
     def run(self, lease, vlan: int) -> Outcome:
         """Drive one analysis and return its terminal outcome.
@@ -343,6 +378,9 @@ class Analysis:
         _must_stay_inside(sample, self._cfg.staging_dir, "staging")
         clone = None
         console = None
+        self._screens = None
+        destroyed = False
+        problems: list[str] = []
         outcome = Outcome(state="failed")
 
         with Heartbeat(self._api, lease.job_id,
@@ -363,23 +401,34 @@ class Analysis:
                                        expected_sha256=lease.sha256,
                                        timeout=timing.FETCH_BUDGET)
                 kind = guests.classify(sample)
+                # Before the clone, so a location, subfolder or command line
+                # this guest cannot honour fails the job without costing a VM.
+                launch = guests.resolve_launch(os_, lease.drop_location,
+                                               lease.drop_subdir,
+                                               lease.arguments)
                 clone = self._clone(os_, vlan, lease)
-                job = self._job(lease, os_, kind, clone, vlan, job_dir, sample)
+                job = self._job(lease, os_, kind, clone, vlan, job_dir, sample,
+                                launch)
 
                 # **Dialled as soon as the domain exists, not at trace start.**
                 #
-                # The console's window is the CLONE's lifetime, not the trace's
+                # The console's window opens with the CLONE, not the trace
                 # (2026-09-05). The relay ends at a VNC port QEMU serves for
                 # this domain, so it can be opened the moment `_clone` returns
                 # a domid -- which lets an operator watch preconfig, where an
                 # injector failure is otherwise only visible as a log line
-                # after the fact.
+                # after the fact. It closes when the trace ends, because the
+                # domain is destroyed then rather than after collection.
                 #
                 # Started BEFORE egress is applied deliberately: if a rule fails
                 # to install, the screen showing what the guest is doing is
                 # exactly what is wanted, and `_start_console` never fails the
                 # analysis.
                 console = self._start_console(job, beat)
+                # The filmstrip, from the same moment and for the same reason:
+                # a guest that never got as far as running the sample is the
+                # most useful thing a screenshot can show (DRAFT-054 TEST 4).
+                self._screens = self._start_screenshots(job)
 
                 # 2. Egress, BEFORE the guest's network is configured and long
                 #    before the sample runs. Ordered this way so that a clone
@@ -401,6 +450,22 @@ class Analysis:
                 self._check(beat)
                 self._api.report_state(lease.job_id, "executing")
                 self._trace(job, component, beat)
+
+                # **The domain goes BEFORE collection** (2026-10-30). The
+                # trace is over, so nothing still needs a guest: the
+                # observers end first -- the filmstrip must be complete before
+                # `_collect` declares file sizes, and the console must not
+                # outlive its domain -- and then the clone is destroyed. A
+                # console can therefore no longer type into a guest whose
+                # artifacts are being pulled, which `routers/console.py` used
+                # to carry as a KNOWN GAP.
+                #
+                # A dirty destroy does not stop the collection. The trace is
+                # the result; `cleanup_status` still records the problem and
+                # `daemon._work` still withholds the VLAN on it.
+                self._stop_observers(console)
+                problems += self._destroy(clone, vlan)
+                destroyed = True
 
                 self._check(beat)
                 self._api.report_state(lease.job_id, "collecting")
@@ -424,25 +489,37 @@ class Analysis:
                                   failure_stage="sandboxd",
                                   failure_reason=f"{type(exc).__name__}: {exc}"[:2000])
             finally:
-                # **The console ends before the domain does, on every path.**
+                # **The observers end before the domain does, on every path.**
                 #
-                # `_teardown` destroys the clone, and a relay still pointed at
-                # its VNC port is a socket into a domain being torn down --
-                # which is what the old `_trace` finally protected against when
-                # the window was the trace. The hazard moved with the window,
-                # so the stop moved with it. Ordering here is the whole of that
-                # protection: these two lines must not be swapped.
-                if console is not None:
-                    console.stop()
+                # `_destroy` destroys the clone, and a relay or a capture still
+                # pointed at its VNC port is a socket into a domain being torn
+                # down. On the success path this already happened after the
+                # trace; both stops are idempotent, so this is the failure and
+                # cancellation path. Ordering here is the whole of that
+                # protection: the stop and the destroy must not be swapped.
+                self._stop_observers(console)
 
                 # ALWAYS, and always before the terminal report: the server
                 # refuses every terminal state that does not arrive from
-                # `cleaning`.
-                outcome.cleanup_status = self._teardown(clone, vlan, sample)
+                # `cleaning`. Exactly once -- the success path destroyed the
+                # domain before collecting.
+                if not destroyed:
+                    problems += self._destroy(clone, vlan)
+                # The sample last: postprocessing scans it.
+                problems += self._remove_staging(sample)
+                outcome.cleanup_status = ("clean" if not problems
+                                          else "dirty: " + ",".join(problems))
 
         self._api.report_state(lease.job_id, "cleaning",
                                cleanup_status=outcome.cleanup_status)
         self._report_terminal(lease, outcome)
+        # **Only here, after `/complete` has RETURNED.** It raises on any
+        # refusal or unreachable platform, so reaching this line means the
+        # manifest is committed and every file it lists is in the store. A
+        # failed or cancelled run never gets here with `completed`, and keeps
+        # its directory for whoever investigates it.
+        if outcome.state == "completed":
+            self._remove_results(job_dir, outcome.manifest)
         return outcome
 
     # -- stages -------------------------------------------------------------
@@ -602,7 +679,8 @@ class Analysis:
             return options
         return replace(options, plugins=tuple(self._cfg.plugins))
 
-    def _job(self, lease, os_, kind, clone, vlan, job_dir, sample) -> Job:
+    def _job(self, lease, os_, kind, clone, vlan, job_dir, sample,
+             launch: guests.Launch | None = None) -> Job:
         # Checked first, and explicitly. Reading `injection_pids[os_]` inline
         # below made a Windows job die on a bare KeyError -- Python evaluates
         # the arguments in order, so the dict lookup won the race against
@@ -628,6 +706,7 @@ class Analysis:
             result_dir=job_dir,
             options=self._trace_options(os_, kind, lease.plugins, lease.timeout, lease.disable_sysret),
             kind=kind,
+            launch=launch,
         )
 
     def _preconfig(self, job: Job, beat: Heartbeat) -> str | None:
@@ -638,8 +717,10 @@ class Analysis:
         networking -- which is what keeps an offline analysis mode reachable.
         """
         log = job.result_dir / PRECONFIG_LOG
+        makes_drop_dir = bool(job.launch and job.launch.subdir)
         budgets = timing.budgets(job.target_os, job.kind,
-                                 job.options.timeout, self._cfg.waits)
+                                 job.options.timeout, self._cfg.waits,
+                                 makes_drop_dir=makes_drop_dir)
 
         # **`budgets.preconfig` guards the PHASE, and this deadline is what
         # makes that true.** It was passed as the `timeout=` of each command
@@ -669,9 +750,12 @@ class Analysis:
                     what, _phase_overran("preconfig", what, budgets.preconfig))
             return remaining
 
-        self._runner.run(guests.argv_deliver(job), timeout=left("writefile"),
-                         what="injector writefile", check=True,
-                         stdout_path=log, stderr_path=log.with_suffix(".stderr"))
+        if makes_drop_dir:
+            self._deliver_into_subdir(job, log, left, beat)
+        else:
+            self._runner.run(guests.argv_deliver(job), timeout=left("writefile"),
+                             what="injector writefile", check=True,
+                             stdout_path=log, stderr_path=log.with_suffix(".stderr"))
 
         self._check(beat)
         self._runner.run(guests.argv_configure_network(job, self._cfg.subnet),
@@ -721,6 +805,38 @@ class Analysis:
         self._runner.run(guests.argv_remove_handoff(job, handoff),
                          timeout=left("rm"), what="injector rm", check=True)
         return component
+
+    def _deliver_into_subdir(self, job: Job, log: Path, left,
+                             beat: Heartbeat) -> None:
+        """Make the job's subfolder, then write the sample into it.
+
+        `mkdir` is an injected process and its injection returns when it
+        STARTS, so the folder may not exist yet when `writefile` runs. The
+        write is therefore retried until it lands -- an open that fails is the
+        expected "not yet", the same reading `_await_component` gives ENOENT
+        -- and a write that never lands is reported as the `writefile` failure
+        it is, carrying `injector`'s own words.
+
+        The injection itself is checked: one that fails means `mkdir` never
+        ran, and retrying a write into a folder nothing is making would only
+        spend the ceiling.
+        """
+        self._runner.run(guests.argv_make_drop_dir(job),
+                         timeout=left("mkdir"), what="injector mkdir",
+                         check=True)
+        argv = guests.argv_deliver(job)
+        deadline = time.monotonic() + self._cfg.waits.drop_dir_timeout
+        while True:
+            self._check(beat)
+            done = self._runner.run(argv, timeout=left("writefile"),
+                                    what="injector writefile", check=False,
+                                    stdout_path=log,
+                                    stderr_path=log.with_suffix(".stderr"))
+            if done.ok:
+                return
+            if time.monotonic() >= deadline:
+                raise CommandError("injector writefile", done)
+            self._sleep(self._cfg.waits.drop_dir_poll, beat)
 
     def _await_component(self, job: Job, handoff: str, dest: Path,
                          left, beat: Heartbeat) -> str:
@@ -851,6 +967,10 @@ class Analysis:
 
             self._sleep(timing._trace_waits(job.target_os, job.kind,
                                             self._cfg.waits), beat)
+            # Where in the filmstrip the sample was launched and the trace
+            # ended, so the report can mark both frames.
+            if self._screens is not None:
+                self._screens.mark("trace_start")
             result = self._runner.run(
                 guests.argv_trace(job, component),
                 timeout=budgets.trace, what="drakvuf",
@@ -860,6 +980,8 @@ class Analysis:
                 stdout_path=job.result_dir / TRACE_LOG,
                 stderr_path=job.result_dir / TRACE_STDERR,
             )
+            if self._screens is not None:
+                self._screens.mark("trace_end")
             # NOT `check=True`, and the choice is deliberate rather than an
             # omission -- it was one, found in review, which is why it is
             # spelled out.
@@ -878,13 +1000,17 @@ class Analysis:
             # `<plugin>.log` in it at all (trace.log itself is split and never
             # uploaded), beside a note naming the exit code, is diagnosable
             # where a bare `completed` is not.
-            self._trace_note = None
+            notes = []
             if not result.ok:
-                self._trace_note = (
+                notes.append(
                     f"drakvuf exited {result.returncode}"
                     + (" (timed out)" if result.timed_out else "")
                     + f"; see {TRACE_STDERR}"
                 )
+            # A launch that is not what the job asked for, said on the job.
+            if caveat := guests.launch_caveat(job):
+                notes.append(caveat)
+            self._trace_note = "; ".join(notes) or None
         finally:
             tcpdump.stop()
 
@@ -920,6 +1046,43 @@ class Analysis:
             log.warning("no live console for job %s: %s", job.job_id, exc)
             return None
 
+    def _start_screenshots(self, job: Job):
+        """Start the filmstrip, if this host takes one. Never fails the analysis.
+
+        The port is resolved again rather than shared with the console: one
+        `xenstore-read` costs nothing, and the console path stays exactly as it
+        was evidenced. A capture that cannot start is still returned, marked
+        unavailable, so its `stop()` writes a `failed` index saying why -- the
+        report then shows "no console" rather than an empty strip that reads as
+        a screen nothing happened on.
+        """
+        if not self._cfg.screenshots_enabled:
+            return None
+        capture = screenshots.Capture(
+            job.job_id, job.result_dir,
+            interval=self._cfg.screenshot_interval,
+            max_frames=self._cfg.screenshot_max_frames,
+            max_bytes=self._cfg.screenshot_max_bytes)
+        try:
+            port = vnc.resolve_vnc_port(self._runner, job.domid,
+                                        job.clone_domain)
+            capture.start(port)
+        except Exception as exc:  # noqa: BLE001 - never fail the analysis
+            log.warning("no screenshots for job %s: %s", job.job_id, exc)
+            capture.unavailable(str(exc)[:500])
+        return capture
+
+    def _stop_observers(self, console) -> None:
+        """End everything watching the clone's console. Idempotent.
+
+        The filmstrip first: once this returns, nothing more is written into
+        the job directory, which `_collect` relies on.
+        """
+        if self._screens is not None:
+            self._screens.stop()
+        if console is not None:
+            console.stop()
+
     def _collect(self, lease, job_dir: Path) -> Outcome:
         """Upload what the run produced and build its manifest."""
         # `dumps/` is left out ONLY when `dumps.zip` exists beside it: that
@@ -937,12 +1100,20 @@ class Analysis:
         # `trace.log` never uploads, split or not. The per-plugin logs ARE the
         # stream (split_drakvuf_log removes the raw file once it has written
         # them), and a raw copy that outlived a failed split would double the
-        # largest artifact of the job. It is not lost: the job directory stays
-        # on Dom0, and the split's own log line says what went wrong.
+        # largest artifact of the job. It is not lost: a surviving `trace.log`
+        # keeps the job directory on Dom0 after the upload (`_remove_results`),
+        # and the split's own log line says what went wrong.
         skipped = packed | {TRACE_LOG}
-        found = sorted(p for p in job_dir.rglob("*")
-                       if p.is_file()
-                       and p.relative_to(job_dir).parts[0] not in skipped)
+        # **Screenshots last.** Sorted by path alone, `screenshots/` would come
+        # before `syscall.log.gz`, `trace.stderr` and `ttps.json` -- so the
+        # MAX_ARTIFACTS cap, or COLLECT_BUDGET running out mid-upload, would
+        # keep frames and drop the trace. Every other artifact keeps exactly
+        # the order it had before frames existed.
+        found = sorted((p for p in job_dir.rglob("*")
+                        if p.is_file()
+                        and p.relative_to(job_dir).parts[0] not in skipped),
+                       key=lambda p: (p.relative_to(job_dir).parts[0]
+                                      == SCREENSHOTS_DIR, p))
         truncated = len(found) > MAX_ARTIFACTS
         found = found[:MAX_ARTIFACTS]
 
@@ -957,8 +1128,9 @@ class Analysis:
             uploaded = []
             # Tracked separately from `truncated`, which may ALREADY be set by
             # the MAX_ARTIFACTS cap above -- testing that one here would break
-            # out after the first batch on any run that produced more than 512
-            # files, uploading 64 of them and calling the rest truncated.
+            # out after the first batch on any run that produced more than
+            # MAX_ARTIFACTS files, uploading 64 of them and calling the rest
+            # truncated.
             out_of_budget = False
             # Tickets are minted a batch at a time, immediately before that
             # batch is sent, rather than all of them up front. Two reasons, and
@@ -991,8 +1163,13 @@ class Analysis:
             truncated = truncated or out_of_budget
             entries = uploaded
 
+        # The capability documents this run produced, each of which must also
+        # be among what was UPLOADED -- the platform refuses a manifest that
+        # claims a document it does not list (result-schema.md §4.2).
+        documents = [n for n in (SCREENSHOTS_INDEX,)
+                     if any(e["name"] == n for e in entries)]
         manifest = {"schema_version": 1, "artifacts": entries,
-                    "documents": [], "truncated": truncated}
+                    "documents": documents, "truncated": truncated}
         note = getattr(self, "_trace_note", None)
         if note:
             manifest["notes"] = note
@@ -1001,14 +1178,19 @@ class Analysis:
             artifacts=[e["name"] for e in entries],
         )
 
-    def _teardown(self, clone, vlan: int, sample: Path) -> str:
-        """Destroy the clone and remove the sample. Never raises.
+    def _destroy(self, clone, vlan: int) -> list[str]:
+        """Revoke egress and destroy the clone. Never raises; returns problems.
 
         Runs on every path -- success, failure, cancellation -- because a clone
         left running is malware with NAT'd egress and nothing watching it. That
         was a real defect in the C watcher before 2026-08-19: cleanup ran only
         in the timeout branch, so a normal completion left its clone up until
         the next sample happened to take the same VLAN slot.
+
+        On the success path it runs right after the trace, before `collecting`
+        (see `run`); everywhere else from `run`'s `finally`. Exactly once
+        either way. The staged sample is NOT removed here -- `_remove_staging`
+        does that after postprocessing, which scans it.
         """
         problems = []
 
@@ -1089,16 +1271,69 @@ class Analysis:
                     problems.append(what)
             clone.config_path.unlink(missing_ok=True)
 
-        # The sample, and the directory it sat in. It reached Dom0 disk because
-        # `injector -m writefile -B` takes a path and there is no stdin form.
+        return problems
+
+    @staticmethod
+    def _remove_staging(sample: Path) -> list[str]:
+        """Remove the sample, and the directory it sat in. Never raises.
+
+        It reached Dom0 disk because `injector -m writefile -B` takes a path
+        and there is no stdin form. Removed after collection rather than with
+        the domain: `yara_analysis` scans it during postprocessing.
+        """
         try:
             shutil.rmtree(sample.parent, ignore_errors=True)
         except OSError:
-            problems.append("staging")
-
-        return "clean" if not problems else "dirty: " + ",".join(problems)
+            return ["staging"]
+        return []
 
     # -- reporting ----------------------------------------------------------
+
+    def _remove_results(self, job_dir: Path, manifest: dict) -> None:
+        """Delete a job's results directory once the store holds it. Never raises.
+
+        Called only after `/complete` succeeded (operator, 2026-11-01). Before
+        that, results directories were never removed by anything, so Dom0's
+        disk held a copy of every run.
+
+        **Two cases keep the directory anyway**, because in each something
+        that should have reached the store did not, and Dom0 has the only copy:
+
+          * a **truncated** manifest -- the MAX_ARTIFACTS cap or COLLECT_BUDGET
+            stopped the upload, and the files past that point were never sent;
+          * a raw **`trace.log`** still present -- `split_drakvuf_log` removes
+            it once the per-plugin logs are written, so one that survived means
+            the split failed. It never uploads (`_collect`), and it may be the
+            only whole copy of the trace.
+
+        Files `_collect` skips on purpose go with the directory: a packed
+        directory's raw copy (`dumps/` beside `dumps.zip`) is in the store as
+        the archive.
+
+        A failure to delete is logged, not reported. The job is already
+        `completed` and nothing it uploaded depends on the Dom0 copy; what
+        a leftover costs is disk, which the log line names.
+
+        `job_dir` was proven inside `results_dir` at the top of `run`, and
+        `shutil.rmtree` does not follow symlinks below it.
+        """
+        if self._cfg.keep_results:
+            log.info("keeping %s: SANDBOXD_KEEP_RESULTS is set", job_dir)
+            return
+        if manifest.get("truncated"):
+            log.warning("keeping %s: its manifest is truncated, so some of "
+                        "its files never reached the store", job_dir)
+            return
+        if (job_dir / TRACE_LOG).exists():
+            log.warning("keeping %s: %s survived, so splitting it failed and "
+                        "it is the only copy of the trace", job_dir, TRACE_LOG)
+            return
+        try:
+            shutil.rmtree(job_dir)
+        except OSError as exc:
+            log.error("could not remove %s after its upload: %s -- delete it "
+                      "by hand, nothing in the store depends on it",
+                      job_dir, exc)
 
     def _report_terminal(self, lease, outcome: Outcome) -> None:
         extra = {}

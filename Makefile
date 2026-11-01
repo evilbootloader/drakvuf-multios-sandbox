@@ -178,7 +178,8 @@ web_vm:
 	sudo xl create $(CFG)
 
 web_sandbox:
-	ssh root@$(VMIP) bash -c 'apt update; \
+	# No `bash -c`: ssh joins its arguments, so it would run only `apt`.
+	ssh root@$(VMIP) 'apt update; \
 	apt install -y postgresql postgresql-contrib python3 python3-venv python3-pip ca-certificates curl gnupg git libmagic1t64; \
 	systemctl enable --now postgresql; \
 	pg_dropcluster --stop  17 main; \
@@ -270,47 +271,18 @@ web_sandbox:
 	mkdir /etc/sandbox_platform ; \
 	chown platform:platform /etc/sandbox_platform ; \
 	BROWSER_ORIGIN=https://$(SANDBOX_WEB) BUCKET_QUOTA=$(S3_QUOTA)GiB RETENTION_DAYS=$(S3_RETENTION) /opt/platform/src/platform/garage/provision.sh; \
-	set -a; . /etc/sandbox_platform/api.env; set +a \
-	  /opt/platform/src/platform/.venv/bin/python \
-	    /opt/platform/src/platform/garage/conformance.py \
-	      --front  https://192.168.1.10:9000 \
-	      --direct http://127.0.0.1:3900 \
-	      --origin https://$(SANDBOX_WEB); \
-	printf "%s\n" \
-	"DATABASE_URL=postgresql:///sandbox_platform" \
-	"" \
-	"# TWO endpoints, and they are not interchangeable. SigV4 signs the Host" \
-	"# header, so a URL signed for one host is rejected at the other. Dom0 reaches" \
-	"# MinIO over the LAN, browsers reach it through the tunnel." \
-	"S3_INTERNAL_ENDPOINT=https://$(VMIP):9000" \
-	"S3_PUBLIC_ENDPOINT=https://$(SANDBOX_WEB)" \
-	"S3_BUCKET=analysis" \
-	"S3_REGION=eu-central-1" \
-	"S3_CA_BUNDLE=/etc/sandbox_platform/tls/ca.crt" \
-	"JWT_SIGNING_KEY=$$(openssl rand -hex 32)" \
-	"JWT_ISSUER=sandbox.evilbootloader.com" \
-	"JWT_AUDIENCE=sandbox-platform" \
-	"ACCESS_TOKEN_TTL_MINUTES=60" \
-	"REFRESH_TOKEN_TTL_DAYS=1" \
-	"# --- login throttling ---------------------------------------------------" \
-	"# Behind cloudflared the socket peer is ALWAYS the tunnel, so without this" \
-	"# every user shares one rate-limit bucket and the per-IP limit is global." \
-	"TRUSTED_CLIENT_IP_HEADER=" \
-	"ATTEMPTS_PER_WINDOW=5" \
-	"WINDOW_LENGTH_MINUTES=5" \
-	"LOCKOUT_THRESHOLD=5" \
-	"LOCKOUT_DURATION_MINUTES=5" \
-	"DECAY_WINDOW_MINUTES=5" \
-	"# 4 x 64 MiB argon2id = 256 MiB peak on a 4096 MiB DomU. Raise only with the" \
-	"# host, and recompute the PRODUCT -- neither factor alone is the bound." \
-	"MAX_CONCURRENT_HASHES=4" \
-	"# --- self-service signup ------------------------------------------------" \
-	"# OFF unless you want it. What it gates is not \"an account\" but the opening" \
-	"# grant of 3600 analysis seconds, so an open2-__ route is free compute for anyone" \
-	"# with an email address and a Telegram account. Closed, create_user.py is the" \
-	"# only way in -- and password reset still works for accounts that exist." \
-	"CONSOLE_ENABLED=True" \
-	"REGISTRATION_OPEN=0" >> /etc/sandbox_platform/api.env;
+	'
+	# The rest of api.env, rendered here from this checkout -- not from the DomU's
+	# clone, which is whatever GitHub had -- and appended to the two S3 lines
+	# provision.sh just wrote. provision.sh truncates the file first, so a re-run
+	# does not duplicate it. Mode 600 BEFORE the signing key is in it.
+	sed -e 's|@VMIP@|$(VMIP)|g' -e 's|@SANDBOX_WEB@|$(SANDBOX_WEB)|g' \
+	    -e 's|@RETENTION_DAYS@|$(S3_RETENTION)|g' \
+	    -e 's|@ANALYSIS_USERNAME@|$(ANALYSIS_VM_USER)|g' \
+	    -e "s|@JWT_SIGNING_KEY@|$$(openssl rand -hex 32)|" \
+	    $(REPO_ROOT)/automation/api.env.example \
+	  | ssh root@$(VMIP) 'chmod 600 /etc/sandbox_platform/api.env && cat >> /etc/sandbox_platform/api.env'
+	ssh root@$(VMIP) 'grep -n "@[A-Z_]*@" /etc/sandbox_platform/api.env && echo "api.env: unrendered placeholder"; \
 	chmod 600 /etc/sandbox_platform/api.env; \
 	chown platform:platform /etc/sandbox_platform/api.env; \
 	su - platform -s /bin/bash -c "export CA_ALLOW_HERE=1; /opt/platform/src/tls/issue-cert.sh init; /opt/platform/src/tls/issue-cert.sh server sandbox_web 127.0.0.1 $(SANDBOX_WEB) $(VMIP); /opt/platform/src/tls/issue-cert.sh server s3bucket_web 127.0.0.1 $(SANDBOX_WEB) $(VMIP); /opt/platform/src/tls/issue-cert.sh server dom0-lab 127.0.0.1 $(SANDBOXDIP)"; \
@@ -356,6 +328,17 @@ web_sandbox:
 	/etc/nginx/conf.d/objects.conf; \
 	sed -i "s/192.168.1.10/$(VMIP)/g" /etc/nginx/conf.d/objects.conf ; \
 	systemctl reload nginx && systemctl restart nginx; \
+	# The store's conformance, now the TLS front exists to test. It ran before
+	# nginx was installed, against a hard-coded .10, and a missing `;` after
+	# `set +a` meant it never ran at all. --ca because its default path is
+	# /etc/sandbox-platform, with a hyphen.
+	set -a; . /etc/sandbox_platform/api.env; set +a; \
+	/opt/platform/src/platform/.venv/bin/python \
+	  /opt/platform/src/platform/garage/conformance.py \
+	    --front  https://$(VMIP):9000 \
+	    --direct http://127.0.0.1:3900 \
+	    --origin https://$(SANDBOX_WEB) \
+	    --ca /etc/sandbox_platform/tls/ca.crt; \
 	cd /opt/platform/src/platform; \
 	sudo -u platform DATABASE_URL=postgresql:///sandbox_platform \
 	 .venv/bin/python create_worker.py dom0-1; \
@@ -421,16 +404,20 @@ sandboxd:
 	cd $(REPO_ROOT); \
 	python3 -m venv .venv-sandboxd; \
 	.venv-sandboxd/bin/pip install -r sandboxd/requirements.txt; \
-	printf "%s\n" \
-	"SANDBOXD_API=https://$(VMIP):8000" \
-	"SANDBOXD_CACERT=/etc/sandboxd/tls/ca.crt" \
-	"SANDBOXD_CLIENT_CERT=/etc/sandboxd/tls/dom0-lab.crt" \
-	"SANDBOXD_CLIENT_KEY=/etc/sandboxd/tls/dom0-lab.key" \
-	"SANDBOXD_MAX_CLONES=3" \
-	"SANDBOXD_TOTAL_MIB=$$(( $$(xl info | grep free_mem | cut -d':' -f2) - 2000 ))" \
-	"SANDBOXD_CONSOLE_API=https://$(VMIP):8000" \
-	"SANDBOXD_CONSOLE_ENABLED=1" \
-	"$$(ssh 192.168.1.12 'sudo -u platform DATABASE_URL=postgresql:///sandbox_platform /opt/platform/src/platform/.venv/bin/python /opt/platform/src/platform/create_worker.py dom0-1 --rotate;' | grep -Eo "WORKER_TOKEN.*")">> /etc/sandboxd/sandboxd.env; \
+	# sandboxd's environment, from automation/sandboxd.env.example. REPLACED, not
+	# appended to: `>>` added a second copy of every line on each re-run. The
+	# token is this host's own, rotated on the platform; written under umask 077
+	# so it is never readable by anyone else, even for a moment.
+	TOKEN=$$(ssh $(VMIP) 'sudo -u platform DATABASE_URL=postgresql:///sandbox_platform /opt/platform/src/platform/.venv/bin/python /opt/platform/src/platform/create_worker.py dom0-1 --rotate;' | grep -Eo 'WORKER_TOKEN=.*' | cut -d= -f2-); \
+	test -n "$$TOKEN"; \
+	TOTAL_MIB=$$(( $$(xl info | grep free_mem | cut -d':' -f2) - 2000 )); \
+	(umask 077; sed -e 's|@VMIP@|$(VMIP)|g' -e "s|@TOTAL_MIB@|$$TOTAL_MIB|" -e "s|@WORKER_TOKEN@|$$TOKEN|" \
+		$(REPO_ROOT)/automation/sandboxd.env.example > /etc/sandboxd/sandboxd.env.new); \
+	if grep -n '@[A-Z_]*@' /etc/sandboxd/sandboxd.env.new; then \
+		echo 'sandboxd.env: unrendered placeholder' >&2; exit 1; \
+	fi; \
+	install -m 600 /etc/sandboxd/sandboxd.env.new /etc/sandboxd/sandboxd.env; \
+	rm -f /etc/sandboxd/sandboxd.env.new; \
 	sed -i 's|/root/drakvuf-multios-sandbox|$(REPO_ROOT)|g' $(REPO_ROOT)/sandboxd/config.py; \
 	sed -i 's/ANALYSIS_USERNAME =.*/ANALYSIS_USERNAME = "$(ANALYSIS_VM_USER)"/g' $(REPO_ROOT)/sandboxd/config.py; \
 	sudo lvcreate --type thin-pool -l 90%FREE --poolmetadatasize 16G -n thinpool vg-root

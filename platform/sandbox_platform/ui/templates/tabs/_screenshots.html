@@ -1,0 +1,113 @@
+{#
+  The filmstrip (DRAFT-054): the guest's screen every couple of seconds,
+  captured from Dom0 by sandboxd/screenshots.py. A large frame with play and
+  step controls, and the whole run as a scrolling line of thumbnails under it.
+
+  **Frames are images here, and only here.** Every other artifact leaves this
+  platform wrapped in a ZIP; an <img> cannot load one, so frames are served by
+  /api/v1/jobs/<id>/screenshot, which refuses anything but a manifest-declared
+  `screenshots/NNN.png` that really is a PNG (routers/jobs.py). The per-frame
+  "download" is still the wrapped artifact.zip.
+
+  Works without filmstrip.js: the large frame and every thumbnail are links to
+  the image. The script adds selection and playback, and its buttons are drawn
+  only once it has loaded (`.has-filmstrip`), because a control that does
+  nothing reads as a fault.
+
+  Everything rendered here is built by this platform -- frame names are
+  `screenshots/<digits>.png` or they are not frames -- except the index's
+  `status_reason`, which a worker wrote and which may quote what QEMU sent.
+  Autoescaped like everything else, and never marked safe.
+#}
+{% if job.artifacts_expired %}
+<div class="empty">
+  <strong>Screenshots have expired.</strong>
+  Objects are removed after the store's retention window, frames with them.
+</div>
+{% elif not strip or not strip.frames %}
+<div class="empty">
+  {% if job.state.value == 'completed' and not job.manifest %}
+    <strong>No manifest was recorded for this run.</strong>
+    Nothing wrote down what it produced, so there are no frames to show.
+  {% elif strip and strip.index and strip.index.status == 'failed' %}
+    <strong>No screenshots were taken.</strong>
+    {{ strip.index.status_reason }}
+  {% elif strip and strip.error %}
+    <strong>The screenshot index could not be read.</strong> {{ strip.error }}
+  {% elif job.state.value == 'completed' %}
+    <strong>This run has no screenshots.</strong>
+    Its analysis host predates them, or has them switched off
+    (<code>SANDBOXD_SCREENSHOTS_ENABLED</code>).
+  {% elif job.state.value in terminal_states %}
+    <strong>This run ended without uploading its results</strong>, so there
+    are no frames to show.
+  {% else %}
+    <strong>Not collected yet.</strong> Frames are taken from the moment the
+    clone exists and upload with the rest of the run when it completes.
+  {% endif %}
+</div>
+{% else %}
+{% set first = strip.frames[0] %}
+{% set last = strip.frames[-1] %}
+{% set step = "%g" | format(strip.interval) %}
+{% if strip.index and strip.index.status == 'partial' %}
+<p class="note"><strong>Partial strip.</strong> {{ strip.index.status_reason }}</p>
+{% endif %}
+{% if strip.error %}
+<p class="note">Timing unavailable — {{ strip.error }} Frames are numbered by
+  tick and played at {{ step }} s each.</p>
+{% elif not strip.timed %}
+<p class="note">This run uploaded no screenshot index, so frames are numbered
+  by tick rather than timed, and played at {{ step }} s each.</p>
+{% endif %}
+
+<section class="block filmstrip" data-filmstrip
+         data-interval-ms="{{ (strip.interval * 1000) | int }}">
+<header class="block-head">
+  <h2>Screenshots <span class="count">{{ strip.frames | length }}</span></h2>
+  <span class="summary">one every {{ step }} s{% if strip.index and strip.index.missed %} ·
+    {{ strip.index.missed }} tick{{ 's' if strip.index.missed != 1 }} without a frame{% endif %}</span>
+</header>
+
+<figure class="filmstrip-stage">
+  <a href="{{ first.src }}" target="_blank" rel="noopener nofollow" data-filmstrip-open>
+    <img src="{{ first.src }}" alt="The guest's screen at {{ first.label }}" data-filmstrip-main>
+  </a>
+  <figcaption class="filmstrip-controls">
+    <button type="button" class="filmstrip-js" data-filmstrip-action="prev"
+            aria-label="Previous frame">‹</button>
+    <button type="button" class="filmstrip-js" data-filmstrip-action="play"
+            aria-pressed="false">Play</button>
+    <button type="button" class="filmstrip-js" data-filmstrip-action="next"
+            aria-label="Next frame">›</button>
+    <span class="mono filmstrip-clock" data-filmstrip-clock>{{ first.label }}</span>
+    <span class="mono dim">/ {{ last.label }}</span>
+    <span class="chip" data-filmstrip-mark{% if not first.mark %} hidden{% endif %}>{{ first.mark }}</span>
+    <a class="filmstrip-download" href="{{ first.download }}" rel="noopener nofollow"
+       data-filmstrip-download>download this frame</a>
+  </figcaption>
+</figure>
+
+<ol class="filmstrip-strip" data-filmstrip-strip>
+{% for f in strip.frames %}
+  <li>
+    <a class="filmstrip-thumb" href="{{ f.src }}" target="_blank" rel="noopener nofollow"
+       data-filmstrip-frame data-tick="{{ f.tick }}" data-src="{{ f.src }}"
+       data-download="{{ f.download }}" data-label="{{ f.label }}" data-mark="{{ f.mark }}"
+       {%- if f.mark %} data-marked{% endif %}
+       {%- if loop.first %} aria-current="true"{% endif %}>
+      <img src="{{ f.src }}" loading="lazy" decoding="async" alt="">
+      <span class="mono">{{ f.label }}{% if f.mark %} · {{ f.mark }}{% endif %}</span>
+    </a>
+  </li>
+{% endfor %}
+</ol>
+</section>
+
+<p class="dim small">
+  Frames are shown here as images. Downloaded — one at a time above, or with
+  everything else from the Artifacts tab — they arrive as a ZIP with the
+  password <code>infected</code>, like every artifact. A frame can carry what
+  the sample put on screen, a ransom note's victim identifier included.
+</p>
+{% endif %}

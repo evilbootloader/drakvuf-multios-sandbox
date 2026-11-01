@@ -167,7 +167,10 @@ results/<job_id>/
   extracted/…          files the SAMPLE wrote (-D), raw    prefix, untrusted names
                        -- present only when nothing
                        packed it
-  screenshots/…        DRAFT-054                           prefix
+  screenshots/NNN.png  the guest's screen, one PNG per 2 s   prefix -- frames
+                       tick, named by tick (DRAFT-054)     only, and uploaded LAST
+  screenshots.json     when each frame was taken, which    reserved; a capability
+                       ticks have none and why             document (§4.3)
 ```
 
 **`trace.log` is written and then replaced.** `stages._trace` writes
@@ -234,6 +237,23 @@ names are untrusted input on the same footing as a submitted filename, and
 the guest's own path for each file (`guest_path`, `guest_basename`) as data
 for display, never as a path to open.
 
+**`screenshots/` holds frames and nothing else, named by TICK** (DRAFT-054,
+`sandboxd/screenshots.py`, `docs/architecture/screenshots.md`). `NNN.png` is
+the frame due at `NNN × interval` seconds after capture began, so a tick that
+produced no frame is a missing number, never a renumbering, and elapsed time
+is exact for every frame that exists. Readers sort by the number, not the
+string. `screenshots.json` is the index: a capability envelope
+(`sandbox.screenshots/1`) whose `status` says whether the strip is complete,
+was cut short by a cap, or could not be taken at all, and whose `data` carries
+the interval, each frame's real capture offset and duration, the missed ticks
+with their reasons, and when the trace started and ended. It is the first
+document `sandboxd` names in the manifest's `documents`.
+
+**Frames upload after every other artifact.** Sorted by path alone,
+`screenshots/` would come before `syscall.log.gz`, `trace.stderr` and
+`ttps.json`, so the artifact cap or an exhausted collection budget would have
+kept frames and dropped the trace. `stages._collect` orders them last.
+
 **`capture.pcap` may legitimately be zero bytes.** A sample that made no
 network traffic is a real result, and #37's upload policy starts its
 `content-length-range` at 0 rather than 1 for exactly this reason. Recorded so
@@ -242,8 +262,9 @@ that the next reader does not "fix" it back.
 ### 4.2 The manifest
 
 One committed row, `jobs.manifest`, written once at `/complete`. Bounded by
-construction: at most 512 artifacts, `notes` at 4096 characters, unknown
-fields refused.
+construction: at most 1024 artifacts (`manifest.MAX_ARTIFACTS`; `sandboxd`'s
+`stages.MAX_ARTIFACTS` must not exceed it, and until 2026-10-30 was 2048),
+`notes` at 4096 characters, unknown fields refused.
 
 Each artifact is an **entry**, not a bare name — `name`, `size_bytes`,
 `sha256`. The worker knows all three at the moment it declares them, having

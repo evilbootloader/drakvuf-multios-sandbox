@@ -8,6 +8,7 @@ because that is what the server enforces and what the C watcher got wrong.
 from __future__ import annotations
 
 import hashlib
+import json
 import sys
 import zipfile
 from dataclasses import dataclass, field
@@ -51,6 +52,9 @@ class FakeLease:
     plugins: list[str] = field(default_factory=lambda: ["syscalls", "filetracer", "fileextractor", "memdump"])
     timeout: int = 120
     disable_sysret: bool = False
+    drop_location: str | None = None
+    drop_subdir: str | None = None
+    arguments: str | None = None
 
 
 @dataclass
@@ -161,10 +165,15 @@ def config(tmp_path) -> S.Config:
     # Zero waits: these are configuration for exactly this reason. With the
     # measured defaults the suite spends 5s per test asleep, which is the
     # argument timing.Waits already makes.
+    # Screenshots OFF here although they are on in production: a capture adds
+    # an `xenstore-read` to every run's call log, and the tests below that are
+    # about something else count and order those calls. The screenshot tests
+    # turn it on and say so.
     return S.Config(staging_dir=tmp_path / "staging",
                     results_dir=tmp_path / "results",
                     config_dir=tmp_path / "cfg", repo_root=repo,
-                    waits=T.Waits(settle=0.0, apk_component_timeout=0.0, apk_component_poll=0.0))
+                    waits=T.Waits(settle=0.0, apk_component_timeout=0.0, apk_component_poll=0.0),
+                    screenshots_enabled=False)
 
 
 def runner_ready(clone="ubuntu_sandbox-3-clone", origin="ubuntu_sandbox"):
@@ -177,9 +186,12 @@ def runner_ready(clone="ubuntu_sandbox-3-clone", origin="ubuntu_sandbox"):
 
 
 def run(tmp_path, *, api=None, runner=None, lease=None, vlan=3, plugins=None,
-        console_enabled=False):
+        console_enabled=False, keep_results=False):
     cfg = config(tmp_path)
     cfg.plugins = plugins
+    # Off as in production: a completed run deletes its results directory.
+    # A test that reads that directory after `run()` returns says so.
+    cfg.keep_results = keep_results
     # Off by default here as it is in production, so a test that cares about
     # the console has to say so -- and every other test runs the shape a real
     # Dom0 runs, with no relay socket dialled.
@@ -339,7 +351,7 @@ def test_both_plugin_output_directories_exist_before_drakvuf_runs(tmp_path):
     loss of evidence, which is the worst way for a sandbox to fail.
     """
     r = runner_ready()
-    run(tmp_path, runner=r)
+    run(tmp_path, runner=r, keep_results=True)
 
     drakvuf = [c for c in r.calls if c.argv[0] == "drakvuf"][0]
     dump = Path(drakvuf.argv[drakvuf.argv.index("-D") + 1])
@@ -962,6 +974,262 @@ def test_the_console_is_not_dialled_when_disabled_on_this_host(tmp_path):
     assert not r.ran(("xenstore-read",))
 
 
+# --- the domain is destroyed before collection (2026-10-30) -----------------
+
+class RecordingApi(FakeApi):
+    """Notes how many Dom0 commands had run when each state was reported, so a
+    test can place a state among the runner's calls."""
+
+    def __init__(self, runner, **kw):
+        super().__init__(**kw)
+        self._runner = runner
+        self.calls_at: dict[str, int] = {}
+
+    def report_state(self, job_id, state, **extra):
+        self.calls_at.setdefault(state, len(self._runner.calls))
+        super().report_state(job_id, state, **extra)
+
+
+def destroys(r) -> list[int]:
+    return [i for i, c in enumerate(r.calls) if c.argv[:2] == ("xl", "destroy")]
+
+
+def test_the_domain_is_destroyed_before_collecting(tmp_path):
+    """**Nothing in collection needs a live guest**, and a guest left running
+    meant a console could type into it while its artifacts were pulled -- the
+    KNOWN GAP routers/console.py carried. So the clone goes before
+    `collecting` is even reported."""
+    r = runner_ready()
+    api = RecordingApi(r)
+    outcome, _ = run(tmp_path, runner=r, api=api)
+
+    assert outcome.state == "completed"
+    assert len(destroys(r)) == 1, "destroyed exactly once"
+    assert destroys(r)[0] < api.calls_at["collecting"], (
+        "the clone was still running when collection began")
+
+
+def test_the_sample_is_still_staged_for_postprocessing(tmp_path, monkeypatch):
+    """`yara_analysis` scans the staged sample, so it outlives the domain and
+    goes only once collection is done."""
+    seen = {}
+
+    def postprocess(job_dir, cfg, os_, vlan):
+        seen["sample"] = (tmp_path / "staging" / FakeLease().job_id
+                          / FakeLease().submitted_filename).exists()
+
+    monkeypatch.setattr(S, "postprocess_analysis_dir", postprocess)
+    run(tmp_path)
+
+    assert seen["sample"] is True, "the sample was removed before postprocessing"
+    assert not (tmp_path / "staging" / FakeLease().job_id).exists()
+
+
+def test_a_failed_run_destroys_its_clone_exactly_once(tmp_path):
+    r = runner_ready()
+    r.script(("injector",), rc=1, stderr="injection failed")
+    outcome, _ = run(tmp_path, runner=r)
+
+    assert outcome.state == "failed"
+    assert len(destroys(r)) == 1
+
+
+def test_a_dirty_destroy_still_collects_and_reports_dirty(tmp_path):
+    """The trace is the result. A domain that would not go is recorded -- and
+    withholds its VLAN in `daemon._work` -- but does not throw the run away."""
+    r = runner_ready()
+    r.script(("lvremove",), rc=5, stderr="Logical volume in use")
+    outcome, api = run(tmp_path, runner=r)
+
+    assert outcome.state == "completed"
+    assert api.completed, "the artifacts were not published"
+    assert outcome.cleanup_status == "dirty: lvremove"
+
+
+# --- screenshots (DRAFT-054) ------------------------------------------------
+
+class FakeCapture:
+    """Stands in for `screenshots.Capture`; records against the runner's
+    call log so its start and stop can be placed among the Dom0 commands."""
+
+    events: list = []
+    runner = None
+
+    def __init__(self, job_id, job_dir, **kw):
+        self.kw = kw
+        FakeCapture.events.append(("init", len(self.runner.calls)))
+
+    def start(self, port):
+        FakeCapture.events.append(("start", port))
+
+    def unavailable(self, reason):
+        FakeCapture.events.append(("unavailable", reason))
+
+    def mark(self, name):
+        FakeCapture.events.append(("mark", name))
+
+    def stop(self):
+        FakeCapture.events.append(("stop", len(self.runner.calls)))
+
+
+@pytest.fixture
+def fake_capture(monkeypatch):
+    FakeCapture.events = []
+    monkeypatch.setattr(S.screenshots, "Capture", FakeCapture)
+    return FakeCapture
+
+
+def run_with_screens(tmp_path, r, **kw):
+    cfg = config(tmp_path)
+    cfg.screenshots_enabled = True
+    cfg.keep_results = kw.pop("keep_results", False)
+    cfg.config_dir.mkdir(parents=True, exist_ok=True)
+    api = kw.pop("api", None) or FakeApi()
+    return S.Analysis(api, r, cfg).run(FakeLease(), 3), api
+
+
+def test_screenshots_start_with_the_clone_and_stop_before_it_goes(
+        tmp_path, fake_capture):
+    """Started as soon as the domain exists -- a guest that never reached the
+    sample is the most useful thing a filmstrip can show -- and stopped before
+    the domain is destroyed AND before collection, which declares file sizes a
+    frame still being written would break."""
+    r = runner_ready()
+    r.script(("xenstore-read",), stdout="5903\n")
+    fake_capture.runner = r
+    api = RecordingApi(r)
+    outcome, _ = run_with_screens(tmp_path, r, api=api)
+
+    assert outcome.state == "completed"
+    assert ("start", 5903) in fake_capture.events
+    names = [c.argv[0] for c in r.calls]
+    assert names.index("xenstore-read") < names.index("injector"), \
+        "capture began after preconfig had started"
+
+    stops = [n for kind, n in fake_capture.events if kind == "stop"]
+    assert stops, "capture was never stopped"
+    assert stops[0] <= destroys(r)[0], "capture outlived its domain"
+    assert stops[0] <= api.calls_at["collecting"]
+
+
+def test_the_trace_is_marked_in_the_filmstrip(tmp_path, fake_capture):
+    r = runner_ready()
+    r.script(("xenstore-read",), stdout="5903\n")
+    fake_capture.runner = r
+    run_with_screens(tmp_path, r)
+
+    marks = [v for kind, v in fake_capture.events if kind == "mark"]
+    assert marks == ["trace_start", "trace_end"]
+
+
+def test_no_console_port_means_no_frames_not_a_failed_job(tmp_path,
+                                                          fake_capture):
+    r = runner_ready()
+    r.script(("xenstore-read",), rc=1)
+    r.script(("xl", "list", "-l"), rc=1)
+    fake_capture.runner = r
+    outcome, api = run_with_screens(tmp_path, r)
+
+    assert outcome.state == "completed"
+    assert any(kind == "unavailable" for kind, _ in fake_capture.events)
+    assert any(kind == "stop" for kind, _ in fake_capture.events), \
+        "an unavailable capture still writes its index at stop"
+
+
+def test_screenshots_are_not_taken_when_disabled_on_this_host(tmp_path,
+                                                             fake_capture):
+    r = runner_ready()
+    fake_capture.runner = r
+    run(tmp_path, runner=r)
+
+    assert fake_capture.events == []
+    assert not r.ran(("xenstore-read",))
+
+
+def test_frames_upload_after_every_other_artifact(tmp_path):
+    """Sorted by path alone, `screenshots/` comes before `syscall.log.gz`,
+    `trace.stderr` and `ttps.json`, so a truncated or out-of-budget upload
+    would keep frames and drop the trace."""
+    job_dir = tmp_path / "results" / "job"
+    (job_dir / "screenshots").mkdir(parents=True)
+    for name in ("screenshots/000.png", "screenshots/001.png",
+                 "screenshots.json", "syscall.log.gz", "trace.stderr",
+                 "ttps.json", "capture.pcap"):
+        (job_dir / name).write_bytes(b"x")
+
+    api = FakeApi()
+    S.Analysis(api, runner_ready(), config(tmp_path))._collect(FakeLease(),
+                                                               job_dir)
+
+    assert api.uploaded == ["capture.pcap", "screenshots.json",
+                            "syscall.log.gz", "trace.stderr", "ttps.json",
+                            "screenshots/000.png", "screenshots/001.png"]
+
+
+def test_the_cap_drops_frames_before_the_trace(tmp_path):
+    job_dir = tmp_path / "results" / "job"
+    (job_dir / "screenshots").mkdir(parents=True)
+    for i in range(S.MAX_ARTIFACTS):
+        (job_dir / "screenshots" / f"{i:04d}.png").write_bytes(b"x")
+    for name in ("syscall.log.gz", "trace.stderr"):
+        (job_dir / name).write_bytes(b"x")
+
+    api = FakeApi()
+    outcome = S.Analysis(api, runner_ready(), config(tmp_path))._collect(
+        FakeLease(), job_dir)
+
+    assert outcome.manifest["truncated"] is True
+    assert {"syscall.log.gz", "trace.stderr"} <= set(api.uploaded)
+
+
+def test_the_index_is_declared_as_a_document(tmp_path):
+    """result-schema.md §4.2: a capability document is named in `documents`
+    and must also be among the uploaded artifacts."""
+    job_dir = tmp_path / "results" / "job"
+    job_dir.mkdir(parents=True)
+    (job_dir / "screenshots.json").write_text("{}")
+
+    analysis = S.Analysis(FakeApi(), runner_ready(), config(tmp_path))
+    outcome = analysis._collect(FakeLease(), job_dir)
+    assert outcome.manifest["documents"] == ["screenshots.json"]
+
+    other = tmp_path / "results" / "other"
+    other.mkdir()
+    (other / "trace.stderr").write_text("")
+    outcome = analysis._collect(FakeLease(), other)
+    assert outcome.manifest["documents"] == []
+
+
+def test_the_artifact_cap_never_exceeds_the_platforms():
+    """sandboxd's cap was 2048 against the platform's 1024 until 2026-10-30,
+    and a run in between got a 422 at /complete that stranded it in
+    `cleaning`."""
+    sys.path.insert(0, str(ROOT / "platform"))
+    import os
+    os.environ.setdefault("DATABASE_URL", "postgresql:///unused")
+    from sandbox_platform import manifest
+
+    assert S.MAX_ARTIFACTS <= manifest.MAX_ARTIFACTS
+
+
+def test_a_real_capture_runs_beside_a_run_and_writes_its_index(tmp_path):
+    """No fake Capture: the real one, with no console to read, still ends in a
+    `failed` index that uploads and is declared -- the report can then say why
+    there are no frames."""
+    r = runner_ready()
+    r.script(("xenstore-read",), rc=1)
+    r.script(("xl", "list", "-l"), rc=1)
+    outcome, api = run_with_screens(tmp_path, r, keep_results=True)
+
+    assert outcome.state == "completed"
+    manifest = api.completed[0]
+    assert "screenshots.json" in manifest["documents"]
+    index = json.loads((tmp_path / "results" / FakeLease().job_id
+                        / "screenshots.json").read_text())
+    assert index["status"] == "failed"
+    assert "VNC port" in index["status_reason"]
+
+
 # --- artifact tickets are batched to the server's cap -----------------------
 
 def test_tickets_are_requested_in_batches_the_server_will_accept(tmp_path):
@@ -1008,11 +1276,11 @@ def test_a_small_run_still_costs_one_ticket_call(tmp_path):
     assert len(api.ticket_batches) == 1
 
 
-def test_the_512_cap_does_not_cut_the_upload_loop_short(tmp_path):
+def test_the_artifact_cap_does_not_cut_the_upload_loop_short(tmp_path):
     """`truncated` is already True from MAX_ARTIFACTS on a run this size.
     Testing that flag to decide whether to stop uploading -- which an earlier
-    draft of this fix did -- would have sent 64 of 512 and called the rest
-    truncated."""
+    draft of this fix did -- would have sent 64 of MAX_ARTIFACTS and called the
+    rest truncated."""
     job_dir = tmp_path / "results" / "job"
     job_dir.mkdir(parents=True)
     for i in range(S.MAX_ARTIFACTS + 10):
@@ -1126,3 +1394,166 @@ def test_a_healthy_dependency_applies_the_mode_that_was_asked_for(tmp_path,
 
     assert applied["mode"] == "tor"
     assert "reason" not in applied
+
+
+# --- drop location, subfolder and command line (2026-11-01) -----------------
+
+def _launch_run(tmp_path, lease, runner=None, cfg=None, **waits):
+    cfg = cfg or config(tmp_path)
+    cfg.config_dir.mkdir(parents=True, exist_ok=True)
+    cfg.waits = T.Waits(settle=0.0, apk_component_timeout=0.0,
+                        apk_component_poll=0.0, drop_dir_poll=0.0, **waits)
+    api = FakeApi()
+    r = runner or runner_ready()
+    return S.Analysis(api, r, cfg).run(lease, 3), api, r, cfg
+
+
+def _injector(cfg, method: str) -> tuple[str, ...]:
+    return ("injector", "-r", str(cfg.profile(TargetOs.UBUNTU)), "-d", "42",
+            "-i", str(cfg.injection_pids[TargetOs.UBUNTU]), "-m", method)
+
+
+def test_a_location_the_guest_cannot_honour_fails_before_any_clone(tmp_path):
+    outcome, api, r, _ = _launch_run(tmp_path, FakeLease(drop_location="appdata"))
+
+    assert outcome.state == "failed"
+    assert "not offered on ubuntu" in outcome.failure_reason
+    assert not r.ran(("lvcreate",)) and not r.ran(("xl", "restore"))
+
+
+def test_a_job_without_a_subfolder_makes_none(tmp_path):
+    """Every job that chose nothing keeps today's preconfig: one writefile."""
+    outcome, _, r, cfg = _launch_run(tmp_path, FakeLease())
+    assert outcome.state == "completed"
+    assert not any("/usr/bin/mkdir" in a for a in r.argvs())
+    assert len(r.find(_injector(cfg, "writefile"))) == 1
+
+
+def test_a_subfolder_is_made_and_the_write_retried_until_it_lands(tmp_path):
+    """`mkdir` is asynchronous, so the first write may find no folder yet."""
+    cfg = config(tmp_path)
+    r = runner_ready().script(_injector(cfg, "writefile"), rc=1, times=1,
+                              stderr="syscall return code: -2")
+    outcome, _, r, cfg = _launch_run(
+        tmp_path, FakeLease(drop_location="temp", drop_subdir="a b/c"), r, cfg)
+
+    assert outcome.state == "completed", outcome.failure_reason
+    mkdir = r.order_of(_injector(cfg, "execproc") + ("-e", "/usr/bin/mkdir"))
+    writes = [i for i, a in enumerate(r.argvs())
+              if a[:len(_injector(cfg, "writefile"))] == _injector(cfg, "writefile")]
+    assert mkdir is not None and len(writes) == 2 and mkdir < writes[0]
+    assert r.argvs()[mkdir][-1] == "/tmp/a b/c"
+    assert r.argvs()[writes[1]][-1] == "/tmp/a b/c/sample.bin"
+
+
+def test_a_write_that_never_lands_fails_as_the_writefile(tmp_path):
+    cfg = config(tmp_path)
+    r = runner_ready().script(_injector(cfg, "writefile"), rc=1,
+                              stderr="syscall return code: -2")
+    outcome, *_ = _launch_run(tmp_path, FakeLease(drop_subdir="x"), r, cfg,
+                              drop_dir_timeout=0.0)
+
+    assert outcome.state == "failed"
+    assert outcome.failure_stage == "injector writefile"
+
+
+def test_the_command_line_reaches_the_trace_as_argv_words(tmp_path):
+    outcome, _, r, _ = _launch_run(tmp_path, FakeLease(arguments="--x 'y z'"))
+
+    assert outcome.state == "completed"
+    drakvuf = next(a for a in r.argvs() if a[0] == "drakvuf")
+    i = drakvuf.index("sh")
+    assert drakvuf[i + 3:i + 7] == ("-f", "--x", "-f", "y z")
+
+
+
+# --- the results directory goes once the store holds it (2026-11-01) -------
+
+class _WatchingApi(FakeApi):
+    """Records whether the results directory still existed when `/complete`
+    was called, and can refuse the call the way the real `_post` does."""
+
+    def __init__(self, job_dir, refuse=False):
+        super().__init__()
+        self.job_dir = job_dir
+        self.refuse = refuse
+        self.existed_at_complete = None
+
+    def complete(self, job_id, manifest):
+        self.existed_at_complete = self.job_dir.is_dir()
+        if self.refuse:
+            raise A.ProtocolError("/complete refused with 409: not cleaning")
+        super().complete(job_id, manifest)
+
+
+def _job_dir(tmp_path):
+    return tmp_path / "results" / FakeLease().job_id
+
+
+def test_a_completed_run_deletes_its_results_after_complete_returns(tmp_path):
+    api = _WatchingApi(_job_dir(tmp_path))
+    outcome, _ = run(tmp_path, api=api)
+
+    assert outcome.state == "completed"
+    assert api.existed_at_complete is True, "deleted before the upload was accepted"
+    assert not _job_dir(tmp_path).exists()
+
+
+def test_a_refused_complete_keeps_the_results(tmp_path):
+    """`/complete` is what commits the manifest. Refused, nothing in the store
+    is served as this run's result, so the Dom0 copy is all there is."""
+    api = _WatchingApi(_job_dir(tmp_path), refuse=True)
+    with pytest.raises(A.ProtocolError):
+        run(tmp_path, api=api)
+
+    assert _job_dir(tmp_path).is_dir()
+
+
+def test_a_failed_run_keeps_its_results(tmp_path):
+    r = runner_ready().script(("injector",), rc=1, stderr="injection failed")
+    outcome, _ = run(tmp_path, runner=r)
+
+    assert outcome.state == "failed"
+    assert _job_dir(tmp_path).is_dir()
+
+
+def test_a_truncated_upload_keeps_its_results(tmp_path, monkeypatch):
+    """Past the cap, files were never sent: Dom0 has the only copy."""
+    monkeypatch.setattr(S, "MAX_ARTIFACTS", 1)
+    outcome, api = run(tmp_path)
+
+    assert api.completed[0]["truncated"] is True
+    assert _job_dir(tmp_path).is_dir()
+
+
+def test_a_trace_log_that_survived_its_split_keeps_its_results(tmp_path, monkeypatch):
+    """`trace.log` never uploads; one still present means the split failed
+    and it may be the only whole copy of the trace."""
+    monkeypatch.setattr(S, "postprocess_analysis_dir",
+                        lambda job_dir, *a: (job_dir / S.TRACE_LOG).write_text("{}\n"))
+    outcome, _ = run(tmp_path)
+
+    assert outcome.state == "completed"
+    assert (_job_dir(tmp_path) / S.TRACE_LOG).exists()
+
+
+def test_keep_results_keeps_a_completed_run(tmp_path):
+    outcome, _ = run(tmp_path, keep_results=True)
+    assert outcome.state == "completed"
+    assert _job_dir(tmp_path).is_dir()
+
+
+def test_a_delete_that_fails_does_not_fail_the_run(tmp_path, monkeypatch, caplog):
+    real = S.shutil.rmtree
+
+    def refuse(path, *a, **kw):
+        if Path(path) == _job_dir(tmp_path):
+            raise PermissionError(13, "Permission denied", str(path))
+        return real(path, *a, **kw)
+
+    monkeypatch.setattr(S.shutil, "rmtree", refuse)
+    outcome, api = run(tmp_path)
+
+    assert outcome.state == "completed"
+    assert api.completed
+    assert "could not remove" in caplog.text

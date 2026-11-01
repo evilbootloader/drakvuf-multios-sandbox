@@ -227,6 +227,10 @@ class Tab:
 
 TABS: tuple[Tab, ...] = (
     Tab("overview", "Overview"),
+    # Second, because it is often the first thing an analyst wants: an error
+    # dialog or a ransom note says in one look what a trace takes minutes to.
+    # No plugin: sandboxd reads the clone's console from Dom0 on every guest.
+    Tab("screenshots", "Screenshots", (), "DRAFT-054"),
     Tab("behaviour", "Behaviour",
         ("syscalls", "procmon", "apimon"), "DRAFT-050 + DRAFT-019"),
     # Always present: a pcap is captured on every run, outside DRAKVUF entirely
@@ -246,8 +250,9 @@ TABS: tuple[Tab, ...] = (
 # Tabs that exist for every guest, because nothing about them depends on a
 # plugin: Overview and Artifacts come from the job row and the manifest;
 # Static is driven by the uploaded bytes rather than the trace; Network rests
-# on the pcap sandboxd captures on every run, outside DRAKVUF.
-_ALWAYS = {"overview", "artifacts", "static", "network"}
+# on the pcap sandboxd captures on every run, outside DRAKVUF; Screenshots on
+# the console every guest has, read from Dom0 (DRAFT-054).
+_ALWAYS = {"overview", "screenshots", "artifacts", "static", "network"}
 
 
 def tabs_for(os_: TargetOs) -> list[Tab]:

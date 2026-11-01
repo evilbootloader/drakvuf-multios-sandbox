@@ -55,6 +55,13 @@ class Lease:
     plugins: list[str] = field(default_factory=list)
     timeout: int = 180
     disable_sysret: bool = True
+    # Where to drop the sample and what to pass it (`launch.py`). NULL on the
+    # row, None here, is "nothing chosen" -- the guest's default folder and no
+    # command line -- and travels to the worker as null rather than being
+    # resolved here: the folder a key names is the host's to decide.
+    drop_location: str | None = None
+    drop_subdir: str | None = None
+    arguments: str | None = None
 
 
 @dataclass(frozen=True)
@@ -112,7 +119,10 @@ def claim(
                 # nothing arrive as the same thing. Both mean "the defaults".
                 plugins=row["plugins"] or [],
                 timeout=row["timeout"],
-                disable_sysret=row["disable_sysret"]
+                disable_sysret=row["disable_sysret"],
+                drop_location=row["drop_location"],
+                drop_subdir=row["drop_subdir"],
+                arguments=row["arguments"],
             )
 
         # Zero rows is ambiguous -- empty queue, or head does not fit -- so

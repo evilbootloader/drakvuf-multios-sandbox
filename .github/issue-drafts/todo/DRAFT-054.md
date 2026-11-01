@@ -1,13 +1,18 @@
 # DRAFT-054: Screenshots — a filmstrip from the Xen framebuffer
 
-**Status:** Drafted 2026-08-25. Not published.
+**Status:** Drafted 2026-08-25. Not published. **Implemented 2026-10-30 —
+capture (increment 1) and the Screenshots tab (increment 2) — and tested in
+the development container; never run on Dom0 or the deployment.** Design:
+`docs/architecture/screenshots.md`. Verification: `verify-screenshots.md` at
+the repository root. Stays in `todo/` until that evidence exists.
 **Area:** enrichment
 **OS:** **ALL three.** Every guest here is a desktop: Ubuntu's golden VM stages
 to `/home/carlos/Desktop`, BlissOS is Android with a UI, and Windows is an
 HVM desktop install.
 **Milestone:** M5
 **Priority:** P2
-**Depends on:** DRAFT-060 (a place to put the capture loop).
+**Depends on:** DRAFT-060 (a place to put the capture loop) — **closed
+2026-09-04**; the loop is a thread beside the trace in `sandboxd/stages.py`.
 **Needs Dom0:** **Yes.**
 
 # Objective
@@ -84,6 +89,15 @@ a reader understands immediately.
 From Dom0, against the clone's VNC console, at a fixed interval — 2s is a
 reasonable start, and DRAFT-050's cost measurements say whether it competes
 with the trace for I/O. Frames to `results/<job_id>/screenshots/NNN.png`.
+
+> **As built (2026-10-30).** DRAFT-050 scopes per-plugin trace cost and never
+> measures capture, so the cost is measured here instead: every frame records
+> its capture time and offset in `screenshots.json`, and the runbook compares
+> traces with and without capture. The capture client is **read-only by
+> construction** (operator, 2026-10-30) — it cannot send KeyEvent,
+> PointerEvent or ClientCutText. Capture is **on by default**
+> (`SANDBOXD_SCREENSHOTS_ENABLED=0` turns it off). Frames are named by tick,
+> so a failed tick is a gap with a recorded reason.
 
 **Every frame is kept.** 180s at 2s is 90 frames; a mostly-static desktop
 compresses to well under a megabyte each, so a run costs single-digit

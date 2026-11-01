@@ -1,0 +1,71 @@
+{#
+  Where the sample is dropped, and what it is passed (sandbox_platform/launch.py).
+
+  Per guest, so it changes with the target. It sits OUTSIDE the Advanced
+  disclosure -- where a sample runs from is a choice a submitter makes on
+  purpose, not tuning -- so it cannot share the plugin list's swap target:
+  `/ui/plugins/<os>` renders this block a second time with `oob`, and htmx
+  swaps it here out of band.
+
+  The location is a select of KEYS. The paths beside them are display only,
+  built from `ANALYSIS_USERNAME`; the analysis host resolves each key with its
+  own table, so what is typed here never becomes a path. The subfolder and
+  the command line are checked again by the API and by the host.
+
+  Everything rendered is this platform's own text; nothing here is a value a
+  sample or another submitter chose.
+#}
+<div id="launch-options" class="launch" data-os="{{ os }}" data-sep="{{ launch.sep }}"
+     {%- if oob %} hx-swap-oob="true"{% endif %}>
+  <label>
+    Drop the sample in
+    <select name="drop_location" data-launch-location>
+    {% for loc in launch.locations %}
+      <option value="{{ loc.key }}" data-path="{{ loc.path }}"
+              {%- if loop.first %} selected{% endif %}>{{ loc.label }} — {{ loc.path }}</option>
+    {% endfor %}
+    </select>
+  </label>
+
+  <label>
+    Subfolder <span class="dim">— optional, created if it is not there</span>
+    <input type="text" name="drop_subdir" maxlength="{{ launch.max_subdir }}"
+           autocomplete="off" spellcheck="false" data-launch-subdir
+           placeholder="{{ launch.subdir_example }}">
+  </label>
+
+  <label>
+    Command-line arguments <span class="dim">— optional</span>
+    <input type="text" name="arguments" maxlength="{{ launch.max_arguments }}"
+           autocomplete="off" spellcheck="false" data-launch-arguments
+           placeholder="{{ launch.arguments_example }}">
+  </label>
+
+  <p class="launch-preview">
+    <span class="dim">Runs as</span>
+    <code data-launch-preview>{{ launch.locations[0].path }}{{ launch.sep }}&lt;file name&gt;</code>
+  </p>
+
+  <p class="note">
+    Subfolder names may use letters, digits, spaces and
+    <code>. _ - ( ) +</code>, with <code>{{ launch.sep }}</code> or
+    <code>/</code> between folders.
+    {% if launch.splits_arguments %}
+    Arguments are split into words the way a shell would — quotes group,
+    a backslash escapes — but nothing expands: no variables, wildcards,
+    pipes or redirection. Each word reaches the sample as its own argument.
+    {% else %}
+    Arguments follow the file name exactly as typed, and the program splits
+    them itself. One containing any of <code>{{ launch.cmd_special }}</code>
+    still reaches the sample unchanged, but the sample is then started without
+    the few seconds' delay that lets the plugins arm first, so its first
+    moments may go unrecorded.
+    {% endif %}
+    {% if os == 'android' %}
+    This guest has one drop location: its shared storage is mounted
+    <code>noexec</code>, so a sample dropped there could not run. Arguments
+    reach a native executable only — an APK is started by its launcher
+    activity, which takes none.
+    {% endif %}
+  </p>
+</div>

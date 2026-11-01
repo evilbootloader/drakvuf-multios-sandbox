@@ -620,6 +620,14 @@ label.choice > input { margin: 0; }
 label.choice .title { font-weight: 600; }
 label.choice .note { grid-column: 2; display: block; border: 0; padding: 0.15rem 0 0; max-width: none; font-size: 0.84rem; }
 
+/* Execution: where the sample is dropped and what it is passed. The fields
+ * take the form's width, because a Windows path with a subfolder is long; the
+ * preview wraps anywhere, because it is one unbroken path on a phone. */
+.launch select, .launch input[type="text"] { display: block; width: 100%; max-width: 44rem; margin-top: 0.25rem; }
+.launch input[type="text"] { font-family: var(--mono); }
+.launch-preview { margin: 0.7rem 0 0.4rem; }
+.launch-preview code { overflow-wrap: anywhere; }
+
 button {
     background: var(--bg-inset);
     color: var(--fg);
@@ -1152,3 +1160,88 @@ details.manifest { margin-top: 1.5rem; }
 .spaced { margin-bottom: 1.25rem; }
 .spaced-top { margin-top: 1rem; }
 td.nowrap { white-space: nowrap; }
+
+/* --- the Screenshots tab (DRAFT-054) ------------------------------------- */
+/*
+   A large frame over a scrolling line of thumbnails. The stage is a fixed 4:3
+   box sized by the page, not by the frame, like `.console-screen` and for the
+   same reason: the guest chooses its resolution, and a stage that resized with
+   it would move everything below under the reader's cursor. `object-fit:
+   contain` letterboxes a frame of any other shape. 4:3 because that is what
+   stdvga desktops are, and capped so the controls stay on screen.
+
+   The step and play buttons exist only once filmstrip.js has loaded and marked
+   <html>; without it every frame is still a link to its image.
+*/
+.filmstrip [hidden] { display: none; }
+.filmstrip-stage { margin: 0 0 0.75rem; }
+.filmstrip-stage > a {
+    display: block;
+    background: #000;
+    border: 1px solid var(--line);
+    border-radius: var(--radius-lg);
+    overflow: hidden;
+}
+.filmstrip-stage img {
+    display: block;
+    width: 100%;
+    height: auto;
+    aspect-ratio: 4 / 3;
+    max-height: 70vh;
+    object-fit: contain;
+    background: #000;
+}
+.filmstrip-controls {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.5rem;
+    padding-top: 0.5rem;
+}
+.filmstrip-js { display: none; }
+.has-filmstrip .filmstrip-js { display: inline-block; }
+.filmstrip-controls button { padding: 0.25rem 0.8rem; }
+.filmstrip-clock { color: var(--fg); font-size: 1rem; }
+.filmstrip-download { margin-left: auto; font-size: 0.85rem; }
+
+.filmstrip-strip {
+    list-style: none;
+    margin: 0;
+    padding: 0 0 0.5rem;
+    display: flex;
+    gap: 0.4rem;
+    overflow-x: auto;
+    scroll-snap-type: x proximity;
+}
+.filmstrip-strip li { flex: 0 0 auto; scroll-snap-align: center; }
+.filmstrip-thumb {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.15rem;
+    padding: 0.2rem;
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    color: var(--fg-muted);
+    font-size: 0.72rem;
+    text-decoration: none;
+}
+.filmstrip-thumb img {
+    display: block;
+    width: 8.5rem;
+    aspect-ratio: 4 / 3;
+    object-fit: contain;
+    background: #000;
+}
+.filmstrip-thumb:hover { border-color: var(--fg-faint); color: var(--fg); }
+/* Where the sample was launched and the trace ended: position, not danger --
+   so the border changes style, and red stays reserved. */
+.filmstrip-thumb[data-marked] { border-style: dashed; }
+/* After the mark rule, so the frame being shown is unmistakable even when it
+   is also a marked one -- and heavier than hover, which the pointer leaves
+   wherever the strip scrolled from under it. */
+.filmstrip-thumb[aria-current="true"] {
+    border-color: var(--fg);
+    outline: 1px solid var(--fg);
+    color: var(--fg);
+}

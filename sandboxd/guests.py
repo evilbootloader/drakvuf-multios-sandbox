@@ -59,6 +59,7 @@ from __future__ import annotations
 
 import logging
 import re
+import shlex
 import zipfile
 from dataclasses import dataclass, field
 from enum import Enum
@@ -462,6 +463,25 @@ def default_trace_options(os_: TargetOs, kind: SampleKind) -> TraceOptions:
 LAUNCH_DELAY = 5
 
 
+class DropLocation(str, Enum):
+    """Where a submitter may ask for the sample to be dropped (2026-11-01).
+
+    A KEY, never a path. The platform stores and sends one of these names, and
+    each guest's row in `PATHS` turns it into a directory -- so nothing a
+    submitter types becomes a guest path, there is no traversal to refuse, and
+    a location a guest does not have cannot be asked for. The platform's copy
+    of the table is `sandbox_platform/launch.py`; `test_guests.py` pins that
+    the two agree, key for key and path for path.
+    """
+
+    DESKTOP = "desktop"
+    DOWNLOADS = "downloads"
+    HOME = "home"
+    TEMP = "temp"
+    APPDATA = "appdata"
+    PROGRAMDATA = "programdata"
+
+
 @dataclass(frozen=True)
 class GuestPaths:
     """Where a sample lands inside the guest, per OS.
@@ -471,29 +491,80 @@ class GuestPaths:
     `/storage/self/primary/Download` is a noexec mount on which `chmod` is
     silently a no-op.
 
+    `staging_dir` is where a job that names no location is dropped -- what
+    every job did before locations could be chosen, so a job queued before
+    then, or an API client that never sends one, runs exactly as it did.
+    `locations` is every directory a job may choose instead, and holds
+    `staging_dir` too. **Every location but each guest's `staging_dir` is
+    Candidate** (2026-11-01): none has been written to by `writefile` on Dom0,
+    and `writefile` does not create a missing directory.
+
     `delay` is a guest command that waits `LAUNCH_DELAY` seconds and prints
     nothing, rendered here rather than templated so the row shows exactly what
     the guest runs. `None` means this guest launches its sample immediately.
+
+    `splits_arguments` says what a job's command line becomes. True: it is
+    split into words like a POSIX shell would split it -- by `shlex`, on Dom0,
+    never by a shell -- and each word reaches the sample as its own `argv`
+    element. False: the guest has no `argv` to fill, only one command line the
+    program parses itself, so the text is passed as typed.
+
+    `mkdir` makes a job's subfolder, with the path as its own argv element.
+    `None` means the guest has no such program and the shell's builtin is used
+    instead -- see `argv_make_drop_dir` for what that costs.
+
+    `sep` joins a subfolder and the sample's name onto a location.
+    `reserved_names` matches folder names the guest cannot create.
     """
 
     staging_dir: str
     shell: str
+    locations: dict[DropLocation, str] = field(default_factory=dict)
     nameserver: str = "1.1.1.1"
     delay: str | None = None
+    splits_arguments: bool = True
+    mkdir: str | None = None
+    sep: str = "/"
+    reserved_names: re.Pattern | None = None
 
+
+# Names Windows maps to devices in every directory, with any extension:
+# `mkdir "...\CON"` fails, and a sample cannot be written beneath one.
+_WINDOWS_DEVICE = re.compile(r"\A(CON|PRN|AUX|NUL|COM[0-9]|LPT[0-9])(\..*)?\Z",
+                             re.IGNORECASE)
+
+_UBUNTU_HOME = f"/home/{config.ANALYSIS_USERNAME}"
+_WINDOWS_HOME = f"C:\\Users\\{config.ANALYSIS_USERNAME}"
 
 PATHS = {
-    TargetOs.UBUNTU: GuestPaths(staging_dir=f"/home/{config.ANALYSIS_USERNAME}/Desktop",
+    # `/tmp` is not noexec on the golden image's root filesystem, and the
+    # injection anchor is PID 1, so `writefile` writes as root wherever it is
+    # pointed (CURRENT-STATE §1.4).
+    TargetOs.UBUNTU: GuestPaths(staging_dir=f"{_UBUNTU_HOME}/Desktop",
                                 shell="/usr/bin/sh",
-                                delay=f"/usr/bin/sleep {LAUNCH_DELAY}"),
+                                locations={
+                                    DropLocation.DESKTOP: f"{_UBUNTU_HOME}/Desktop",
+                                    DropLocation.DOWNLOADS: f"{_UBUNTU_HOME}/Downloads",
+                                    DropLocation.HOME: _UBUNTU_HOME,
+                                    DropLocation.TEMP: "/tmp",
+                                },
+                                delay=f"/usr/bin/sleep {LAUNCH_DELAY}",
+                                mkdir="/usr/bin/mkdir"),
     # /system/bin/sh, not /usr/bin/sh: the Ubuntu path does not exist here. No
     # sudo and no `su -c` either -- the guest is already root and ships
     # neither. All three measured by DRAFT-013.
     #
     # `sleep` is toybox, in the same directory as the shell.
+    #
+    # **One location, deliberately.** The obvious second one,
+    # `/storage/self/primary/Download`, is the noexec mount the class docstring
+    # describes: a native sample dropped there could not run, and the job would
+    # complete as a sample that did nothing.
     TargetOs.ANDROID: GuestPaths(staging_dir="/data/local/tmp",
                                  shell="/system/bin/sh",
-                                 delay=f"/system/bin/sleep {LAUNCH_DELAY}"),
+                                 locations={DropLocation.TEMP: "/data/local/tmp"},
+                                 delay=f"/system/bin/sleep {LAUNCH_DELAY}",
+                                 mkdir="/system/bin/mkdir"),
 
     # **`ping`, because `timeout` cannot be used here.** `timeout /t` reads the
     # console to watch for a keypress and aborts with "ERROR: Input redirection
@@ -514,11 +585,149 @@ PATHS = {
     # Absolute path for the same reason as the Linux rows: the injected process
     # inherits the ANCHOR's environment, and a `ping` found on PATH is a `ping`
     # that can be "not found" in a guest whose anchor has a thin one.
+    #
+    # Every location is one a standard user may create files in, so the
+    # choice moves where the sample runs from, not what it is allowed to do.
+    #
+    # `splits_arguments=False`: Windows has no argv. A process gets one command
+    # line and splits it itself (`CommandLineToArgvW`, or its own parser), so
+    # splitting it on Dom0 would only guess at what the sample does.
     TargetOs.WINDOWS: GuestPaths(
-        staging_dir=f"C:\\Users\\{config.ANALYSIS_USERNAME}\\Desktop",
+        staging_dir=f"{_WINDOWS_HOME}\\Desktop",
         shell="C:\\Windows\\System32\\cmd.exe",
-        delay=f"C:\\Windows\\System32\\PING.EXE -n {LAUNCH_DELAY} 127.0.0.1 >nul"),
+        locations={
+            DropLocation.DESKTOP: f"{_WINDOWS_HOME}\\Desktop",
+            DropLocation.DOWNLOADS: f"{_WINDOWS_HOME}\\Downloads",
+            DropLocation.HOME: _WINDOWS_HOME,
+            DropLocation.TEMP: f"{_WINDOWS_HOME}\\AppData\\Local\\Temp",
+            DropLocation.APPDATA: f"{_WINDOWS_HOME}\\AppData\\Roaming",
+            DropLocation.PROGRAMDATA: "C:\\ProgramData",
+        },
+        delay=f"C:\\Windows\\System32\\PING.EXE -n {LAUNCH_DELAY} 127.0.0.1 >nul",
+        splits_arguments=False,
+        sep="\\",
+        reserved_names=_WINDOWS_DEVICE),
 }
+
+
+# A job's command line, in UTF-8 bytes. The platform refuses longer at
+# submission (`launch.MAX_ARGUMENT_BYTES`, pinned equal by `test_guests.py`).
+# Far under every limit on the way -- cmd.exe's 8191 characters, Linux's 128
+# KiB per argv string -- and the Linux words go onto the injected thread's
+# stack (`linux_syscalls.c`), which is the one place a long one could matter.
+MAX_ARGUMENT_BYTES = 1024
+
+# A job's subfolder under its drop location. Bounded so the joined path stays
+# well inside Windows' 260-character MAX_PATH with any location and a long
+# filename, which `writefile` would otherwise fail on with a bare error.
+MAX_SUBDIR_BYTES = 128
+MAX_SUBDIR_DEPTH = 8
+
+# **An allowlist, and ASCII, on purpose.** On Windows the folder is made by
+# `cmd.exe /c mkdir "<dir>"` -- cmd has no argv, so the path IS shell text there
+# (`argv_make_drop_dir`) -- and it is part of the staged path the delayed launch
+# quotes. None of these is special to cmd inside double quotes, and none to any
+# shell anywhere, so reviewing this needs no knowledge of cmd's parser. Unlike
+# the sample's own name, a folder is the submitter's choice rather than part of
+# the evidence (DRAFT-030), so refusing one costs no analysis.
+_SUBDIR_CHARS = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+                          "abcdefghijklmnopqrstuvwxyz"
+                          "0123456789 ._-()+")
+
+
+def split_subdir(os_: TargetOs, raw: str | None) -> tuple[str, ...]:
+    """`"tools\\x64"` or `"tools/x64"` -> `("tools", "x64")`. Raises ValueError.
+
+    Either separator is accepted, so a submitter can type the folder the way
+    the guest spells paths; the platform stores it `/`-joined. A trailing
+    separator is forgiven, a leading one is not -- it reads as an absolute path
+    and would not be one.
+
+    `sandbox_platform/launch.py` has the same rule; `test_guests.py` runs one
+    table of cases through both, because two copies of a path rule that
+    disagree is what CLAUDE.md's three filename checks warn about.
+    """
+    text = (raw or "").strip()
+    if not text:
+        return ()
+    if len(text.encode()) > MAX_SUBDIR_BYTES:
+        raise ValueError(f"subfolder exceeds {MAX_SUBDIR_BYTES} bytes")
+    parts = re.split(r"[\\/]", text.rstrip("\\/"))
+    if len(parts) > MAX_SUBDIR_DEPTH:
+        raise ValueError(f"subfolder is more than {MAX_SUBDIR_DEPTH} levels deep")
+    for part in parts:
+        if part in ("", ".", ".."):
+            raise ValueError(f"subfolder {text!r} is not a plain relative path")
+        bad = sorted(set(part) - _SUBDIR_CHARS)
+        if bad:
+            raise ValueError(
+                f"subfolder name {part!r} contains {''.join(bad)!r}; use letters, "
+                f"digits, spaces and . _ - ( ) +")
+        # Windows drops a trailing dot or space when it makes the folder, so the
+        # path it made would not be the one written to. Refused on every guest
+        # so there is one rule.
+        if part != part.strip() or part.endswith("."):
+            raise ValueError(
+                f"subfolder name {part!r} starts or ends with a space, or ends "
+                f"with a dot")
+        reserved = PATHS[os_].reserved_names
+        if reserved is not None and reserved.match(part):
+            raise ValueError(
+                f"subfolder name {part!r} is reserved on {os_.value}")
+    return tuple(parts)
+
+
+@dataclass(frozen=True)
+class Launch:
+    """Where the job asked for its sample to be dropped, and what to pass it.
+
+    `drop_dir` is the whole guest directory, subfolder included. `subdir` is
+    kept as well because a non-empty one is a folder that does not exist yet:
+    preconfig makes it before writing the sample (`argv_make_drop_dir`).
+    """
+
+    drop_dir: str
+    subdir: tuple[str, ...] = ()
+    arguments: str = ""
+
+
+def resolve_launch(os_: TargetOs, location: str | None, subdir: str | None,
+                   arguments: str | None) -> Launch:
+    """The job's drop location and command line, checked. Raises ValueError.
+
+    Called before a clone exists, so a value no guest can honour costs no VM.
+    The platform refuses all of these at submission; this is the second check,
+    for a job queued by a platform that disagrees with this one.
+
+    No control character in the command line, the platform's rule for
+    filenames and for the same reasons: a newline ends a cmd.exe command early,
+    and forges a log line anywhere the command line is printed.
+    """
+    paths = PATHS[os_]
+    if location is None:
+        base = paths.staging_dir
+    else:
+        try:
+            base = paths.locations[DropLocation(location)]
+        except (ValueError, KeyError):
+            raise ValueError(
+                f"drop location {location!r} is not offered on {os_.value}; "
+                f"it offers {sorted(k.value for k in paths.locations)}"
+            ) from None
+
+    parts = split_subdir(os_, subdir)
+    drop_dir = paths.sep.join((base, *parts))
+
+    raw = (arguments or "").strip()
+    if len(raw.encode()) > MAX_ARGUMENT_BYTES:
+        raise ValueError(f"command line exceeds {MAX_ARGUMENT_BYTES} bytes")
+    if any(ord(c) < 0x20 or ord(c) == 0x7F for c in raw):
+        raise ValueError(f"command line contains a control character: {raw!r}")
+    if raw and paths.splits_arguments:
+        # Parsed now so a quote left open fails here, before the clone, and
+        # not at trace time with the guest already prepared.
+        shlex.split(raw)
+    return Launch(drop_dir=drop_dir, subdir=parts, arguments=raw)
 
 
 # **What makes a staged filename stop being one argument to `cmd.exe /c`.**
@@ -540,6 +749,12 @@ PATHS = {
 # two that actually escape the quoting. The rest are rejected anyway: reviewing
 # this should not require knowing that.
 _CMD_UNSAFE = frozenset('"%&<>|^!')
+
+# Windows PowerShell 5.1, which every Windows 10 and 11 ships at this path.
+# Absolute for the reason the `PATHS` rows give: the injected process inherits
+# the ANCHOR's environment, and a bare `powershell.exe` resolved through PATH
+# can be "not found" in a guest whose anchor has a thin one.
+_POWERSHELL = "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"
 
 
 # The symbol profiles DRAKVUF takes beside the kernel one (`-r`): option ->
@@ -638,10 +853,24 @@ class Job:
     result_dir: Path
     options: TraceOptions
     kind: SampleKind
+    # The job's drop location, subfolder and command line (2026-11-01). None
+    # is the guest's `staging_dir` and no arguments -- a job that chose
+    # nothing runs exactly as every job did before.
+    launch: Launch | None = None
+
+    @property
+    def drop_dir(self) -> str:
+        if self.launch is None:
+            return PATHS[self.target_os].staging_dir
+        return self.launch.drop_dir
+
+    @property
+    def arguments(self) -> str:
+        return self.launch.arguments if self.launch else ""
 
     @property
     def guest_sample(self) -> str:
-        """`<staging>/<submitted filename>`, built by ONE rule.
+        """`<drop dir><sep><submitted filename>`, built by ONE rule.
 
         Both the stage that delivers and the stage that executes derive it the
         same way, from the same two values. That drift is not hypothetical: it
@@ -649,7 +878,7 @@ class Job:
         `/home/<USER>/Desktop/test` while preconfig staged to
         `/home/carlos/Desktop/test`.
         """
-        return  f"{PATHS[self.target_os].staging_dir}\\{self.submitted_filename}" if self.target_os == TargetOs.WINDOWS else f"{PATHS[self.target_os].staging_dir}/{self.submitted_filename}"
+        return f"{self.drop_dir}{PATHS[self.target_os].sep}{self.submitted_filename}"
 
 
 # --- staging -----------------------------------------------------------------
@@ -668,6 +897,33 @@ def argv_deliver(job: Job) -> list[str]:
         "-B", str(job.sample_path),
         "-e", job.guest_sample,
     ]
+
+
+def argv_make_drop_dir(job: Job) -> list[str]:
+    """Make the job's subfolder, before the sample is written into it.
+
+    `writefile` opens with `O_CREAT` and no more (`linux_write_file.c`), so it
+    cannot write beneath a folder that does not exist. Only a job that chose a
+    subfolder gets this injection; every other job's preconfig is unchanged.
+
+    **Asynchronous, like every `execproc`:** the injection returns when the
+    process starts, not when the folder exists. `stages._deliver` therefore
+    retries the `writefile` until it lands rather than trusting the order.
+
+    On Linux the path is its own argv element after `--`, so nothing parses
+    it. **Windows has no `mkdir` program**, only cmd's builtin, so there the
+    path is text in a `cmd.exe /c` string. That is safe only because
+    `split_subdir` admits nothing cmd treats specially inside double quotes,
+    and the location half is this module's own literal.
+    """
+    paths = PATHS[job.target_os]
+    head = ["injector", "-r", str(job.profile), "-d", str(job.domid),
+            "-i", str(job.injection_pid)]
+    if paths.mkdir is not None:
+        return head + ["-m", "execproc", "-e", paths.mkdir,
+                       "-f", "-p", "-f", "--", "-f", job.drop_dir]
+    return head + ["-m", "shellexec", "-e", paths.shell,
+                   "-f", f'/c mkdir "{job.drop_dir}"']
 
 
 def _ubuntu_netcfg(job: Job, subnet: str) -> str:
@@ -863,7 +1119,8 @@ def argv_remove_handoff(job: Job, handoff: str) -> list[str]:
 
 # --- tracing -----------------------------------------------------------------
 
-def _linux_launch(paths: GuestPaths, target: str) -> list[str]:
+def _linux_launch(paths: GuestPaths, target: str,
+                  words: list[str] | tuple[str, ...] = ()) -> list[str]:
     """Wait `LAUNCH_DELAY`, then become the sample.
 
     **The untrusted filename never becomes shell text.** `sh -c '<script>' sh
@@ -884,15 +1141,23 @@ def _linux_launch(paths: GuestPaths, target: str) -> list[str]:
     The shell's own startup is NOT in the traced window -- it is what the
     injection returns from, so it runs while the plugins are still going in,
     which is the whole point. What lands inside the window is one `execve`.
+
+    **A job's command line arrives as more positional parameters**, one `-f`
+    per word, and `exec "$@"` hands them on as the sample's own argv. So a
+    submitter's `$`, quote or `;` is never parsed by the guest shell either.
+    A job with no command line keeps `exec "$1"`, byte for byte the argv the
+    Ubuntu evidence was gathered with.
     """
+    tail = [x for word in words for x in ("-f", word)]
     if not paths.delay:
-        return ["-e", target]
+        return ["-e", target] + tail
     return ["-e", paths.shell, "-f", "-c",
-            "-f", f'{paths.delay}; exec "$1"',
-            "-f", "sh", "-f", target]
+            "-f", f'{paths.delay}; exec "{"$@" if words else "$1"}"',
+            "-f", "sh", "-f", target] + tail
 
 
-def _windows_launch(paths: GuestPaths, target: str) -> list[str]:
+def _windows_launch(paths: GuestPaths, target: str,
+                    arguments: str = "") -> list[str]:
     """The same wait, through the one shell that cannot take it as an argument.
 
     `shellexec` reaches `ShellExecuteEx` with `-e` as `lpFile` and **only the
@@ -912,34 +1177,84 @@ def _windows_launch(paths: GuestPaths, target: str) -> list[str]:
     its child -- a child the plugins now SEE being created, which they could
     not before. And the sample runs with a console attached. Normal for
     Windows, and a closer parent than the anchor process was.
+
+    **A job's command line follows the sample as typed**, which is what
+    Windows itself does: `ShellExecuteEx` builds `"<file>" <parameters>` and
+    the program splits that string however it chooses. It is held to the same
+    `_CMD_UNSAFE` test as the name, because in the delayed form it is cmd.exe
+    text too. One that fails it is passed as `lpParameters` to a direct launch,
+    which no shell parses -- byte-exact, but without the delay, and
+    `launch_caveat` says so on the job.
     """
 
     execute_string = target
+
+    # **The test is on the text this module did not write** -- the staged path
+    # and the job's command line -- never on the assembled command. It tested
+    # `ps_args` until 2026-11-01, which holds the `"` this function puts round
+    # the path itself, so every `.ps1` failed it and none ever got the delay.
+    # The quotes are ours and are the quoting; only what goes between them,
+    # and after them, can escape it.
+    unsafe = bool(_CMD_UNSAFE & set(target + arguments))
 
     if target.lower().endswith(".ps1"):
         ps_args = (
             f'-NoProfile -ExecutionPolicy Bypass -File "{target}"'
         )
+        if arguments:
+            ps_args += f" {arguments}"
 
-        if not paths.delay or _CMD_UNSAFE & set(ps_args):
-            return ["-e", "powershell.exe", "-f", ps_args]
+        if not paths.delay or unsafe:
+            return ["-e", _POWERSHELL, "-f", ps_args]
 
         return [
             "-e",
             paths.shell,
             "-f",
-            f"/c {paths.delay} & powershell.exe {ps_args}",
+            f"/c {paths.delay} & {_POWERSHELL} {ps_args}",
         ]
 
-    if not paths.delay or _CMD_UNSAFE & set(execute_string):
-        return ["-e", execute_string]
+    if not paths.delay or unsafe:
+        return ["-e", execute_string] + (["-f", arguments] if arguments else [])
 
     return [
         "-e",
         paths.shell,
         "-f",
-        f'/c {paths.delay} & "{execute_string}"',
+        f'/c {paths.delay} & "{execute_string}"'
+        + (f" {arguments}" if arguments else ""),
     ]
+
+
+def launch_caveat(job: Job) -> str | None:
+    """A sentence for the job's notes when the launch is not what was asked.
+
+    Said on the job rather than left to be noticed: both cases change what the
+    trace contains, and neither fails anything.
+    """
+    if job.kind is SampleKind.APK:
+        if job.arguments:
+            return ("command line not passed: an APK is started by its "
+                    "launcher activity, which takes none")
+        return None
+    # Read off the argv itself rather than re-deriving the rule, so this
+    # cannot disagree with what `argv_trace` actually runs: a guest with a
+    # delay runs it through its shell, and anything else skipped it.
+    paths = PATHS[job.target_os]
+    if paths.delay and _launch(job)[1] != paths.shell:
+        return (f"started without the {LAUNCH_DELAY}s launch delay: the "
+                f"command it would have run through {paths.shell} contains "
+                f"one of {''.join(sorted(_CMD_UNSAFE))}, so the sample's "
+                f"first seconds may precede the plugins")
+    return None
+
+
+def _launch(job: Job) -> list[str]:
+    """The `-e`/`-f` half of the trace argv for anything that is not an APK."""
+    paths = PATHS[job.target_os]
+    if job.target_os == TargetOs.WINDOWS:
+        return _windows_launch(paths, job.guest_sample, job.arguments)
+    return _linux_launch(paths, job.guest_sample, shlex.split(job.arguments))
 
 # `--wait-stop-plugins`, in seconds: "Wait for plugins to stop before
 # termination loop" (`drakvuf --help`). Without it DRAKVUF asks each plugin to
@@ -991,7 +1306,6 @@ def argv_trace(job: Job, component: str | None = None) -> list[str]:
     wait. The APK path is the exception and says why inline.
     """
     mode = "shellexec" if job.target_os == TargetOs.WINDOWS else "execproc"
-    paths = PATHS[job.target_os]
 
     # The cheapest evasion a sample tries is a CPUID for the hypervisor-present
     # bit; `cpuidmon` records the check. The answer is the one bare metal gives
@@ -1022,11 +1336,8 @@ def argv_trace(job: Job, component: str | None = None) -> list[str]:
         # what `test_the_traced_window_is_one_execve` pins.
         argv += ["-e", "/system/bin/am", "-f", "start", "-f", "-n",
                  "-f", component]
-
-    elif job.target_os == TargetOs.WINDOWS:
-        argv += _windows_launch(paths, job.guest_sample)
     else:
-        argv += _linux_launch(paths, job.guest_sample)
+        argv += _launch(job)
 
     argv += job.options.drakvuf_flags()
     argv += ["-o", "json", "-t", str(job.options.timeout)]

@@ -251,7 +251,7 @@ def test_a_lease_is_acquired_and_run(tmp_path):
 def test_a_dirty_teardown_does_not_get_its_vlan_back(tmp_path):
     """The VLAN is withheld, not recycled.
 
-    `_teardown` has always reported "dirty: ..." and nothing consumed it, so a
+    Teardown has always reported "dirty: ..." and nothing consumed it, so a
     domain that survived `xl destroy` handed its VLAN straight to the next
     sample -- a restore onto the previous sample's snapshot, which is DRAFT-033.
     `ResourceTable.withhold` was written for this and had no caller.
@@ -644,6 +644,47 @@ def test_the_console_is_off_unless_the_environment_turns_it_on():
         {**base, "SANDBOXD_CONSOLE_ENABLED": "1"}).console_enabled is True
     assert D.Settings.from_env(
         {**base, "SANDBOXD_CONSOLE_ENABLED": "on"}).console_enabled is True
+
+
+def test_screenshots_are_on_unless_the_environment_turns_them_off():
+    """The operator's default (2026-10-30), and the opposite parse to the
+    console's: turning it off is the emergency action, so every obvious
+    spelling of "off" must work."""
+    base = {"SANDBOXD_API": "https://p:8443", "WORKER_TOKEN": "t",
+            "SANDBOXD_TOTAL_MIB": "8192"}
+
+    assert D.Settings.from_env(base).screenshots_enabled is True
+    for off in ("0", "false", "No", " off "):
+        assert D.Settings.from_env(
+            {**base, "SANDBOXD_SCREENSHOTS_ENABLED": off}
+        ).screenshots_enabled is False, off
+    assert D.Settings.from_env(
+        {**base, "SANDBOXD_SCREENSHOTS_ENABLED": "1"}).screenshots_enabled is True
+
+
+def test_results_are_deleted_after_upload_unless_kept():
+    """Off unless recognised as on: deleting what is already in the store is
+    the default the operator asked for (2026-11-01)."""
+    base = {"SANDBOXD_API": "https://p", "WORKER_TOKEN": "t",
+            "SANDBOXD_TOTAL_MIB": "8192"}
+    assert D.Settings.from_env(base).keep_results is False
+    for on in ("1", "true", "Yes", " on "):
+        assert D.Settings.from_env(
+            {**base, "SANDBOXD_KEEP_RESULTS": on}).keep_results is True, on
+    assert D.Settings.from_env(
+        {**base, "SANDBOXD_KEEP_RESULTS": "ture"}).keep_results is False
+
+
+def test_the_keep_results_setting_reaches_the_analysis_config(tmp_path):
+    assert daemon(tmp_path)._cfg.keep_results is False
+    assert daemon(tmp_path / "kept",
+                  keep_results=True)._cfg.keep_results is True
+
+
+def test_the_screenshot_setting_reaches_the_analysis_config(tmp_path):
+    assert daemon(tmp_path)._cfg.screenshots_enabled is True
+    assert daemon(tmp_path / "off",
+                  screenshots_enabled=False)._cfg.screenshots_enabled is False
 
 
 def test_the_console_setting_reaches_the_analysis_config(tmp_path):

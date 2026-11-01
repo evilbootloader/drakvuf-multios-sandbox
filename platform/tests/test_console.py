@@ -18,7 +18,7 @@ from conftest import WORKER_TOKEN, owner_id
 from sandbox_platform.console import (
     AlreadyAttached, Registry, Session, Side, pump,
 )
-from sandbox_platform.enums import RUNNING_STATES
+from sandbox_platform.enums import CONSOLE_STATES
 
 # anyio's pytest plugin rather than pytest-asyncio: anyio is already a FastAPI
 # dependency, so this adds nothing to a container whose security argument rests
@@ -519,10 +519,12 @@ def test_the_leaseholder_is_admitted(client, conn, console_on, relayed, worker_t
 #
 # Widened 2026-09-05. DRAFT-056 scoped a session to `executing`; the real
 # constraint is the DOMAIN, because the relay ends at a VNC port QEMU serves
-# for a live clone. `RUNNING_STATES` already names exactly those states.
+# for a live clone. `CONSOLE_STATES` names exactly those states -- since
+# 2026-10-30 without `collecting`, because sandboxd destroys the domain when
+# the trace ends.
 #
-# The states are driven from `RUNNING_STATES` rather than listed here, so a
-# state added to the pipeline joins these tests instead of quietly falling
+# The states are driven from `CONSOLE_STATES` rather than listed here, so a
+# state added to the window joins these tests instead of quietly falling
 # outside them.
 
 def job_in(conn, state: str, owner: str = "dom0-1",
@@ -538,7 +540,7 @@ def job_in(conn, state: str, owner: str = "dom0-1",
     ).fetchone()[0]
 
 
-@pytest.mark.parametrize("state", sorted(s.value for s in RUNNING_STATES))
+@pytest.mark.parametrize("state", sorted(s.value for s in CONSOLE_STATES))
 def test_the_worker_may_dial_whenever_a_clone_exists(
         client, conn, console_on, relayed, state, worker_tokens):
     """**`cloning` and `preparing` are the point.** sandboxd dials as soon as
@@ -551,16 +553,19 @@ def test_the_worker_may_dial_whenever_a_clone_exists(
     assert relayed == [(str(job_id), Side.WORKER)], f"refused in {state}"
 
 
-@pytest.mark.parametrize("state", ["received", "queued", "cleaning",
-                                   "completed", "failed", "cancelled"])
+@pytest.mark.parametrize("state", ["received", "queued", "collecting",
+                                   "cleaning", "completed", "failed",
+                                   "cancelled"])
 def test_the_worker_is_refused_when_no_clone_exists(
         client, conn, console_on, relayed, state, worker_tokens):
     """Before the clone and after teardown there is no domain to bridge to.
 
-    `cleaning` is in this list and not the one above: the worker still holds
-    the LEASE through cleanup -- that is what `LEASED_STATES` is for -- but
-    `_teardown` has already destroyed the domain by then, so there is nothing
-    left to serve a framebuffer.
+    `collecting` and `cleaning` are in this list and not the one above: the
+    worker still holds the LEASE through both -- that is what `LEASED_STATES`
+    is for -- but sandboxd destroys the domain when the trace ends, before
+    reporting `collecting` (2026-10-30), so there is nothing left to serve a
+    framebuffer, and nothing a console could type into while the artifacts
+    are pulled.
     """
     job_id = job_in(conn, state)
 
@@ -585,11 +590,11 @@ def browser_headers(access_token, email="analyst@example.test", **extra):
     return {**access_token(email), **SAME_ORIGIN, **extra}
 
 
-@pytest.mark.parametrize("state", sorted(s.value for s in RUNNING_STATES))
+@pytest.mark.parametrize("state", sorted(s.value for s in CONSOLE_STATES))
 def test_the_browser_may_watch_whenever_a_clone_exists(
         client, conn, console_on, relayed, access_token, state):
-    """The operator's end of the same window -- preconfig and collection
-    included, which is the whole of what the widening buys."""
+    """The operator's end of the same window -- preconfig included, which is
+    the whole of what the widening buys."""
     job_id = job_in(conn, state, job_owner="analyst@example.test")
 
     from starlette.websockets import WebSocketDisconnect
@@ -604,7 +609,8 @@ def test_the_browser_may_watch_whenever_a_clone_exists(
     assert relayed == [(str(job_id), Side.BROWSER)]
 
 
-@pytest.mark.parametrize("state", ["queued", "cleaning", "completed"])
+@pytest.mark.parametrize("state", ["queued", "collecting", "cleaning",
+                                   "completed"])
 def test_the_browser_is_refused_when_no_clone_exists(
         client, conn, console_on, relayed, access_token, state):
     from starlette.websockets import WebSocketDisconnect
@@ -725,7 +731,7 @@ def test_an_explicit_allowlist_admits_a_different_origin(
 
 # --- the reaper must not be narrower than the window it reaps --------------
 
-@pytest.mark.parametrize("state", sorted(s.value for s in RUNNING_STATES))
+@pytest.mark.parametrize("state", sorted(s.value for s in CONSOLE_STATES))
 def test_maintenance_keeps_a_session_while_the_clone_lives(conn, client, state):
     """`stale_sessions` read `state = 'executing'` until 2026-09-05.
 
@@ -742,7 +748,8 @@ def test_maintenance_keeps_a_session_while_the_clone_lives(conn, client, state):
     assert maintenance.stale_sessions([job_id]) == []
 
 
-@pytest.mark.parametrize("state", ["completed", "cleaning", "queued"])
+@pytest.mark.parametrize("state", ["completed", "cleaning", "collecting",
+                                   "queued"])
 def test_maintenance_reaps_a_session_with_no_clone(conn, client, state):
     from sandbox_platform import maintenance
 

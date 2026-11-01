@@ -170,3 +170,17 @@ def test_fetching_and_uploading_have_their_own_budgets():
     b = budgets(TargetOs.UBUNTU, SampleKind.ELF)
     assert b.collect > 0
     assert T.FETCH_BUDGET > 0
+
+def test_a_job_with_a_subfolder_gets_its_write_retries_inside_the_budget():
+    """The subfolder's ceiling is added to the floor, not carved out of the
+    headroom -- and only for a job that has one, so every other job's guard
+    is the one it had."""
+    for os_, kind in ((TargetOs.UBUNTU, SampleKind.ELF),
+                      (TargetOs.ANDROID, SampleKind.APK)):
+        plain = T.budgets(os_, kind, 120)
+        made = T.budgets(os_, kind, 120, makes_drop_dir=True)
+        assert made.preconfig == (
+            T._preconfig_waits(os_, kind, makes_drop_dir=True)
+            + T.PRECONFIG_INJECTION_HEADROOM)
+        assert made.preconfig > plain.preconfig
+    assert T.budgets(TargetOs.UBUNTU, SampleKind.ELF, 120).preconfig == 60.0

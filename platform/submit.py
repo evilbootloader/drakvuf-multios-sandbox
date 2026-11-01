@@ -90,16 +90,21 @@ class Submitter:
         self.s3 = httpx.Client(timeout=300.0, headers=headers,
                                verify=ssl_context(cacert))
 
-    def create(self, target_os: str, filename: str, size: int) -> dict:
+    def create(self, target_os: str, filename: str, size: int,
+               **launch: str | None) -> dict:
         """Reserve a job row and get an upload capability for it.
 
         `size_bytes` is a declaration, not a measurement, and the server treats
         it as one: it signs the policy with min(declared, server cap), so
         under-declaring shrinks your own allowance rather than raising it.
+
+        `launch` is `drop_location`, `drop_subdir` and `arguments`; a None is
+        left out, which the server reads as the guest's default.
         """
-        r = self.http.post("/api/v1/jobs", json={
-            "target_os": target_os, "filename": filename, "size_bytes": size,
-        })
+        body = {"target_os": target_os, "filename": filename,
+                "size_bytes": size}
+        body.update({k: v for k, v in launch.items() if v is not None})
+        r = self.http.post("/api/v1/jobs", json=body)
         r.raise_for_status()
         return r.json()
 
@@ -216,6 +221,20 @@ def main() -> int:
     ap.add_argument("--declare-size", type=int, metavar="BYTES",
                     help="declare a size other than the file's own, to check "
                          "that the server measures rather than believes")
+    ap.add_argument("--drop-location",
+                    choices=["desktop", "downloads", "home", "temp",
+                             "appdata", "programdata"],
+                    help="where in the guest to drop the sample; each guest "
+                         "offers a subset (sandbox_platform/launch.py). "
+                         "Default: the guest's own -- Desktop, or "
+                         "/data/local/tmp on Android")
+    ap.add_argument("--drop-subdir", metavar="PATH",
+                    help="a subfolder under --drop-location, created in the "
+                         "guest, e.g. tools/x64")
+    ap.add_argument("--arguments", metavar="TEXT",
+                    help="the sample's command line. Split into words like a "
+                         "shell would (nothing expands) on Ubuntu and "
+                         "Android; passed as typed on Windows")
     ap.add_argument("--access-token", metavar="JWT",
                     help="Cloudflare Access token for the tunnel path. Get one "
                          "with: cloudflared access token -app=<api url>")
@@ -232,7 +251,10 @@ def main() -> int:
 
     real = args.file.stat().st_size
     created = s.create(args.target_os, args.file.name,
-                       args.declare_size or real)
+                       args.declare_size or real,
+                       drop_location=args.drop_location,
+                       drop_subdir=args.drop_subdir,
+                       arguments=args.arguments)
     job_id = created["job_id"]
     print(f"created {job_id} for {args.file.name} ({real} bytes)")
 

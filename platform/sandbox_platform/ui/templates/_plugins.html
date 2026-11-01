@@ -65,3 +65,8 @@
     a refused one.
   </p>
 </fieldset>
+
+{# The Execution fieldset's body, swapped out of band when this list is
+   swapped for another guest -- see _launch.html. Only from the htmx route:
+   the submit page includes that block in its own place. #}
+{% if oob %}{% include "_launch.html" %}{% endif %}

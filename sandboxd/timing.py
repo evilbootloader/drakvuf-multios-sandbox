@@ -41,6 +41,11 @@ load-bearing.
           ENOENT. Now polled: preconfig waits for content that parses as a
           launchable component, so a healthy job is FASTER than the old sleep.
 
+  <=20s   a job's subfolder (DROP_DIR_TIMEOUT), a CEILING not a sleep
+          Only for a job that chose one. `mkdir` is an injected process, so
+          its injection returns before the folder exists; preconfig retries
+          the `writefile` until it lands. UNMEASURED (2026-11-01).
+
     5s    SIGINT -> SIGKILL
           DRAKVUF flushes and detaches its introspection state on SIGINT;
           killing it outright can leave stealth breakpoints written into guest
@@ -111,6 +116,15 @@ APK_COMPONENT_TIMEOUT = 90.0
 # 2s keeps the worst case around 45 injections rather than 90.
 APK_COMPONENT_POLL = 2.0
 
+# How long preconfig retries `writefile` while a job's subfolder is being made.
+# `mkdir -p` and cmd's `mkdir` are each one syscall-sized job once started, so
+# this is nearly all process start-up in a guest that has just been restored.
+# UNMEASURED (2026-11-01) and generous for the same reason as the APK ceiling:
+# overshooting costs a slow failure, undershooting a failed job on a healthy
+# sample. Each retry is a `writefile` whose open fails first, so it is cheap.
+DROP_DIR_TIMEOUT = 20.0
+DROP_DIR_POLL = 1.0
+
 # Headroom over the deliberate waits for the injections themselves, none of
 # which is measured -- notably the 12 MB `writefile`. Was an implicit `* 3`
 # multiplier on the sleep, which stopped meaning anything once the sleep became
@@ -170,6 +184,8 @@ class Waits:
     # only makes a slow guest fail sooner.
     apk_component_timeout: float = APK_COMPONENT_TIMEOUT
     apk_component_poll: float = APK_COMPONENT_POLL
+    drop_dir_timeout: float = DROP_DIR_TIMEOUT
+    drop_dir_poll: float = DROP_DIR_POLL
     kill_grace: float = KILL_GRACE
     # The post-`xl destroy` poll, used by both the clone builder and the
     # startup sweep. Here with the rest because it is the same kind of thing:
@@ -181,7 +197,8 @@ DEFAULT_WAITS = Waits()
 
 
 def _preconfig_waits(os_: TargetOs, kind: SampleKind,
-                     waits: Waits = DEFAULT_WAITS) -> float:
+                     waits: Waits = DEFAULT_WAITS, *,
+                     makes_drop_dir: bool = False) -> float:
     """The waits that MUST fit inside the preconfig budget.
 
     **The worst case, not the expected case** -- and that changed on 2026-09-04.
@@ -194,6 +211,8 @@ def _preconfig_waits(os_: TargetOs, kind: SampleKind,
     total = 0.0
     if os_ is TargetOs.ANDROID and kind is SampleKind.APK:
         total += waits.apk_component_timeout
+    if makes_drop_dir:
+        total += waits.drop_dir_timeout
     return total
 
 
@@ -214,7 +233,8 @@ def _trace_waits(os_: TargetOs, kind: SampleKind,
 
 
 def budgets(os_: TargetOs, kind: SampleKind, trace_timeout: int,
-            waits: Waits = DEFAULT_WAITS) -> PhaseBudgets:
+            waits: Waits = DEFAULT_WAITS, *,
+            makes_drop_dir: bool = False) -> PhaseBudgets:
     """Phase guards for one job, derived rather than tabulated.
 
     **The preconfig and trace budgets are computed from what they contain**,
@@ -228,7 +248,8 @@ def budgets(os_: TargetOs, kind: SampleKind, trace_timeout: int,
     Rather than record that as a note, the budget is the deliberate waits plus
     headroom, so it cannot be under-set by arithmetic.
     """
-    preconfig_floor = _preconfig_waits(os_, kind, waits)
+    preconfig_floor = _preconfig_waits(os_, kind, waits,
+                                       makes_drop_dir=makes_drop_dir)
     trace_floor = _trace_waits(os_, kind, waits) + float(trace_timeout)
 
     return PhaseBudgets(

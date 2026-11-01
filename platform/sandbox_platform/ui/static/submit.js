@@ -52,6 +52,37 @@
                    "reload and pick again."
     };
 
+    /* "Runs as <path> <arguments>": what the guest will be asked to run,
+     * redrawn as the form changes. Display only -- the host builds the real
+     * path from the location's key -- and textContent only, because the file
+     * name and the arguments are the submitter's text. Listening on the form
+     * and on htmx's settle keeps it right after the Execution block is
+     * swapped for another guest. */
+    function preview() {
+        var box = document.getElementById("launch-options");
+        var out = box && box.querySelector("[data-launch-preview]");
+        if (!out) { return; }
+        var sep = box.dataset.sep;
+        var chosen = box.querySelector("[data-launch-location]");
+        var base = chosen && chosen.selectedOptions[0]
+            ? chosen.selectedOptions[0].dataset.path : "";
+        var parts = [base];
+        var subdir = box.querySelector("[data-launch-subdir]");
+        if (subdir) {
+            subdir.value.split(/[\\/]/).forEach(function (p) {
+                if (p.trim()) { parts.push(p.trim()); }
+            });
+        }
+        var picked = form.querySelector('input[type="file"]').files[0];
+        parts.push(picked ? picked.name : "<file name>");
+        var args = box.querySelector("[data-launch-arguments]");
+        var tail = args && args.value.trim() ? " " + args.value.trim() : "";
+        out.textContent = parts.join(sep) + tail;
+    }
+    form.addEventListener("input", preview);
+    form.addEventListener("change", preview);
+    document.body.addEventListener("htmx:afterSettle", preview);
+
     form.addEventListener("submit", async function (event) {
         event.preventDefault();
 
@@ -82,6 +113,18 @@
                 timeout: timeout,
                 disable_sysret: disable_sysret
             };
+            /* Where to drop it and what to pass it (launch.py). The location
+             * is the select's KEY, never the path shown beside it; empty
+             * text fields are not sent, so "nothing chosen" has one spelling.
+             * The server checks all three again. */
+            var dropLocation = form.querySelector('select[name="drop_location"]');
+            var dropSubdir = form.querySelector('input[name="drop_subdir"]');
+            var args = form.querySelector('input[name="arguments"]');
+            if (dropLocation) { payload.drop_location = dropLocation.value; }
+            if (dropSubdir && dropSubdir.value.trim()) {
+                payload.drop_subdir = dropSubdir.value;
+            }
+            if (args && args.value.trim()) { payload.arguments = args.value; }
             if (egress) {
                 payload.egress_mode = egress.dataset.mode;
                 /* `offline` names no exit; sending one is a 422 by design,

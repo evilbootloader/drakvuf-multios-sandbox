@@ -133,7 +133,7 @@ class FakeRunner:
         # host, and the blanket "everything succeeds" default would otherwise
         # model a host where every chain always exists.
         #
-        # That is not a detail. `stages._teardown` asks exactly this question
+        # That is not a detail. `stages._destroy` asks exactly this question
         # to decide whether a VLAN is clean enough to reuse, so a fake that
         # answers "yes, still there" makes every teardown dirty and every VLAN
         # withheld -- which is what happened when the probe was added. Scripted

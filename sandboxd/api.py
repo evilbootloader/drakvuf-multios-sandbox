@@ -92,6 +92,14 @@ class Lease:
     # `offline`. The safe reading of "nobody said" is "no way out".
     egress_exit: str | None = None
     egress_mode: str | None = None
+    # Where to drop the sample and what to pass it (2026-11-01). A location
+    # KEY, a `/`-joined subfolder and the command line as typed; all three are
+    # checked by `guests.resolve_launch` before a clone exists. None is the
+    # guest's default directory and no arguments -- what an older platform,
+    # or a job that chose nothing, gets.
+    drop_location: str | None = None
+    drop_subdir: str | None = None
+    arguments: str | None = None
 
 
 @dataclass(frozen=True)
@@ -319,6 +327,12 @@ class WorkerAPI:
                 # so it has to reach `_trace_options` intact to mean that.
                 timeout=body.get("timeout", 180),
                 disable_sysret=body.get("disable_sysret"),
+                # `.get` for the same skew. Not checked here: none of the
+                # three becomes a Dom0 path, so a bad one fails its own job
+                # (`stages.run`) instead of the whole claim.
+                drop_location=body.get("drop_location"),
+                drop_subdir=body.get("drop_subdir"),
+                arguments=body.get("arguments"),
             )
         if status == "reserved":
             return Reserved(blocking_job_id=str(body["blocking_job_id"]),

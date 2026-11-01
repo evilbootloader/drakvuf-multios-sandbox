@@ -170,6 +170,12 @@ class LeaseResponse(BaseModel):
     plugins: list[str] = []
     timeout: int = 180
     disable_sysret: bool = True
+    # As the submitter chose them, validated at `create_job`; None is the
+    # guest's default folder and no command line. sandboxd checks them again
+    # before cloning (`guests.resolve_launch`).
+    drop_location: str | None = None
+    drop_subdir: str | None = None
+    arguments: str | None = None
 
 
 class ReservedResponse(BaseModel):
@@ -373,7 +379,10 @@ def claim(req: ClaimRequest, worker_id: WorkerAuth):
                 key_prefix=last.key_prefix,
                 plugins=last.plugins,
                 timeout=last.timeout,
-                disable_sysret=last.disable_sysret
+                disable_sysret=last.disable_sysret,
+                drop_location=last.drop_location,
+                drop_subdir=last.drop_subdir,
+                arguments=last.arguments,
             )
 
         if time.monotonic() >= deadline:

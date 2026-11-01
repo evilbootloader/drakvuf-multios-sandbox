@@ -78,14 +78,28 @@ class JobState(StrEnum):
     INTERRUPTED = "interrupted"
 
 
-# States in which a clone EXISTS and the sample may be executing. Cancelling
-# a job in one of these is a request the worker collects, not an act -- there
-# is a domain to tear down first.
+# States in which the worker is running the job. Cancelling a job in one of
+# these is a request the worker collects, not an act -- it may have a domain to
+# tear down first. A clone exists in all of them but `collecting`: sandboxd
+# destroys it when the trace ends, before collection (2026-10-30).
 RUNNING_STATES = frozenset({
     JobState.CLONING,
     JobState.PREPARING,
     JobState.EXECUTING,
     JobState.COLLECTING,
+})
+
+# States in which a clone EXISTS, and so a console can (DRAFT-056). Narrower
+# than RUNNING_STATES by `collecting`, since sandboxd stopped keeping the
+# domain alive through collection. Before that a console stayed open while
+# artifacts were being pulled, and could type into the guest and change what
+# got collected after the trace had ended -- a KNOWN GAP routers/console.py
+# carried. Both ends of the relay, the session reaper and the job page all
+# read this, so the window cannot drift between them.
+CONSOLE_STATES = frozenset({
+    JobState.CLONING,
+    JobState.PREPARING,
+    JobState.EXECUTING,
 })
 
 # States in which the worker still OWNS the job and may report on it.

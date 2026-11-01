@@ -81,7 +81,7 @@ def test_no_port_anywhere_is_not_an_analysis_failure():
     r.script(("xenstore-read",), rc=1)
     r.script(("xl", "list", "-l"), rc=1)
 
-    with pytest.raises(vnc.ConsoleUnavailable, match="Candidate and unverified"):
+    with pytest.raises(vnc.ConsoleUnavailable, match="runbook 09 §B2"):
         vnc.resolve_vnc_port(r, 42, "ubuntu_sandbox-3-clone")
 
 

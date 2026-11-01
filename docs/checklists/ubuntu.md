@@ -205,7 +205,7 @@ Three things the same run surfaced that are **not** fixed:
   visible in `xl list` and will otherwise be rediscovered as a mystery.
   **Structural cause removed, not re-observed.** Cleanup was a sibling
   process with no handle on the trace. In `sandboxd` the DRAKVUF child is
-  owned by the same process and is waited on before `_teardown` runs
+  owned by the same process and is waited on before `_destroy` runs
   (`sandboxd/stages.py`), so the destroy cannot overlap a live trace the way
   it did. **This has not been re-checked on Dom0** — leave the box open until
   someone looks at `xl list` after a real run.

@@ -67,7 +67,7 @@ def generate_report(context: PostprocessContext) -> None:
         "schema_version": REPORT_SCHEMA_VERSION,
         "startup": get_inject_info(analysis_dir, process_tree),
         **context.report,
-        # What process_dumps and screenshot_metadata put aside for upstream's
+        # What process_dumps puts aside for upstream's
         # metadata store; folded in here for the same reason `info` is gone.
         "metadata": context.extra_metadata,
     }

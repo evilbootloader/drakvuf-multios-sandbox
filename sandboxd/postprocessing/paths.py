@@ -45,6 +45,14 @@ PROCDUMPS_DIR = "procdumps"
 EXTRACTED_DIR = "extracted"
 EXTRACTED_ZIP = "extracted.zip"
 
+# The guest's screen, one PNG per 2 s tick, and the index that says when each
+# was taken and why any is missing (DRAFT-054, sandboxd/screenshots.py). Not
+# DRAKVUF output and nothing here reads them: they are named here because
+# `stages._collect` orders the frames after every other artifact, and the
+# platform serves only names under this prefix as images.
+SCREENSHOTS_DIR = "screenshots"
+SCREENSHOTS_INDEX = "screenshots.json"
+
 # DRAKVUF's stdout, as `stages._trace` writes it. **Must equal
 # `sandboxd.stages.TRACE_LOG`** -- it is restated here rather than imported
 # because stages.py imports this package, and sandboxd/tests/test_postprocessing.py
