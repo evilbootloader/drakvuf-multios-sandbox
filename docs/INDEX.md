@@ -366,8 +366,8 @@ It maps **headings, not content**: a fact stated in the middle of a section is n
   - `docs/architecture/guest-identity.md:23` — [1. The evidence it answers](architecture/guest-identity.md#1-the-evidence-it-answers)
   - `docs/architecture/guest-identity.md:43` — [2. The identity](architecture/guest-identity.md#2-the-identity)
   - `docs/architecture/guest-identity.md:67` — [3. Where it goes](architecture/guest-identity.md#3-where-it-goes)
-  - `docs/architecture/guest-identity.md:113` — [4. Why a reinstall](architecture/guest-identity.md#4-why-a-reinstall)
-  - `docs/architecture/guest-identity.md:147` — [5. What it does not answer](architecture/guest-identity.md#5-what-it-does-not-answer)
+  - `docs/architecture/guest-identity.md:115` — [4. Why a reinstall](architecture/guest-identity.md#4-why-a-reinstall)
+  - `docs/architecture/guest-identity.md:149` — [5. What it does not answer](architecture/guest-identity.md#5-what-it-does-not-answer)
 
 ## `docs/architecture/licensing.md`
 

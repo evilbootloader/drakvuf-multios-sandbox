@@ -100,7 +100,9 @@ device_model_args_hvm = [ '-global', 'ide-hd.model=...', '-global', 'ide-hd.seri
 The tracked templates (`misc/*.cfg` and the `misc/xen-vms/` copies) carry the
 first two lines and say where the rest comes from; they never carry the
 identity's values. **On Dom0 the four `misc/xen-vms/` configs `make` writes do,**
-and `sandboxd` reads them there: Dom0 only pulls, so never commit them from it.
+and `sandboxd` reads them there. Never commit them from Dom0, whose checkout
+has commits of its own: `git update-index --skip-worktree` on the four keeps a
+`git commit -a` from taking them, and makes a pull that changes them stop.
 `clone.py`'s rewrite keeps `mac=`, so every clone has the guest's MAC, each on its
 own VLAN.
 

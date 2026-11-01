@@ -3,7 +3,7 @@ Subject: [PATCH] hvmloader, x86/cpuid: let a guest look like the machine it is g
 
 Xen 4.20.1 with automation/xen-altp2m-pause-vcpu.patch and
 automation/xen-rdtsc-poc.patch applied first; drakvuf-dev/xen branch
-rdtsc-poc 929d911908. docs/architecture/guest-identity.md has the
+rdtsc-poc 89af367fbd. docs/architecture/guest-identity.md has the
 design; scripts/xen-identity.py then writes this deployment's identity
 into hvmloader and libacpi.
 
@@ -15,11 +15,15 @@ A guest whose CPUID policy clears the hypervisor bit
 (cpuid = "host,hypervisor=0") finds no Xen or Viridian leaves from user
 mode; its kernel and hvmloader still do.
 
+libacpi copies its OEM and table IDs as fixed-width fields, so a real
+vendor's, which fills the field, builds under GCC's stringop-truncation.
+
 ---
  docs/man/xl.cfg.5.pod.in          |  6 ++++--
  tools/firmware/hvmloader/smbios.c | 20 +++++++++++++++++++-
+ tools/libacpi/build.c             | 11 ++++++++++-
  xen/arch/x86/cpuid.c              | 18 +++++++++++++++++-
- 3 files changed, 40 insertions(+), 4 deletions(-)
+ 4 files changed, 50 insertions(+), 5 deletions(-)
 
 diff --git a/docs/man/xl.cfg.5.pod.in b/docs/man/xl.cfg.5.pod.in
 index 8e1422104e..a68d52b3f3 100644
@@ -76,6 +80,28 @@ index 97a054e9e3..68d6243f61 100644
          {
              /* Vendor/OEM table, copy it in. Note the handle values cannot
               * be changed since it is unknown what is in each of these tables
+diff --git a/tools/libacpi/build.c b/tools/libacpi/build.c
+index 2f29863db1..0c06bb2fcc 100644
+--- a/tools/libacpi/build.c
++++ b/tools/libacpi/build.c
+@@ -21,7 +21,16 @@
+ #define ACPI_MAX_SECONDARY_TABLES 16
+ 
+ #define align16(sz)        (((sz) + 15) & ~15)
+-#define fixed_strcpy(d, s) strncpy((d), (s), sizeof(d))
++/*
++ * ACPI IDs are fixed-width fields, NUL padded when shorter. An ID that fills
++ * its field has no NUL, which strncpy() is warned about as a truncated
++ * string: copy the bytes instead. s is a string literal.
++ */
++#define fixed_strcpy(d, s) do {                                         \
++    memset((d), 0, sizeof(d));                                          \
++    memcpy((d), (s), sizeof(s) - 1 < sizeof(d) ? sizeof(s) - 1         \
++                                               : sizeof(d));           \
++} while ( 0 )
+ 
+ extern struct acpi_20_rsdp Rsdp;
+ extern struct acpi_20_rsdt Rsdt;
 diff --git a/xen/arch/x86/cpuid.c b/xen/arch/x86/cpuid.c
 index 2a777436ee..bdea913db2 100644
 --- a/xen/arch/x86/cpuid.c
