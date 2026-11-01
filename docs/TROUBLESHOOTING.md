@@ -927,6 +927,24 @@ at boot). The 125 search builds before were incremental and never crashed;
 (`nproc` follows the mask). The lasting fix is a current BIOS, and the chip
 checked under full load after it.
 
+### `xen-rdtsc-poc.service` — `Dependency failed`, and no `RDTSC_POC` in `xl dmesg`
+
+**Symptom.** After the first boot into a Xen from `make xen`, `systemctl
+status xen-rdtsc-poc` shows `inactive (dead)` and `Job ... failed with result
+'dependency'`; `systemctl --failed` lists `xencommons.service`. Xen and `xl`
+work, but the guests' RDTSCs are not compensated.
+
+**Cause.** The unit required `xencommons.service`. With `--enable-systemd`,
+xenstored, xenconsoled and the QEMU disk backend are started by their own
+units; `xencommons.service` is generated from the init script, repeats them,
+and fails on every Xen boot (`qemu-system-i386: cannot create PID file: Cannot
+lock pid file`), as it did on 2026-11-01 13:05 before this unit existed. That
+failure is harmless; the dependency on it was not.
+
+**Fix.** The unit requires `xenstored.service`, which `xl` needs. On a boot
+where it already failed, check `xl dmesg | grep RDTSC_POC` is empty, install
+the fixed unit and start it: it presses `d`, once.
+
 ### The guest freezes or crawls with RDTSC compensation on
 
 **Symptom.** Xen booted with `rdtsc-poc=1`, the `d` key pressed

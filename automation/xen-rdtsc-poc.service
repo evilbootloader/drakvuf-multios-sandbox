@@ -12,8 +12,12 @@
 
 [Unit]
 Description=Turn on Xen's RDTSC compensation (xl debug-keys d)
-Requires=xencommons.service
-After=xencommons.service
+# xl needs xenstored. On a Xen built with --enable-systemd that is
+# xenstored.service, not the generated xencommons.service: that one runs the
+# init script, which repeats what the systemd units did and fails on every boot
+# (its second QEMU disk backend finds the first one's pid file locked).
+Requires=xenstored.service
+After=xenstored.service xen-init-dom0.service
 ConditionPathExists=/proc/xen/capabilities
 
 [Service]
