@@ -1,0 +1,128 @@
+From: =?UTF-8?q?Llu=C3=ADs=20Bessa?= <evilbootloader@proton.me>
+Subject: [PATCH] hvmloader, x86/cpuid: let a guest look like the machine it is given
+
+Xen 4.20.1 with automation/xen-altp2m-pause-vcpu.patch and
+automation/xen-rdtsc-poc.patch applied first; drakvuf-dev/xen branch
+rdtsc-poc 929d911908. docs/architecture/guest-identity.md has the
+design; scripts/xen-identity.py then writes this deployment's identity
+into hvmloader and libacpi.
+
+hvmloader copies in the SMBIOS structures of smbios_firmware whose type
+it does not write itself (caches, port connectors, slots, probes,
+cooling devices), as it did only for vendor types.
+
+A guest whose CPUID policy clears the hypervisor bit
+(cpuid = "host,hypervisor=0") finds no Xen or Viridian leaves from user
+mode; its kernel and hvmloader still do.
+
+---
+ docs/man/xl.cfg.5.pod.in          |  6 ++++--
+ tools/firmware/hvmloader/smbios.c | 20 +++++++++++++++++++-
+ xen/arch/x86/cpuid.c              | 18 +++++++++++++++++-
+ 3 files changed, 40 insertions(+), 4 deletions(-)
+
+diff --git a/docs/man/xl.cfg.5.pod.in b/docs/man/xl.cfg.5.pod.in
+index 8e1422104e..a68d52b3f3 100644
+--- a/docs/man/xl.cfg.5.pod.in
++++ b/docs/man/xl.cfg.5.pod.in
+@@ -2146,8 +2146,10 @@ Specifies a path to a file that contains extra SMBIOS firmware structures to
+ pass into a guest. The file can contain a set of DMTF predefined structures
+ which will override the internal defaults. Not all predefined structures can be
+ overridden,
+-only the following types: 0, 1, 2, 3, 11, 22, 39. The file can also contain any
+-number of vendor defined SMBIOS structures (type 128 - 255). Since SMBIOS
++only the following types: 0, 1, 2, 3, 11, 22, 39. Predefined types hvmloader
++does not write itself (caches, port connectors, slots, probes, cooling devices
++and the like) are added as given, as are any number of vendor defined SMBIOS
++structures (type 128 - 255); their handles are kept as given. Since SMBIOS
+ structures do not present their overall size, each entry in the file must be
+ preceded by a 32b integer indicating the size of the following structure.
+ 
+diff --git a/tools/firmware/hvmloader/smbios.c b/tools/firmware/hvmloader/smbios.c
+index 97a054e9e3..68d6243f61 100644
+--- a/tools/firmware/hvmloader/smbios.c
++++ b/tools/firmware/hvmloader/smbios.c
+@@ -962,6 +962,19 @@ smbios_type_39_init(void *start)
+     return start;
+ }
+ 
++/* Types written above, from a passed in structure where one may replace them */
++static int
++smbios_type_written(uint8_t type)
++{
++    switch ( type )
++    {
++    case 0: case 1: case 2: case 3: case 4: case 11: case 16: case 17:
++    case 19: case 20: case 22: case 32: case 39: case 127:
++        return 1;
++    }
++    return 0;
++}
++
+ static void *
+ smbios_type_vendor_oem_init(void *start)
+ {
+@@ -975,7 +988,12 @@ smbios_type_vendor_oem_init(void *start)
+     while ( total < smbios_pt_length )
+     {
+         ptr = (uint8_t*)(sep + 1);
+-        if ( ptr[0] >= 128 )
++        /*
++         * Vendor/OEM tables, and the standard types not written above: caches,
++         * port connectors, slots, probes, cooling devices. A guest without them
++         * has none of that hardware, which a real machine always has.
++         */
++        if ( ptr[0] >= 128 || !smbios_type_written(ptr[0]) )
+         {
+             /* Vendor/OEM table, copy it in. Note the handle values cannot
+              * be changed since it is unknown what is in each of these tables
+diff --git a/xen/arch/x86/cpuid.c b/xen/arch/x86/cpuid.c
+index 2a777436ee..bdea913db2 100644
+--- a/xen/arch/x86/cpuid.c
++++ b/xen/arch/x86/cpuid.c
+@@ -5,6 +5,7 @@
+ 
+ #include <asm/cpu-policy.h>
+ #include <asm/cpuid.h>
++#include <asm/hvm/hvm.h>
+ #include <asm/hvm/viridian.h>
+ #include <asm/xstate.h>
+ 
+@@ -32,6 +33,19 @@ bool recheck_cpu_features(unsigned int cpu)
+     return okay;
+ }
+ 
++/*
++ * A guest whose policy clears the hypervisor bit (cpuid = "host,hypervisor=0")
++ * finds no hypervisor leaves in user mode either: they read as empty, like any
++ * leaf a processor lacks. Its kernel, which with the bit clear has no reason
++ * to look, and hvmloader, which finds Xen there at boot, still see them.
++ */
++static bool cpuid_hypervisor_hidden(const struct vcpu *v,
++                                    const struct cpu_policy *p)
++{
++    return !p->basic.hypervisor && v == current && is_hvm_vcpu(current) &&
++           hvm_get_cpl(current) == 3;
++}
++
+ void guest_cpuid(const struct vcpu *v, uint32_t leaf,
+                  uint32_t subleaf, struct cpuid_leaf *res)
+ {
+@@ -94,7 +108,7 @@ void guest_cpuid(const struct vcpu *v, uint32_t leaf,
+         break;
+ 
+     case 0x40000000U ... 0x400000ffU:
+-        if ( is_viridian_domain(d) )
++        if ( is_viridian_domain(d) && !cpuid_hypervisor_hidden(v, p) )
+             return cpuid_viridian_leaves(v, leaf, subleaf, res);
+ 
+         fallthrough;
+@@ -103,6 +117,8 @@ void guest_cpuid(const struct vcpu *v, uint32_t leaf,
+          * only until 0x400000ff, but we already use double that.
+          */
+     case 0x40000100U ... 0x400001ffU:
++        if ( cpuid_hypervisor_hidden(v, p) )
++            return;
+         return cpuid_hypervisor_leaves(v, leaf, subleaf, res);
+ 
+     case 0x80000000U ... 0x80000000U + CPUID_GUEST_NR_EXTD - 1:

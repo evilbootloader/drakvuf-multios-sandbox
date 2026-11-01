@@ -880,6 +880,33 @@ while other vCPUs run, which is why it shows up there.
 installed on Dom0 2026-10-19, procedure `make xen`. The fix is
 [posted to xen-devel](https://lists.xenproject.org/archives/html/xen-devel/2026-10/msg01125.html).
 
+### The guest freezes or crawls with RDTSC compensation on
+
+**Symptom.** Xen booted with `rdtsc-poc=1`, the `d` key pressed
+(`docs/architecture/rdtsc-poc.md`), a Linux guest under DRAKVUF. The trace
+keeps receiving events, mostly the kernel's timer paths, but the workload hardly
+runs: a test program that should run every 5 s runs once in 55 s, an injected
+`sleep 10` takes most of a minute, the desktop stops redrawing. Nothing is
+logged; the guest is not crashed, and `xl list` shows it using its vCPUs.
+
+**Cause.** **The guest kernel's RDTSCs were compressed** (`RDTSC_KERNEL_ADJUST
+1`, or any build that compressed every read). The guests run the `xen`
+clocksource and clockevent: the kernel's clock is the TSC through pvclock, and
+its timer deadlines are absolute Xen system time computed from that clock. A
+kernel TSC behind the real one sets every deadline early; the timer fires, the
+kernel finds it is not yet time, sets it again, and the guest spends its run
+time in timer interrupts. Measured 2026-11-01 by the RDTSC search: every
+variant compressing kernel reads froze or crawled both guests in every test;
+program reads only ran at normal speed in every test.
+
+**Fix.** Compress program reads only, which is the patch's design and default
+(`RDTSC_KERNEL_ADJUST 0`): kernel, library and vDSO reads get the guest TSC. A
+red pill compares its own two reads, so nothing it measures needs the kernel's
+time changed. If a build that compresses only program reads still slows a
+guest, look at `prog_pvclock` in the `t` dump: a compressed value is held at or
+above pvclock's `tsc_timestamp`, and below it a clock read would wrap decades
+forward.
+
 ### The Windows guest bugchecks `0x1e` within a minute of tracing with all plugins
 
 **Symptom.** `xl dmesg` shows
@@ -944,6 +971,13 @@ a running extraction at the return of its current call, and files are copied in
 
 **Not reproduced since:** on 2026-10-20, older builds, the guest also crashed
 with every plugin but fileextractor. Not diagnosed.
+
+**Seen again 2026-11-01**, `0x7f 0x8` (double fault), in one of six al-khaser
+runs with every plugin, Dom0's `drakvuf-dev` build at `4f6b311`, which has
+`b63f466`. Just before it, `fileextractor_fail` records from `msedgewebview2`
+writing the same file on two threads: the first defect's pattern. Not
+diagnosed; DRAKVUF's parallel-events work since `b63f466` may have reopened it.
+Those runs disable fileextractor and memdump since.
 
 ### Admission holds forever — one line per second, no clone, no error
 

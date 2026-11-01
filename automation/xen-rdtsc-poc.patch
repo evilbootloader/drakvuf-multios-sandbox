@@ -1,0 +1,1488 @@
+From: =?UTF-8?q?Llu=C3=ADs=20Bessa?= <evilbootloader@proton.me>
+Subject: [PATCH] x86/vmx: RDTSC_POC, hide VM exit time from red pill RDTSC pairs
+
+Xen 4.20.1 with automation/xen-altp2m-pause-vcpu.patch applied first.
+Squashes drakvuf-dev/xen branch rdtsc-poc 5fa34725a4, dc30449605 and 18aaea8adf;
+docs/architecture/rdtsc-poc.md has the design and the evidence.
+
+With the rdtsc-poc boot option, every RDTSC/RDTSCP of a guest created
+with altp2m (the ones DRAKVUF analyses) exits to Xen; debug key 'd'
+turns the compensation on, key 't' dumps its state. User RDTSCs in a
+program's own code (below 0x7f0000000000, Linux programs, and
+0x7ff600000000-0x7ff800000000, Windows executables) are compressed on a
+timeline of their own per vCPU: one that comes at most RDTSC_USER_CLOSE
+(1M) cycles of guest run time after the previous one, with no sleep
+between, returns that one plus 10-25 cycles, hiding up to
+RDTSC_USER_LAG_MAX (30M). Kernel, library, vDSO and Windows DLL RDTSCs
+return the guest TSC as is: a Linux guest on the xen clocksource and
+clockevent fires every timer early when its kernel TSC lags, and
+freezes. RDTSC_USER_PURE (off) would return the guest's own work for a
+pair with no exit between, for al-khaser's Locky check.
+
+---
+ xen/arch/x86/hvm/vmx/vmcs.c             |   18 +
+ xen/arch/x86/hvm/vmx/vmx.c              | 1088 ++++++++++++++++++++++++++++++-
+ xen/arch/x86/include/asm/hvm/vmx/vmcs.h |  216 ++++++
+ 3 files changed, 1316 insertions(+), 6 deletions(-)
+
+diff --git a/xen/arch/x86/hvm/vmx/vmcs.c b/xen/arch/x86/hvm/vmx/vmcs.c
+index f9538063da..9f9e64bd55 100644
+--- a/xen/arch/x86/hvm/vmx/vmcs.c
++++ b/xen/arch/x86/hvm/vmx/vmcs.c
+@@ -1120,6 +1120,12 @@ static int construct_vmcs(struct vcpu *v)
+     if ( d->arch.vtsc && !cpu_has_vmx_tsc_scaling )
+         v->arch.hvm.vmx.exec_control |= CPU_BASED_RDTSC_EXITING;
+ 
++    /*
++    * Enable RDTSC/RDTSCP interception for the PoC domain.
++    */
++    if ( unlikely(d->arch.hvm.vmx.rdtsc_poc_enabled) )
++        v->arch.hvm.vmx.exec_control |= CPU_BASED_RDTSC_EXITING;
++
+     v->arch.hvm.vmx.secondary_exec_control = vmx_secondary_exec_control;
+     v->arch.hvm.vmx.tertiary_exec_control  = vmx_tertiary_exec_control;
+ 
+@@ -1165,6 +1171,18 @@ static int construct_vmcs(struct vcpu *v)
+ 
+     vmx_update_cpu_exec_control(v);
+ 
++    if ( d->arch.hvm.vmx.rdtsc_poc_enabled )
++    {
++        printk(XENLOG_INFO
++            "RDTSC_POC: dom=%u vcpu=%u "
++            "exec_control=%#x rdtsc_exiting=%u\n",
++            d->domain_id,
++            v->vcpu_id,
++            v->arch.hvm.vmx.exec_control,
++            !!(v->arch.hvm.vmx.exec_control &
++                CPU_BASED_RDTSC_EXITING));
++    }
++
+     __vmwrite(VM_EXIT_CONTROLS, vmexit_ctl);
+     __vmwrite(VM_ENTRY_CONTROLS, vmentry_ctl);
+ 
+diff --git a/xen/arch/x86/hvm/vmx/vmx.c b/xen/arch/x86/hvm/vmx/vmx.c
+index 1373ef2787..979c1850fd 100644
+--- a/xen/arch/x86/hvm/vmx/vmx.c
++++ b/xen/arch/x86/hvm/vmx/vmx.c
+@@ -50,9 +50,455 @@
+ #include <asm/spec_ctrl.h>
+ #include <public/arch-x86/cpuid.h>
+ 
++#include <xen/keyhandler.h>
++#include <xen/time.h>
++#include <xen/xvmalloc.h>
++
++/* lag_gap is the mean of the sorted window slice [LO, HI), in basis points. */
++#define RDTSC_LAG_LO_BP 9499
++#define RDTSC_LAG_HI_BP 9899
++#define RDTSC_LAG_LO (RDTSC_WINDOW_SIZE * RDTSC_LAG_LO_BP / 10000)
++#define RDTSC_LAG_HI (RDTSC_WINDOW_SIZE * RDTSC_LAG_HI_BP / 10000)
++/* Gaps above this percentile of the window are not compressed. */
++#define RDTSC_GATE_BP 9950
++
++static bool rdtsc_poc_apply_enabled;
++
++static unsigned int rdtsc_hist_bucket(uint64_t gap)
++{
++    unsigned int top;
++
++    if ( gap < RDTSC_HIST_SUB )
++        return gap;
++
++    /* The highest set bit picks the group, the next RDTSC_HIST_SUB_BITS the bucket. */
++    top = flsl(gap) - 1;
++
++    return (top - RDTSC_HIST_SUB_BITS + 1) * RDTSC_HIST_SUB +
++           ((gap >> (top - RDTSC_HIST_SUB_BITS)) & (RDTSC_HIST_SUB - 1));
++}
++
++/* Largest gap that falls in bucket b */
++static uint64_t rdtsc_hist_upper(unsigned int b)
++{
++    unsigned int group = b / RDTSC_HIST_SUB;
++    unsigned int sub = b % RDTSC_HIST_SUB;
++
++    if ( !group )
++        return sub;
++
++    return ((uint64_t)(RDTSC_HIST_SUB + sub + 1) << (group - 1)) - 1;
++}
++
++static void rdtsc_window_account(struct rdtsc_gap_window *w,
++                                 uint64_t gap, bool add)
++{
++    unsigned int b = rdtsc_hist_bucket(gap);
++    unsigned int group = b / RDTSC_HIST_SUB;
++
++    if ( add )
++    {
++        w->count[b]++;
++        w->sum[b] += gap;
++        w->group_count[group]++;
++        w->group_sum[group] += gap;
++        w->ge_100k += gap >= 100000ULL;
++        w->ge_1m += gap >= 1000000ULL;
++        w->ge_10m += gap >= 10000000ULL;
++    }
++    else
++    {
++        w->count[b]--;
++        w->sum[b] -= gap;
++        w->group_count[group]--;
++        w->group_sum[group] -= gap;
++        w->ge_100k -= gap >= 100000ULL;
++        w->ge_1m -= gap >= 1000000ULL;
++        w->ge_10m -= gap >= 10000000ULL;
++    }
++}
++
++/* Adds a gap to the window; once the window is full, the oldest gap leaves. */
++static void rdtsc_window_push(struct rdtsc_gap_window *w, uint64_t gap)
++{
++    if ( gap > RDTSC_HIST_MAX_GAP )
++        gap = RDTSC_HIST_MAX_GAP;
++
++    if ( w->samples == RDTSC_WINDOW_SIZE )
++        rdtsc_window_account(w, w->ring[w->head], false);
++    else
++        w->samples++;
++
++    w->ring[w->head] = gap;
++    rdtsc_window_account(w, gap, true);
++
++    if ( ++w->head == RDTSC_WINDOW_SIZE )
++        w->head = 0;
++}
++
++/* Sum of the k largest gaps of the window */
++static uint64_t rdtsc_window_top_sum(const struct rdtsc_gap_window *w,
++                                     unsigned int k)
++{
++    uint64_t sum = 0;
++    unsigned int group, b;
++
++    for ( group = RDTSC_HIST_GROUPS; k && group-- > 0; )
++    {
++        if ( w->group_count[group] <= k )
++        {
++            k -= w->group_count[group];
++            sum += w->group_sum[group];
++            continue;
++        }
++
++        for ( b = (group + 1) * RDTSC_HIST_SUB;
++              k && b-- > group * RDTSC_HIST_SUB; )
++        {
++            if ( w->count[b] <= k )
++            {
++                k -= w->count[b];
++                sum += w->sum[b];
++            }
++            else
++            {
++                /* Part of a bucket: its mean stands for the gaps taken. */
++                sum += w->sum[b] / w->count[b] * k +
++                       w->sum[b] % w->count[b] * k / w->count[b];
++                k = 0;
++            }
++        }
++    }
++
++    return sum;
++}
++
++/* Top of the bucket that holds the r-th largest gap of the window, r >= 1 */
++static uint64_t rdtsc_window_top_value(const struct rdtsc_gap_window *w,
++                                       unsigned int r)
++{
++    unsigned int group, b;
++
++    for ( group = RDTSC_HIST_GROUPS; group-- > 0; )
++    {
++        if ( w->group_count[group] < r )
++        {
++            r -= w->group_count[group];
++            continue;
++        }
++
++        for ( b = (group + 1) * RDTSC_HIST_SUB; b-- > group * RDTSC_HIST_SUB; )
++        {
++            if ( w->count[b] >= r )
++                return rdtsc_hist_upper(b);
++
++            r -= w->count[b];
++        }
++    }
++
++    return 0;
++}
++
++/* Nearest-rank percentile; basis points: 9000=p90, 9950=p99.5. */
++static uint64_t rdtsc_window_percentile(const struct rdtsc_gap_window *w,
++                                        unsigned int bp)
++{
++    uint64_t rank;
++
++    if ( !w->samples || !bp || bp > 10000 )
++        return 0;
++
++    rank = ((uint64_t)w->samples * bp + 9999) / 10000;
++
++    return rdtsc_window_top_value(w, w->samples - rank + 1);
++}
++
++/*
++ * The baseline, once the window is full: the gate, above which a gap is not
++ * compressed, and the lag_gap, the mean of the slice [RDTSC_LAG_LO, RDTSC_LAG_HI)
++ * of the sorted window, which caps how far the guest TSC may fall behind.
++ */
++static bool rdtsc_window_baseline(const struct rdtsc_gap_window *w,
++                                  uint64_t *max_gap, uint64_t *lag_gap)
++{
++    BUILD_BUG_ON(RDTSC_LAG_HI_BP > 10000);
++    BUILD_BUG_ON(RDTSC_LAG_LO >= RDTSC_LAG_HI);
++
++    if ( !w || w->samples < RDTSC_WINDOW_SIZE )
++        return false;
++
++    *max_gap = rdtsc_window_percentile(w, RDTSC_GATE_BP);
++    *lag_gap = (rdtsc_window_top_sum(w, RDTSC_WINDOW_SIZE - RDTSC_LAG_LO) -
++                rdtsc_window_top_sum(w, RDTSC_WINDOW_SIZE - RDTSC_LAG_HI)) /
++               (RDTSC_LAG_HI - RDTSC_LAG_LO);
++
++    return true;
++}
++
++static const char *const rdtsc_why_name[] = {
++    [RDTSC_WHY_COMPRESSED]  = "compressed",
++    [RDTSC_WHY_OFF]         = "off",
++    [RDTSC_WHY_SLEPT]       = "slept",
++    [RDTSC_WHY_NO_BASELINE] = "no_baseline",
++    [RDTSC_WHY_GATE_HIGH]   = "gate_high",
++    [RDTSC_WHY_GATE_LOW]    = "gate_low",
++    [RDTSC_WHY_LAG]         = "lag",
++    [RDTSC_WHY_KERNEL]      = "kernel",
++    [RDTSC_WHY_FAR]         = "far",
++};
++
++/* Window percentiles in the 't' dump, in basis points */
++static const unsigned int rdtsc_dump_bp[] = {
++    200, 500, 1000, 5000, 8500, 9000, 9500, 9800, 9900, 9950, 9990,
++};
++
++static void cf_check rdtsc_poc_dump(unsigned char key)
++{
++    struct domain *d;
++
++    rcu_read_lock(&domlist_read_lock);
++
++    for_each_domain ( d )
++    {
++        struct vmx_domain *vmx;
++        const struct rdtsc_gap_window *w;
++        uint64_t p[ARRAY_SIZE(rdtsc_dump_bp)] = {};
++        uint64_t max_gap = 0, lag_gap = 0, low = 0, high = 0;
++        uint64_t pairs = 0, pairs_ok = 0;
++        struct rdtsc_pair_entry pair_log[RDTSC_PAIR_LOG] = {};
++        struct {
++            uint64_t reads, compressed, far, slept, lag, pvclock, max_hidden, pure;
++        } prog[RDTSC_PAIR_VCPUS] = {};
++        unsigned int samples = 0, ge_100k = 0, ge_1m = 0, ge_10m = 0, i;
++        bool ready = false;
++        struct vcpu *v;
++
++        if ( !is_hvm_domain(d) ||
++            !d->arch.hvm.vmx.rdtsc_poc_enabled )
++            continue;
++
++        vmx = &d->arch.hvm.vmx;
++
++        /* Copy under the lock, print after it: every RDTSC exit takes it. */
++        spin_lock(&vmx->rdtsc_lock);
++
++        w = vmx->rdtsc_window;
++        if ( w && w->samples )
++        {
++            ready = rdtsc_window_baseline(w, &max_gap, &lag_gap);
++
++            for ( i = 0; i < ARRAY_SIZE(rdtsc_dump_bp); i++ )
++                p[i] = rdtsc_window_percentile(w, rdtsc_dump_bp[i]);
++
++            low = rdtsc_window_top_value(w, w->samples);
++            high = rdtsc_window_top_value(w, 1);
++            samples = w->samples;
++            ge_100k = w->ge_100k;
++            ge_1m = w->ge_1m;
++            ge_10m = w->ge_10m;
++        }
++
++        /* Oldest first */
++        if ( w )
++        {
++            pairs = w->pairs;
++            pairs_ok = w->pairs_ok;
++            for ( i = 0; i < RDTSC_PAIR_LOG; i++ )
++                pair_log[i] = w->pair_log[(w->pair_head + i) % RDTSC_PAIR_LOG];
++
++            for ( i = 0; i < RDTSC_PAIR_VCPUS; i++ )
++            {
++                const struct rdtsc_user_timeline *t = &w->user[i];
++
++                prog[i].reads = t->reads;
++                prog[i].compressed = t->compressed;
++                prog[i].far = t->far;
++                prog[i].slept = t->slept;
++                prog[i].lag = t->lag;
++                prog[i].pvclock = t->pvclock;
++                prog[i].max_hidden = t->max_hidden;
++                prog[i].pure = t->pure;
++            }
++        }
++
++        spin_unlock(&vmx->rdtsc_lock);
++
++        printk(XENLOG_INFO
++            "RDTSC_POC: dom=%u baseline_valid=%u samples=%u window=%u\n",
++            d->domain_id, (unsigned int)ready, samples, RDTSC_WINDOW_SIZE);
++
++        if ( samples )
++        {
++            /* Percentiles, minimum and maximum are the top of their bucket. */
++            printk(XENLOG_INFO
++                "RDTSC_POC: mean=%llu gate=%llu p02=%llu p05=%llu "
++                "p10=%llu p50=%llu p85=%llu p90=%llu "
++                "p95=%llu p98=%llu\n",
++                (unsigned long long)lag_gap,
++                (unsigned long long)max_gap,
++                (unsigned long long)p[0],
++                (unsigned long long)p[1],
++                (unsigned long long)p[2],
++                (unsigned long long)p[3],
++                (unsigned long long)p[4],
++                (unsigned long long)p[5],
++                (unsigned long long)p[6],
++                (unsigned long long)p[7]);
++
++            printk(XENLOG_INFO
++                "RDTSC_POC: p99=%llu p995=%llu p999=%llu "
++                "ge_100k=%u ge_1m=%u ge_10m=%u retained=%u\n",
++                (unsigned long long)p[8],
++                (unsigned long long)p[9],
++                (unsigned long long)p[10],
++                ge_100k, ge_1m, ge_10m,
++                RDTSC_LAG_HI - RDTSC_LAG_LO);
++
++            printk(XENLOG_INFO
++                 "RDTSC_POC: observed_min=%llu "
++                 "observed_max=%llu\n",
++                 (unsigned long long)low,
++                 (unsigned long long)high);
++        }
++
++        printk(XENLOG_INFO
++            "RDTSC_POC: dom=%u pairs=%llu pairs_ok=%llu\n",
++            d->domain_id, (unsigned long long)pairs,
++            (unsigned long long)pairs_ok);
++
++        for ( i = 0; i < RDTSC_PAIR_LOG; i++ )
++        {
++            const struct rdtsc_pair_entry *e = &pair_log[i];
++
++            if ( !e->rip )
++                continue;
++
++            printk(XENLOG_INFO
++                "RDTSC_POC: dom=%u pair vcpu=%u rip=%#llx host_gap=%llu "
++                "stolen=%llu run=%llu gap=%llu max_gap=%llu reads=%u "
++                "exits=%u delta=%llu why=%s\n",
++                d->domain_id, e->vcpu, (unsigned long long)e->rip,
++                (unsigned long long)e->host_gap,
++                (unsigned long long)e->stolen,
++                (unsigned long long)e->run,
++                (unsigned long long)e->gap,
++                (unsigned long long)e->max_gap, e->reads, e->exits,
++                (unsigned long long)e->delta,
++                e->why < ARRAY_SIZE(rdtsc_why_name) ? rdtsc_why_name[e->why]
++                                                    : "?");
++        }
++
++        /* Best-effort snapshots: vCPU counters change concurrently. */
++        for_each_vcpu ( d, v )
++        {
++            const struct rdtsc_poc_vcpu *a =
++                &v->arch.hvm.vmx.rdtsc_poc;
++
++            printk(XENLOG_INFO
++                "RDTSC_POC: dom=%u vcpu=%u reads=%llu "
++                "compressed=%llu normal=%llu adjusted=%llu "
++                "lag_reject=%llu jumps_gt_4k=%llu\n",
++                d->domain_id, v->vcpu_id,
++                (unsigned long long)ACCESS_ONCE(a->rdtsc_reads),
++                (unsigned long long)ACCESS_ONCE(a->compressed_reads),
++                (unsigned long long)ACCESS_ONCE(a->normal_returns),
++                (unsigned long long)ACCESS_ONCE(a->adjusted_returns),
++                (unsigned long long)ACCESS_ONCE(a->lag_rejections),
++                (unsigned long long)ACCESS_ONCE(a->large_forward_jumps));
++
++            printk(XENLOG_INFO
++                "RDTSC_POC: dom=%u vcpu=%u "
++                "big_gate=%llu big_lag=%llu big_compressed=%llu\n",
++                d->domain_id, v->vcpu_id,
++                (unsigned long long)ACCESS_ONCE(a->big_gate_high),
++                (unsigned long long)ACCESS_ONCE(a->big_lag_rejections),
++                (unsigned long long)ACCESS_ONCE(a->big_compressed));
++
++            /* Guest delta is per-vCPU, not necessarily the detector pair. */
++            printk(XENLOG_INFO
++                "RDTSC_POC: dom=%u vcpu=%u "
++                "guest_delta_le100=%llu guest_delta_gt100=%llu "
++                "guest_delta_ge1m=%llu guest_delta_max=%llu\n",
++                d->domain_id, v->vcpu_id,
++                (unsigned long long)ACCESS_ONCE(a->guest_delta_le_100),
++                (unsigned long long)ACCESS_ONCE(a->guest_delta_gt_100),
++                (unsigned long long)ACCESS_ONCE(a->guest_delta_ge_1m),
++                (unsigned long long)ACCESS_ONCE(a->guest_delta_max));
++
++            printk(XENLOG_INFO
++                "RDTSC_POC: dom=%u vcpu=%u "
++                "baseline_miss=%llu gate_high=%llu gate_low=%llu "
++                "slept=%llu\n",
++                d->domain_id, v->vcpu_id,
++                (unsigned long long)ACCESS_ONCE(a->baseline_missing),
++                (unsigned long long)ACCESS_ONCE(a->gate_high_rejections),
++                (unsigned long long)ACCESS_ONCE(a->gate_low_rejections),
++                (unsigned long long)ACCESS_ONCE(a->sleep_breaks));
++
++            printk(XENLOG_INFO
++                "RDTSC_POC: dom=%u vcpu=%u "
++                "max_lag=%llu max_jump=%llu ahead=%llu "
++                "gaps_100k=%llu gaps_1m=%llu gaps_10m=%llu\n",
++                d->domain_id, v->vcpu_id,
++                (unsigned long long)ACCESS_ONCE(a->max_virtual_lag),
++                (unsigned long long)ACCESS_ONCE(a->max_forward_jump),
++                (unsigned long long)ACCESS_ONCE(a->ahead_of_normal),
++                (unsigned long long)ACCESS_ONCE(a->gap_ge_100k),
++                (unsigned long long)ACCESS_ONCE(a->gap_ge_1m),
++                (unsigned long long)ACCESS_ONCE(a->gap_ge_10m));
++
++            /* Close pairs: returned at most RDTSC_CLOSE_DELTA apart, or why not */
++            printk(XENLOG_INFO
++                "RDTSC_POC: dom=%u vcpu=%u "
++                "close=%llu close_ok=%llu close_lag=%llu close_gate=%llu "
++                "close_by_steal=%llu stolen_reads=%llu stolen_max=%llu\n",
++                d->domain_id, v->vcpu_id,
++                (unsigned long long)ACCESS_ONCE(a->close_pairs),
++                (unsigned long long)ACCESS_ONCE(a->close_ok),
++                (unsigned long long)ACCESS_ONCE(a->close_lag),
++                (unsigned long long)ACCESS_ONCE(a->close_gate),
++                (unsigned long long)ACCESS_ONCE(a->close_by_steal),
++                (unsigned long long)ACCESS_ONCE(a->stolen_reads),
++                (unsigned long long)ACCESS_ONCE(a->stolen_max));
++
++            /* User RDTSCs in programs' own code, the only ones compressed */
++            if ( v->vcpu_id < RDTSC_PAIR_VCPUS )
++                printk(XENLOG_INFO
++                    "RDTSC_POC: dom=%u vcpu=%u prog_reads=%llu "
++                    "prog_compressed=%llu prog_far=%llu prog_slept=%llu "
++                    "prog_lag=%llu prog_pvclock=%llu prog_max_hidden=%llu "
++                    "prog_pure=%llu\n",
++                    d->domain_id, v->vcpu_id,
++                    (unsigned long long)prog[v->vcpu_id].reads,
++                    (unsigned long long)prog[v->vcpu_id].compressed,
++                    (unsigned long long)prog[v->vcpu_id].far,
++                    (unsigned long long)prog[v->vcpu_id].slept,
++                    (unsigned long long)prog[v->vcpu_id].lag,
++                    (unsigned long long)prog[v->vcpu_id].pvclock,
++                    (unsigned long long)prog[v->vcpu_id].max_hidden,
++                    (unsigned long long)prog[v->vcpu_id].pure);
++        }
++    }
++
++    rcu_read_unlock(&domlist_read_lock);
++}
++
++static bool __read_mostly opt_rdtsc_poc;
++boolean_param("rdtsc-poc", opt_rdtsc_poc);
++
+ static bool __initdata opt_force_ept;
+ boolean_param("force-ept", opt_force_ept);
+ 
++static void cf_check rdtsc_poc_enable(unsigned char key)
++{
++    if ( !ACCESS_ONCE(rdtsc_poc_apply_enabled) )
++    {
++        ACCESS_ONCE(rdtsc_poc_apply_enabled) = true;
++
++        printk(XENLOG_INFO "RDTSC_POC: compensation enabled\n");
++    }
++}
++
+ static void cf_check vmx_ctxt_switch_from(struct vcpu *v);
+ static void cf_check vmx_ctxt_switch_to(struct vcpu *v);
+ 
+@@ -566,22 +1012,55 @@ static int cf_check vmx_domain_initialise(struct domain *d)
+     };
+     int rc;
+ 
++    struct vmx_domain *vmx = &d->arch.hvm.vmx;
++
+     d->arch.ctxt_switch = &csw;
+ 
+     /*
+      * Work around CVE-2018-12207?  The hardware domain is already permitted
+      * to reboot the system, so doesn't need mitigating against DoS's.
+      */
+-    d->arch.hvm.vmx.exec_sp = is_hardware_domain(d) || opt_ept_exec_sp;
++    vmx->exec_sp = is_hardware_domain(d) || opt_ept_exec_sp;
++
++    /*
++     * Only guests created with altp2m, the ones DRAKVUF analyses: every other one
++     * (a PVH service domain) would pay a VM exit per RDTSC for nothing.
++     * hvm_domain_initialise() has set the mode from the creation flags.
++     */
++    vmx->rdtsc_poc_enabled = opt_rdtsc_poc && !is_hardware_domain(d) &&
++        d->arch.hvm.params[HVM_PARAM_ALTP2M] != XEN_ALTP2M_disabled;
++    spin_lock_init(&vmx->rdtsc_lock);
+ 
+     if ( (rc = vmx_alloc_vlapic_mapping(d)) != 0 )
+         return rc;
+ 
++    if ( vmx->rdtsc_poc_enabled )
++    {
++        vmx->rdtsc_window = xvzalloc(struct rdtsc_gap_window);
++        if ( !vmx->rdtsc_window )
++        {
++            vmx_free_vlapic_mapping(d);
++            return -ENOMEM;
++        }
++    }
++
+     return 0;
+ }
+ 
+ static void cf_check vmx_domain_relinquish_resources(struct domain *d)
+ {
++    struct vmx_domain *vmx = &d->arch.hvm.vmx;
++    struct rdtsc_gap_window *w = vmx->rdtsc_window;
++
++    /* The 't' dump may still look at a dying domain's window. */
++    if ( w )
++    {
++        spin_lock(&vmx->rdtsc_lock);
++        vmx->rdtsc_window = NULL;
++        spin_unlock(&vmx->rdtsc_lock);
++        xvfree(w);
++    }
++
+     vmx_free_vlapic_mapping(d);
+ }
+ 
+@@ -1494,14 +1973,38 @@ static void cf_check vmx_set_tsc_offset(struct vcpu *v, u64 offset, u64 at_tsc)
+     vmx_vmcs_exit(v);
+ }
+ 
+-static void cf_check vmx_set_rdtsc_exiting(struct vcpu *v, bool enable)
++static void cf_check vmx_set_rdtsc_exiting(
++    struct vcpu *v, bool enable)
+ {
++    bool poc_enabled =
++        v->domain->arch.hvm.vmx.rdtsc_poc_enabled;
++
++    bool effective_enable = enable || poc_enabled;
++
+     vmx_vmcs_enter(v);
+-    v->arch.hvm.vmx.exec_control &= ~CPU_BASED_RDTSC_EXITING;
+-    if ( enable )
+-        v->arch.hvm.vmx.exec_control |= CPU_BASED_RDTSC_EXITING;
++
++    v->arch.hvm.vmx.exec_control &=
++        ~CPU_BASED_RDTSC_EXITING;
++
++    if ( effective_enable )
++        v->arch.hvm.vmx.exec_control |=
++            CPU_BASED_RDTSC_EXITING;
++
+     vmx_update_cpu_exec_control(v);
++
+     vmx_vmcs_exit(v);
++
++    if ( poc_enabled )
++    {
++        printk(XENLOG_INFO
++               "RDTSC_POC: dom=%u vcpu=%u "
++               "requested=%u effective=%u exec_control=%#x\n",
++               v->domain->domain_id,
++               v->vcpu_id,
++               (unsigned int)enable,
++               (unsigned int)effective_enable,
++               v->arch.hvm.vmx.exec_control);
++    }
+ }
+ 
+ static void cf_check vmx_set_descriptor_access_exiting(
+@@ -2997,6 +3500,17 @@ const struct hvm_function_table * __init start_vmx(void)
+         return NULL;
+     }
+ 
++    register_keyhandler(
++        't',
++        rdtsc_poc_dump,
++        "Dump RDTSC POC counters",
++        false);
++    register_keyhandler(
++        'd',
++        rdtsc_poc_enable,
++        "Enable RDTSC POC compensation",
++        false);
++
+     vmx_function_table.caps.singlestep = cpu_has_monitor_trap_flag;
+ 
+     if ( cpu_has_vmx_dt_exiting )
+@@ -4058,6 +4572,541 @@ static void undo_nmis_unblocked_by_iret(void)
+               guest_info | VMX_INTR_SHADOW_NMI);
+ }
+ 
++
++
++#define TSC_STEP 10ULL
++#define TSC_MIN_GAP 20ULL
++#define RDTSC_POC_U64_MAX (~(uint64_t)0)
++/* Gaps up to this many cycles of guest time are close pairs, like a red pill test. */
++#define RDTSC_CLOSE_GAP 20000ULL
++/* What a red pill test accepts between two RDTSCs */
++#define RDTSC_CLOSE_DELTA 100ULL
++/*
++ * A close pair may take the lag this far above lag_gap: the timeline then catches
++ * up on a later read with a larger gap, where a jump does not show. It bounds how
++ * much longer a TSC busy-wait can take (300000 cycles: 100 us at 3 GHz).
++ */
++#define RDTSC_CLOSE_HEADROOM 300000ULL
++/*
++ * Stolen time hidden at most, and only inside close pairs: guest timers are
++ * deadlines on the real guest TSC, so a timeline seconds behind it (a restore or
++ * an injection holds the vCPU for that long) leaves the guest crawling.
++ * 3000000 cycles: 1 ms at 3 GHz.
++ */
++#define RDTSC_STEAL_MAX 3000000ULL
++/*
++ * Ceiling for the gate and the lag_gap. Without sleep and stolen time, a gap above
++ * it is the guest's own work, however common it is in the window (a run of 8 ms
++ * gaps once made both jump there and the guest crawl). 1000000 cycles: 0.33 ms.
++ */
++#define RDTSC_GAP_CEILING 1000000ULL
++/*
++ * 1: a gap is the time the vCPU ran the guest, from each VM entry to its VM exit,
++ * so Xen's handling of the exits DRAKVUF causes is out of it as well as stolen
++ * time. 0: the host time minus stolen time.
++ */
++#define RDTSC_GAP_RUN 0
++/*
++ * 1: kernel, library and vDSO RDTSCs are compressed on the vCPU's timeline as
++ * well. 0: they return the guest TSC as is. A Linux guest on the xen clocksource
++ * and clockevent turns the TSC into its clock (pvclock) and its timer deadlines
++ * (absolute Xen system time); a kernel clock behind the real one fires every
++ * timer early, and the guest freezes in a storm of timer interrupts.
++ */
++#define RDTSC_KERNEL_ADJUST 0
++/*
++ * A user RDTSC in a program's own code returns the previous one on its vCPU plus a
++ * few cycles if the vCPU ran the guest at most this long in between and did not
++ * sleep: Xen's handling of the exits in between, pauses and waits are not guest
++ * run time. 1000000 cycles: 0.33 ms at 3 GHz. A red pill pair under DRAKVUF's
++ * dev-all ran up to 133k cycles (the kernel logging UMIP's warning, ~27 exits);
++ * 200000 still missed the first detector run after a restore.
++ */
++#define RDTSC_USER_CLOSE 1000000ULL
++/*
++ * Most guest time such a read hides. DRAKVUF paused a red pill pair up to 4.7M
++ * cycles. 30000000 cycles: 10 ms at 3 GHz.
++ */
++#define RDTSC_USER_LAG_MAX 30000000ULL
++/*
++ * User RDTSCs in a program's own code: below RDTSC_USER_RIP_MAX, where Linux maps
++ * programs (its shared libraries and vDSO from about 0x7f0000000000 up), and from
++ * RDTSC_USER_EXE_LO to RDTSC_USER_EXE_HI, where 64-bit Windows maps executables (its
++ * DLLs, QueryPerformanceCounter's included, from about 0x7ff800000000 up). Linux puts
++ * libraries in that band rarely: it is 8 GB of the 1 TB their base is randomised over.
++ */
++#define RDTSC_USER_RIP_MAX 0x7f0000000000ULL
++#define RDTSC_USER_EXE_LO 0x7ff600000000ULL
++#define RDTSC_USER_EXE_HI 0x7ff800000000ULL
++
++/*
++ * 1: a read with no VM exit since the previous one (no syscall, fault or CPUID took
++ * the vCPU out) returns that one plus the guest's own work in between: the run time
++ * less the least seen for such a pair, which is the cost of the RDTSC exit itself.
++ * al-khaser's Locky check wants CloseHandle(0) (40-90 cycles of work) to take 10
++ * times GetProcessHeap()'s (none); a fixed step of 10-25 cycles never does. Reads
++ * with exits between keep the fixed step: the red pill's SIDT and CPUID's exit.
++ */
++#define RDTSC_USER_PURE 0
++
++static bool rdtsc_program_rip(uint64_t rip)
++{
++    return rip < RDTSC_USER_RIP_MAX ||
++           (rip >= RDTSC_USER_EXE_LO && rip < RDTSC_USER_EXE_HI);
++}
++
++/* The guest's pvclock timestamp: a TSC below it would wrap its clock forward */
++static uint64_t rdtsc_pvclock_stamp(const struct vcpu *v)
++{
++    if ( !v->vcpu_info_area.map )
++        return 0;
++
++    return vcpu_info(v, time.tsc_timestamp);
++}
++
++/*
++ * A user RDTSC in a program's own code, on the vCPU's program timeline t. Kernel,
++ * library and vDSO reads are not on it, so the guest's clock and timers keep the
++ * real TSC. The domain's rdtsc_lock is held.
++ */
++static uint64_t rdtsc_poc_user(
++    struct vcpu *v,
++    struct rdtsc_user_timeline *t,
++    uint64_t blocked,
++    uint64_t host_tsc,
++    uint64_t normal_tsc)
++{
++    struct rdtsc_poc_vcpu *a = &v->arch.hvm.vmx.rdtsc_poc;
++    uint64_t result = normal_tsc;
++
++    t->reads++;
++
++    if ( !t->valid )
++        a->why = RDTSC_WHY_NO_BASELINE;
++    else if ( blocked != t->blocked_ns )
++    {
++        a->why = RDTSC_WHY_SLEPT;
++        t->slept++;
++    }
++    else if ( a->run_tsc - t->run_tsc > RDTSC_USER_CLOSE )
++    {
++        a->why = RDTSC_WHY_FAR;
++        t->far++;
++    }
++    else
++    {
++        uint64_t candidate = t->last_returned + TSC_STEP + (host_tsc & 0xf);
++
++        /* Only this RDTSC's own exit since the previous read */
++        if ( RDTSC_USER_PURE && a->exits - t->exits == 1 )
++        {
++            uint64_t run = a->run_tsc - t->run_tsc;
++
++            if ( run < t->run_min )
++                t->run_min = run;
++            candidate = t->last_returned + 1 + (run - t->run_min);
++            t->pure++;
++        }
++
++        if ( candidate > normal_tsc ||
++             normal_tsc - candidate > RDTSC_USER_LAG_MAX )
++        {
++            a->why = RDTSC_WHY_LAG;
++            t->lag++;
++        }
++        else
++        {
++            uint64_t stamp = rdtsc_pvclock_stamp(v);
++
++            if ( candidate < stamp )
++            {
++                candidate = stamp;
++                t->pvclock++;
++            }
++
++            result = candidate;
++            a->why = RDTSC_WHY_COMPRESSED;
++            t->compressed++;
++            if ( normal_tsc - result > t->max_hidden )
++                t->max_hidden = normal_tsc - result;
++        }
++    }
++
++    /* Never backwards on the timeline */
++    if ( t->valid && result <= t->last_returned )
++        result = t->last_returned + 1;
++
++    if ( !t->valid )
++        t->run_min = RDTSC_POC_U64_MAX;
++    t->last_returned = result;
++    t->run_tsc = a->run_tsc;
++    t->blocked_ns = blocked;
++    t->exits = a->exits;
++    t->valid = true;
++
++    return result;
++}
++
++/*
++ * Follows the red pill like pairs of the vCPU through this read, judged as why.
++ * The domain's rdtsc_lock is held.
++ */
++static void rdtsc_pair_track(
++    struct rdtsc_gap_window *w,
++    const struct vcpu *v,
++    uint64_t rip,
++    uint64_t cr3,
++    bool user,
++    uint64_t host_tsc,
++    uint64_t stolen_ns,
++    uint64_t gap,
++    uint64_t result,
++    uint8_t why)
++{
++    const struct rdtsc_poc_vcpu *a = &v->arch.hvm.vmx.rdtsc_poc;
++    struct rdtsc_pair_chain *c;
++
++    if ( v->vcpu_id >= RDTSC_PAIR_VCPUS )
++        return;
++
++    c = &w->chain[v->vcpu_id];
++
++    if ( c->rip )
++    {
++        c->reads++;
++        c->gap += gap;
++        if ( gap > c->max_gap )
++            c->max_gap = gap;
++        if ( c->why == RDTSC_WHY_COMPRESSED && why != RDTSC_WHY_KERNEL )
++            c->why = why;
++
++        if ( user && cr3 == c->cr3 &&
++             (rip > c->rip ? rip - c->rip : c->rip - rip) < RDTSC_PAIR_RIP )
++        {
++            uint64_t delta = result > c->result ? result - c->result : 0;
++            uint64_t exits = a->exits - c->exits - c->reads;
++
++            w->pairs++;
++            if ( delta <= RDTSC_CLOSE_DELTA )
++                w->pairs_ok++;
++
++            w->pair_log[w->pair_head] = (struct rdtsc_pair_entry) {
++                .rip = rip,
++                .host_gap = host_tsc - c->host_tsc,
++                .stolen = muldiv64(stolen_ns - c->stolen_ns, cpu_khz, 1000000),
++                .run = a->run_tsc - c->run_tsc,
++                .gap = c->gap,
++                .max_gap = c->max_gap,
++                .delta = delta,
++                .exits = exits > UINT32_MAX ? UINT32_MAX : exits,
++                .vcpu = v->vcpu_id,
++                .reads = c->reads,
++                .why = c->why,
++            };
++
++            if ( ++w->pair_head == RDTSC_PAIR_LOG )
++                w->pair_head = 0;
++        }
++        else if ( !user && c->reads < RDTSC_PAIR_READS )
++            return;
++    }
++
++    /* A user read in a program's own code starts a new chain, anything else ends it */
++    if ( !user || !rdtsc_program_rip(rip) )
++    {
++        c->rip = 0;
++        return;
++    }
++
++    *c = (struct rdtsc_pair_chain) {
++        .rip = rip,
++        .cr3 = cr3,
++        .result = result,
++        .host_tsc = host_tsc,
++        .run_tsc = a->run_tsc,
++        .stolen_ns = stolen_ns,
++        .exits = a->exits,
++        .why = RDTSC_WHY_COMPRESSED,
++    };
++}
++
++/*
++ * The value of a guest RDTSC on this vCPU's timeline. gap is the guest time since
++ * the vCPU's previous RDTSC exit, without the off_tsc cycles it spent off the guest
++ * (paused, waiting for a pCPU, and with RDTSC_GAP_RUN in Xen). A gap the window
++ * counts as normal is compressed to a few cycles, as long as the timeline stays
++ * within lag_gap of the guest TSC; a close pair may hide off_tsc on top of that.
++ * The domain's rdtsc_lock is held.
++ */
++static uint64_t rdtsc_poc_adjust(
++    struct vcpu *v,
++    bool have_gap,
++    uint64_t gap,
++    uint64_t off_tsc,
++    uint64_t host_tsc,
++    uint64_t normal_tsc)
++{
++    struct rdtsc_poc_vcpu *a =
++        &v->arch.hvm.vmx.rdtsc_poc;
++
++    uint64_t result = normal_tsc;
++
++    uint64_t last_returned_tsc = a->last_returned_tsc;
++    bool is_close = false, lag_fail = false, gate_fail = false;
++
++    a->why = RDTSC_WHY_SLEPT;
++
++    if ( have_gap && a->returned_valid )
++    {
++        uint64_t max_gap = 0;
++        uint64_t lag_gap = 0;
++        bool have_baseline =
++            rdtsc_window_baseline(v->domain->arch.hvm.vmx.rdtsc_window,
++                                  &max_gap, &lag_gap);
++
++        if ( max_gap > RDTSC_GAP_CEILING )
++            max_gap = RDTSC_GAP_CEILING;
++        if ( lag_gap > RDTSC_GAP_CEILING )
++            lag_gap = RDTSC_GAP_CEILING;
++
++        is_close = gap <= RDTSC_CLOSE_GAP;
++
++        if ( !have_baseline )
++        {
++            a->why = RDTSC_WHY_NO_BASELINE;
++            a->baseline_missing++;
++        }
++        else if ( gap > max_gap )
++        {
++            a->why = RDTSC_WHY_GATE_HIGH;
++            a->gate_high_rejections++;
++            gate_fail = is_close;
++            if ( gap >= 1000000ULL )
++                a->big_gate_high++;
++        }
++        else if ( gap < TSC_MIN_GAP )
++        {
++            a->why = RDTSC_WHY_GATE_LOW;
++            a->gate_low_rejections++;
++        }
++        else
++        {
++            uint64_t step = TSC_STEP + (host_tsc & 0xf);
++
++            /*
++             * Only a close pair may keep the lag above lag_gap: by the headroom,
++             * the time off the guest hidden so far and this gap's, up to
++             * RDTSC_STEAL_MAX. Any other read pays all of it back.
++             */
++            uint64_t allowance = lag_gap;
++            uint64_t hide = 0;
++
++            if ( is_close )
++            {
++                if ( a->hidden_stolen + off_tsc <= RDTSC_STEAL_MAX )
++                    hide = off_tsc;
++                allowance += RDTSC_CLOSE_HEADROOM + a->hidden_stolen + hide;
++            }
++
++            if (last_returned_tsc <= RDTSC_POC_U64_MAX - step)
++            {
++                uint64_t candidate =
++                    last_returned_tsc + step;
++                if ( candidate <= normal_tsc &&
++                     normal_tsc - candidate <= allowance )
++                {
++                    result = candidate;
++                    a->why = RDTSC_WHY_COMPRESSED;
++                    a->hidden_stolen += hide;
++                    a->compressed_reads++;
++                    if ( gap >= 1000000ULL )
++                        a->big_compressed++;
++                }
++                else
++                {
++                    a->why = RDTSC_WHY_LAG;
++                    a->lag_rejections++;
++                    lag_fail = is_close;
++                    if ( gap >= 1000000ULL )
++                        a->big_lag_rejections++;
++                }
++            }
++        }
++    }
++
++    /* A value returned as is pays back all the time hidden so far. */
++    if ( result == normal_tsc )
++        a->hidden_stolen = 0;
++
++    /*
++     * Avoid returning a timestamp older than
++     * the last value returned on this vCPU.
++     */
++    if ( a->returned_valid && result <= last_returned_tsc )
++    {
++        if (last_returned_tsc != RDTSC_POC_U64_MAX)
++            result = last_returned_tsc + 1;
++    }
++
++    if ( result < normal_tsc &&
++         normal_tsc - result > a->max_virtual_lag )
++        a->max_virtual_lag = normal_tsc - result;
++
++    if ( result > normal_tsc )
++        a->ahead_of_normal++;
++
++    if (result == normal_tsc)
++        a->normal_returns++;
++    else
++        a->adjusted_returns++;
++
++    /* Adjacent returned RDTSC values on THIS vCPU, all processes combined.
++     * These are NOT identified as time1/time2 from the detector. */
++    if ( a->returned_valid && result > last_returned_tsc )
++    {
++        uint64_t delta = result - last_returned_tsc;
++
++        if ( delta > 4000 )
++            a->large_forward_jumps++;
++        if ( delta > a->max_forward_jump )
++            a->max_forward_jump = delta;
++
++        if ( delta <= 100 )
++            a->guest_delta_le_100++;
++        else
++            a->guest_delta_gt_100++;
++        if ( delta >= 1000000ULL )
++            a->guest_delta_ge_1m++;
++        if ( delta > a->guest_delta_max )
++            a->guest_delta_max = delta;
++    }
++
++    if ( is_close )
++    {
++        a->close_pairs++;
++        if ( result - last_returned_tsc <= RDTSC_CLOSE_DELTA )
++            a->close_ok++;
++        else if ( lag_fail )
++            a->close_lag++;
++        else if ( gate_fail )
++            a->close_gate++;
++    }
++
++    a->last_returned_tsc = result;
++    a->returned_valid = true;
++
++    return result;
++}
++
++/*
++ * A guest RDTSC/RDTSCP of a RDTSC_POC domain. entry_tsc is the host TSC at the
++ * VM exit, where the gap since this vCPU's previous RDTSC exit ends.
++ */
++static uint64_t rdtsc_poc_read(
++    struct vcpu *v,
++    uint64_t entry_tsc,
++    uint64_t rip,
++    bool user)
++{
++    struct vmx_domain *vmx = &v->domain->arch.hvm.vmx;
++    struct rdtsc_poc_vcpu *a = &v->arch.hvm.vmx.rdtsc_poc;
++    uint64_t blocked = v->runstate.time[RUNSTATE_blocked];
++    uint64_t stolen = v->runstate.time[RUNSTATE_offline] +
++                      v->runstate.time[RUNSTATE_runnable];
++    uint64_t cr3 = v->arch.hvm.guest_cr[3];
++    uint64_t gap = 0, off_tsc = 0, result;
++    bool have_gap;
++
++    spin_lock(&vmx->rdtsc_lock);
++
++    /*
++     * A vCPU that slept (HLT, SCHEDOP_block) since its previous RDTSC: that time
++     * is idle, not the cost of traps, so the gap is neither compressed nor
++     * recorded. Xen switches to the idle vCPU lazily, without
++     * vmx_ctxt_switch_from(), so only the runstate tells.
++     */
++    if ( blocked != a->blocked_ns )
++    {
++        a->blocked_ns = blocked;
++        a->gap_valid = false;
++        a->sleep_breaks++;
++    }
++
++    have_gap = a->gap_valid && entry_tsc >= a->last_host_tsc;
++    if ( have_gap )
++    {
++        uint64_t host_gap = entry_tsc - a->last_host_tsc;
++        uint64_t run_gap = a->run_tsc - a->last_run_tsc;
++
++        /*
++         * Time the vCPU was paused (vm_event, domain pauses) or waited for a
++         * pCPU is not guest time: the gap is what the guest ran.
++         */
++        uint64_t stolen_tsc = muldiv64(stolen - a->stolen_ns, cpu_khz, 1000000);
++
++        gap = host_gap;
++        if ( stolen_tsc )
++        {
++            gap = host_gap > stolen_tsc + TSC_MIN_GAP ? host_gap - stolen_tsc
++                                                      : TSC_MIN_GAP;
++            a->stolen_reads++;
++            if ( stolen_tsc > a->stolen_max )
++                a->stolen_max = stolen_tsc;
++        }
++
++        /* Xen's handling of every VM exit in between is out of it too */
++        if ( RDTSC_GAP_RUN && run_gap < gap )
++            gap = run_gap > TSC_MIN_GAP ? run_gap : TSC_MIN_GAP;
++
++        off_tsc = host_gap > gap ? host_gap - gap : 0;
++        if ( host_gap > RDTSC_CLOSE_GAP && gap <= RDTSC_CLOSE_GAP )
++            a->close_by_steal++;
++
++        if ( gap >= 100000ULL )
++            a->gap_ge_100k++;
++        if ( gap >= 1000000ULL )
++            a->gap_ge_1m++;
++        if ( gap >= 10000000ULL )
++            a->gap_ge_10m++;
++    }
++    a->stolen_ns = stolen;
++
++    result = hvm_get_guest_tsc_fixed(v, rdtsc_ordered());
++
++    /* Collect even when compensation is disabled. */
++    a->why = RDTSC_WHY_OFF;
++    if ( ACCESS_ONCE(rdtsc_poc_apply_enabled) )
++    {
++        if ( user && rdtsc_program_rip(rip) && vmx->rdtsc_window &&
++             v->vcpu_id < RDTSC_PAIR_VCPUS )
++            result = rdtsc_poc_user(v, &vmx->rdtsc_window->user[v->vcpu_id],
++                                    blocked, entry_tsc, result);
++        else if ( RDTSC_KERNEL_ADJUST )
++            result = rdtsc_poc_adjust(v, have_gap, gap, off_tsc,
++                                      entry_tsc, result);
++        else
++            a->why = RDTSC_WHY_KERNEL;
++    }
++
++    if ( vmx->rdtsc_window )
++    {
++        rdtsc_pair_track(vmx->rdtsc_window, v, rip, cr3, user, entry_tsc,
++                         stolen, gap, result, a->why);
++
++        /* After this read's decision, so an outlier never approves itself */
++        if ( have_gap )
++            rdtsc_window_push(vmx->rdtsc_window, gap);
++    }
++
++    a->last_host_tsc = entry_tsc;
++    a->last_run_tsc = a->run_tsc;
++    a->gap_valid = true;
++
++    spin_unlock(&vmx->rdtsc_lock);
++
++    return result;
++}
++
+ void asmlinkage vmx_vmexit_handler(struct cpu_user_regs *regs)
+ {
+     unsigned long exit_qualification, exit_reason, idtv_info, intr_info = 0;
+@@ -4066,6 +5115,21 @@ void asmlinkage vmx_vmexit_handler(struct cpu_user_regs *regs)
+     struct vcpu *v = current;
+     struct domain *currd = v->domain;
+ 
++    uint64_t rdtsc_poc_entry_tsc = 0;
++
++    if ( unlikely(currd->arch.hvm.vmx.rdtsc_poc_enabled) )
++    {
++        struct rdtsc_poc_vcpu *a = &v->arch.hvm.vmx.rdtsc_poc;
++
++        rdtsc_poc_entry_tsc = rdtsc_ordered();
++        a->exits++;
++
++        /* The guest ran from the VM entry to now */
++        if ( a->resume_tsc && rdtsc_poc_entry_tsc > a->resume_tsc )
++            a->run_tsc += rdtsc_poc_entry_tsc - a->resume_tsc;
++        a->resume_tsc = 0;
++    }
++
+     __vmread(GUEST_RIP,    &regs->rip);
+     __vmread(GUEST_RSP,    &regs->rsp);
+     __vmread(GUEST_RFLAGS, &regs->rflags);
+@@ -4486,7 +5550,15 @@ void asmlinkage vmx_vmexit_handler(struct cpu_user_regs *regs)
+         /* fall through */
+     case EXIT_REASON_RDTSC:
+         update_guest_eip(); /* Safe: RDTSC, RDTSCP */
+-        hvm_rdtsc_intercept(regs);
++
++        if ( unlikely(currd->arch.hvm.vmx.rdtsc_poc_enabled) )
++        {
++            v->arch.hvm.vmx.rdtsc_poc.rdtsc_reads++;
++            msr_split(regs, rdtsc_poc_read(v, rdtsc_poc_entry_tsc, regs->rip,
++                                           vmx_get_cpl() == 3));
++        }
++        else
++            hvm_rdtsc_intercept(regs);
+         break;
+ 
+     case EXIT_REASON_VMCALL:
+@@ -4904,6 +5976,10 @@ bool asmlinkage vmx_vmenter_helper(const struct cpu_user_regs *regs)
+     __vmwrite(GUEST_RSP,    regs->rsp);
+     __vmwrite(GUEST_RFLAGS, regs->rflags | X86_EFLAGS_MBS);
+ 
++    /* RDTSC_POC: the guest runs from here to the next VM exit */
++    if ( unlikely(currd->arch.hvm.vmx.rdtsc_poc_enabled) )
++        curr->arch.hvm.vmx.rdtsc_poc.resume_tsc = rdtsc();
++
+     return true;
+ }
+ 
+diff --git a/xen/arch/x86/include/asm/hvm/vmx/vmcs.h b/xen/arch/x86/include/asm/hvm/vmx/vmcs.h
+index e1d3398141..da8207a47c 100644
+--- a/xen/arch/x86/include/asm/hvm/vmx/vmcs.h
++++ b/xen/arch/x86/include/asm/hvm/vmx/vmcs.h
+@@ -8,6 +8,9 @@
+ #define __ASM_X86_HVM_VMX_VMCS_H__
+ 
+ #include <xen/mm.h>
++#include <xen/timer.h>
++#include <xen/tasklet.h>
++#include <xen/atomic.h>
+ 
+ extern void vmcs_dump_vcpu(struct vcpu *v);
+ extern int vmx_vmcs_init(void);
+@@ -44,6 +47,210 @@ struct ept_data {
+     cpumask_var_t invalidate;
+ };
+ 
++
++/* The newest gaps of all vCPUs of a domain, the RDTSC_POC baseline */
++#define RDTSC_WINDOW_SIZE 10000U
++
++/*
++ * Gap histogram: values below 2^RDTSC_HIST_SUB_BITS have one bucket each, and every
++ * power of two above has RDTSC_HIST_SUB buckets (at most 1/16 wide). Gaps are clamped
++ * to RDTSC_HIST_MAX_GAP, about 6 minutes at 3 GHz.
++ */
++#define RDTSC_HIST_SUB_BITS 4
++#define RDTSC_HIST_SUB      (1U << RDTSC_HIST_SUB_BITS)
++#define RDTSC_HIST_MAX_BITS 40
++#define RDTSC_HIST_MAX_GAP  ((1ULL << RDTSC_HIST_MAX_BITS) - 1)
++#define RDTSC_HIST_GROUPS   (RDTSC_HIST_MAX_BITS - RDTSC_HIST_SUB_BITS + 1)
++#define RDTSC_HIST_BUCKETS  (RDTSC_HIST_GROUPS * RDTSC_HIST_SUB)
++
++/*
++ * Red pill like pairs: two user RDTSCs on a vCPU, from the same process, less than
++ * RDTSC_PAIR_RIP bytes apart (the same instruction too: a rdtsc() helper that is
++ * not inlined), in a program's own code (rdtsc_program_rip(), vmx.c), where
++ * system libraries and the vDSO's clock_gettime() are not. Kernel RDTSCs may come between
++ * them, fewer than RDTSC_PAIR_READS (Linux reads the TSC on every return to user
++ * mode for its kernel stack offset, after a SIDT emulated for UMIP too, and for
++ * the timestamp of each message it logs, such as UMIP's warning). Each
++ * domain keeps the last RDTSC_PAIR_LOG of them for the 't' dump, and follows the
++ * first RDTSC_PAIR_VCPUS vCPUs. User RDTSCs in a program's own code are also the
++ * only ones RDTSC_POC compresses, unless RDTSC_KERNEL_ADJUST.
++ */
++#define RDTSC_PAIR_RIP 64U
++#define RDTSC_PAIR_READS 64U
++#define RDTSC_PAIR_LOG 16U
++#define RDTSC_PAIR_VCPUS 16U
++
++/* Why a RDTSC returned what it did */
++enum rdtsc_why {
++    RDTSC_WHY_COMPRESSED,
++    RDTSC_WHY_OFF,          /* compensation not enabled yet */
++    RDTSC_WHY_SLEPT,        /* first read after the vCPU slept */
++    RDTSC_WHY_NO_BASELINE,
++    RDTSC_WHY_GATE_HIGH,
++    RDTSC_WHY_GATE_LOW,
++    RDTSC_WHY_LAG,
++    RDTSC_WHY_KERNEL,       /* not in a program's own code: the guest TSC as is */
++    RDTSC_WHY_FAR,          /* too much guest run time since the program's last read */
++};
++
++struct rdtsc_pair_entry {
++    uint64_t rip;
++    uint64_t host_gap;      /* host cycles between the two VM exits */
++    uint64_t stolen;        /* of which the vCPU was paused or waited for a pCPU */
++    uint64_t run;           /* of which it ran the guest, VM entry to VM exit */
++    uint64_t gap;           /* the gaps the reads after the first were judged on */
++    uint64_t max_gap;       /* the largest of them */
++    uint64_t delta;         /* second value returned minus the first */
++    uint32_t exits;         /* VM exits of the vCPU between the two, but RDTSCs */
++    uint16_t vcpu;
++    uint8_t reads;          /* RDTSCs after the first, the second one included */
++    uint8_t why;            /* the first of them not compressed, else compressed */
++};
++
++/* A vCPU's last user RDTSC in a program's own code, and the reads since */
++struct rdtsc_pair_chain {
++    uint64_t rip;           /* 0: none */
++    uint64_t cr3;
++    uint64_t result;
++    uint64_t host_tsc;
++    uint64_t run_tsc;
++    uint64_t stolen_ns;
++    uint64_t exits;
++    uint64_t gap;
++    uint64_t max_gap;
++    unsigned int reads;
++    uint8_t why;
++};
++
++/* The timeline of a vCPU's user RDTSCs in programs' own code, and what they returned */
++struct rdtsc_user_timeline {
++    uint64_t last_returned;
++    uint64_t run_tsc;       /* the vCPU's run_tsc at that read */
++    uint64_t blocked_ns;
++    uint64_t exits;         /* the vCPU's VM exits at that read */
++    uint64_t run_min;       /* least run time between two reads with no exit between */
++    bool valid;
++
++    uint64_t reads;
++    uint64_t compressed;
++    uint64_t far;
++    uint64_t slept;
++    uint64_t lag;
++    uint64_t pvclock;       /* raised to the guest's pvclock timestamp */
++    uint64_t max_hidden;
++    uint64_t pure;          /* compressed to the guest's own work, RDTSC_USER_PURE */
++};
++
++/*
++ * The window as a ring, which says which gap leaves when a new one comes, and the
++ * same gaps as a histogram with each bucket's count and sum, plus the totals of each
++ * group of RDTSC_HIST_SUB buckets. A percentile or the mean of a slice of the sorted
++ * window is a walk down the groups, exact but for the buckets at the slice's ends.
++ */
++struct rdtsc_gap_window {
++    unsigned int head;
++    unsigned int samples;
++
++    unsigned int ge_100k;
++    unsigned int ge_1m;
++    unsigned int ge_10m;
++
++    uint32_t group_count[RDTSC_HIST_GROUPS];
++    uint64_t group_sum[RDTSC_HIST_GROUPS];
++    uint32_t count[RDTSC_HIST_BUCKETS];
++    uint64_t sum[RDTSC_HIST_BUCKETS];
++
++    uint64_t ring[RDTSC_WINDOW_SIZE];
++
++    /* Red pill like pairs: all of them, those returned at most 100 apart, the last ones */
++    uint64_t pairs;
++    uint64_t pairs_ok;
++    unsigned int pair_head;
++    struct rdtsc_pair_entry pair_log[RDTSC_PAIR_LOG];
++    struct rdtsc_pair_chain chain[RDTSC_PAIR_VCPUS];
++    struct rdtsc_user_timeline user[RDTSC_PAIR_VCPUS];
++};
++
++/* Lives in struct vcpu, which must stay below PAGE_SIZE. */
++struct rdtsc_poc_vcpu {
++    /* Host TSC at this vCPU's previous RDTSC exit: a gap is between two of the same vCPU */
++    uint64_t last_host_tsc;
++    /* False after the vCPU slept: the next gap is idle time, neither compressed nor recorded */
++    bool gap_valid;
++
++    /* Each vCPU has its own timeline: the value it returned last */
++    uint64_t last_returned_tsc;
++    bool returned_valid;
++
++    /*
++     * Runstate times at the previous RDTSC, in ns: blocked is sleep, offline plus
++     * runnable is time stolen by Xen (vm_event and domain pauses, waiting for a pCPU)
++     */
++    uint64_t blocked_ns;
++    uint64_t stolen_ns;
++    /*
++     * Time off the guest (stolen, or all of it with RDTSC_GAP_RUN) hidden since the
++     * last value returned as is, in cycles
++     */
++    uint64_t hidden_stolen;
++
++    /*
++     * Host TSC at the last VM entry (0 once its VM exit counted it), the cycles the
++     * vCPU ran the guest so far, and those at its previous RDTSC
++     */
++    uint64_t resume_tsc;
++    uint64_t run_tsc;
++    uint64_t last_run_tsc;
++
++    /* VM exits of this vCPU */
++    uint64_t exits;
++    uint8_t why;
++
++    uint64_t rdtsc_reads;
++    uint64_t compressed_reads;
++    uint64_t max_virtual_lag;
++    uint64_t max_forward_jump;
++    uint64_t ahead_of_normal;
++    uint64_t lag_rejections;
++    uint64_t baseline_missing;
++    uint64_t gate_high_rejections;
++    uint64_t gate_low_rejections;
++
++    uint64_t normal_returns;
++    uint64_t adjusted_returns;
++    uint64_t large_forward_jumps;
++
++    /* What happened to the gaps of 1M cycles or more */
++    uint64_t big_gate_high;
++    uint64_t big_lag_rejections;
++    uint64_t big_compressed;
++
++    /* Deltas between adjacent values returned on this vCPU, all processes combined */
++    uint64_t guest_delta_le_100;
++    uint64_t guest_delta_gt_100;
++    uint64_t guest_delta_ge_1m;
++    uint64_t guest_delta_max;
++
++    /*
++     * Close pairs, two RDTSCs with little guest time between them like a red pill
++     * test, and what they returned: a delta of at most 100 cycles, or why not
++     */
++    uint64_t close_pairs;
++    uint64_t close_ok;
++    uint64_t close_lag;
++    uint64_t close_gate;
++    uint64_t close_by_steal;
++
++    uint64_t sleep_breaks;
++    uint64_t stolen_reads;
++    uint64_t stolen_max;
++
++    uint64_t gap_ge_100k;
++    uint64_t gap_ge_1m;
++    uint64_t gap_ge_10m;
++};
++
++
+ #define _VMX_DOMAIN_PML_ENABLED    0
+ #define VMX_DOMAIN_PML_ENABLED     (1ul << _VMX_DOMAIN_PML_ENABLED)
+ struct vmx_domain {
+@@ -56,6 +263,12 @@ struct vmx_domain {
+      * around CVE-2018-12207 as appropriate.
+      */
+     bool exec_sp;
++
++    bool rdtsc_poc_enabled;
++
++    /* RDTSC_POC: one gap window for all vCPUs, under the lock */
++    spinlock_t rdtsc_lock;
++    struct rdtsc_gap_window *rdtsc_window;
+ };
+ 
+ /*
+@@ -93,6 +306,7 @@ struct pi_blocking_vcpu {
+     spinlock_t           *lock;
+ };
+ 
++
+ struct vmx_vcpu {
+     /* Physical address of VMCS. */
+     paddr_t              vmcs_pa;
+@@ -179,6 +393,8 @@ struct vmx_vcpu {
+      * pCPU and wakeup the related vCPU.
+      */
+     struct pi_blocking_vcpu pi_blocking;
++
++    struct rdtsc_poc_vcpu rdtsc_poc;
+ };
+ 
+ int vmx_create_vmcs(struct vcpu *v);

@@ -12,6 +12,11 @@ drakvuf.json
 # The bare pattern already covers state/*.bak — see state/README.md.
 *.bak
 
+# This deployment's guest hardware identity (scripts/xen-identity.py) and the
+# firmware files drawn from it. Unpublished, so no detection can name it.
+state/xen-identity.json
+state/firmware/
+
 # LibVMI/DRAKVUF kernel profiles: ~48MB and ~62MB of dwarf2json output,
 # regenerated per kernel build rather than authored. Tracked under misc/
 # until issue #4; see profiles/README.md for hashes and regeneration.

@@ -71,8 +71,9 @@ guest state in `state/`; neither is git-tracked. See `profiles/README.md`,
 - `automation/` — host provisioning and deployment assets: `network-setup.sh`
   (executed by `sandboxd` at every daemon start), host-global `platform.env`,
   the egress configs (`torrc`, `fakenet.*`, `drakvuf-egress.target`) that
-  `make sandboxd` installs, and the Xen fix and GRUB config that `make xen`
-  installs (`xen-altp2m-pause-vcpu.patch`, `xen-grub.cfg`). The
+  `make sandboxd` installs, and the Xen patches, unit and GRUB config that
+  `make xen` installs (`xen-altp2m-pause-vcpu.patch`, `xen-rdtsc-poc.patch`,
+  `xen-guest-identity.patch`, `xen-rdtsc-poc.service`, `xen-grub.cfg`). The
   shell and C pipeline that used to live here was deleted 2026-09-15 — see
   `docs/architecture/automation-files.md`.
 - `sandboxd/` — the Dom0 orchestrator and its tests. **This is the analysis

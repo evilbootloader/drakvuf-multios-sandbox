@@ -146,7 +146,8 @@ def test_the_introspection_settings_survive_untouched():
 
     out = C.rewrite_config((MISC / "ubuntu_sandbox.cfg").read_text(), s)
 
-    for line in ("altp2m = 2", "hap = 1", "shadow_memory = 32", "viridian = 1"):
+    for line in ("altp2m = 2", "hap = 1", "shadow_memory = 32", "viridian = 0",
+                 "cpuid = 'host,hypervisor=0'"):
         assert line in out
     # The comments too: they explain why these must not be changed.
     assert "external mode -- required for stealth breakpoints" in out

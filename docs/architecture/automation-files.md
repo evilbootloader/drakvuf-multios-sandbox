@@ -58,6 +58,13 @@ assets **`xen-altp2m-pause-vcpu.patch`**, the 4.20.1 backport of the altp2m
 deadlock fix, and **`xen-grub.cfg`**, the GRUB settings that boot it. `make xen`
 applies and installs both.
 
+Added 2026-11-01, also for `make xen`: **`xen-rdtsc-poc.patch`** and
+**`xen-rdtsc-poc.service`**, the RDTSC compensation and the unit that turns it
+on at boot (`rdtsc-poc.md`), and **`xen-guest-identity.patch`**, the hvmloader
+and CPUID half of the guests' hardware identity (`guest-identity.md`). The
+other half is `scripts/xen-identity.py`, which `make xen` and the guest install
+targets run.
+
 ---
 
 ## Facts carried out of the deleted files

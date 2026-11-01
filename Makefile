@@ -16,10 +16,20 @@ ANALYSIS_VM_PASS := malware
 ANALYSIS_VM_USER := user
 REPO_ROOT := $(shell pwd)
 # Xen boot line, see docs/CURRENT-STATE.md §1.2
-XEN_CMDLINE := dom0_mem=8192M,max:8192M dom0_max_vcpus=6 dom0_vcpus_pin=1 force-ept=1 ept=ad=0 hap_1gb=0 hap_2mb=0 altp2m=1 hpet=legacy-replacement smt=0 sched=credit
+XEN_CMDLINE := dom0_mem=8192M,max:8192M dom0_max_vcpus=6 dom0_vcpus_pin=1 force-ept=1 ept=ad=0 hap_1gb=0 hap_2mb=0 altp2m=1 hpet=legacy-replacement smt=0 sched=credit rdtsc-poc=1
 # Parallel vm_event processing deadlocks dom0 without it:
 # https://lists.xenproject.org/archives/html/xen-devel/2026-10/msg01125.html
 XEN_PATCH := $(REPO_ROOT)/automation/xen-altp2m-pause-vcpu.patch
+# RDTSC compensation for the analysis guests (rdtsc-poc=1 above, and the 'd' key
+# xen-rdtsc-poc.service presses at boot): docs/architecture/rdtsc-poc.md
+XEN_RDTSC_PATCH := $(REPO_ROOT)/automation/xen-rdtsc-poc.patch
+# SMBIOS hardware from smbios_firmware, no hypervisor leaves without the hypervisor bit;
+# scripts/xen-identity.py then writes this deployment's identity over Xen's own strings,
+# and its firmware files and lines into the guests' configs: docs/architecture/guest-identity.md
+XEN_IDENTITY_PATCH := $(REPO_ROOT)/automation/xen-guest-identity.patch
+XEN_IDENTITY := $(REPO_ROOT)/scripts/xen-identity.py
+# The guests' firmware files, from the identity (not tracked, like the identity)
+GUEST_FIRMWARE := $(REPO_ROOT)/state/firmware
 # OVMF is built from tianocore's edk2 instead of the xenbits mirror Config.mk names
 OVMF_URL := https://github.com/tianocore/edk2.git
 OVMF_REVISION := 4dfdca63a93497203f197ec98ba20e2327e4afe4
@@ -35,7 +45,7 @@ WIN_ISO_SHA256 := 0eea13c537e39cd1631b1758cd98847cf0d88bd0c32a8d69d9a02723ae79a6
 .PHONY: xen web_vm web_sandbox sandboxd
 
 xen:
-	@echo "Building and installing Xen with the altp2m deadlock fix, then reboot into it"
+	@echo "Building and installing Xen with the altp2m deadlock fix and RDTSC compensation, then reboot into it"
 	set -e; \
 	sudo apt-get install -y wget git bcc bin86 gawk bridge-utils iproute2 libcurl4-openssl-dev bzip2 libpci-dev build-essential make gcc clang libc6-dev linux-libc-dev zlib1g-dev libncurses5-dev patch libvncserver-dev libssl-dev libsdl-dev iasl libbz2-dev e2fslibs-dev git-core uuid-dev ocaml libx11-dev bison flex ocaml-findlib xz-utils gettext libyajl-dev libpixman-1-dev libaio-dev libfdt-dev cabextract libglib2.0-dev autoconf automake libtool libjson-c-dev libfuse-dev liblzma-dev autoconf-archive kpartx python3-dev python3-pip golang libsystemd-dev nasm ninja-build llvm lld; \
 	sudo apt-get install -y python3-pefile python3-construct; \
@@ -44,7 +54,12 @@ xen:
 	cd drakvuf; \
 	git submodule update --init xen; \
 	cd xen; \
-	git apply --reverse --check $(XEN_PATCH) 2>/dev/null || git apply $(XEN_PATCH); \
+	# From the pinned commit every time: the identity rewrites strings the patches leave \
+	git checkout -- .; \
+	git apply $(XEN_PATCH); \
+	git apply $(XEN_RDTSC_PATCH); \
+	git apply $(XEN_IDENTITY_PATCH); \
+	python3 $(XEN_IDENTITY) patch-xen .; \
 	sed -i -e 's|^OVMF_UPSTREAM_URL ?= .*|OVMF_UPSTREAM_URL ?= $(OVMF_URL)|' \
 		-e 's|^OVMF_UPSTREAM_REVISION ?= .*|OVMF_UPSTREAM_REVISION ?= $(OVMF_REVISION)|' Config.mk; \
 	grep -qx 'OVMF_UPSTREAM_REVISION ?= $(OVMF_REVISION)' Config.mk; \
@@ -69,8 +84,13 @@ xen:
 	sudo systemctl enable xen-qemu-dom0-disk-backend.service; \
 	sudo systemctl enable xen-init-dom0.service; \
 	sudo systemctl enable xenconsoled.service; \
+	# rdtsc-poc=1 makes the guests' RDTSCs exit; the 'd' key, once per boot, compensates them \
+	sudo install -m 0644 $(REPO_ROOT)/automation/xen-rdtsc-poc.service /etc/systemd/system/xen-rdtsc-poc.service; \
+	sudo systemctl daemon-reload; \
+	sudo systemctl enable xen-rdtsc-poc.service; \
 	sudo update-grub2; \
 	sudo grep -q "multiboot2.*altp2m=1" /boot/grub/grub.cfg || { echo "update-grub2 wrote no Xen entry"; exit 1; }; \
+	sudo grep -q "multiboot2.*rdtsc-poc=1" /boot/grub/grub.cfg || { echo "the Xen entry has no rdtsc-poc=1"; exit 1; }; \
 	echo "Xen installed, reboot to start it"
 
 web_vm:
@@ -455,6 +475,8 @@ ubuntu_analysis_vm:
 	"    - curtin in-target --target=/target -- bash -c 'KVER=\$$(ls /boot/vmlinuz-* | sed \"s|/boot/vmlinuz-||\" | sort -V | tail -1); apt-get install -y linux-image-\$${KVER}-dbgsym'" \
 	"    - curtin in-target --target=/target -- mkdir -p /etc/gdm3" \
 	"    - curtin in-target --target=/target -- sh -c 'printf \"[daemon]\nAutomaticLoginEnable=true\nAutomaticLogin=$(ANALYSIS_VM_USER)\n\" > /etc/gdm3/custom.conf'" \
+	"    - curtin in-target --target=/target -- sed -i 's/^GRUB_CMDLINE_LINUX=\"/&net.ifnames=0 /' /etc/default/grub" \
+	"    - curtin in-target --target=/target -- update-grub" \
 	"  keyboard:" \
 	"    layout: \"es\"" > user-data; \
 	touch meta-data; \
@@ -467,6 +489,9 @@ ubuntu_analysis_vm:
 	mount $(REPO_ROOT)/misc/iso/ubuntu-22.04.5-desktop-amd64.iso  /mnt; \
 	cp /mnt/casper/initrd /mnt/casper/vmlinuz $(REPO_ROOT)/misc/iso/; \
 	umount /mnt; \
+	# The guest's hardware identity: docs/architecture/guest-identity.md \
+	python3 $(XEN_IDENTITY) guest-files $(GUEST_FIRMWARE); \
+	MAC=$$(python3 $(XEN_IDENTITY) get mac); \
 	printf "%s\n" \
 	"arch = 'x86_64'" \
 	"name = 'ubuntu_analysis'" \
@@ -486,15 +511,17 @@ ubuntu_analysis_vm:
 	"usb = 1" \
 	"usbdevice = 'tablet'" \
 	"audio = 1" \
-	"viridian = 1" \
+	"viridian = 0" \
+	"cpuid = 'host,hypervisor=0'" \
 	"altp2m = 2" \
 	"shadow_memory = 128" \
-	"vif = [ 'type=ioemu,model=e1000,bridge=xenbr0' ]" \
+	"vif = [ 'type=ioemu,model=e1000,mac=$$MAC,bridge=xenbr0' ]" \
 	"disk = ['phy:/dev/vg-root/ubuntu,hda,w','file:$(REPO_ROOT)/misc/iso/seed.iso,hdb:cdrom,r','file:$(REPO_ROOT)/misc/iso/ubuntu-22.04.5-live-server-amd64.iso,hdc:cdrom,r']" \
 	"kernel = '$(REPO_ROOT)/misc/iso/vmlinuz'" \
 	"ramdisk = '$(REPO_ROOT)/misc/iso/initrd'" \
-	"extra = 'autoinstall'" \
+	"extra = 'autoinstall net.ifnames=0'" \
 		> $(REPO_ROOT)/misc/xen-vms/ubuntu.cfg; \
+	python3 $(XEN_IDENTITY) xl-cfg $(GUEST_FIRMWARE) >> $(REPO_ROOT)/misc/xen-vms/ubuntu.cfg; \
 	sudo lvcreate -V 1T --thin -n ubuntu vg-root/thinpool; \
 	xl create $(REPO_ROOT)/misc/xen-vms/ubuntu.cfg; \
 	sed -Ei 's/^kernel.*|^ramdisk.*|^extra.*//g' $(REPO_ROOT)/misc/xen-vms/ubuntu.cfg;
@@ -528,6 +555,9 @@ windows_analysis_vm:
 	  -udf -J -joliet-long -allow-limited-size \
 	  -V "WIN11_SEABIOS" \
 	  /tmp/win11iso/
+	# The guest's hardware identity: docs/architecture/guest-identity.md \
+	python3 $(XEN_IDENTITY) guest-files $(GUEST_FIRMWARE); \
+	MAC=$$(python3 $(XEN_IDENTITY) get mac); \
 	printf "%s\n" \
 	"arch = 'x86_64'" \
 	"name = 'windows_analysis'" \
@@ -547,11 +577,13 @@ windows_analysis_vm:
 	"usb = 1" \
 	"usbdevice = 'tablet'" \
 	"audio = 1" \
-	"viridian = 1" \
+	"viridian = 0" \
+	"cpuid = 'host,hypervisor=0'" \
 	"altp2m = 2" \
 	"shadow_memory = 128" \
-	"vif = [ 'type=ioemu,model=e1000,bridge=xenbr0' ]" \
+	"vif = [ 'type=ioemu,model=e1000,mac=$$MAC,bridge=xenbr0' ]" \
 	"disk = [ 'phy:/dev/vg-root/windows,hda,w', 'file:$(REPO_ROOT)/misc/iso/Win11_modified.iso,hdc:cdrom,r' ]" > $(REPO_ROOT)/misc/xen-vms/windows.cfg; \
+	python3 $(XEN_IDENTITY) xl-cfg $(GUEST_FIRMWARE) >> $(REPO_ROOT)/misc/xen-vms/windows.cfg; \
 	sudo lvcreate -V 1T --thin -n windows vg-root/thinpool; \
 	xl create $(REPO_ROOT)/misc/xen-vms/windows.cfg
 
@@ -573,6 +605,9 @@ setup_hooks_windows:
 	umount /mnt; \
 	kpartx -d /dev/vg-root/windows; \
 	lvcreate -s -kn -n windows_sandbox vg-root/windows; \
+	# The guest's hardware identity: docs/architecture/guest-identity.md \
+	python3 $(XEN_IDENTITY) guest-files $(GUEST_FIRMWARE); \
+	MAC=$$(python3 $(XEN_IDENTITY) get mac); \
 	printf "%s\n" \
 	"arch = 'x86_64'" \
 	"name = 'windows_analysis_sandbox'" \
@@ -592,12 +627,13 @@ setup_hooks_windows:
 	"usb = 1" \
 	"usbdevice = 'tablet'" \
 	"audio = 1" \
-	"viridian = 1" \
+	"viridian = 0" \
+	"cpuid = 'host,hypervisor=0'" \
 	"altp2m = 2" \
 	"shadow_memory = 128" \
-	"cpuid = \"host,hypervisor=0\"" \
-	"vif = [ 'type=ioemu,model=e1000,script=vif-openvswitch,bridge=xenbr1' ]" \
+	"vif = [ 'type=ioemu,model=e1000,mac=$$MAC,script=vif-openvswitch,bridge=xenbr1' ]" \
 	"disk = [ 'phy:/dev/vg-root/windows_sandbox,hda,w' ]" > $(REPO_ROOT)/misc/xen-vms/windows_sandbox.cfg; \
+	python3 $(XEN_IDENTITY) xl-cfg $(GUEST_FIRMWARE) >> $(REPO_ROOT)/misc/xen-vms/windows_sandbox.cfg; \
 	xl create $(REPO_ROOT)/misc/xen-vms/windows_sandbox.cfg; \
 	sleep 120; \
 	INJECTION_PID=$$(vmi-process-list -d $$(xl domid windows_analysis_sandbox) -j $(REPO_ROOT)/profiles/windows.json \
@@ -623,6 +659,9 @@ setup_hooks_ubuntu:
 	kpartx -d /dev/mapper/vg--root-ubuntu3; \
 	kpartx -d /dev/vg-root/ubuntu; \
 	lvcreate -s -kn -n ubuntu_sandbox vg-root/ubuntu; \
+	# The guest's hardware identity: docs/architecture/guest-identity.md \
+	python3 $(XEN_IDENTITY) guest-files $(GUEST_FIRMWARE); \
+	MAC=$$(python3 $(XEN_IDENTITY) get mac); \
 	printf "%s\n" \
 	"arch = 'x86_64'" \
 	"name = 'ubuntu_analysis_sandbox'" \
@@ -642,13 +681,14 @@ setup_hooks_ubuntu:
 	"usb = 1" \
 	"usbdevice = 'tablet'" \
 	"audio = 1" \
-	"viridian = 1" \
+	"viridian = 0" \
+	"cpuid = 'host,hypervisor=0'" \
 	"altp2m = 2" \
 	"shadow_memory = 128" \
-	"cpuid = \"host,hypervisor=0\"" \
-	"vif = [ 'type=ioemu,model=e1000,script=vif-openvswitch,bridge=xenbr1' ]" \
+	"vif = [ 'type=ioemu,model=e1000,mac=$$MAC,script=vif-openvswitch,bridge=xenbr1' ]" \
 	"disk = ['phy:/dev/vg-root/ubuntu_sandbox,hda,w' ]" \
 		> $(REPO_ROOT)/misc/xen-vms/ubuntu_sandbox.cfg; \
+	python3 $(XEN_IDENTITY) xl-cfg $(GUEST_FIRMWARE) >> $(REPO_ROOT)/misc/xen-vms/ubuntu_sandbox.cfg; \
 	xl create $(REPO_ROOT)/misc/xen-vms/ubuntu_sandbox.cfg; \
 	sleep 120; \
 	xl save ubuntu_analysis_sandbox $(REPO_ROOT)/state/ubuntu_sandbox.bak $(REPO_ROOT)/misc/xen-vms/ubuntu_sandbox.cfg; \

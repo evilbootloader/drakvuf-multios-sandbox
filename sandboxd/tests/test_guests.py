@@ -555,15 +555,25 @@ def test_android_traces_with_both_flags(tmp_path):
 
 
 def test_every_trace_hides_the_hypervisor_from_cpuid(tmp_path):
-    """`-s` -- "Hide Hypervisor bits and signature in CPUID", from
-    `drakvuf --help` (operator-confirmed 2026-09-19). A global, not a per-OS
-    flag: the check it defeats is the same instruction on every guest."""
-    for os_, kind, component in ((TargetOs.UBUNTU, SampleKind.ELF, None),
-                                 (TargetOs.ANDROID, SampleKind.APK, "com.x/.Main"),
-                                 (TargetOs.WINDOWS, SampleKind.PE, None)):
+    """The check is the same instruction on every guest, so every guest hides
+    the hypervisor: Ubuntu and Windows in their configs (`cpuid =
+    'host,hypervisor=0'`, which the Makefile writes), Android with `-s`, "Hide
+    Hypervisor bits and signature in CPUID" (`drakvuf --help`, operator-confirmed
+    2026-09-19), whose config does not."""
+    makefile = (Path(__file__).resolve().parents[2] / "Makefile").read_text()
+    for os_, kind, component, by_config in ((TargetOs.UBUNTU, SampleKind.ELF, None, True),
+                                            (TargetOs.ANDROID, SampleKind.APK, "com.x/.Main", False),
+                                            (TargetOs.WINDOWS, SampleKind.PE, None, True)):
         argv = G.argv_trace(job(tmp_path, os_, kind), component)
         assert argv[0] == "drakvuf"
-        assert "-s" in argv[:argv.index("-e")], f"{os_.value}: -s is DRAKVUF's, not the sample's"
+        if by_config:
+            assert "-s" not in argv[:argv.index("-e")], f"{os_.value}: its config hides it"
+        else:
+            assert "-s" in argv[:argv.index("-e")], f"{os_.value}: -s is DRAKVUF's, not the sample's"
+    for target in ("ubuntu_analysis_vm:", "setup_hooks_ubuntu:",
+                   "windows_analysis_vm:", "setup_hooks_windows:"):
+        body = makefile.split("\n" + target, 1)[1].split("\n\n", 1)[0]
+        assert "\"cpuid = 'host,hypervisor=0'\"" in body, target
 
 
 def test_every_trace_waits_for_plugins_with_a_call_in_flight(tmp_path):
@@ -939,14 +949,14 @@ def test_a_per_job_plugin_selection_is_honoured_when_supplied(tmp_path):
 
 def test_supplied_options_do_not_change_ubuntu_defaults(tmp_path):
     """Behavioural parity is the acceptance criterion. A job that carries no
-    options must produce exactly what the Ubuntu trace script produced --
-    plus `-s`, the one deliberate departure (operator, 2026-09-19): the
-    script did not hide the hypervisor from CPUID, and every trace now does.
+    options must produce exactly what the Ubuntu trace script produced. `-s`
+    was a deliberate departure from 2026-09-19 to 2026-11-01; the guest config
+    now hides the hypervisor instead (operator, 2026-11-01).
     """
     argv = G.argv_trace(job(tmp_path))
 
-    assert argv[:10] == [
-        "drakvuf", "-r", "/root/profiles/linux.json", "-s", "-d", "42",
+    assert argv[:9] == [
+        "drakvuf", "-r", "/root/profiles/linux.json", "-d", "42",
         "-i", "1415", "-m", "execproc",
     ]
 

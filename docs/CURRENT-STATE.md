@@ -79,6 +79,7 @@ CT 102, and everything `qm` and `pct` could do.
 | Fact | Value | Confirmed |
 |---|---|---|
 | Xen | **4.20.1, built from source with the altp2m deadlock fix** — drakvuf's `xen` submodule at `RELEASE-4.20.1` plus `automation/xen-altp2m-pause-vcpu.patch`, the 4.20.1 backport of the fix [posted to xen-devel](https://lists.xenproject.org/archives/html/xen-devel/2026-10/msg01125.html). Packaged by Xen's own `make debball` as **`xen-upstream 4.20.1`**, which installs the tools under `/usr/local`. `xl info`: `cc_compile_date Mon Oct 19 22:19:01 UTC 2026`, `cc_compile_by user`. The drakvuf-builds `xen-hypervisor` package is removed but not purged (`dpkg -l`: `rc`). `make xen` is the procedure; as a Makefile target it has **not run yet** — the install was done by hand (operator, 2026-10-19) | 2026-10-20 |
+| Xen, since 2026-11-01 | **A development build of the operator's `drakvuf-dev/xen` branch `rdtsc-poc`, not `make xen`'s.** The RDTSC search installs its candidates with the same configure/`debball` sequence: `xl info` `cc_compile_date Sun Nov  1 17:00:10 UTC 2026`, boot line with `rdtsc-poc=1`. It is the compensation of `docs/architecture/rdtsc-poc.md` without `RDTSC_USER_PURE` and without the guest identity (`docs/architecture/guest-identity.md`); `make xen` adds both | 2026-11-01 |
 | Why the fix | Without it, `--parallel-events` deadlocks Dom0: a vm_event response switching a vCPU's altp2m view waits, holding the altp2m list lock, for that vCPU to be descheduled, while a log-dirty fault on a third vCPU holds the p2m lock and waits for the altp2m list lock. `TROUBLESHOOTING.md` has the symptom | operator, 2026-10-19 |
 | DRAKVUF | **Built from the submodule, `/root/drakvuf-multios-sandbox/drakvuf`, at `26ad2e2`, with its libvmi at `c97816c`** — the pins in the row below. `/usr/local/bin/drakvuf` and `injector` are dated 2026-10-24 05:57, `/usr/local/lib/libvmi.so.0.0.15` 05:56. Evidenced by `git submodule status` on Dom0 and by strings only those commits have: unixsocketmon's `Cannot read struct sock from this profile` in `drakvuf`, `c97816c`'s `can't register the copy of the event` in libvmi. **The banner says `v1.1-3886574`, which is stale** — next row | 2026-10-24 |
 | DRAKVUF provenance | **The banner's version is the commit the build directory was CONFIGURED at, not the one it was built from.** `meson.build` runs `git describe` at configure time; `drakvuf/build` was configured 2026-10-20 18:11, at `3886574`, and every `ninja` build since keeps that string. **There is no `--version` option** (`drakvuf: unrecognized option '--version'`) — the banner is the first line either binary prints. Settle provenance with `git -C /root/drakvuf-multios-sandbox/drakvuf log -1` and a string only the expected commit has, or `meson setup --reconfigure` before building. The 2026-09-04 contradiction (`injector v1.1-52df0bc` against `da982ab`) concerned the binaries these replaced | 2026-10-24 |
@@ -408,7 +409,7 @@ accurate as dated evidence.
 
 | Component | Command | Service |
 |---|---|---|
-| `sandboxd` | **source the env file first**, then `python -m sandboxd.daemon` in the foreground — see §1.2 for the exact Dom0 invocation. Exits immediately without `SANDBOXD_API`, `WORKER_TOKEN`, `SANDBOXD_TOTAL_MIB`. | unit: fakenet.service |
+| `sandboxd` | **source the env file first**, then `python -m sandboxd.daemon` in the foreground — see §1.2 for the exact Dom0 invocation. Exits immediately without `SANDBOXD_API`, `WORKER_TOKEN`, `SANDBOXD_TOTAL_MIB`. | unit: fakenet.service, xen-rdtsc-poc.service |
 
 ### Environment read by `sandboxd.daemon`
 
@@ -420,6 +421,6 @@ accurate as dated evidence.
 |---|---|
 | sandboxd modules | 16 |
 | test files | 17 sandboxd, 28 platform |
-| documents under `docs/` | 42 |
+| documents under `docs/` | 44 |
 
 <!-- END GENERATED -->

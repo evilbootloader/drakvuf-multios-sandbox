@@ -148,6 +148,13 @@ class TraceOptions:
     fast_singlestep: bool = False    # -F
     disable_sysret: bool = False
     interaction: Interaction = Interaction.NONE
+    # `-s`: "Hide Hypervisor bits and signature in CPUID" (`drakvuf --help`,
+    # operator-confirmed 2026-09-19), by trapping every CPUID into DRAKVUF.
+    # Off where the guest's own config hides the hypervisor instead
+    # (`cpuid = 'host,hypervisor=0'`, docs/architecture/guest-identity.md):
+    # from boot, for every CPUID, and Xen's leaves at 0x40000100 too, which
+    # `-s` left visible.
+    cpuid_stealth: bool = True
 
     def drakvuf_flags(self) -> list[str]:
         flags: list[str] = []
@@ -345,8 +352,12 @@ def default_trace_options(os_: TargetOs, kind: SampleKind) -> TraceOptions:
         #
         # DRAFT-052's syscall filter is still the better lever: it removes
         # syscall ENTRIES too while keeping returns for the calls analysed.
+        # No `-s`: `make ubuntu_analysis_vm` and `setup_hooks_ubuntu` write the
+        # guest config with the hypervisor bit cleared (operator, 2026-11-01).
+        # A guest saved before that shows the bit until it is re-created.
         return TraceOptions(plugins=_UBUNTU_PLUGINS, timeout=120,
-                            fast_singlestep=True, disable_sysret=False)
+                            fast_singlestep=True, disable_sysret=False,
+                            cpuid_stealth=False)
 
     if os_ is TargetOs.ANDROID:
         return TraceOptions(
@@ -393,10 +404,13 @@ def default_trace_options(os_: TargetOs, kind: SampleKind) -> TraceOptions:
     # and their Windows-only and Linux-only plugins would cross.
     # `test_guests.py` pins that this branch reads its own name.
     if os_ is TargetOs.WINDOWS:
+        # No `-s`, as for Ubuntu: `make windows_analysis_vm` and
+        # `setup_hooks_windows` clear the hypervisor bit in the guest config.
         return TraceOptions(
             plugins=_WINDOWS_PLUGINS, timeout=120,
             fast_singlestep=True,
             disable_sysret=True,
+            cpuid_stealth=False,
         )
 
     # Not dead code: it is what a fourth `TargetOs` member gets on the day one
@@ -979,12 +993,13 @@ def argv_trace(job: Job, component: str | None = None) -> list[str]:
     mode = "shellexec" if job.target_os == TargetOs.WINDOWS else "execproc"
     paths = PATHS[job.target_os]
 
-    # `-s`: "Hide Hypervisor bits and signature in CPUID" (`drakvuf --help`,
-    # operator-confirmed 2026-09-19). The cheapest evasion a sample tries is
-    # a CPUID for the hypervisor-present bit; `cpuidmon` records the check,
-    # this makes the answer the one bare metal gives. Every OS, every trace.
+    # The cheapest evasion a sample tries is a CPUID for the hypervisor-present
+    # bit; `cpuidmon` records the check. The answer is the one bare metal gives
+    # on every guest: from its config where that clears the bit, from `-s`
+    # (`TraceOptions.cpuid_stealth`) where it does not.
+    stealth = ["-s"] if job.options.cpuid_stealth else []
     argv = [
-        "drakvuf", "-r", str(job.profile), "-s", "-d", str(job.domid),
+        "drakvuf", "-r", str(job.profile), *stealth, "-d", str(job.domid),
         "-i", str(job.injection_pid), "-m", mode, "--parallel-events",
         "--sysret-mode", "kernel", 
     ]

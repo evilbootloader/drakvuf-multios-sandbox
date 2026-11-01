@@ -1,0 +1,25 @@
+# Turns on Xen's RDTSC compensation once per boot. `make xen` installs it as
+# /etc/systemd/system/xen-rdtsc-poc.service and enables it.
+#
+# Two switches, see docs/architecture/rdtsc-poc.md: the rdtsc-poc=1 boot option
+# (XEN_CMDLINE) makes every RDTSC of a guest created with altp2m exit to Xen,
+# and the 'd' debug key makes Xen answer those exits on the compensated
+# timeline. Without this unit the guests' RDTSCs exit and are answered with the
+# plain guest TSC: slower, and no less detectable.
+#
+# 'd' only sets a flag, so pressing it before any guest exists is fine; it is
+# pressed once per boot all the same, as it always has been.
+
+[Unit]
+Description=Turn on Xen's RDTSC compensation (xl debug-keys d)
+Requires=xencommons.service
+After=xencommons.service
+ConditionPathExists=/proc/xen/capabilities
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/xl debug-keys d
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
