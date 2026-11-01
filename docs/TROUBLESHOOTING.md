@@ -927,6 +927,24 @@ at boot). The 125 search builds before were incremental and never crashed;
 (`nproc` follows the mask). The lasting fix is a current BIOS, and the chip
 checked under full load after it.
 
+### Uncommenting `XEN_OVERRIDE_GRUB_DEFAULT=0` still boots Xen
+
+**Symptom.** To boot Dom0 without Xen, the one boot Xen may be built on,
+`XEN_OVERRIDE_GRUB_DEFAULT=0` is uncommented in
+`/etc/default/grub.d/xen.cfg` and `update-grub2` run; the reboot comes back on
+Xen. The RDTSC and al-khaser searches stop with `dom0 booted, but not into
+native` (2026-11-01, the first boot after `make xen`).
+
+**Cause.** `automation/xen-grub.cfg` set `GRUB_DEFAULT` to the Xen entry
+unconditionally and had no `XEN_OVERRIDE_GRUB_DEFAULT` line at all. Nothing in
+`/etc/grub.d` reads that variable: only a `xen.cfg` that tests it before
+setting `GRUB_DEFAULT` makes it a switch, which the file `make xen` replaced did.
+
+**Fix.** The file sets `GRUB_DEFAULT` only while the commented
+`#XEN_OVERRIDE_GRUB_DEFAULT=0` stays commented; uncommented, GRUB boots entry 0
+of `/etc/default/grub`, Ubuntu without Xen. Checked on Dom0 with
+`grub-mkconfig -o` both ways.
+
 ### `xen-rdtsc-poc.service` — `Dependency failed`, and no `RDTSC_POC` in `xl dmesg`
 
 **Symptom.** After the first boot into a Xen from `make xen`, `systemctl
