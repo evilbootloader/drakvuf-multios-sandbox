@@ -880,6 +880,53 @@ while other vCPUs run, which is why it shows up there.
 installed on Dom0 2026-10-19, procedure `make xen`. The fix is
 [posted to xen-devel](https://lists.xenproject.org/archives/html/xen-devel/2026-10/msg01125.html).
 
+### `make xen` — `pod2man`: `Can't open Entering: No such file or directory`
+
+**Symptom.** `make xen` builds the hypervisor and the tools, then stops in
+`docs/` with one `Can't open Entering` per man page and
+`[Makefile:176: man5/xl.cfg.5] Error 2`. The command above them reads
+`pod2man --release=make[2]: Entering directory '.../docs' 4.20.1 make[2]: Leaving directory '.../xen'`.
+
+**Cause.** Xen's build ran as a sub-make of the repository's Makefile and
+inherited its `MAKEFLAGS`/`MAKELEVEL`. `docs/Makefile` takes the version from
+a nested `make xenversion`, and with those set GNU make 4.3 printed its
+directory lines into that output despite `--no-print-directory`. The same
+commands from a shell, as the 2026-10-19 install was done, are unaffected;
+reproduced on Dom0 2026-11-01 with `make -n install-docs` both ways.
+
+**Fix.** The `xen` recipe unsets `MAKEFLAGS MFLAGS MAKELEVEL` before it
+builds. With an older checkout, `make --no-print-directory xen` does the same.
+
+### `make xen` — `__builtin_strncpy output truncated` in `tools/libacpi/build.c`
+
+**Symptom.** `-Werror=stringop-truncation` at `fixed_strcpy(...oem_id,
+ACPI_OEM_ID)`, from libxl's build of `tools/libacpi/build.c`.
+
+**Cause.** `scripts/xen-identity.py` gives the ACPI tables a real vendor's OEM
+ID, which fills its 6-byte field (Xen's is `"Xen"`), and the macro copied it
+with `strncpy()`. The field needs no NUL; GCC 13 calls it a truncation.
+
+**Fix.** `automation/xen-guest-identity.patch` copies the IDs as fixed-width
+fields. Compile-checked on Dom0 with the flags `make -n` gives for libxl's and
+hvmloader's builds of `build.c`.
+
+### `make xen` — `internal compiler error: Segmentation fault`, or the assembler's `Internal error`
+
+**Symptom.** A full `make xen` crashes in the toolchain itself, a different
+file each time: `cc1` in `xen/common/unlzma.c` (`during RTL pass: ira`), then
+`as` in an OVMF module (`/tmp/cc*.s: Internal error (Segmentation fault)`).
+No OOM kill, no machine check in the kernel log.
+
+**Cause, suspected, not confirmed.** Dom0's CPU is an i9-13900KF, the
+generation whose cores degrade under old microcode and then fail under
+all-core load; this BIOS still carries microcode `0x10f` (Ubuntu loads `0x133`
+at boot). The 125 search builds before were incremental and never crashed;
+`make xen` rebuilds everything on 32 threads.
+
+**Workaround.** Build on the E-cores only, `taskset -c 16-31 make xen`
+(`nproc` follows the mask). The lasting fix is a current BIOS, and the chip
+checked under full load after it.
+
 ### The guest freezes or crawls with RDTSC compensation on
 
 **Symptom.** Xen booted with `rdtsc-poc=1`, the `d` key pressed

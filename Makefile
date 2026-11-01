@@ -47,6 +47,10 @@ WIN_ISO_SHA256 := 0eea13c537e39cd1631b1758cd98847cf0d88bd0c32a8d69d9a02723ae79a6
 xen:
 	@echo "Building and installing Xen with the altp2m deadlock fix and RDTSC compensation, then reboot into it"
 	set -e; \
+	# Build Xen as from a shell, not as a sub-make of this one: a sub-make prints its \
+	# directories, docs/Makefile reads the Xen version from a nested make's output, and \
+	# pod2man then fails on --release=make[2]: Entering directory ... \
+	unset MAKEFLAGS MFLAGS MAKELEVEL; \
 	sudo apt-get install -y wget git bcc bin86 gawk bridge-utils iproute2 libcurl4-openssl-dev bzip2 libpci-dev build-essential make gcc clang libc6-dev linux-libc-dev zlib1g-dev libncurses5-dev patch libvncserver-dev libssl-dev libsdl-dev iasl libbz2-dev e2fslibs-dev git-core uuid-dev ocaml libx11-dev bison flex ocaml-findlib xz-utils gettext libyajl-dev libpixman-1-dev libaio-dev libfdt-dev cabextract libglib2.0-dev autoconf automake libtool libjson-c-dev libfuse-dev liblzma-dev autoconf-archive kpartx python3-dev python3-pip golang libsystemd-dev nasm ninja-build llvm lld; \
 	sudo apt-get install -y python3-pefile python3-construct; \
 	cd $(REPO_ROOT); \
