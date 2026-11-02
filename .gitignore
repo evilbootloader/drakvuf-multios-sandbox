@@ -114,3 +114,4 @@ sandboxd/postprocessing/data/
 misc/iso
 misc/Artifacts
 .venv-sandboxd
+misc/iso/cidata/user-data
