@@ -2896,6 +2896,32 @@ in drakvuf `8dc7788`.
 dispatchers. **A trace from an older pin has sysret records with no
 information in them**; re-run rather than reinterpret it.
 
+### A 32-bit Linux sample has no syscall records
+
+**Symptom.** A job whose sample is a 32-bit (i386) ELF, or any 32-bit process
+in a Linux guest, has no `syscall` records for it, while the 64-bit processes
+in the same trace have theirs. Nothing in drakvuf's output says why. Fixed
+records carry `"Type":"x32"`, the plugin's name for them, although the ABI is
+i386, not x32.
+
+**Cause.** Three, each enough on its own. The plugin hooked only
+`do_int80_syscall_32` for 32-bit syscalls, which the Ubuntu (5.15.0-198) and
+Android (6.6.129) guest kernels do not have: `int $0x80` goes to
+`int80_emulation` (`grep -c '"do_int80_syscall_32"' profiles/linux.json
+profiles/android.json` prints `0` for both), and failing to place the hook
+was a debug message only.
+`sysenter` and `syscall` from 32-bit mode go to `do_fast_syscall_32`, which was
+never hooked. And the numbers were looked up in a table in x86_64 order, so a
+placed hook would have named i386 `write` (4) as `stat`. Upstream too: it came
+with the dispatcher hooks in drakvuf `8dc7788`.
+
+**Fix.** drakvuf `6f37d02` hooks `ia32_sys_call`, which both paths reach, and
+numbers 32-bit syscalls by an i386 table. A kernel with neither 32-bit
+dispatcher now makes drakvuf print `[SYSCALLS] No 32-bit syscall dispatcher
+found, syscalls of 32-bit processes are not traced` on stderr. Working on Dom0
+(operator, 2026-11-02). **A trace from an older pin has no 32-bit syscalls in
+it**; re-run rather than conclude the sample made none.
+
 ### `unixsocketmon` was selected and wrote nothing
 
 **Symptom.** A Linux job with `unixsocketmon` among its plugins has no
