@@ -231,15 +231,16 @@ def _budget(os_: TargetOs) -> dict:
                         Android ELF, but NOT for an Android APK, which gets
                         150s there. The kind is read from the sample's bytes on
                         the worker and cannot be known while this form renders,
-                        so a form-default APK traces 30s short of its measured
-                        budget. Returning 150 for Android would cover it, at
-                        the cost of 30 extra seconds on an Android ELF.
+                        so Android gets the APK's 150, and an Android ELF
+                        traces 30 seconds longer than its default. (Until
+                        2026-11-02 every guest got 150: the condition tested
+                        `TargetOs.ANDROID`, always true, instead of `os_`.)
       `disable_sysret`  unticked for Windows against True there, so a Windows
                         submitter who leaves the form alone turns the flag off
                         rather than inheriting the Candidate default.
     """
     return {
-        "timeout": 150 if TargetOs.ANDROID else 120,
+        "timeout": 150 if os_ is TargetOs.ANDROID else 120,
         "max_timeout": catalogue.MAX_TRACE_TIMEOUT,
         "linux": os_ is not TargetOs.WINDOWS,
         "disable_sysret": catalogue.sysret_disabled_by_default(os_),

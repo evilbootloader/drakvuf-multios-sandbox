@@ -21,6 +21,7 @@ import uuid
 import pytest
 from conftest import owner_id
 from markupsafe import escape
+from sandbox_platform.catalogue import MAX_TRACE_TIMEOUT
 
 # Exactly the names test_jobs_api.py admits at submission. Duplicated as a
 # literal rather than imported, deliberately: if someone narrows that list,
@@ -193,6 +194,16 @@ def test_ubuntu_and_android_claim_the_same_four(client):
 def test_an_unknown_target_os_is_refused(client):
     """The same closed set as submission, not a second weaker boundary."""
     assert client.get("/ui/plugins/linux").status_code == 422
+
+
+@pytest.mark.parametrize("os_, timeout", [("ubuntu", 120), ("windows", 120), ("android", 150)])
+def test_the_form_offers_each_guests_default_timeout(client, os_, timeout):
+    """Android's 150 covers an APK (`ui._budget` has why). Until 2026-11-02
+    every guest was offered 150: the condition tested the enum member, which
+    is always true. The form's maximum is the one the API enforces."""
+    page = client.get(f"/ui/plugins/{os_}").text
+
+    assert f'name="timeout" value="{timeout}" min="10" max="{MAX_TRACE_TIMEOUT}"' in page
 
 def test_a_tab_with_no_data_is_marked_as_such(client, conn):
     """#38 ships with most tabs empty on purpose.
