@@ -163,7 +163,7 @@ web_vm:
 			"nameserver 8.8.8.8" \
 			> /etc/resolv.conf; \
 		mkdir -p /root/.ssh; \
-		printf "%s %s\n" '$(RSA_KEY)' > /root/.ssh/authorized_keys; \
+		printf "%s\n" '$(RSA_KEY)' > /root/.ssh/authorized_keys; \
                 chmod 700 /root/.ssh; \
 		chmod 600 /root/.ssh/authorized_keys; \
 		printf "%s\n" \
@@ -284,10 +284,6 @@ web_sandbox:
 	chown platform:platform /etc/sandbox_platform ; \
 	BROWSER_ORIGIN=https://$(SANDBOX_WEB) BUCKET_QUOTA=$(S3_QUOTA)GiB RETENTION_DAYS=$(S3_RETENTION) /opt/platform/src/platform/garage/provision.sh; \
 	'
-	# The rest of api.env, rendered here from this checkout -- not from the DomU's
-	# clone, which is whatever GitHub had -- and appended to the two S3 lines
-	# provision.sh just wrote. provision.sh truncates the file first, so a re-run
-	# does not duplicate it. Mode 600 BEFORE the signing key is in it.
 	sed -e 's|@VMIP@|$(VMIP)|g' -e 's|@SANDBOX_WEB@|$(SANDBOX_WEB)|g' \
 	    -e 's|@RETENTION_DAYS@|$(S3_RETENTION)|g' \
 	    -e 's|@ANALYSIS_USERNAME@|$(ANALYSIS_VM_USER)|g' \
@@ -340,10 +336,6 @@ web_sandbox:
 	/etc/nginx/conf.d/objects.conf; \
 	sed -i "s/192.168.1.10/$(VMIP)/g" /etc/nginx/conf.d/objects.conf ; \
 	systemctl reload nginx && systemctl restart nginx; \
-	# The store's conformance, now the TLS front exists to test. It ran before
-	# nginx was installed, against a hard-coded .10, and a missing `;` after
-	# `set +a` meant it never ran at all. --ca because its default path is
-	# /etc/sandbox-platform, with a hyphen.
 	set -a; . /etc/sandbox_platform/api.env; set +a; \
 	/opt/platform/src/platform/.venv/bin/python \
 	  /opt/platform/src/platform/garage/conformance.py \
