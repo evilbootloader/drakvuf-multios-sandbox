@@ -1,0 +1,2 @@
+# al-khaser.patch keeps the CRLF line endings of the files it patches: no conversion
+al-khaser.patch -text

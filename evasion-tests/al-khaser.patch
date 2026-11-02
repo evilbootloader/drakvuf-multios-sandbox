@@ -1,0 +1,524 @@
+al-khaser with a code per check, for alkhaser_search.sh (evasion-tests/README.md)
+
+Upstream: https://github.com/ayoubfaouzi/al-khaser (GPL-2.0), applies to commit
+f0e5559073fe02c4f50cc8c3ed8d5b302a6a0659. build_al_khaser.sh clones that commit and applies
+this file; its hunks keep al-khaser's CRLF line endings (see .gitattributes here).
+
+- Every check reports a code, category * 1000 + its position in the category (TLS 1 ...
+  ANALYSIS_TOOLS 15, HUMAN_INTERACTION 16), on its result line and in log.txt.
+- The exit code is the first detection. Each detection also ends a thread with its code, and
+  each check's start, detection and block is marked with an event named
+  "al-khaser <code> <category|start|detected|blocked> <text>", so a DRAKVUF syscall trace names
+  them (NtTerminateThread, NtCreateEvent).
+- Each check runs on its own thread: one that has not returned within --check-timeout
+  (default 120 s) is reported as blocked, code 100000 + its code, and the run goes on.
+- The human-interaction checks (mouse movement, user input) are off by default; getchar()
+  only with --pause.
+
+diff --git a/al-khaser/Al-khaser.cpp b/al-khaser/Al-khaser.cpp
+index 9967d52..db901ec 100644
+--- a/al-khaser/Al-khaser.cpp
++++ b/al-khaser/Al-khaser.cpp
+@@ -22,6 +22,7 @@ BOOL ENABLE_TIMING_ATTACKS = FALSE;
+ BOOL ENABLE_DUMPING_CHECK = FALSE;
+ BOOL ENABLE_ANALYSIS_TOOLS_CHECK = FALSE;
+ BOOL ENABLE_ANTI_DISASSM_CHECKS = FALSE;
++BOOL ENABLE_HUMAN_INTERACTION_CHECKS = FALSE;
+ const char* PROGRAM_NAME = "al-khaser.exe";
+ 
+ 
+@@ -65,6 +66,7 @@ void EnableChecks(std::string checkType) {
+ 	else if (checkType == "DUMPING_CHECK")		ENABLE_DUMPING_CHECK = TRUE;
+ 	else if (checkType == "ANALYSIS_TOOLS")		ENABLE_ANALYSIS_TOOLS_CHECK = TRUE;
+ 	else if (checkType == "ANTI_DISASSM")		ENABLE_ANTI_DISASSM_CHECKS = TRUE;
++	else if (checkType == "HUMAN_INTERACTION")	ENABLE_HUMAN_INTERACTION_CHECKS = TRUE;
+ }
+ 
+ void print_help(const char* prog_name){
+@@ -90,8 +92,13 @@ void print_help(const char* prog_name){
+ 		"                        DUMPING_CHECK    (Dumping memory/process checks)\n"
+ 		"                        ANALYSIS_TOOLS   (Analysis tools detection)\n"
+ 		"                        ANTI_DISASSM     (Anti-disassembly checks)\n"
++		"                        HUMAN_INTERACTION (Mouse movement and user input; not run by default)\n"
+ 		"  --sleep <seconds>   Set sleep/delay duration in seconds (default: 600).\n"
+ 		"  --delay <seconds>   Alias for --sleep.\n"
++		"  --check-timeout <seconds>  A check that does not return within this time is\n"
++		"                      reported as blocked and the run goes on (default: 120, at least\n"
++		"                      twice the sleep delay plus 60).\n"
++		"  --pause             Wait for Enter before exiting.\n"
+ 		"  -h, --help          Show this help message and exit.\n"
+ 		"\n"
+ 		"Examples:\n"
+@@ -100,7 +107,16 @@ void print_help(const char* prog_name){
+ 		"  %s --sleep 30\n"
+ 		"\n"
+ 		"If no --check options are given, all checks are executed by default.\n"
+-		"If no other options are given, the default delay is 600 seconds.\n",
++		"If no other options are given, the default delay is 600 seconds.\n"
++		"\n"
++		"Every check has a code, its category times 1000 plus its position in it\n"
++		"(TLS 1, DEBUG 2, INJECTION 3, GEN_SANDBOX 4, VBOX 5, VMWARE 6, VPC 7, QEMU 8,\n"
++		"XEN 9, KVM 10, WINE 11, PARALLELS 12, HYPERV 13, TIMING_ATTACKS 14,\n"
++		"ANALYSIS_TOOLS 15, HUMAN_INTERACTION 16). The exit code is the code of the\n"
++		"first check that detected something, else 100000 plus the first blocked one's,\n"
++		"else 0. One thread per detection exits with that check's code (100000 + code\n"
++		"when blocked), and events named \"al-khaser <code> <start|detected|blocked> <check>\"\n"
++		"mark each check, for a trace of the run.\n",
+ 		prog_name, prog_name, prog_name, prog_name
+ 	);
+ }
+@@ -109,6 +125,9 @@ int main(int argc, char* argv[]){
+ 	/* enable functions */
+ 	UINT delayInSeconds = 600U; // default value
+ 	int enabled_checks = 0;
++	BOOL pause_at_end = FALSE;
++	UINT exit_code;
++	UINT checkTimeoutInSeconds = 120U;
+ 
+ 	if (argc > 1) {
+ 		for (int i = 1; i < argc; ++i) {
+@@ -131,6 +150,15 @@ int main(int argc, char* argv[]){
+ 					delayInSeconds = (UINT)val;
+ 				}
+ 				i++; // skip the value
++			} else if (strcmp(argv[i], "--check-timeout") == 0 && i + 1 < argc) {
++				long val = strtol(argv[i + 1], NULL, 10);
++				if (val > 0 && val < 86400)
++					checkTimeoutInSeconds = (UINT)val;
++				else
++					printf("[!] Invalid check timeout: %s. Using %u seconds.\n", argv[i + 1], checkTimeoutInSeconds);
++				i++; // skip the value
++			} else if (strcmp(argv[i], "--pause") == 0) {
++				pause_at_end = TRUE;
+ 			} else if ((strcmp(argv[i], "--check") == 0) && i + 1 < argc) {
+ 				EnableChecks(argv[i + 1]);
+ 				enabled_checks++;
+@@ -144,6 +172,11 @@ int main(int argc, char* argv[]){
+ 	if (!enabled_checks) {
+ 		EnableDefaultChecks();
+ 	}
++
++	/* The timing checks sleep up to twice the delay */
++	if (checkTimeoutInSeconds < 2 * delayInSeconds + 60)
++		checkTimeoutInSeconds = 2 * delayInSeconds + 60;
++	check_timeout_ms = checkTimeoutInSeconds * 1000U;
+ 	
+ 
+ 	/* Resize the console window for better visibility */
+@@ -165,14 +198,14 @@ int main(int argc, char* argv[]){
+ 
+ 	/* TLS checks */
+ 	if (ENABLE_TLS_CHECKS) {
+-		print_category(TEXT("TLS Callbacks"));
++		begin_category(CATEGORY_TLS, TEXT("TLS Callbacks"));
+ 		exec_check(&TLSCallbackProcess, TEXT("TLS process attach callback "));
+ 		exec_check(&TLSCallbackThread, TEXT("TLS thread attach callback "));
+ 	}
+ 
+ 	/* Debugger Detection */
+ 	if (ENABLE_DEBUG_CHECKS) {
+-		print_category(TEXT("Debugger Detection"));
++		begin_category(CATEGORY_DEBUG, TEXT("Debugger Detection"));
+ 		exec_check(&IsDebuggerPresentAPI, TEXT("Checking IsDebuggerPresent API "));
+ 		exec_check(&IsDebuggerPresentPEB, TEXT("Checking PEB.BeingDebugged "));
+ 		exec_check(&CheckRemoteDebuggerPresentAPI, TEXT("Checking CheckRemoteDebuggerPresent API "));
+@@ -215,7 +248,7 @@ int main(int argc, char* argv[]){
+ 	}
+ 
+ 	if (ENABLE_INJECTION_CHECKS) {
+-		print_category(TEXT("DLL Injection Detection"));
++		begin_category(CATEGORY_INJECTION, TEXT("DLL Injection Detection"));
+ 		exec_check(&ScanForModules_EnumProcessModulesEx_32bit, TEXT("Enumerating modules with EnumProcessModulesEx [32-bit] "));
+ 		exec_check(&ScanForModules_EnumProcessModulesEx_64bit, TEXT("Enumerating modules with EnumProcessModulesEx [64-bit] "));
+ 		exec_check(&ScanForModules_EnumProcessModulesEx_All, TEXT("Enumerating modules with EnumProcessModulesEx [ALL] "));
+@@ -229,7 +262,7 @@ int main(int argc, char* argv[]){
+ 
+ 	/* Generic sandbox detection */
+ 	if (ENABLE_GEN_SANDBOX_CHECKS) {
+-		print_category(TEXT("Generic Sandboxe/VM Detection"));
++		begin_category(CATEGORY_GEN_SANDBOX, TEXT("Generic Sandboxe/VM Detection"));
+ 		loaded_dlls();
+ 		known_file_names();
+ 		known_usernames();
+@@ -245,8 +278,6 @@ int main(int argc, char* argv[]){
+ 		exec_check(&disk_size_wmi, TEXT("Checking hard disk size using WMI "));
+ 		exec_check(&dizk_size_deviceiocontrol, TEXT("Checking hard disk size using DeviceIoControl "));
+ 		exec_check(&setupdi_diskdrive, TEXT("Checking SetupDi_diskdrive "));
+-		exec_check(&mouse_movement, TEXT("Checking mouse movement "));
+-		exec_check(&lack_user_input, TEXT("Checking lack of user input "));
+ 		exec_check(&memory_space, TEXT("Checking memory space using GlobalMemoryStatusEx "));
+ 		exec_check(&disk_size_getdiskfreespace, TEXT("Checking disk size using GetDiskFreeSpaceEx "));
+ 		exec_check(&cpuid_is_hypervisor, TEXT("Checking if CPU hypervisor field is set using cpuid(0x1)"));
+@@ -284,9 +315,16 @@ int main(int argc, char* argv[]){
+ 		exec_check(&firmware_ACPI, TEXT("Checking ACPI table strings "));
+ 	}
+ 
++	/* Human interaction: only with --check HUMAN_INTERACTION */
++	if (ENABLE_HUMAN_INTERACTION_CHECKS) {
++		begin_category(CATEGORY_HUMAN_INTERACTION, TEXT("Human Interaction"));
++		exec_check(&mouse_movement, TEXT("Checking mouse movement "));
++		exec_check(&lack_user_input, TEXT("Checking lack of user input "));
++	}
++
+ 	/* VirtualBox Detection */
+ 	if (ENABLE_VBOX_CHECKS) {
+-		print_category(TEXT("VirtualBox Detection"));
++		begin_category(CATEGORY_VBOX, TEXT("VirtualBox Detection"));
+ 		vbox_reg_key_value();
+ 		exec_check(&vbox_dir, TEXT("Checking VirtualBox Guest Additions directory "));
+ 		vbox_files();
+@@ -310,7 +348,7 @@ int main(int argc, char* argv[]){
+ 
+ 	/* VMWare Detection */
+ 	if (ENABLE_VMWARE_CHECKS) {
+-		print_category(TEXT("VMWare Detection"));
++		begin_category(CATEGORY_VMWARE, TEXT("VMWare Detection"));
+ 		vmware_reg_key_value();
+ 		vmware_reg_keys();
+ 		vmware_files();
+@@ -324,14 +362,14 @@ int main(int argc, char* argv[]){
+ 
+ 	/* Virtual PC Detection */
+ 	if (ENABLE_VPC_CHECKS) {
+-		print_category(TEXT("Virtual PC Detection"));
++		begin_category(CATEGORY_VPC, TEXT("Virtual PC Detection"));
+ 		virtual_pc_process();
+ 		virtual_pc_reg_keys();
+ 	}
+ 
+ 	/* QEMU Detection */
+ 	if (ENABLE_QEMU_CHECKS) {
+-		print_category(TEXT("QEMU Detection"));
++		begin_category(CATEGORY_QEMU, TEXT("QEMU Detection"));
+ 		qemu_reg_key_value();
+ 		qemu_reg_keys();
+ 		qemu_processes();
+@@ -343,7 +381,7 @@ int main(int argc, char* argv[]){
+ 
+ 	/* Xen Detection */
+ 	if (ENABLE_XEN_CHECKS) {
+-		print_category(TEXT("Xen Detection"));
++		begin_category(CATEGORY_XEN, TEXT("Xen Detection"));
+ 		xen_reg_keys();
+ 		xen_process();
+ 		exec_check(&xen_check_mac, TEXT("Checking Mac Address start with 08:16:3E "));
+@@ -351,7 +389,7 @@ int main(int argc, char* argv[]){
+ 
+ 	/* KVM Detection */
+ 	if (ENABLE_KVM_CHECKS) {
+-		print_category(TEXT("KVM Detection"));
++		begin_category(CATEGORY_KVM, TEXT("KVM Detection"));
+ 		kvm_files();
+ 		kvm_reg_keys();
+ 		exec_check(&kvm_dir, TEXT("Checking KVM virio directory "));
+@@ -359,21 +397,21 @@ int main(int argc, char* argv[]){
+ 
+ 	/* Wine Detection */
+ 	if (ENABLE_WINE_CHECKS) {
+-		print_category(TEXT("Wine Detection"));
++		begin_category(CATEGORY_WINE, TEXT("Wine Detection"));
+ 		exec_check(&wine_exports, TEXT("Checking Wine via dll exports "));
+ 		wine_reg_keys();
+ 	}
+ 
+ 	/* Parallels Detection */
+ 	if (ENABLE_PARALLELS_CHECKS) {
+-		print_category(TEXT("Parallels Detection"));
++		begin_category(CATEGORY_PARALLELS, TEXT("Parallels Detection"));
+ 		parallels_reg_keys();
+ 		parallels_process();
+ 		exec_check(&parallels_check_mac, TEXT("Checking Mac Address start with 00:1C:42 "));
+ 	}
+ 
+ 	if (ENABLE_HYPERV_CHECKS) {
+-		print_category(TEXT("Hyper-V Detection"));
++		begin_category(CATEGORY_HYPERV, TEXT("Hyper-V Detection"));
+ 		exec_check(&check_hyperv_driver_objects, TEXT("Checking for Hyper-V driver objects "));
+ 		exec_check(&check_hyperv_global_objects, TEXT("Checking for Hyper-V global objects "));
+ 	}
+@@ -390,7 +428,7 @@ int main(int argc, char* argv[]){
+ 
+ 	/* Timing Attacks */
+ 	if (ENABLE_TIMING_ATTACKS) {
+-		print_category(TEXT("Timing-attacks"));
++		begin_category(CATEGORY_TIMING, TEXT("Timing-attacks"));
+ 
+ 		UINT delayInMillis = delayInSeconds * 1000U;
+ 		printf("\n[*] Delay value is set to %u seconds (%u minutes) ...\n", delayInSeconds, delayInSeconds / 60);
+@@ -411,7 +449,7 @@ int main(int argc, char* argv[]){
+ 
+ 	/* Malware analysis tools */
+ 	if (ENABLE_ANALYSIS_TOOLS_CHECK) {
+-		print_category(TEXT("Analysis-tools"));
++		begin_category(CATEGORY_ANALYSIS_TOOLS, TEXT("Analysis-tools"));
+ 		analysis_tools_process();
+ 	}
+ 
+@@ -433,6 +471,9 @@ int main(int argc, char* argv[]){
+ #endif
+ 	}
+ 
++	/* Report before Anti Dumping erases our PE header, which every new thread's start reads */
++	exit_code = report_detections();
++
+ 	/* Anti Dumping */
+ 	if (ENABLE_DUMPING_CHECK) {
+ 		print_category(TEXT("Anti Dumping"));
+@@ -442,7 +483,8 @@ int main(int argc, char* argv[]){
+ 
+ 	_tprintf(_T("\n\nAnalysis done, I hope you didn't get red flags :)"));
+ 
+-	getchar();
+-	return 0;
++	if (pause_at_end)
++		getchar();
++	return (int)exit_code;
+ }
+ 
+diff --git a/al-khaser/Shared/Common.cpp b/al-khaser/Shared/Common.cpp
+index 079156e..5217013 100644
+--- a/al-khaser/Shared/Common.cpp
++++ b/al-khaser/Shared/Common.cpp
+@@ -1,6 +1,76 @@
+ #include "pch.h"
+ #include "Common.h"
+ 
++/* The category running, how many checks it reported so far, and the detections: code and text */
++static UINT current_category = 0;
++static UINT checks_in_category = 0;
++static std::vector<UINT> detections, blocked;
++DWORD check_timeout_ms = 120 * 1000;
++
++/* An event named "al-khaser <code> <kind> <text>": its NtCreateEvent shows in a trace */
++static VOID trace_mark(UINT code, const TCHAR* kind, const TCHAR* text)
++{
++	std::basic_string<TCHAR> name = TEXT("al-khaser ") + std::to_wstring(code) + TEXT(" ") + kind +
++		TEXT(" ") + (text ? text : TEXT(""));
++
++	/* A backslash would make it a path */
++	std::replace(name.begin(), name.end(), TEXT('\\'), TEXT('/'));
++	name = name.substr(0, 200);
++	while (!name.empty() && name.back() == TEXT(' '))
++		name.pop_back();
++	HANDLE event = CreateEvent(NULL, FALSE, FALSE, name.c_str());
++	if (event)
++		CloseHandle(event);
++}
++
++static DWORD WINAPI exit_code_thread(LPVOID code)
++{
++	return (DWORD)(ULONG_PTR)code;
++}
++
++/* A thread that exits with code: its NtTerminateThread shows in a trace */
++static VOID trace_exit_code(UINT code)
++{
++	HANDLE thread = CreateThread(NULL, 0, exit_code_thread, (LPVOID)(ULONG_PTR)code, 0, NULL);
++	if (thread) {
++		WaitForSingleObject(thread, INFINITE);
++		CloseHandle(thread);
++	}
++}
++
++/* Shared with the check's thread, which may outlive run_check */
++struct check_job {
++	std::function<int()> check;
++	int result = 0;
++};
++
++static DWORD WINAPI check_thread(LPVOID param)
++{
++	std::shared_ptr<check_job>* job = (std::shared_ptr<check_job>*)param;
++	(*job)->result = (*job)->check();
++	delete job;
++	return 0;
++}
++
++int run_check(std::function<int()> check, const TCHAR* szMsg)
++{
++	std::shared_ptr<check_job> job = std::make_shared<check_job>();
++	job->check = std::move(check);
++
++	/* The code _print_check_result is going to give it */
++	trace_mark(current_category * 1000 + checks_in_category + 1, TEXT("start"), szMsg);
++
++	std::shared_ptr<check_job>* ref = new std::shared_ptr<check_job>(job);
++	HANDLE thread = CreateThread(NULL, 0, check_thread, ref, 0, NULL);
++	if (!thread) {
++		delete ref;
++		return job->check();
++	}
++	DWORD wait = WaitForSingleObject(thread, check_timeout_ms);
++	CloseHandle(thread);
++	return wait == WAIT_OBJECT_0 ? job->result : CHECK_BLOCKED;
++}
++
+ VOID print_detected()
+ {
+ 	/* Get handle to standard output */
+@@ -33,6 +103,22 @@ VOID print_not_detected()
+ 	SetConsoleTextAttribute(nStdHandle, OriginalColors);
+ }
+ 
++VOID print_blocked()
++{
++	/* Get handle to standard output */
++	HANDLE nStdHandle = GetStdHandle(STD_OUTPUT_HANDLE);
++	CONSOLE_SCREEN_BUFFER_INFO ConsoleScreenBufferInfo;
++	SecureZeroMemory(&ConsoleScreenBufferInfo, sizeof(CONSOLE_SCREEN_BUFFER_INFO));
++
++	/* Save the original console color */
++	GetConsoleScreenBufferInfo(nStdHandle, &ConsoleScreenBufferInfo);
++	WORD OriginalColors = *(&ConsoleScreenBufferInfo.wAttributes);
++
++	SetConsoleTextAttribute(nStdHandle, 14);
++	_tprintf(TEXT("[BLOCKED]\n"));
++	SetConsoleTextAttribute(nStdHandle, OriginalColors);
++}
++
+ VOID print_category(const TCHAR* text)
+ {
+ 	/* Get handle to standard output */
+@@ -63,17 +149,60 @@ VOID _print_check_text(const TCHAR* szMsg)
+ 
+ VOID _print_check_result(int result, const TCHAR* szMsg)
+ {
+-	if (result == TRUE)
++	UINT code = current_category * 1000 + ++checks_in_category;
++
++	_tprintf(TEXT("%5u "), code);
++	if (result == CHECK_BLOCKED) {
++		print_blocked();
++		blocked.push_back(code);
++		trace_mark(code, TEXT("blocked"), szMsg);
++		trace_exit_code(CHECK_BLOCKED_BASE + code);
++	}
++	else if (result == TRUE) {
+ 		print_detected();
++		detections.push_back(code);
++		trace_mark(code, TEXT("detected"), szMsg);
++		trace_exit_code(code);
++	}
+ 	else
+ 		print_not_detected();
+ 
+ 	/* log to file*/
+ 	TCHAR buffer[256] = _T("");
+-	_stprintf_s(buffer, sizeof(buffer) / sizeof(TCHAR), _T("[*] %s -> %d"), szMsg, result);
++	_stprintf_s(buffer, sizeof(buffer) / sizeof(TCHAR), _T("[%u] %s -> %d"), code, szMsg, result);
+ 	LOG_PRINT(buffer);
+ }
+ 
++VOID begin_category(UINT category, const TCHAR* text)
++{
++	current_category = category;
++	checks_in_category = 0;
++	print_category(text);
++	trace_mark(category * 1000, TEXT("category"), text);
++}
++
++UINT report_detections()
++{
++	_tprintf(TEXT("\n\n[*] Checks that detected something: %u"), (UINT)detections.size());
++	LOG_PRINT(_T("[*] Checks that detected something: %u"), (UINT)detections.size());
++	for (UINT code : detections) {
++		_tprintf(TEXT(" %u"), code);
++		LOG_PRINT(_T("[*] Detected: %u"), code);
++	}
++
++	_tprintf(TEXT("\n[*] Checks that did not return within %u s: %u"), check_timeout_ms / 1000, (UINT)blocked.size());
++	LOG_PRINT(_T("[*] Checks that did not return within %u s: %u"), check_timeout_ms / 1000, (UINT)blocked.size());
++	for (UINT code : blocked) {
++		_tprintf(TEXT(" %u"), code);
++		LOG_PRINT(_T("[*] Blocked: %u"), code);
++	}
++	_tprintf(TEXT("\n"));
++
++	if (!detections.empty())
++		return detections.front();
++	return blocked.empty() ? 0 : CHECK_BLOCKED_BASE + blocked.front();
++}
++
+ VOID print_results(int result, TCHAR* szMsg)
+ {
+ 	_print_check_text(szMsg);
+@@ -87,7 +216,7 @@ VOID exec_check(int(*callback)(), const TCHAR* szMsg)
+ 	_print_check_text(szMsg);
+ 
+ 	/* Call our check */
+-	int result = callback();
++	int result = run_check(callback, szMsg);
+ 
+ 	/* Print / Log the result */
+ 	if (szMsg)
+diff --git a/al-khaser/Shared/Common.h b/al-khaser/Shared/Common.h
+index 14a53a5..4783ad4 100644
+--- a/al-khaser/Shared/Common.h
++++ b/al-khaser/Shared/Common.h
+@@ -1,5 +1,7 @@
+ #pragma once
+ 
++#include <functional>
++
+ VOID print_detected() ;
+ VOID print_not_detected() ;
+ VOID print_category(const TCHAR* text);
+@@ -15,6 +17,49 @@ VOID _print_check_result(int result, const TCHAR* szMsg);
+ 
+ VOID exec_check(int(*callback)(), const TCHAR* szMsg);
+ 
++/*
++ * Every check of exec_check runs on a thread of its own: one that does not return within
++ * check_timeout_ms is reported as blocked (CHECK_BLOCKED), its thread left behind, and the run
++ * goes on. The trace marks each check's start too, so a run that still hangs shows where.
++ */
++#define CHECK_BLOCKED (-1000)
++/* Added to a blocked check's code in its thread's and the process's exit code */
++#define CHECK_BLOCKED_BASE 100000
++extern DWORD check_timeout_ms;
++int run_check(std::function<int()> check, const TCHAR* szMsg);
++
++/*
++ * Every check that reports a result has a code of its own: its category times 1000
++ * plus its position in the category, in the order the checks run (VBOX's 12th
++ * check is 5012). Every result line shows it. A run exits with the code of the
++ * first check that detected something, else CHECK_BLOCKED_BASE plus the first blocked
++ * one's, else 0. A trace of syscalls shows them all, as they happen: an event named
++ * "al-khaser <code> <start|detected|blocked> <check>" (NtCreateEvent; "category" with the
++ * category's code * 1000 when one begins), and for a detection a thread that exits with
++ * the code (NtTerminateThread), CHECK_BLOCKED_BASE + code for a blocked check.
++ */
++enum CHECK_CATEGORY {
++	CATEGORY_TLS = 1,
++	CATEGORY_DEBUG = 2,
++	CATEGORY_INJECTION = 3,
++	CATEGORY_GEN_SANDBOX = 4,
++	CATEGORY_VBOX = 5,
++	CATEGORY_VMWARE = 6,
++	CATEGORY_VPC = 7,
++	CATEGORY_QEMU = 8,
++	CATEGORY_XEN = 9,
++	CATEGORY_KVM = 10,
++	CATEGORY_WINE = 11,
++	CATEGORY_PARALLELS = 12,
++	CATEGORY_HYPERV = 13,
++	CATEGORY_TIMING = 14,
++	CATEGORY_ANALYSIS_TOOLS = 15,
++	CATEGORY_HUMAN_INTERACTION = 16,
++};
++
++VOID begin_category(UINT category, const TCHAR* text);
++UINT report_detections();
++
+ // this must be defined in this header file
+ // see: https://stackoverflow.com/questions/495021/why-can-templates-only-be-implemented-in-the-header-file
+ template <typename T>
+@@ -24,7 +69,7 @@ VOID exec_check(int(*callback)(T param), T param, const TCHAR* szMsg)
+ 	_print_check_text(szMsg);
+ 
+ 	/* Call our check */
+-	int result = callback(param);
++	int result = run_check([=]() { return callback(param); }, szMsg);
+ 
+ 	/* Print / Log the result */
+ 	if (szMsg)

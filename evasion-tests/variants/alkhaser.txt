@@ -1,0 +1,12 @@
+# Variants for alkhaser_search.sh, in the format of rdtsc.txt (README.md, "Variants").
+#
+# The patch as shipped: Windows executables (0x7ff600000000-0x7ff800000000) compressed,
+# RDTSC_USER_PURE off. On the i9-13900KF dom0 (2026-11-02, guests with the identity) check 14011
+# (RDTSC around CPUID) passed and 14010 (Locky) was detected
+baseline
+# Exit-free pairs return the guest's own work: Locky expected to pass, 14011 to keep passing.
+# Measured: Locky detected in 1 run of 4
+pure                     RDTSC_USER_PURE=1
+#
+# Only the timing checks, a test in minutes instead of half an hour:
+#   ALKHASER_ARGS='--check TIMING_ATTACKS --sleep 1' DRAKVUF_TIMEOUT=300 TESTS=6 ./alkhaser_search.sh

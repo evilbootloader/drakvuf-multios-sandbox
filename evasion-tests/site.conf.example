@@ -1,0 +1,59 @@
+# Host settings of rdtsc_search.sh and alkhaser_search.sh. Copy this file to site.conf (not
+# tracked) next to it and fill it in; SITE_CONF=<file> picks another one. README.md, "Adapting it
+# to your hardware", explains each value.
+#
+# Keep the VAR=${VAR:-value} form: a value given on the command line then still wins over the
+# one here (DOM0=root@other ./rdtsc_search.sh). Settings of one run (TESTS, ONLY, VARIANTS,
+# DRAKVUF_TIMEOUT, ...) belong on the command line, not here.
+
+# --- dom0 -----------------------------------------------------------------------------------
+# How ssh reaches dom0 as root, with a key that needs no password (the search runs for hours)
+DOM0=${DOM0:-root@192.0.2.10}
+SSH_KEY=${SSH_KEY:-$HOME/.ssh/id_ed25519}
+# dom0's checkout of this repository, with make xen and make sandboxd run from it. It must be at
+# the same commit as this checkout: the search compares their drakvuf submodules and Xen patch
+REMOTE_REPO=${REMOTE_REPO:-/root/drakvuf-multios-sandbox}
+# Where the search keeps its state on dom0 (installed variant, job logs, detector, al-khaser)
+REMOTE_STATE=${REMOTE_STATE:-/root/evasion-tests}
+# Where the benchmarks write on dom0. An al-khaser test writes tens of GB: a disk with room
+REMOTE_OUT_BASE=${REMOTE_OUT_BASE:-/root/evasion-tests/out}
+
+# --- Test VMs (README.md, "Test VMs") --------------------------------------------------------
+# Each VM: the Xen cfg on dom0 the benchmark restores the saved state with, and the thin
+# snapshot it restores it onto, which the cfg's disk must name. VM2 runs the second
+# configuration at the same time as VM1; leave it empty when dom0 has no room for two guests.
+LINUX_VM1=${LINUX_VM1-CFG=/root/evasion-tests/ubuntu_test1.cfg CLONE_NAME=ubuntu_sandbox-test1}
+LINUX_VM2=${LINUX_VM2-CFG=/root/evasion-tests/ubuntu_test2.cfg CLONE_NAME=ubuntu_sandbox-test2}
+WINDOWS_VM1=${WINDOWS_VM1-CFG=/root/evasion-tests/windows_test1.cfg CLONE_NAME=windows_sandbox-test1}
+WINDOWS_VM2=${WINDOWS_VM2-CFG=/root/evasion-tests/windows_test2.cfg CLONE_NAME=windows_sandbox-test2}
+
+# --- Hardware --------------------------------------------------------------------------------
+# CPUs the Xen build is pinned to (a taskset list), empty for all. For a CPU that crashes the
+# toolchain under a full build, like the i9-13900KF this was written on (its E-cores: 16-31)
+BUILD_CPUS=${BUILD_CPUS-}
+# Seconds dom0 may take to reboot, POST included
+BOOT_LIMIT=${BOOT_LIMIT:-1800}
+
+# --- Optional --------------------------------------------------------------------------------
+# 1 opens a VNC viewer per VM here while the tests run (TigerVNC). The cfgs from misc/xen-vms
+# listen on 127.0.0.1: forward the ports with ssh -L and set VNC_HOST=127.0.0.1
+VNC=${VNC:-0}
+#VNC_HOST=${VNC_HOST:-127.0.0.1}
+#VNC_PORTS=${VNC_PORTS:-5900 5901}
+# Where the results go here: <RESULTS_BASE>/rdtsc-search/<timestamp>, .../alkhaser-search/...
+#RESULTS_BASE=${RESULTS_BASE:-/path/to/results}
+# A Xen tree of your own instead of dom0's make xen tree, e.g. while developing the patch: every
+# file it changed from XEN_BASE is uploaded to REMOTE_XEN. Its hvmloader and libacpi lack the
+# guest identity (scripts/xen-identity.py patch-xen): run make xen again after such a search.
+#LOCAL_XEN=${LOCAL_XEN:-$HOME/src/xen}
+#XEN_BASE=${XEN_BASE:-RELEASE-4.20.1}
+#REMOTE_XEN=${REMOTE_XEN:-/root/src/xen}
+# 0 skips the check that dom0's drakvuf source is this checkout's (it is still built there)
+#DRAKVUF_SOURCE_CHECK=${DRAKVUF_SOURCE_CHECK:-1}
+# Added to every benchmark's environment, last: e.g. another DRAKVUF build
+#BENCH_EXTRA_ENV=${BENCH_EXTRA_ENV-DEV_BIN=/opt/drakvuf/build/drakvuf DEV_LIBVMI=/opt/libvmi/libvmi/.libs}
+# The detector on dom0 and in the guest (names ending in /detector); BUILD_DETECTOR=0 uses an
+# existing binary instead of building detector.c on dom0
+#REMOTE_DETECTOR=${REMOTE_DETECTOR:-/root/evasion-tests/detector}
+#DETECTOR_DST=${DETECTOR_DST:-/tmp/detector}
+#BUILD_DETECTOR=${BUILD_DETECTOR:-1}

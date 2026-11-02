@@ -6,7 +6,9 @@
 > branch `rdtsc-poc` (5fa34725a4, dc30449605, 18aaea8adf). `make xen` applies it
 > and puts `rdtsc-poc=1` on the boot line; `automation/xen-rdtsc-poc.service`
 > presses the `d` key once per boot. Dom0 runs builds of that branch, installed
-> by the search scripts rather than by `make xen`.
+> by the search scripts rather than by `make xen`. Those scripts are now in
+> [`evasion-tests/`](../../evasion-tests/README.md) (2026-11-02), with how to run
+> them and how to adapt the limits below to another CPU's TSC rate.
 
 DRAKVUF stops a guest vCPU for every trap: a vm_event round trip, an altp2m
 switch, a single step. A program that reads the TSC twice around a trapping
@@ -76,8 +78,8 @@ on that: 200k cycles of run time missed the first run after a restore (the
 kernel logs UMIP's warning between the reads), 3M of hidden time missed pauses
 of up to 4.7M.
 
-Windows 11, al-khaser under DRAKVUF (`alkhaser_search.sh` outside this
-repository): with the Windows executable range, its RDTSC around CPUID check
+Windows 11, al-khaser under DRAKVUF (`alkhaser_search.sh`, then outside this
+repository, now in `evasion-tests/`): with the Windows executable range, its RDTSC around CPUID check
 (14011) passes; without it, nothing on Windows is compressed and that check
 detects.
 

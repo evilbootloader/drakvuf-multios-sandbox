@@ -372,10 +372,10 @@ It maps **headings, not content**: a fact stated in the middle of a section is n
 
 - `docs/architecture/guest-identity.md:1` — [Guest identity — what the analysis guests look like from inside](architecture/guest-identity.md#guest-identity--what-the-analysis-guests-look-like-from-inside)
   - `docs/architecture/guest-identity.md:25` — [1. The evidence it answers](architecture/guest-identity.md#1-the-evidence-it-answers)
-  - `docs/architecture/guest-identity.md:57` — [2. The identity](architecture/guest-identity.md#2-the-identity)
-  - `docs/architecture/guest-identity.md:87` — [3. Where it goes](architecture/guest-identity.md#3-where-it-goes)
-  - `docs/architecture/guest-identity.md:158` — [4. Why a reinstall](architecture/guest-identity.md#4-why-a-reinstall)
-  - `docs/architecture/guest-identity.md:197` — [5. What it does not answer](architecture/guest-identity.md#5-what-it-does-not-answer)
+  - `docs/architecture/guest-identity.md:58` — [2. The identity](architecture/guest-identity.md#2-the-identity)
+  - `docs/architecture/guest-identity.md:88` — [3. Where it goes](architecture/guest-identity.md#3-where-it-goes)
+  - `docs/architecture/guest-identity.md:159` — [4. Why a reinstall](architecture/guest-identity.md#4-why-a-reinstall)
+  - `docs/architecture/guest-identity.md:201` — [5. What it does not answer](architecture/guest-identity.md#5-what-it-does-not-answer)
 
 ## `docs/architecture/licensing.md`
 
@@ -458,11 +458,11 @@ It maps **headings, not content**: a fact stated in the middle of a section is n
 ## `docs/architecture/rdtsc-poc.md`
 
 - `docs/architecture/rdtsc-poc.md:1` — [RDTSC compensation — the guest's TSC without DRAKVUF's time in it](architecture/rdtsc-poc.md#rdtsc-compensation--the-guests-tsc-without-drakvufs-time-in-it)
-  - `docs/architecture/rdtsc-poc.md:18` — [1. What it does](architecture/rdtsc-poc.md#1-what-it-does)
-    - `docs/architecture/rdtsc-poc.md:41` — [1.1 Why the kernel keeps the real TSC](architecture/rdtsc-poc.md#11-why-the-kernel-keeps-the-real-tsc)
-  - `docs/architecture/rdtsc-poc.md:59` — [2. Evidence](architecture/rdtsc-poc.md#2-evidence)
-  - `docs/architecture/rdtsc-poc.md:86` — [3. Known gaps](architecture/rdtsc-poc.md#3-known-gaps)
-  - `docs/architecture/rdtsc-poc.md:108` — [4. Operating it](architecture/rdtsc-poc.md#4-operating-it)
+  - `docs/architecture/rdtsc-poc.md:20` — [1. What it does](architecture/rdtsc-poc.md#1-what-it-does)
+    - `docs/architecture/rdtsc-poc.md:43` — [1.1 Why the kernel keeps the real TSC](architecture/rdtsc-poc.md#11-why-the-kernel-keeps-the-real-tsc)
+  - `docs/architecture/rdtsc-poc.md:61` — [2. Evidence](architecture/rdtsc-poc.md#2-evidence)
+  - `docs/architecture/rdtsc-poc.md:88` — [3. Known gaps](architecture/rdtsc-poc.md#3-known-gaps)
+  - `docs/architecture/rdtsc-poc.md:110` — [4. Operating it](architecture/rdtsc-poc.md#4-operating-it)
 
 ## `docs/architecture/result-schema.md`
 

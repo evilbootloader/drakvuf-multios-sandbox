@@ -1,0 +1,18 @@
+# Variants for rdtsc_search.sh: one per line, a name, then KEY=VALUE for any #define of
+# xen/arch/x86/hvm/vmx/vmx.c or .../vmx/vmcs.h (README.md, "Variants"). A key left out keeps the
+# value of automation/xen-rdtsc-poc.patch. Values: decimal or 0x hex, optionally U or ULL.
+# A variant whose Xen dom0 already runs (same sources) goes straight to the tests.
+#
+# The patch as shipped: RDTSC_USER_CLOSE 1M and RDTSC_USER_LAG_MAX 30M cycles, measured 0 of
+# 200 red pill detections on the i9-13900KF dom0, 2026-11-01 (docs/architecture/rdtsc-poc.md §2)
+baseline
+# Exit-free pairs return the guest's own work. The red pill's pair has SIDT's exit in it, so
+# expected unchanged
+pure                     RDTSC_USER_PURE=1
+#
+# Scaling the run-time window and the hidden-time cap to another TSC rate (README.md, "TSC
+# rate"). The shipped values are 1M and 30M cycles at a ~3 GHz TSC, about 0.33 ms and 10 ms. For
+# a 2.1 GHz TSC, the same times and a margin either side:
+#close700k_lag21m        RDTSC_USER_CLOSE=700000ULL RDTSC_USER_LAG_MAX=21000000ULL
+#close1m_lag21m          RDTSC_USER_CLOSE=1000000ULL RDTSC_USER_LAG_MAX=21000000ULL
+#close1500k_lag30m       RDTSC_USER_CLOSE=1500000ULL RDTSC_USER_LAG_MAX=30000000ULL

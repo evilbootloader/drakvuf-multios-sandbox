@@ -115,3 +115,10 @@ misc/iso
 misc/Artifacts
 .venv-sandboxd
 misc/iso/cidata/user-data
+
+# evasion-tests/: this lab's settings (Dom0 address, key, paths), the search results, the
+# al-khaser checkout and build, and the detector binary. See evasion-tests/README.md.
+evasion-tests/site.conf
+evasion-tests/results/
+evasion-tests/build/
+evasion-tests/detector

@@ -1,8 +1,8 @@
 # Guest identity — what the analysis guests look like from inside
 
 > **Status (2026-11-02): PARTLY EVIDENCED.** The guests were reinstalled with
-> it and al-khaser run on Windows on 2026-11-02 (`alkhaser_search.sh`, outside
-> the repository, run `20261102-003810`: two Xen variants, two tests each, in
+> it and al-khaser run on Windows on 2026-11-02 (`alkhaser_search.sh`, then
+> outside the repository, now [`evasion-tests/`](../../evasion-tests/README.md); run `20261102-003810`: two Xen variants, two tests each, in
 > `dev-syscalls` and `dev-all`). Of the 2026-11-01 detections below, 4064,
 > 4073, 4074, 4078, 4080, 4084, 4085, 4087–4094, 4096, 9001 and 9003 were gone
 > in every run. Three that should have gone did not: 4097, 4098 and 8010. Their
@@ -25,7 +25,8 @@ zone.
 ## 1. The evidence it answers
 
 al-khaser on the Windows 11 guest under DRAKVUF, 2026-11-01, before any of
-this (`alkhaser_search.sh`, outside the repository). Each line is a check that
+this (`alkhaser_search.sh`, then outside the repository, now in
+`evasion-tests/`). Each line is a check that
 detected the sandbox, and what here answers it:
 
 | al-khaser check | Gave away | Answered by |
@@ -171,10 +172,13 @@ neither. So, in order:
 **Until then, `sandboxd` without `-s` lets today's guests see the hypervisor
 bit.** Deploy the `sandboxd` change with the reinstalled guests, not before.
 
-**A Xen built any other way has none of it in hvmloader, libacpi or QEMU.** The
-RDTSC and al-khaser searches (outside the repository) build and install Xen from
-a `drakvuf-dev/xen` checkout: restored guests do not notice, but a guest
+**A Xen built any other way has none of it in hvmloader, libacpi or QEMU.**
+Until 2026-11-02 the RDTSC and al-khaser searches built and installed Xen from a
+`drakvuf-dev/xen` checkout: restored guests do not notice, but a guest
 installed or cold-booted on it gets Xen's strings back. Run `make xen` first.
+In [`evasion-tests/`](../../evasion-tests/README.md) they change only `vmx.c`
+and `vmcs.h` of the tree `make xen` left on Dom0, which keeps the identity; only
+their `LOCAL_XEN` mode still uploads a tree of its own.
 
 **The Ubuntu guest still knows it runs on Xen.** Linux finds Xen's signature
 whatever the hypervisor bit, and the patch hides the leaves from user mode
