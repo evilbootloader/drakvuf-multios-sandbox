@@ -240,6 +240,7 @@ def _budget(os_: TargetOs) -> dict:
     """
     return {
         "timeout": 150 if TargetOs.ANDROID else 120,
+        "max_timeout": catalogue.MAX_TRACE_TIMEOUT,
         "linux": os_ is not TargetOs.WINDOWS,
         "disable_sysret": catalogue.sysret_disabled_by_default(os_),
     }

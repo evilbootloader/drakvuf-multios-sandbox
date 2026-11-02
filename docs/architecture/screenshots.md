@@ -195,7 +195,7 @@ it. A frame landing after that would break the presigned
 | Bound | Value | Why |
 |---|---|---|
 | Interval | 2 s (`config.SCREENSHOT_INTERVAL`) | the draft's figure |
-| Frames | 450 ticks (`SCREENSHOT_MAX_FRAMES`) | 15 minutes; the trace timeout is under 600 s |
+| Frames | 750 ticks (`SCREENSHOT_MAX_FRAMES`) | 25 minutes; the trace timeout is at most 1200 s (`catalogue.MAX_TRACE_TIMEOUT`). 450 while it was under 600 s, until 2026-11-02 |
 | Bytes | 256 MiB (`SCREENSHOT_MAX_BYTES`) | a guest drawing noise must never be what pushes a job past #37's 4 GiB budget, where a 413 fails it |
 | Artifacts | uploaded **last** (`stages._collect`) | the artifact cap or `COLLECT_BUDGET` drops frames, never the trace |
 

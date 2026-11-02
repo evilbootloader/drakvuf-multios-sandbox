@@ -193,6 +193,13 @@ def sysret_disabled_by_default(os_: TargetOs) -> bool:
     return os_ is TargetOs.ANDROID
 
 
+#: The longest trace a job may ask for, in seconds: DRAKVUF's `-t`. The API
+#: refuses more and the submit form offers no more. 600 until 2026-11-02, when
+#: the operator raised it; sandboxd's screenshot cap
+#: (`config.SCREENSHOT_MAX_FRAMES`) covers a trace this long.
+MAX_TRACE_TIMEOUT = 1200
+
+
 # `defaults(os_)` was removed 2026-09-17 with DRAFT-052. It existed to tell a
 # report page which plugins a job PROBABLY ran, back when the selection was not
 # recorded; the job now carries its own `plugins`, so the guess had exactly one

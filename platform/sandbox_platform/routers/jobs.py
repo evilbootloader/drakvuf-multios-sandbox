@@ -48,7 +48,7 @@ from ..enums import (
     Visibility,
 )
 
-from ..catalogue import PLUGINS, sysret_disabled_by_default
+from ..catalogue import MAX_TRACE_TIMEOUT, PLUGINS, sysret_disabled_by_default
 
 import logging
 log = logging.getLogger(__name__)
@@ -219,7 +219,7 @@ class CreateJobRequest(BaseModel):
     filename: str = Field(min_length=1, max_length=_MAX_SAMPLE_NAME)
     size_bytes: int = Field(gt=0)
     plugins: list["str"]
-    timeout: int = Field(gt=0, lt=600)
+    timeout: int = Field(gt=0, le=MAX_TRACE_TIMEOUT)
     # Absent means the guest's default (`catalogue.sysret_disabled_by_default`),
     # resolved in `create_job` -- what the submit form would have sent, not a
     # blanket True that switched return values off for every API client.
@@ -558,10 +558,10 @@ def create_job(req: CreateJobRequest,
             f"available plugins for Ubuntu and Android are {plugins_linux}",
         )
 
-    if not isinstance(req.timeout, int) or int(req.timeout) > 600 or int(req.timeout) < 0:
+    if not isinstance(req.timeout, int) or int(req.timeout) > MAX_TRACE_TIMEOUT or int(req.timeout) < 0:
         raise HTTPException(
             status.HTTP_406_NOT_ACCEPTABLE,
-            f"timeout goes from 0 to 600",
+            f"timeout goes from 0 to {MAX_TRACE_TIMEOUT}",
         )
     
     if req.disable_sysret is None:

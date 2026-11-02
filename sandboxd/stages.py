@@ -101,7 +101,8 @@ def _must_stay_inside(path: Path, root: Path, what: str) -> None:
 # 1025-2048 files built a manifest `/complete` refused with a 422, raised as a
 # ProtocolError from `_report_terminal` -- outside `run`'s `try` -- so the job
 # sat in `cleaning` with its artifacts uploaded and no manifest. Screenshots
-# (DRAFT-054) add up to 450 files per job and made that reachable. Lower is
+# (DRAFT-054) add up to `config.SCREENSHOT_MAX_FRAMES` files per job (450
+# then, 750 since 2026-11-02) and made that reachable. Lower is
 # safe; higher is that bug.
 MAX_ARTIFACTS = 1024
 

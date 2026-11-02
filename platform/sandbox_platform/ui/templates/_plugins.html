@@ -51,7 +51,7 @@
   <legend>Trace budget</legend>
   <label>
     Timeout (seconds)
-    <input type="number" name="timeout" value="{{ budget.timeout }}" min="10" max="600">
+    <input type="number" name="timeout" value="{{ budget.timeout }}" min="10" max="{{ budget.max_timeout }}">
   </label>
   <label>
     <input type="checkbox" name="disable_sysret">

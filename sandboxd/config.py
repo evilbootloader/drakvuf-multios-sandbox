@@ -205,11 +205,12 @@ KEEP_RESULTS = False
 #: interval is real time (sandboxd/screenshots.py).
 SCREENSHOT_INTERVAL = 2.0
 
-#: Ticks before capture stops: 15 minutes at 2 s. The trace timeout is under
-#: 600 s and preconfig adds minutes at most, so a run reaching this is
-#: pathological -- and the frames are still well inside the platform's 1024
+#: Ticks before capture stops: 25 minutes at 2 s. The trace timeout is at most
+#: 1200 s (the platform's `catalogue.MAX_TRACE_TIMEOUT`, 600 until 2026-11-02,
+#: when this was 450) and preconfig adds minutes at most, so a run reaching this
+#: is pathological -- and the frames are still inside the platform's 1024
 #: artifact cap, behind every other artifact (stages._collect).
-SCREENSHOT_MAX_FRAMES = 450
+SCREENSHOT_MAX_FRAMES = 750
 
 #: Bytes of PNG per job before capture stops. A desktop frame is tens to
 #: hundreds of KiB; this bounds a guest drawing noise so frames can never be

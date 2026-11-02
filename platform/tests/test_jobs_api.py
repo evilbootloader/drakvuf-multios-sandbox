@@ -13,6 +13,7 @@ import zipfile
 import pytest
 
 from conftest import WORKER_TOKEN, enqueue, owner_id, state_of
+from sandbox_platform.catalogue import MAX_TRACE_TIMEOUT
 
 WINDOWS_MIB = 6294
 SMALL_MIB = 2198
@@ -68,6 +69,20 @@ def test_target_os_is_closed_at_submission(client, bad):
         "target_os": bad, "filename": "x.bin", "size_bytes": 10, "plugins":["syscalls"], "timeout":180, "disable_sysret": True,
     })
     assert r.status_code == 422
+
+
+# --- the trace timeout ------------------------------------------------------
+
+@pytest.mark.parametrize("timeout, admitted", [(1, True), (MAX_TRACE_TIMEOUT, True),
+                                               (MAX_TRACE_TIMEOUT + 1, False), (0, False)])
+def test_the_trace_timeout_is_bounded_by_the_catalogue(client, timeout, admitted):
+    """1200 since 2026-11-02. The bound used to be `lt=600`, so the 600 the error
+    message offered was itself refused."""
+    r = client.post("/api/v1/jobs", json={
+        "target_os": "ubuntu", "filename": "x.bin", "size_bytes": 10, "plugins": ["syscalls"],
+        "timeout": timeout, "disable_sysret": True,
+    })
+    assert (r.status_code == 201) is admitted, r.text
 
 
 # --- the two endpoints ----------------------------------------------------

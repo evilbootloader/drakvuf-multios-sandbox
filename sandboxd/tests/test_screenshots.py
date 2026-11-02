@@ -479,3 +479,18 @@ def test_a_real_frame_through_the_loop(tmp_path, vnc):
 
     png = (cap._job_dir / SS.SCREENSHOTS_DIR / "000.png").read_bytes()
     assert decode_png(png)[2] == expected_rgb(5, 3)
+
+
+# --- the cap against the platform's longest trace ----------------------------
+
+def test_capture_outlasts_the_longest_trace_a_job_may_ask_for():
+    """A strip that stops minutes before the trace ends reads as a screen on
+    which nothing happened. The trace maximum is the platform's, the cap
+    sandboxd's: raising one without the other is what this catches. Five
+    minutes over the trace for preconfig and the launch."""
+    from sandbox_platform.catalogue import MAX_TRACE_TIMEOUT
+    from sandboxd import config
+    from sandboxd.stages import MAX_ARTIFACTS
+
+    assert config.SCREENSHOT_MAX_FRAMES * config.SCREENSHOT_INTERVAL >= MAX_TRACE_TIMEOUT + 300
+    assert config.SCREENSHOT_MAX_FRAMES < MAX_ARTIFACTS
