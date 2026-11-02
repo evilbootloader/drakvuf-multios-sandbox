@@ -4,7 +4,8 @@ firmware and devices, in place of Xen's and QEMU's.
 
 Xen writes its own name into every guest: SMBIOS says "Xen" and "HVM domU", its BIOS
 release is Xen's version, every ACPI table names "Xen"/"HVM" as OEM and hvmloader as
-creator, the MAC starts with Xen's 00:16:3E, the disk is a "QEMU HARDDISK". A guest also
+creator, the MAC starts with Xen's 00:16:3E, the disk is a "QEMU HARDDISK" and the CD-ROM
+a "QEMU DVD-ROM", both at QEMU's firmware revision "2.5+". A guest also
 lacks what every real machine has: caches, port connectors, slots, fans, probes, a
 thermal zone. Malware checks for all of it.
 
@@ -91,13 +92,22 @@ PROFILES = [
 # QEMU emulates an Intel 82540EM for model=e1000: an Intel OUI matches the device
 INTEL_OUIS = ["00:1B:21", "3C:FD:FE", "A0:36:9F", "68:05:CA", "00:15:17", "F8:F2:1E"]
 
+# Model, serial format, firmware revisions. Without a revision QEMU gives every disk and
+# drive its own, "2.5+", which Windows puts in their device IDs.
 DISKS = [
-    ("Samsung SSD 870 EVO 500GB", "S6PXNM0T{d6}A"),
-    ("WDC WDS500G2B0A-00SM50", "{d12}"),
-    ("CT500MX500SSD1", "2108E5{h6}"),
-    ("KINGSTON SA400S37480G", "50026B7784{h6}"),
+    ("Samsung SSD 870 EVO 500GB", "S6PXNM0T{d6}A", ["SVT01B6Q", "SVT02B6Q"]),
+    ("WDC WDS500G2B0A-00SM50", "{d12}", ["401000WD", "411010WD", "415020WD"]),
+    ("CT500MX500SSD1", "2108E5{h6}", ["M3CR033", "M3CR043", "M3CR045", "M3CR046"]),
+    ("KINGSTON SA400S37480G", "50026B7784{h6}", ["SBFK61K1", "SBFKB1D1"]),
 ]
-OPTICAL = ["HL-DT-ST DVD+-RW GTA0N", "TSSTcorp DVD+-RW SU-208FB", "ASUS DRW-24D5MT"]
+# The model's first word is the drive's vendor, and at most 8 characters: QEMU reports it
+# so in INQUIRY (automation/qemu-xen-cdrom-inquiry.patch), where Windows names the drive
+# from. The revision is INQUIRY's 4 characters; the serial replaces QEMU's "QM000NN".
+OPTICAL = [
+    ("HL-DT-ST DVD+-RW GTA0N", "K{h4}{d6}", ["A100", "A1C0"]),
+    ("TSSTcorp DVD+-RW SU-208FB", "R{h5}{d6}", ["D100", "D200"]),
+    ("ASUS DRW-24D5MT", "KL{h3}{d6}", ["1.00", "1.01"]),
+]
 
 
 def pick(seq):
@@ -135,8 +145,8 @@ def draw():
     system_serial, board_serial, chassis_serial = serials(p["serial"])
     oem_id, table_id, oem_rev, creator, creator_rev = p["acpi"]
     month, day, year = 1 + secrets.randbelow(12), 1 + secrets.randbelow(28), 2023 + secrets.randbelow(3)
-    disk_model, disk_serial = pick(DISKS)
-    return {
+    disk_model, disk_serial, _ = pick(DISKS)
+    identity = {
         "manufacturer": p["manufacturer"],
         "product": pick(p["products"]),
         "family": p["family"],
@@ -162,8 +172,31 @@ def draw():
         "macs": {},  # one per guest, drawn by `mac GUEST`
         "disk_model": disk_model,
         "disk_serial": fill(disk_serial),
-        "cdrom_model": pick(OPTICAL),
+        "cdrom_model": pick(OPTICAL)[0],
     }
+    draw_drive_details(identity)
+    return identity
+
+
+def draw_drive_details(identity):
+    """The disk's and the optical drive's firmware revisions and the drive's serial, for the
+    models the identity has. An identity drawn before they were added gets them here, for
+    its own models: a new model would be a new device to an installed Windows. Returns the
+    keys it added."""
+    revisions = {model: revs for model, _, revs in DISKS}
+    drives = {model: (serial, revs) for model, serial, revs in OPTICAL}
+    if identity["disk_model"] not in revisions or identity["cdrom_model"] not in drives:
+        sys.exit("No firmware revisions for %r or %r: add them to DISKS or OPTICAL"
+                 % (identity["disk_model"], identity["cdrom_model"]))
+    serial, cdrom_revisions = drives[identity["cdrom_model"]]
+    added = []
+    for key, value in (("disk_firmware", lambda: pick(revisions[identity["disk_model"]])),
+                       ("cdrom_firmware", lambda: pick(cdrom_revisions)),
+                       ("cdrom_serial", lambda: fill(serial))):
+        if key not in identity:
+            identity[key] = value()
+            added.append(key)
+    return added
 
 
 # Each guest gets its own MAC. The Ubuntu and Windows golden VMs both sit on xenbr0, and
@@ -201,6 +234,10 @@ def load(path, create=True):
             identity.setdefault("macs", {})[LEGACY_MAC_OWNER] = identity.pop("mac")
             save(path, identity)
             print("Gave the identity's one MAC to %s in %s" % (LEGACY_MAC_OWNER, path), file=sys.stderr)
+        added = draw_drive_details(identity)
+        if added:
+            save(path, identity)
+            print("Drew %s into %s" % (", ".join(added), path), file=sys.stderr)
         return identity
     if not create:
         sys.exit("No identity in %s: run `%s show` first" % (path, sys.argv[0]))
@@ -297,10 +334,19 @@ def smbios_struct(type_, handle, formatted, strings):
     return struct.pack("<I", len(structure)) + structure
 
 
+# What hvmloader writes for a guest with 4 vCPUs and 8 GiB: types 0-3, 4 per vCPU, 11, 16,
+# 17, 19 and 20 per 16 GiB, 32 and the end of table (127)
+HVMLOADER_STRUCTURES = 15
+
+
 def smbios_file(identity):
     """The hardware hvmloader does not describe: caches (7), port connectors (8), slots (9),
-    voltage (26), temperature (28) and current (29) probes, a cooling device (27). Handles
-    follow hvmloader's type << 8 numbering, which these types do not use."""
+    BIOS languages (13), voltage (26), temperature (28) and current (29) probes, cooling
+    devices (27), onboard devices (41). Handles follow hvmloader's type << 8 numbering,
+    which these types do not use.
+
+    A real desktop's table has 60 structures or more. With hvmloader's alone a guest has
+    15, and al-khaser (check 4098) calls 40 or fewer a virtual machine; these make 55."""
     out = []
     # Type 7, SMBIOS 3.1: designation, configuration, max size, installed size, supported and
     # current SRAM type, speed, error correction, system cache type, associativity, sizes 2
@@ -310,19 +356,30 @@ def smbios_file(identity):
         size = 0x8000 | (kib // 64) if kib >= 32768 else kib
         out.append(smbios_struct(7, 0x0700 + i, struct.pack(
             "<BHHHHHBBBBII", 1, config, size, size, 0x0020, 0x0020, 0, ecc, kind, assoc, kib, kib), [name]))
-    # Type 8: internal designator, internal type, external designator, external type, port type
-    ports = [("J1A1", "USB 1", 0x12, 0x10), ("J1A2", "USB 2", 0x12, 0x10), ("J2A1", "USB 3", 0x12, 0x10),
-             ("J2A2", "USB 4", 0x12, 0x10), ("J3A1", "Network", 0x0B, 0x1F), ("J4A1", "Audio Line Out", 0x1F, 0x1D),
-             ("J4A2", "Microphone", 0x1F, 0x1D), ("J5A1", "DisplayPort", 0xFF, 0x1C)]
-    for i, (internal, external, connector, port) in enumerate(ports):
-        out.append(smbios_struct(8, 0x0800 + i, struct.pack("<BBBBB", 1, 0, 2, connector, port),
-                                 [internal, external]))
+    # Type 8: internal designator and connector type, external designator and connector type,
+    # port type. The back panel, then the board's headers, which have no outside designator
+    ports = [("J1A1", 0x00, "PS/2 Mouse", 0x0F, 0x0E), ("J1A1", 0x00, "PS/2 Keyboard", 0x0F, 0x0D)]
+    ports += [("J2A%d" % (n // 2 + 1), 0x00, "USB %d" % n, 0x12, 0x10) for n in range(1, 7)]
+    ports += [("J3A1", 0x00, "Network", 0x0B, 0x1F),
+              ("J4A1", 0x00, "HDMI", 0xFF, 0x1C), ("J4A2", 0x00, "DisplayPort", 0xFF, 0x1C),
+              ("J5A1", 0x00, "Audio Line In", 0x1F, 0x1D), ("J5A2", 0x00, "Audio Line Out", 0x1F, 0x1D),
+              ("J5A3", 0x00, "Microphone", 0x1F, 0x1D)]
+    ports += [("SATA%d" % n, 0x22, "", 0x00, 0x20) for n in range(1, 5)]
+    ports += [("JUSB1", 0xFF, "", 0x00, 0x10), ("JUSB2", 0xFF, "", 0x00, 0x10), ("JAUD1", 0xFF, "", 0x00, 0x1D)]
+    for i, (internal, internal_type, external, external_type, port) in enumerate(ports):
+        out.append(smbios_struct(8, 0x0800 + i, struct.pack(
+            "<BBBBB", 1, internal_type, 2 if external else 0, external_type, port),
+            [internal, external] if external else [internal]))
     # Type 9, SMBIOS 2.6: designation, type, width, usage, length, id, characteristics 1 and 2,
-    # segment, bus, device/function
-    for i, (name, kind, width, usage, bus) in enumerate([
-            ("PCIEX16_1", 0xB6, 0x0D, 4, 0x01), ("PCIEX1_1", 0xB3, 0x08, 3, 0xFF), ("M.2_1", 0x16, 0x0B, 4, 0x02)]):
+    # segment, bus, device/function. All available (3), no bus: the guest's disk is SATA and
+    # its video onboard, so its slots are empty as such a PC's are
+    for i, (name, kind, width, length) in enumerate([
+            ("PCIEX16_1", 0xB6, 0x0D, 0x04), ("PCIEX1_1", 0xB2, 0x08, 0x03), ("PCIEX1_2", 0xB2, 0x08, 0x03),
+            ("PCIEX16_2", 0xB6, 0x0A, 0x04), ("M.2_1", 0x16, 0x0A, 0x03), ("M.2_2", 0x16, 0x0A, 0x03)]):
         out.append(smbios_struct(9, 0x0900 + i, struct.pack(
-            "<BBBBBHBBHBB", 1, kind, width, usage, 0x04, i + 1, 0x0C, 0x01, 0, bus, 0), [name]))
+            "<BBBBBHBBHBB", 1, kind, width, 3, length, i + 1, 0x0C, 0x01, 0, 0xFF, 0xFF), [name]))
+    # Type 13: installable languages, flags (long names), reserved, current language
+    out.append(smbios_struct(13, 0x0D00, struct.pack("<BB15xB", 1, 0, 1), ["en|US|iso8859-1"]))
     # Types 26, 28, 29: description, location and status, maximum, minimum, resolution,
     # tolerance, accuracy, OEM, nominal value (values 0x8000 are unknown)
     probes = [(26, "CPU Core Voltage", 0x63, 1500, 500, 10, 0x8000, 0x8000, 1100),
@@ -341,6 +398,10 @@ def smbios_file(identity):
     for i, (name, rpm) in enumerate([("CPU Fan", 1200), ("System Fan", 900)]):
         out.append(smbios_struct(27, 0x1B00 + i, struct.pack(
             "<HBBIHB", 0x1C00, 0x63, 1, 0, rpm, 1), [name]))
+    # Type 41: designation, device type (enabled), instance, segment, bus, device/function.
+    # QEMU's VGA and e1000, at the 00:02.0 and 00:03.0 xl gives them
+    for i, (name, kind, devfn) in enumerate([("Onboard IGD", 0x03, 0x10), ("Onboard LAN", 0x05, 0x18)]):
+        out.append(smbios_struct(41, 0x2900 + i, struct.pack("<BBBHBB", 1, 0x80 | kind, 1, 0, 0, devfn), [name]))
     return b"".join(out)
 
 
@@ -411,9 +472,11 @@ def xl_cfg(identity, out_dir):
     print("acpi_firmware = '%s'" % (out / "ssdt.aml"))
     # The Xen platform PCI device (5853:0001) serves PV drivers, which the guests do not use
     print("xen_platform_pci = 0")
-    print("device_model_args_hvm = [ '-global', 'ide-hd.model=%s', '-global', 'ide-hd.serial=%s', "
-          "'-global', 'ide-cd.model=%s' ]" % (identity["disk_model"], identity["disk_serial"],
-                                              identity["cdrom_model"]))
+    # The CD-ROM's model reaches its INQUIRY data only with automation/qemu-xen-cdrom-inquiry.patch
+    drives = ["ide-hd.model=" + identity["disk_model"], "ide-hd.serial=" + identity["disk_serial"],
+              "ide-hd.ver=" + identity["disk_firmware"], "ide-cd.model=" + identity["cdrom_model"],
+              "ide-cd.serial=" + identity["cdrom_serial"], "ide-cd.ver=" + identity["cdrom_firmware"]]
+    print("device_model_args_hvm = [ %s ]" % ", ".join("'-global', '%s'" % d for d in drives))
 
 
 def main():

@@ -65,6 +65,10 @@ and CPUID half of the guests' hardware identity (`guest-identity.md`). The
 other half is `scripts/xen-identity.py`, which `make xen` and the guest install
 targets run.
 
+Added 2026-11-02: **`qemu-xen-cdrom-inquiry.patch`**, which `make xen` applies
+to the qemu-xen tree Xen's build clones, so a CD-ROM given the identity's model
+does not still answer as `QEMU QEMU DVD-ROM` (`guest-identity.md` §3).
+
 ---
 
 ## Facts carried out of the deleted files

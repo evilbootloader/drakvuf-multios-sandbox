@@ -1,13 +1,15 @@
 # Guest identity — what the analysis guests look like from inside
 
-> **Status (2026-11-01): CANDIDATE. Implemented and checked in parts, never run
-> end to end.** `scripts/xen-identity.py` was run against a copy of the Xen
-> source and its output compiled on Dom0 (the ACPI tables and the thermal zone
-> with `iasl`); a rendered guest config passed `xl -N create`. Nothing below has
-> booted a guest. It takes effect only on guests **installed after** `make xen`
-> has run with it (§4), so the evidence for it is an al-khaser run on a
-> reinstalled Windows guest and the red pill on a reinstalled Ubuntu guest,
-> compared with the 2026-11-01 baseline below.
+> **Status (2026-11-02): PARTLY EVIDENCED.** The guests were reinstalled with
+> it and al-khaser run on Windows on 2026-11-02 (`alkhaser_search.sh`, outside
+> the repository, run `20261102-003810`: two Xen variants, two tests each, in
+> `dev-syscalls` and `dev-all`). Of the 2026-11-01 detections below, 4064,
+> 4073, 4074, 4078, 4080, 4084, 4085, 4087–4094, 4096, 9001 and 9003 were gone
+> in every run. Three that should have gone did not: 4097, 4098 and 8010. Their
+> fixes (the rows marked 2026-11-02) are **CANDIDATE**: compiled and checked as
+> §1 says, never booted. Like the rest, they take effect only on guests
+> **installed after** `make xen` has run with them (§4). The red pill on a
+> reinstalled Ubuntu guest has not been run.
 
 Malware asks the machine what it is before it does anything. Xen answers with
 its own name: SMBIOS says `Xen` and `HVM domU`, the BIOS release is Xen's
@@ -30,13 +32,25 @@ detected the sandbox, and what here answers it:
 |---|---|---|
 | 4073, 4074 model, manufacturer (WMI) | `HVM domU`, `Xen` | identity in hvmloader and `smbios=` |
 | 4078, 4080, 4084, 4085, 4087–4094 fan, cache, probes, ports, slots, thermal zone (WMI) | none present | `smbios_firmware` (SMBIOS types 7, 8, 9, 26–29) and `acpi_firmware` (a thermal zone) |
-| 4098 SMBIOS tables | too few | the same structures |
-| 8010 ACPI tables (QEMU check) | Xen's ACPI headers | identity in libacpi |
+| 4098 SMBIOS tables | 40 or fewer structures: 15 of hvmloader's, then 36 with these | the same structures, 55 with hvmloader's (2026-11-02) |
+| 8010 ACPI tables (QEMU check) | the FADT's power profile, 0 (unspecified), as QEMU's tables have it, not Xen's headers | 1, desktop, in the identity patch (2026-11-02) |
 | 4064, 4096, 4097 disk (SetupDi, registry) | `QEMU HARDDISK` | `ide-hd.model`/`serial` |
+| 4097 CD-ROM (registry) | `Enum\IDE\CdRomQEMU_QEMU_DVD-ROM_…`, the installer's drive: Windows names it from INQUIRY, where QEMU says `QEMU` whatever `ide-cd.model` | `automation/qemu-xen-cdrom-inquiry.patch`; `ide-cd.ver`/`serial` and `ide-hd.ver` for QEMU's `2.5+` (2026-11-02) |
 | 9001 PCI vendor 5853 | the Xen platform device | `xen_platform_pci = 0` |
 | 9003 MAC `00:16:3E` | Xen's OUI | an Intel OUI, the e1000's |
-| 13002 Hyper-V objects | possibly Viridian (§5) | `viridian = 0` |
+| 13002 Hyper-V objects | not Viridian: still detected with it off (§5) | nothing to answer |
 | 4067, 4068 CPUID hypervisor bit and vendor | hidden only by DRAKVUF's `-s` | `cpuid = 'host,hypervisor=0'` and the Xen patch |
+
+How the 2026-11-02 rows were found and checked. 4097: the golden LV's
+`SYSTEM` hive, read on Dom0; the patched `atapi.c` compiled with QEMU's own
+flags, and the patch applied to Dom0's qemu-xen tree with `git apply --check`.
+4098: the structures counted from `smbios.bin` and hvmloader's
+`write_smbios_tables`; `sandboxd/tests/test_xen_identity.py` keeps the total
+over 40. 8010: `static_tables.c` compiled with hvmloader's flags, and byte 45
+of the FADT, which al-khaser reads, is 1.
+
+Not in the table: 2029 (`NtYieldExecution`), which al-khaser's source calls
+unreliable itself, and the checks that fire on real hardware too (§5).
 
 ---
 
@@ -46,8 +60,12 @@ detected the sandbox, and what here answers it:
 models (Dell OptiPlex, HP EliteDesk, Lenovo ThinkCentre, ASUS and MSI boards
 with AMI firmware): vendor, product, BIOS vendor, version and date, board,
 chassis, serial numbers in each vendor's format, OEM strings, ACPI OEM and table
-IDs and creator, an EISA ID, a disk and an optical drive model — and an Intel
-MAC for each guest, drawn the first time that guest's targets ask for it.
+IDs and creator, an EISA ID, a disk and an optical drive model with their
+firmware revisions and the drive's serial — and an Intel MAC for each guest,
+drawn the first time that guest's targets ask for it. An identity drawn before
+the revisions and the drive's serial existed gets them the next time the script
+reads it, for the models it already has: a new model would be a new device to
+an installed Windows.
 
 It is kept in **`state/xen-identity.json`, which is not tracked** (nor are the
 files drawn from it). An identity that is not published cannot be detected by
@@ -75,15 +93,25 @@ creator), the DefinitionBlocks of the DSDT and SSDTs, the VM generation
 counter's `XEN0000` ID, and hvmloader's SMBIOS defaults (BIOS vendor and
 version, its release numbers, the build date as release date, system and
 chassis maker, product, version, the type 11 and battery strings).
-`automation/xen-guest-identity.patch` adds two things to Xen:
+`automation/xen-guest-identity.patch` adds three things to Xen:
 
 - hvmloader copies in `smbios_firmware` structures of the types it does not
   write itself, as it did for vendor types only;
+- the FADT's preferred power-management profile is 1, desktop. Xen left it 0,
+  unspecified, which is what QEMU's own tables say and real firmware does not;
 - a guest whose CPUID policy clears the hypervisor bit finds no Xen or Viridian
   leaves **from user mode**. Its kernel and hvmloader, which finds Xen there at
   boot, still see them. Windows does not look with the bit clear; Linux scans
   for Xen's signature whatever the bit (`hypervisor_cpuid_base`,
   `arch/x86/include/asm/cpuid.h`), so it still runs as a Xen guest (§4).
+
+**QEMU, at `make xen`.** Xen's build clones qemu-xen at its pin; `make xen`
+clones it first, resets it and applies `automation/qemu-xen-cdrom-inquiry.patch`.
+A CD-ROM given a model answered with it only in IDENTIFY PACKET, and Windows
+names the drive from INQUIRY, where QEMU said vendor `QEMU`, product `QEMU
+DVD-ROM`. The patch reports the model there too, split as a real drive's is:
+the vendor its first word, at most 8 characters, the product the rest. A drive
+given no model answers as before.
 
 **The guest configs, at the four install targets** (`ubuntu_analysis_vm`,
 `setup_hooks_ubuntu`, `windows_analysis_vm`, `setup_hooks_windows`):
@@ -96,7 +124,8 @@ smbios = [ <identity strings, serial numbers, OEM strings> ]
 smbios_firmware = '<repo>/state/firmware/smbios.bin'
 acpi_firmware = '<repo>/state/firmware/ssdt.aml'
 xen_platform_pci = 0
-device_model_args_hvm = [ '-global', 'ide-hd.model=...', '-global', 'ide-hd.serial=...', '-global', 'ide-cd.model=...' ]
+device_model_args_hvm = [ '-global', 'ide-hd.model=...', '-global', 'ide-hd.serial=...', '-global', 'ide-hd.ver=...',
+                          '-global', 'ide-cd.model=...', '-global', 'ide-cd.serial=...', '-global', 'ide-cd.ver=...' ]
 ```
 
 The tracked templates (`misc/*.cfg` and the `misc/xen-vms/` copies) carry the
@@ -142,6 +171,11 @@ neither. So, in order:
 **Until then, `sandboxd` without `-s` lets today's guests see the hypervisor
 bit.** Deploy the `sandboxd` change with the reinstalled guests, not before.
 
+**A Xen built any other way has none of it in hvmloader, libacpi or QEMU.** The
+RDTSC and al-khaser searches (outside the repository) build and install Xen from
+a `drakvuf-dev/xen` checkout: restored guests do not notice, but a guest
+installed or cold-booted on it gets Xen's strings back. Run `make xen` first.
+
 **The Ubuntu guest still knows it runs on Xen.** Linux finds Xen's signature
 whatever the hypervisor bit, and the patch hides the leaves from user mode
 only, so the kernel keeps the `xen` clocksource and clockevent the RDTSC
@@ -169,9 +203,20 @@ on the reinstalled one too.
   genuine-Windows check (4095) block past al-khaser's two minutes, and every
   plugin at once trips `NtYieldExecution` (2029).
 - **4099, ACPI tables**: al-khaser wants five PNP device IDs in every ACPI
-  table, which no real machine has either.
-- **13002** may be `VDRVROOT`, which every Windows has, rather than Viridian's
-  `VmGid`/`VmGenerationCounter`; which object matched has not been looked at.
+  table, which no real machine has either: FACP, APIC and the rest never
+  carry them, so it fires on real hardware too. Two things it reads besides
+  are real tells, but the PNP test fails first on any machine: a `WAET`
+  table, which hvmloader always writes, and no `WSMT`, which current real
+  firmware has.
+- **13002, `\GLOBAL??` objects**: still detected with `viridian = 0`, so not
+  `VMBUS#` or `VmGid`, and not `VmGenerationCounter`: Xen's generation counter
+  device has `_STA` 0 without `ms_vm_genid`, and the guest's `Enum\ACPI` has no
+  such device. That leaves `VDRVROOT`, the Virtual Drive Enumerator every
+  Windows installs (`Enum\ROOT\vdrvroot` is there from setup). Worked out by
+  elimination, not seen: al-khaser on a real Windows 11 PC would confirm it.
+- **14010, RDTSC Locky**: detected in every run with Xen's RDTSC compensation
+  as deployed, and in one of four with `RDTSC_USER_PURE=1`. Whether a real
+  Windows 11 passes it has not been measured (`rdtsc-poc.md`).
 - **CPUID from kernel mode** still finds Xen's leaves. On Linux that is
   visible from user mode too: `/sys/hypervisor/type` reads `xen` and `dmesg`
   says `Hypervisor detected: Xen HVM`.

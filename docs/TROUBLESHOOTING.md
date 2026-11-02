@@ -1379,6 +1379,29 @@ unchanged, and Windows draws a new one the next time `make windows_analysis_vm`
 or `make setup_hooks_windows` writes its configs. Clones need nothing further:
 see `docs/architecture/guest-identity.md` §3 for why they keep their guest's MAC.
 
+### al-khaser still finds QEMU in `Enum\IDE` on a guest installed with the identity
+
+**Symptom.** al-khaser's check 4097 (`Checking Enum\IDE and Enum\SCSI entries
+for VM strings`) detects on a Windows guest installed after `make xen` with
+the identity, though its disk is the identity's
+(`IDE\DiskSamsung_SSD_870_EVO_500GB_..._2.5+____` in the trace) and the
+config it was installed with had `ide-cd.model=`. Seen 2026-11-02, every run.
+
+**Cause.** `Enum\IDE\CdRomQEMU_QEMU_DVD-ROM_______________________2.5+____`,
+the drive the installer DVD was in, still in the registry (read from the golden
+LV's `SYSTEM` hive). Windows names an ATAPI drive from its INQUIRY data, and
+QEMU's `hw/ide/atapi.c` answers INQUIRY with vendor `QEMU`, product `QEMU
+DVD-ROM` whatever the drive's model: `ide-cd.model` sets only IDENTIFY
+PACKET's. The sandbox configs have no drive, and Windows keeps the key of
+every device it has seen.
+
+**Fix.** `make xen` applies `automation/qemu-xen-cdrom-inquiry.patch` to the
+qemu-xen tree it builds, so the drive reports its model there too, and the
+identity gives it a firmware revision and a serial in place of QEMU's `2.5+`
+and `QM000NN`. A guest installed before keeps the key: reinstall it.
+**Candidate, untested:** `pnputil /remove-device` on the drive's instance, in a
+boot without the drive, then a new saved state.
+
 ---
 
 # The platform, TLS and the tunnel

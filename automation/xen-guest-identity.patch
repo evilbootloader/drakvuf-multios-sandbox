@@ -3,7 +3,7 @@ Subject: [PATCH] hvmloader, x86/cpuid: let a guest look like the machine it is g
 
 Xen 4.20.1 with automation/xen-altp2m-pause-vcpu.patch and
 automation/xen-rdtsc-poc.patch applied first; drakvuf-dev/xen branch
-rdtsc-poc 89af367fbd. docs/architecture/guest-identity.md has the
+rdtsc-poc 81c0eadb6e. docs/architecture/guest-identity.md has the
 design; scripts/xen-identity.py then writes this deployment's identity
 into hvmloader and libacpi.
 
@@ -18,12 +18,16 @@ mode; its kernel and hvmloader still do.
 libacpi copies its OEM and table IDs as fixed-width fields, so a real
 vendor's, which fills the field, builds under GCC's stringop-truncation.
 
+The FADT says the guest is a desktop (preferred PM profile 1), not
+unspecified (0): QEMU's tables say 0 and real firmware does not.
+
 ---
  docs/man/xl.cfg.5.pod.in          |  6 ++++--
  tools/firmware/hvmloader/smbios.c | 20 +++++++++++++++++++-
  tools/libacpi/build.c             | 11 ++++++++++-
+ tools/libacpi/static_tables.c     |  6 ++++++
  xen/arch/x86/cpuid.c              | 18 +++++++++++++++++-
- 4 files changed, 50 insertions(+), 5 deletions(-)
+ 5 files changed, 56 insertions(+), 5 deletions(-)
 
 diff --git a/docs/man/xl.cfg.5.pod.in b/docs/man/xl.cfg.5.pod.in
 index 8e1422104e..a68d52b3f3 100644
@@ -102,6 +106,23 @@ index 2f29863db1..0c06bb2fcc 100644
  
  extern struct acpi_20_rsdp Rsdp;
  extern struct acpi_20_rsdt Rsdt;
+diff --git a/tools/libacpi/static_tables.c b/tools/libacpi/static_tables.c
+index 715f46fee0..78c54eb0fa 100644
+--- a/tools/libacpi/static_tables.c
++++ b/tools/libacpi/static_tables.c
+@@ -43,6 +43,12 @@ struct acpi_fadt Fadt = {
+         .creator_revision = ACPI_CREATOR_REVISION
+     },
+ 
++    /*
++     * A desktop. 0, unspecified, is what QEMU's own tables say and real
++     * firmware does not, so malware reads it as a virtual machine.
++     */
++    .preferred_pm_profile = 1,
++
+     .sci_int = 9,
+ 
+     .pm1a_evt_blk = ACPI_PM1A_EVT_BLK_ADDRESS_V1,
 diff --git a/xen/arch/x86/cpuid.c b/xen/arch/x86/cpuid.c
 index 2a777436ee..bdea913db2 100644
 --- a/xen/arch/x86/cpuid.c

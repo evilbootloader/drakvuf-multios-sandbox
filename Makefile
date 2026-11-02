@@ -27,6 +27,9 @@ XEN_RDTSC_PATCH := $(REPO_ROOT)/automation/xen-rdtsc-poc.patch
 # scripts/xen-identity.py then writes this deployment's identity over Xen's own strings,
 # and its firmware files and lines into the guests' configs: docs/architecture/guest-identity.md
 XEN_IDENTITY_PATCH := $(REPO_ROOT)/automation/xen-guest-identity.patch
+# QEMU's CD-ROM answers INQUIRY with its ide-cd.model instead of "QEMU QEMU DVD-ROM";
+# applied to the qemu-xen tree the Xen build clones
+QEMU_CDROM_PATCH := $(REPO_ROOT)/automation/qemu-xen-cdrom-inquiry.patch
 XEN_IDENTITY := $(REPO_ROOT)/scripts/xen-identity.py
 # The guests' firmware files, from the identity (not tracked, like the identity)
 GUEST_FIRMWARE := $(REPO_ROOT)/state/firmware
@@ -68,6 +71,11 @@ xen:
 		-e 's|^OVMF_UPSTREAM_REVISION ?= .*|OVMF_UPSTREAM_REVISION ?= $(OVMF_REVISION)|' Config.mk; \
 	grep -qx 'OVMF_UPSTREAM_REVISION ?= $(OVMF_REVISION)' Config.mk; \
 	./configure --enable-githttp --enable-systemd --enable-ovmf --disable-pvshim; \
+	# qemu-xen is cloned by the build, at its pin, so clone it now and patch it, \
+	# from the pinned commit every time as the Xen tree is \
+	make -C tools qemu-xen-dir-find; \
+	git -C tools/qemu-xen-dir-remote checkout -- .; \
+	git -C tools/qemu-xen-dir-remote apply $(QEMU_CDROM_PATCH); \
 	make -j$$(nproc) dist-xen; \
 	make -j$$(nproc) dist-tools; \
 	make -j$$(nproc) debball; \

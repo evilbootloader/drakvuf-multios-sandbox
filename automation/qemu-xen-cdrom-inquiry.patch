@@ -1,0 +1,72 @@
+Subject: [PATCH] hw/ide/atapi: report a CD-ROM given a model as that drive
+
+qemu-xen e064f42c80, QEMU_UPSTREAM_REVISION of Xen 4.20.1. The Xen build
+clones it into tools/qemu-xen-dir-remote; `make xen` applies this there.
+docs/architecture/guest-identity.md has why.
+
+An ide-cd given a model (-global ide-cd.model=...) reported it only in
+IDENTIFY PACKET. Its INQUIRY data still said vendor "QEMU", product
+"QEMU DVD-ROM", and Windows names a CD-ROM from those: the drive of a
+guest installed from one stayed in its registry as
+Enum\IDE\CdRomQEMU_QEMU_DVD-ROM_..., which malware reads (al-khaser
+check 4097). Report the model there too, split as a real drive's is:
+the vendor its first word, the product the rest.
+
+A CD-ROM given no model answers as before.
+
+ hw/ide/atapi.c | 35 +++++++++++++++++++++++++++++++++--
+ 1 file changed, 33 insertions(+), 2 deletions(-)
+
+diff --git a/hw/ide/atapi.c b/hw/ide/atapi.c
+index e82959d..aef7325 100644
+--- a/hw/ide/atapi.c
++++ b/hw/ide/atapi.c
+@@ -705,6 +705,38 @@ static void cmd_request_sense(IDEState *s, uint8_t *buf)
+     ide_atapi_cmd_reply(s, 18, max_len);
+ }
+ 
++/*
++ * The vendor and product of a drive given a model (ide-cd.model), split as a
++ * real ATAPI drive's are: the vendor is the model's first word, the product the
++ * rest. Windows names a CD-ROM from these two, not from IDENTIFY PACKET's
++ * model, so a drive given another model still showed up as "QEMU QEMU
++ * DVD-ROM" in its registry. A first word longer than the 8 characters of the
++ * vendor field gives the model's first 8 characters instead.
++ */
++static void inquiry_vendor_product(IDEState *s, uint8_t *vendor,
++                                   uint8_t *product)
++{
++    const char *model = s->drive_model_str;
++    size_t len = strlen(model);
++    const char *space = memchr(model, ' ', MIN(len, 9));
++    char name[9];
++
++    if (!strcmp(model, "QEMU DVD-ROM")) {
++        padstr8(vendor, 8, "QEMU");
++        padstr8(product, 16, "QEMU DVD-ROM");
++        return;
++    }
++
++    len = space ? (size_t)(space - model) : MIN(len, 8);
++    pstrcpy(name, len + 1, model);
++    padstr8(vendor, 8, name);
++    model += len;
++    if (*model == ' ') {
++        model++;
++    }
++    padstr8(product, 16, model);
++}
++
+ static void cmd_inquiry(IDEState *s, uint8_t *buf)
+ {
+     uint8_t page_code = buf[2];
+@@ -798,8 +830,7 @@ static void cmd_inquiry(IDEState *s, uint8_t *buf)
+         buf[5] = 0;    /* reserved */
+         buf[6] = 0;    /* reserved */
+         buf[7] = 0;    /* reserved */
+-        padstr8(buf + 8, 8, "QEMU");
+-        padstr8(buf + 16, 16, "QEMU DVD-ROM");
++        inquiry_vendor_product(s, buf + 8, buf + 16);
+         padstr8(buf + 32, 4, s->version);
+         idx = 36;
+     }
