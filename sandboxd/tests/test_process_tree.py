@@ -66,9 +66,9 @@ def test_a_signal_from_an_idle_cpu_leaves_swapper_0_the_root():
 
 
 def test_a_rebind_takes_the_new_parents_pid_and_happens_once():
-    """The rebind itself still happens. Its PPID is the new parent's PID:
-    upstream copied the new parent's own PPID, so the next line for the same
-    process differed again and moved it to the end of its siblings."""
+    """The rebind itself still happens. Its PPID is the new parent's PID, not
+    the new parent's own PPID, with which the next line for the same process
+    would differ again and move it to the end of its siblings."""
     tree = tree_from_log(procmon(
         running(4, 0, "System"),
         running(10, 4, "a.exe"),

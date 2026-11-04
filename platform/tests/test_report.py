@@ -180,8 +180,7 @@ def test_the_lineage_through_a_loop_follows_the_tree(sample_parent, chain):
 
 
 def test_a_sample_with_a_dangling_parent_is_the_root_of_its_lineage():
-    """The old walk took the missing parent's seqid into the path and
-    raised KeyError on `by_seqid`."""
+    """A missing parent stays off the path: `by_seqid` has no entry for it."""
     doc = sample_report(processes=[process(4, 7208, 99, "sample.exe"),
                                    process(5, 7300, 4, "cmd.exe")])
     [root] = R.parse(json.dumps(doc).encode()).report.lineage()

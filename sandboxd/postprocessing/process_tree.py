@@ -65,8 +65,8 @@ class Process:
             self.parent.children.remove(self)
         new_parent.children.append(self)
         self.parent = new_parent
-        # The parent's PID. Upstream took the parent's own PPID, which made
-        # every later line for this process look reparented again.
+        # What tree_from_log compares the next line's PPID against: anything
+        # else makes every later line for this process read as another rebind.
         self.ppid = new_parent.pid
 
 

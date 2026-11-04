@@ -393,9 +393,8 @@ class Report(_Lenient):
         list does not have.
 
         The path up is `_parents`, the same edges `tree` draws, so it ends at
-        a root of that forest: walking raw `parent_seqid` went round a loop
-        from wherever it entered, and past a dangling parent into a seqid
-        `by_seqid` does not have."""
+        a root of that forest and never leaves the list. Raw `parent_seqid`
+        does neither: it can enter a loop anywhere and name a missing parent."""
         target = self.startup.process
         if target is None:
             return []
