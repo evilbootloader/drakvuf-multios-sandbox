@@ -122,3 +122,6 @@ evasion-tests/site.conf
 evasion-tests/results/
 evasion-tests/build/
 evasion-tests/detector
+
+# Host-specific Makefile values: analysis user and password, SSH key, addresses
+Makefile.local

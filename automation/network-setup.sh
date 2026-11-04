@@ -731,12 +731,22 @@ iptables -C INPUT -j "$INPUT_CHAIN" 2>/dev/null ||
 # can reach the host. They come FIRST in the chain, above everything about
 # analysis VLANs, because their correctness must not depend on any rule below.
 #
-# Stated as a DROP on the uplink rather than an ACCEPT on the VLANs: this rule
-# stays right even if a future mode adds another way for clone traffic to reach
-# a local listener.
+# Stated as a DROP on every interface that is not an analysis VLAN, rather
+# than an ACCEPT on the VLANs: this rule stays right even if a future mode
+# adds another way for clone traffic to reach a local listener. Until
+# 2026-11-04 it dropped on the uplink bridge alone, so any interface added
+# later -- a WireGuard tunnel, a second NIC -- reached an open resolver, an
+# SMTP sink and an FTP/TFTP server running as root (review L-2).
+#
+# Loopback is let through first: FakeNet's proxy listener hands each
+# connection to the protocol listener over 127.0.0.1, and that is the only
+# way the ports below 38926 are meant to be reached. RETURN, not ACCEPT: the
+# host's own INPUT rules still apply to it, as they did when no rule here
+# matched lo.
+iptables -A "$INPUT_CHAIN" -i lo -j RETURN
 for tor_port in 9040 9053; do
-    iptables -A "$INPUT_CHAIN" -i "$UPLINK_BRIDGE" -p tcp --dport "$tor_port" -j DROP
-    iptables -A "$INPUT_CHAIN" -i "$UPLINK_BRIDGE" -p udp --dport "$tor_port" -j DROP
+    iptables -A "$INPUT_CHAIN" ! -i "$ANALYSIS_BRIDGE.+" -p tcp --dport "$tor_port" -j DROP
+    iptables -A "$INPUT_CHAIN" ! -i "$ANALYSIS_BRIDGE.+" -p udp --dport "$tor_port" -j DROP
 done
 
 # FakeNet-NG's listeners, for exactly the reason above and with more ports to
@@ -756,7 +766,7 @@ done
 # which is why FakeNet's DNS listener moved.
 #
 # **These lists must track automation/fakenet.ini.** Enabling a listener there
-# without adding its port here exposes it, silently and only on the uplink --
+# without adding its port here exposes it, silently and only off the VLANs --
 # every in-lab test would still pass. sandboxd/tests/test_egress.py parses both
 # files and fails when they disagree.
 #
@@ -764,10 +774,10 @@ done
 # transfer rather than at startup, so it never appears in `ss` at launch and is
 # the one an operator checking by hand would miss.
 for fakenet_tcp in 21 25 80 110 1337 6667 38926 60000:60010; do
-    iptables -A "$INPUT_CHAIN" -i "$UPLINK_BRIDGE" -p tcp --dport "$fakenet_tcp" -j DROP
+    iptables -A "$INPUT_CHAIN" ! -i "$ANALYSIS_BRIDGE.+" -p tcp --dport "$fakenet_tcp" -j DROP
 done
 for fakenet_udp in 69 1337 5300 38926; do
-    iptables -A "$INPUT_CHAIN" -i "$UPLINK_BRIDGE" -p udp --dport "$fakenet_udp" -j DROP
+    iptables -A "$INPUT_CHAIN" ! -i "$ANALYSIS_BRIDGE.+" -p udp --dport "$fakenet_udp" -j DROP
 done
 
 # Replies to traffic Dom0 itself started. Without this, an operator

@@ -230,8 +230,24 @@ git log --oneline -1
 ```bash
 # PLATFORM DOMU
 cd /opt/platform/src/platform
-sudo -u platform .venv/bin/pip install -r requirements.txt
+sudo -u platform .venv/bin/pip install --require-hashes -r requirements.txt
 ```
+
+`requirements.txt` is generated: the pins live in `requirements.in`, and the
+`.txt` adds the sha256 of every distribution file, so pip installs those files
+and nothing else (review M-1, 2026-11-03). Change the `.in`, then regenerate
+in the dev container (`pip install uv` once) and commit both:
+
+```bash
+# DEV CONTAINER, repository root
+uv pip compile --universal --generate-hashes -c sandboxd/requirements.in \
+    platform/requirements.in -o platform/requirements.txt
+```
+
+The constraint keeps the packages shared with sandboxd at sandboxd's versions,
+because CI installs both files into one interpreter.
+`sandboxd/tests/test_requirements.py` fails on a `.in` pin the `.txt` lacks, on
+a line without a hash, and on a shared package the two pin differently.
 
 ### 5.3 Environment, only if the change added settings
 
@@ -329,8 +345,20 @@ Dependencies only if `sandboxd/requirements.txt` changed:
 
 ```bash
 # DOM0
-/root/drakvuf-multios-sandbox/.venv-sandboxd/bin/pip install \
+/root/drakvuf-multios-sandbox/.venv-sandboxd/bin/pip install --require-hashes \
   -r /root/drakvuf-multios-sandbox/sandboxd/requirements.txt
+```
+
+As for the platform (5.2), the `.txt` is generated from `sandboxd/requirements.in`
+with hashes. Change the `.in`, then in the dev container regenerate it, and the
+platform's after it, since the platform's is constrained to these pins:
+
+```bash
+# DEV CONTAINER, repository root
+uv pip compile --universal --generate-hashes \
+    sandboxd/requirements.in -o sandboxd/requirements.txt
+uv pip compile --universal --generate-hashes -c sandboxd/requirements.in \
+    platform/requirements.in -o platform/requirements.txt
 ```
 
 **capa's rules are not in the repository** (`.gitignore`), and without them

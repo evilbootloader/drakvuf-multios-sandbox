@@ -229,3 +229,10 @@ on the reinstalled one too.
 - **Android** is unchanged: `viridian = 1` in its configs and DRAKVUF's `-s`.
   Changing its config means re-saving the Android state, which is not done
   without an explicit instruction.
+- **Uptime.** Every clone restores from the saved state with the uptime that
+  state was saved at, and a machine that has been up for two minutes is one
+  of the first things a sample reads (`GetTickCount`, `/proc/uptime`). So the
+  template is saved **by hand, after at least 20 minutes running** (operator's
+  decision, 2026-11-03): `make setup_hooks_*` leaves the domain up and prints
+  the `xl save` command rather than saving two minutes after `xl create`, as
+  it did until then. Not an identity field, but the same kind of tell.

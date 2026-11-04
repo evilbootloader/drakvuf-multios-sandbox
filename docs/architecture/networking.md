@@ -475,9 +475,12 @@ Three things follow, and all three are wanted:
 
 `TransPort` and `DNSPort` bind `0.0.0.0`, because a `REDIRECT` targets the
 address of the interface the packet arrived on and that differs per VLAN.
-`network-setup.sh` therefore **drops both ports arriving on the uplink**, as
-the first rules in `DRAKVUF_INPUT`. Without those two rules this host is an
-open proxy for anyone who can reach it.
+`network-setup.sh` therefore **drops both ports arriving on any interface
+that is not an analysis VLAN**, as the first rules in `DRAKVUF_INPUT` after a
+`RETURN` for loopback. Without those two rules this host is an open proxy for
+anyone who can reach it. Until 2026-11-04 the drop named the uplink bridge
+alone, so an interface added later, a tunnel or a second NIC, would have
+reached the listeners (review L-2).
 
 #### `simulated` — DRAFT-057 Phase 3
 
@@ -525,9 +528,11 @@ documentation, and each was found by executing runbook 13 step 6:
 Its listeners bind `0.0.0.0` for the same reason tor's do, and cannot be told
 otherwise: FakeNet overwrites every listener's address with one process-wide
 value, and the setting that would restrict it to an interface is read only by
-the diverter. `network-setup.sh` drops all of them on the uplink — eleven
-ports and a range, against tor's two. The DNS listener is the one that matters
-most: unguarded it is an open resolver on the house LAN.
+the diverter. `network-setup.sh` drops all of them off the analysis VLANs —
+eleven ports and a range, against tor's two, with loopback let through first
+because the proxy listener hands each connection to its protocol listener over
+`127.0.0.1`. The DNS listener is the one that matters most: unguarded it is an
+open resolver on the house LAN.
 
 **HTTPS is refused by the sample, and that is disclosed rather than fixed.**
 The proxy terminates TLS with a certificate minted from an ephemeral CA, so a

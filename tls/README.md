@@ -42,6 +42,17 @@ heuristic, not a proof — the rule is yours to keep.
 - `ca/<name>.key`, `ca/<name>.crt` — issued material. Copy the pair to the
   host it belongs to and nowhere else.
 
+**A platform built by `make web_sandbox` has no workstation in the loop**, so
+the target makes the CA on the DomU (`CA_ALLOW_HERE=1`), issues the three
+leaf certificates and then **destroys `ca.key` there** (2026-11-03; until then
+it stayed on the DomU, owned by the API's user, which this section forbids).
+On such a platform the root key exists nowhere: a renewal, or a fourth
+certificate, is a new CA — `rm -r /etc/sandbox_platform/tls`, `make
+web_sandbox`, then `make sandboxd` to put the new `ca.crt` on Dom0. The leaves
+last 825 days, so that is a rare event, and it costs less than a root key
+living beside the service it signs for. Any later run of the target that finds
+a `ca.key` on the platform stops and says how to remove it.
+
 **Nothing under `ca/` is tracked.** `.gitignore` covers `*.key` and `*.pem`
 repository-wide; `tls/ca/` is ignored outright so a stray `.crt` cannot be
 committed either.

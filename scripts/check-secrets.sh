@@ -238,6 +238,13 @@ scan "Garage access key id" \
 scan "private key block" \
      '-----BEGIN [A-Z ]*PRIVATE KEY-----'
 
+# A crypt(3) password hash: sha-512 ($6$), sha-256 ($5$), yescrypt ($y$) or
+# bcrypt ($2b$). `make ubuntu_analysis_vm` writes one into the cloud-init
+# user-data it generates, which was tracked until 2026-11-04 despite being
+# ignored (review L-1); a hash of a weak password is the password.
+scan "crypt(3) password hash" \
+     '\$(6|5|y|2[abxy])\$[A-Za-z0-9./$]{20,}'
+
 # PBS encryption key material. Losing this loses every backup; publishing it
 # loses their confidentiality.
 #

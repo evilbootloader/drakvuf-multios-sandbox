@@ -278,9 +278,16 @@ jobs:
         # MinIO, no running API — and not of *packages*. Installing only
         # sandboxd/requirements.txt fails collection with
         # `ModuleNotFoundError: No module named 'fastapi'`.
+        #
+        # Both files carry --hash, so pip runs in hash-checking mode, which
+        # admits no unhashed requirement on the same command line: pytest is a
+        # second install. The two files pin their shared packages alike
+        # (sandboxd/tests/test_requirements.py), or this one install would
+        # have nothing to resolve to.
         run: |
           python -m pip install --upgrade pip
-          pip install -r sandboxd/requirements.txt -r platform/requirements.txt pytest
+          pip install --require-hashes -r sandboxd/requirements.txt -r platform/requirements.txt
+          pip install pytest
 
       - name: pytest
         run: python -m pytest sandboxd/tests -q
@@ -346,7 +353,8 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r platform/requirements.txt pytest
+          pip install --require-hashes -r platform/requirements.txt
+          pip install pytest
 
       - name: Start MinIO
         if: matrix.store == 'minio'

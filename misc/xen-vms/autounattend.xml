@@ -664,45 +664,49 @@ $scripts = @(
 	};
 	{
 		# --- Software installs ---
-		$TempDir = "$env:TEMP\UnattendedSetup";
-		New-Item -ItemType Directory -Force -Path $TempDir | Out-Null;
+		# From the installation media, not the network (2026-11-03). The
+		# installers were vendored into the modified ISO by `make win_installers`,
+		# which downloaded each once and verified it against the SHA-256 kept in
+		# automation/win-installers.list. Until then this block fetched every one
+		# over HTTPS at install time with no check, three of them from unversioned
+		# redirects, so no two builds of this image were the same.
+		$Src = $null;
+		foreach ($d in (Get-PSDrive -PSProvider FileSystem)) { if (Test-Path "$($d.Root)installers\7z2408-x64.exe") { $Src = "$($d.Root)installers"; $IsoRoot = $d.Root; break } };
+		if (-not $Src) { throw 'installers directory not found on any drive: the ISO was built without make win_installers' };
+		Write-Host "Installing from $Src";
 
 		# Chrome (Enterprise MSI - reliable silent install)
-		Write-Host "Downloading Chrome Enterprise MSI...";
-		Invoke-WebRequest -Uri 'https://dl.google.com/dl/chrome/install/googlechromestandaloneenterprise64.msi' -OutFile "$TempDir\ChromeSetup.msi" -UseBasicParsing;
-		Write-Host "Installing Chrome...";
-		Start-Process msiexec.exe -ArgumentList "/i `"$TempDir\ChromeSetup.msi`" /qn /norestart" -Wait;
+		Start-Process msiexec.exe -ArgumentList "/i `"$Src\googlechromestandaloneenterprise64.msi`" /qn /norestart" -Wait;
 
 		# Adobe Reader
-		Invoke-WebRequest -Uri 'https://ardownload2.adobe.com/pub/adobe/acrobat/win/AcrobatDC/2100720099/AcroRdrDCx642100720099_MUI.exe' -OutFile "$TempDir\AcroRdr.exe" -UseBasicParsing;
-		Start-Process "$TempDir\AcroRdr.exe" -ArgumentList '/sAll /rs /rps /msi' -Wait;
+		Start-Process "$Src\AcroRdrDCx642100720099_MUI.exe" -ArgumentList '/sAll /rs /rps /msi' -Wait;
 
 		# 7-Zip
-		Invoke-WebRequest -Uri 'https://www.7-zip.org/a/7z2408-x64.exe' -OutFile "$TempDir\7z.exe" -UseBasicParsing;
-		Start-Process "$TempDir\7z.exe" -ArgumentList '/S' -Wait;
+		Start-Process "$Src\7z2408-x64.exe" -ArgumentList '/S' -Wait;
 
 		# Python 3
-		Invoke-WebRequest -Uri 'https://www.python.org/ftp/python/3.12.0/python-3.12.0-amd64.exe' -OutFile "$TempDir\python.exe" -UseBasicParsing;
-		Start-Process "$TempDir\python.exe" -ArgumentList '/quiet InstallAllUsers=1 PrependPath=1 Include_test=0' -Wait;
+		Start-Process "$Src\python-3.12.0-amd64.exe" -ArgumentList '/quiet InstallAllUsers=1 PrependPath=1 Include_test=0' -Wait;
 
 		# .NET Framework 4.8
-		Invoke-WebRequest -Uri 'https://go.microsoft.com/fwlink/?linkid=2088631' -OutFile "$TempDir\ndp48.exe" -UseBasicParsing;
-		Start-Process "$TempDir\ndp48.exe" -ArgumentList '/q /norestart' -Wait;
+		Start-Process "$Src\ndp48-x86-x64-allos-enu.exe" -ArgumentList '/q /norestart' -Wait;
 
-		# .NET Framework 3.5
-		Start-Process dism.exe -ArgumentList '/Online /Enable-Feature /FeatureName:NetFx3 /All' -Wait;
+		# .NET Framework 3.5, from the media's own sources\sxs rather than Windows Update
+		Start-Process dism.exe -ArgumentList "/Online /Enable-Feature /FeatureName:NetFx3 /All /Source:$($IsoRoot)sources\sxs /LimitAccess" -Wait;
 
 		# .NET 8.0 runtimes
-		Invoke-WebRequest -Uri 'https://aka.ms/dotnet/8.0/dotnet-runtime-win-x64.exe' -OutFile "$TempDir\net8x64.exe" -UseBasicParsing;
-		Start-Process "$TempDir\net8x64.exe" -ArgumentList '/install /quiet /norestart' -Wait;
-		Invoke-WebRequest -Uri 'https://aka.ms/dotnet/8.0/dotnet-runtime-win-x86.exe' -OutFile "$TempDir\net8x86.exe" -UseBasicParsing;
-		Start-Process "$TempDir\net8x86.exe" -ArgumentList '/install /quiet /norestart' -Wait;
+		Start-Process "$Src\dotnet-runtime-8.0-win-x64.exe" -ArgumentList '/install /quiet /norestart' -Wait;
+		Start-Process "$Src\dotnet-runtime-8.0-win-x86.exe" -ArgumentList '/install /quiet /norestart' -Wait;
 	};
 	{
 		# --- Office Installation via ODT ---
 		$TempDir = "$env:TEMP\UnattendedSetup";
-		$ODTUrl = 'https://download.microsoft.com/download/6c1eeb25-cf8b-41d9-8d0d-cc1dbc032140/officedeploymenttool_20228-20124.exe';
-		$ODTPath = "$TempDir\odt.exe";
+		$Src = $null;
+		foreach ($d in (Get-PSDrive -PSProvider FileSystem)) { if (Test-Path "$($d.Root)installers\officedeploymenttool_20228-20124.exe") { $Src = "$($d.Root)installers"; break } };
+		if (-not $Src) { throw 'installers directory not found on any drive: the ISO was built without make win_installers' };
+		New-Item -ItemType Directory -Force -Path $TempDir | Out-Null;
+		# The Deployment Tool is vendored and verified like the rest (win_installers);
+		# Office itself is what it downloads, by design, from Microsoft's CDN.
+		$ODTPath = "$Src\officedeploymenttool_20228-20124.exe";
 		$ODTDir = "$TempDir\ODT";
 
 		# 1. Write configuration.xml with CDN fallback (XML-escaped!)
@@ -718,9 +722,6 @@ $scripts = @(
 &lt;/Configuration&gt;
 '@;
 		$ConfigXml | Out-File -FilePath "$TempDir\configuration.xml" -Encoding UTF8 -Force;
-
-		# 2. Download ODT
-		Invoke-WebRequest -Uri $ODTUrl -OutFile $ODTPath -UseBasicParsing;
 
 		# 3. Extract ODT
 		Start-Process -FilePath $ODTPath -ArgumentList "/extract:$ODTDir /quiet" -Wait;

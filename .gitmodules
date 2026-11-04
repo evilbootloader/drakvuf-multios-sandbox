@@ -2,7 +2,9 @@
 	path = drakvuf
 	url = https://github.com/evilbootloader/drakvuf.git
 	ignore = untracked
-	branch = main
+	# develop is where the pins come from; `main` here let `git submodule
+	# update --remote` move the pin to a commit never deployed (review L-23)
+	branch = develop
 [submodule "sandboxd/data/protections-artifacts"]
 	path = sandboxd/data/protections-artifacts
 	url = https://github.com/elastic/protections-artifacts.git

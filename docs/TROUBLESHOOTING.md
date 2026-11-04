@@ -945,6 +945,26 @@ setting `GRUB_DEFAULT` makes it a switch, which the file `make xen` replaced did
 of `/etc/default/grub`, Ubuntu without Xen. Checked on Dom0 with
 `grub-mkconfig -o` both ways.
 
+### Dom0 comes back on the plain kernel after an evasion search
+
+**Symptom.** After `rdtsc_search.sh` or `alkhaser_search.sh` stopped — an
+error, Ctrl-C, the search machine down — Dom0 boots Ubuntu without Xen: no
+`control_d` in `/proc/xen/capabilities`, `xl` fails. Or the next search
+refuses to start with `A previous search did not put dom0 back`.
+
+**Cause.** Since 2026-11-04 the searches make the plain kernel the GRUB
+default while they run and boot each variant's Xen once with `grub-reboot`,
+so that a variant that panics at boot, or a search that dies, leaves Dom0
+reachable instead of looping on an unreviewed Xen (review M-9). A search gives
+Xen the default back when it ends; one that could not leaves
+`/root/evasion-tests/known-good/` and `orig/` behind on purpose, as the record
+of what is still to put back.
+
+**Fix.** `evasion-tests/restore_dom0.sh` from the search machine, or the steps
+by hand in `evasion-tests/README.md` §5. `make xen` alone also reinstalls Xen
+and resets the tree, but leaves the two directories, which the next search
+refuses: delete them after it.
+
 ### `xen-rdtsc-poc.service` — `Dependency failed`, and no `RDTSC_POC` in `xl dmesg`
 
 **Symptom.** After the first boot into a Xen from `make xen`, `systemctl
@@ -3360,3 +3380,58 @@ line for that API either. Nothing errored.
 early — `drakvuf_load_dll_hook_config` rethrows as `Invalid entry on line N`
 (`userhook.cpp:1035`) and DRAKVUF does not start at all. If the trace ran, the
 list parsed.
+
+### `sandboxd` disappears after a long trace; `journalctl -k` says `Out of memory: Killed process … (python)`, and the platform had reaped the job half an hour earlier
+
+**Seen 2026-11-02 on Dom0**, after a 20-minute trace (job `88b44209`, whose
+results directory was 8.3 G). The daemon was gone, no `sandboxd` held
+`/run/lock/sandboxd.lock`, and its own log said nothing. The kernel did:
+
+```text
+Nov 02 19:55:08 dom0 kernel: python invoked oom-killer: gfp_mask=0x140dca(GFP_HIGHUSER_MOVABLE|__GFP_COMP|__GFP_ZERO), order=0, oom_score_adj=0
+Nov 02 19:55:09 dom0 kernel: Out of memory: Killed process 104044 (python) total-vm:15625468kB, anon-rss:7003280kB, file-rss:7296kB, shmem-rss:0kB, UID:0 pgtables:30168kB oom_score_adj:0
+```
+
+and the platform had already given up on the job, in `journalctl -u sandbox-api`:
+
+```text
+Nov 02 19:26:21 platform python[12287]: reaped 1 job(s) with expired leases: 88b44209-84a1-4ba9-b740-fb9ec0b36a2e
+```
+
+**Cause.** Postprocessing ran inside the daemon, and two of its passes hold
+the whole in-scope trace in memory: capa builds one pydantic model per
+syscall and API record of the sample's processes (1.7 KiB per line, measured
+2026-09-18 on a 2.27 M-line Windows trace), and falco builds a list of every
+in-scope record as a dict and sorts it by `EventUID`
+(`sandboxd/postprocessing/falco/events.py`, `Trace._collect`). A 20-minute
+trace has about seven times the lines of the 180 s runs those were sized on.
+Dom0 has 7.9 GiB; the daemon reached 6.7 GiB resident and 15.6 GB of address
+space, filled the 8 GiB of swap, and was the largest process when the kernel
+chose.
+
+**Why the lease lapsed first.** The heartbeat is a thread in the same
+process. Once the host was swapping, the thread building the list was
+faulting pages with the interpreter lock held, so the heartbeat thread ran
+rarely enough that 120 s passed between beats; the platform reaped the job at
+19:26 and the kill came at 19:55. A `lease_expired` on a job that was in
+`collecting` is this, not a dead network.
+
+**What changed, 2026-11-03.** The plugins run in a child process
+(`sandboxd/postprocessing/child.py`) under `RLIMIT_DATA`
+(`SANDBOXD_POSTPROCESS_MAX_MIB`, 3072 by default) and a wall-clock budget
+(`timing.POSTPROCESS_BUDGET`). An overrun is now a `MemoryError` inside one
+plugin: the next plugin runs, the manifest's `notes` name the one that failed,
+`report.json` carries it under `postprocessing_failures`, and the daemon keeps
+its clones and its heartbeats. The limit bounds the damage; it does not make
+the pass succeed on a trace that needs more — that is the work on the passes
+themselves (fewer fields kept per record, streaming instead of sorting).
+
+**How to see it next time.** `journalctl -k --no-pager | grep -iE 'oom-kill|Killed process'`;
+the daemon's high-water mark while it runs,
+`for p in $(fuser /run/lock/sandboxd.lock 2>/dev/null); do grep -E '^VmHWM' /proc/$p/status; done`;
+and `postprocessing_failures` in the job's `report.json`.
+
+**What is NOT the cause:** `SANDBOXD_TOTAL_MIB`. It sizes what Dom0 hands to
+clones and has nothing to do with Dom0's own memory, so lowering it changes
+nothing here — Dom0's own size is `dom0_mem` on the Xen command line
+(CURRENT-STATE §1.2).

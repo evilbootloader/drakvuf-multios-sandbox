@@ -1,19 +1,34 @@
 SHELL	:= /bin/bash
 .ONESHELL:
 
-VM      := platform
-CFG     := misc/xen-vms/platform.cfg
-VMADDR	:= 192.168.1.12/24
+# Host-specific values -- the analysis user and its password, the operator's
+# SSH key, the addresses -- belong in an UNTRACKED `Makefile.local` beside
+# this file (2026-11-03). It is read first, and every default below yields to
+# it (`?=`). Until then Dom0 carried its own values as a local commit on this
+# file, which blocked every `git pull --ff-only` and put a password and a key
+# into a tracked file; `scripts/check-secrets.sh` does not read a Makefile.
+-include Makefile.local
+
+VM      ?= platform
+CFG     ?= misc/xen-vms/platform.cfg
+VMADDR	?= 192.168.1.12/24
 VMIP := $(firstword $(subst /, ,$(VMADDR)))
-VMROUTE	:= 192.168.1.1
-RSA_KEY	:= 
-SANDBOX_WEB := sandbox.evilbootloader.com
-GARAGE_V := v2.4.1
-S3_QUOTA := 100
-S3_RETENTION := 30
-SANDBOXDIP := 192.168.1.6
-ANALYSIS_VM_PASS := malware
-ANALYSIS_VM_USER := user
+VMROUTE	?= 192.168.1.1
+RSA_KEY	?=
+SANDBOX_WEB ?= sandbox.evilbootloader.com
+GARAGE_V ?= v2.4.1
+# Garage publishes no checksum file (migrate-object-store-to-garage.md probed
+# for one on 2026-10-02). This is the sha256 of the v2.4.1 musl binary as
+# downloaded on 2026-10-02 and again on 2026-11-03, on two machines, and it is
+# what the platform runs. Bumping GARAGE_V means downloading, hashing and
+# recording the new one here first; until 2026-11-03 the hash was only printed
+# (review M-1).
+GARAGE_SHA256 ?= ae49f8de4aaee6b5ca305f7cbdccc8cd8a29b2804aac074649f18bfb83d0a2b6
+S3_QUOTA ?= 400
+S3_RETENTION ?= 30
+SANDBOXDIP ?= 192.168.1.6
+ANALYSIS_VM_PASS ?= malware
+ANALYSIS_VM_USER ?= user
 REPO_ROOT := $(shell pwd)
 # Xen boot line, see docs/CURRENT-STATE.md §1.2
 XEN_CMDLINE := dom0_mem=8192M,max:8192M dom0_max_vcpus=6 dom0_vcpus_pin=1 force-ept=1 ept=ad=0 hap_1gb=0 hap_2mb=0 altp2m=1 hpet=legacy-replacement smt=0 sched=credit rdtsc-poc=1
@@ -44,6 +59,24 @@ VOLATILITY3_PR650 := 7fe200e5f4611a676299dd67fd435a8dd9bec6e7
 # release by ginjfo.com and iguru.gr; Dom0's copy matched it 2026-10-24
 WIN_ISO_URL := https://archive.org/download/win-11-23-h-2-english-international-x-64/Win11_23H2_EnglishInternational_x64.iso
 WIN_ISO_SHA256 := 0eea13c537e39cd1631b1758cd98847cf0d88bd0c32a8d69d9a02723ae79a612
+UBUNTU_ISO_URL := https://releases.ubuntu.com/jammy/ubuntu-22.04.5-live-server-amd64.iso
+# From releases.ubuntu.com/jammy/SHA256SUMS, whose SHA256SUMS.gpg verified on
+# 2026-11-03 against the Ubuntu CD Image Automatic Signing Key (2012),
+# 8439 38DF 228D 22F7 B374 2BC0 D94A A3F0 EFE2 1092. Checked before every use,
+# not only after a download (review M-1).
+UBUNTU_ISO_SHA256 := 9bc6028870aef3f74f4e16b900008179e78b130e6b0b9a140635434a46aa98b0
+# FakeNet-NG: the commit tag v3.5 named on 2026-11-03. A tag can be moved, a
+# commit cannot, so the install names the commit (review M-1).
+FAKENET_COMMIT := 82c01b00f8da2f29fc4ae77c6f5546bb26dd8904
+# What the platform DomU checks out: this checkout's HEAD. It must be pushed,
+# since the DomU fetches it from GitHub, and web_sandbox fails at the checkout
+# when it is not. Until 2026-11-03 the DomU got whatever the default branch's
+# tip was at the time, reviewed or not (review M-1).
+PLATFORM_SHA ?= $(shell git -C $(REPO_ROOT) rev-parse HEAD)
+# The installers vendored into the modified ISO: automation/win-installers.list
+# names each file, its SHA-256 and where it comes from.
+WIN_INSTALLERS := $(REPO_ROOT)/misc/iso/win-installers
+WIN_INSTALLERS_LIST := $(REPO_ROOT)/automation/win-installers.list
 
 .PHONY: xen web_vm web_sandbox sandboxd
 
@@ -79,7 +112,14 @@ xen:
 	make -j$$(nproc) dist-xen; \
 	make -j$$(nproc) dist-tools; \
 	make -j$$(nproc) debball; \
-	sudo apt-get remove -y 'xen*' 'libxen*' || true; \
+	# Anchored (2026-11-03). An argument that names no package and contains \
+	# '*' is a POSIX regex to apt, matched as a SUBSTRING of every package \
+	# name: 'xen*' is "xe, then any number of n", which selects libxext6, \
+	# exempi and whatever else has "xe" in its name, with -y, and the \
+	# || true hid the outcome. '^xen-' and '^libxen' select the distro's Xen \
+	# packages and nothing else; the || true stays because a host with no \
+	# such packages makes apt exit non-zero, and that is not a failure here. \
+	sudo apt-get remove -y '^xen-' '^libxen' || true; \
 	sudo apt install -y ./dist/xen*.deb; \
 	# The boot line and Xen as the default entry, in the file grub-mkconfig reads last \
 	sudo install -d /etc/default/grub.d; \
@@ -92,7 +132,12 @@ xen:
 	for m in xen-evtchn xen-privcmd xen-gntdev; do \
 		grep -qx "$$m" /etc/modules || echo "$$m" | sudo tee -a /etc/modules >/dev/null; \
 	done; \
-	sudo systemctl enable xencommons.service; \
+	# xenstored.service, not xencommons.service (2026-11-03). The tree ships \
+	# no xencommons unit: that name is the init script systemd's generator \
+	# wraps, which repeats what the units already did and fails on every \
+	# boot -- automation/xen-rdtsc-poc.service has carried that note since it \
+	# was written, and the poc unit itself Requires xenstored.service. \
+	sudo systemctl enable xenstored.service; \
 	sudo systemctl enable xen-qemu-dom0-disk-backend.service; \
 	sudo systemctl enable xen-init-dom0.service; \
 	sudo systemctl enable xenconsoled.service; \
@@ -107,11 +152,30 @@ xen:
 
 web_vm:
 	@echo "Installing $(VM)..."
+	# One shell for the whole recipe (.ONESHELL) and no && between its steps:
+	# until 2026-11-03 a failed lvcreate was ignored and mkfs ran on the
+	# volumes that already existed. The first failure now ends the run.
+	set -e
+
+	# The operator's public key, from Makefile.local. Refused here, before any
+	# volume is touched: without it `make web_sandbox` has no way into the DomU.
+	test -n '$(RSA_KEY)' || { echo "RSA_KEY is empty: put the operator's public key in Makefile.local, e.g. RSA_KEY := ssh-ed25519 AAAA... root@dom0" >&2; exit 1; }
 
 	sudo apt install -y lvm2 debootstrap
 
+	# The thin pool every guest volume lives in, created once, here, before
+	# the first volume that needs it. Until 2026-11-03 it was created at the
+	# END of `make sandboxd`, which failed on every re-run of that target.
+	sudo lvs vg-root/thinpool >/dev/null 2>&1 || sudo lvcreate --type thin-pool -l 90%FREE --poolmetadatasize 16G -n thinpool vg-root
+
+	# This target builds a NEW platform. A second run must never reach mkfs:
+	# it would format the platform's root and the 512 G object store, which
+	# the kernel refuses only while the DomU holds them open. Removing the
+	# volumes is a deliberate act done by hand, never a side effect of make.
+	for lv in $(VM) $(VM)_data; do if sudo lvs vg-root/$$lv >/dev/null 2>&1; then echo "vg-root/$$lv exists: refusing to build over a platform. To rebuild from nothing: xl destroy $(VM); lvremove vg-root/$(VM) vg-root/$(VM)_data -- by hand, on purpose." >&2; exit 1; fi; done
+
 	sudo lvcreate -V 20G  --thin -n $(VM) vg-root/thinpool
-	sudo lvcreate -V 256G --thin -n $(VM)_data vg-root/thinpool
+	sudo lvcreate -V 512G --thin -n $(VM)_data vg-root/thinpool
 
 	sudo mkfs.ext4 -L $(VM)-root /dev/vg-root/$(VM)
 	sudo mkfs.ext4 -T largefile -L $(VM)-data /dev/vg-root/$(VM)_data
@@ -131,6 +195,7 @@ web_vm:
 
 
 	sudo chroot /mnt/$(VM) /bin/bash -c '\
+		set -e; \
 		echo "$(VM)" > /etc/hostname; \
 		echo "Input root password:"; \
 		passwd root; \
@@ -162,16 +227,21 @@ web_vm:
 			"nameserver 1.1.1.1" \
 			"nameserver 8.8.8.8" \
 			> /etc/resolv.conf; \
-		mkdir -p /root/.ssh; \
-		printf "%s\n" '$(RSA_KEY)' > /root/.ssh/authorized_keys; \
-                chmod 700 /root/.ssh; \
-		chmod 600 /root/.ssh/authorized_keys; \
 		printf "%s\n" \
 			"127.0.0.1 localhost" \
 			"127.0.1.1 $(VM)" \
 			"::1 localhost ip6-localhost ip6-loopback" \
 			> /etc/hosts; \
 	'
+
+	# The key goes in from OUTSIDE the chroot (2026-11-03). Until then it was
+	# spliced into the single-quoted `bash -c` script above as '$(RSA_KEY)':
+	# the key's own quotes ended that string, its words became arguments of
+	# bash instead of text of the script, and authorized_keys was never
+	# written -- the DomU never got the key. Here no shell re-parses it: one
+	# quoted word to printf, piped into install, which also sets the modes.
+	sudo install -d -m 700 -o root -g root /mnt/$(VM)/root/.ssh
+	printf '%s\n' '$(RSA_KEY)' | sudo install -m 600 -o root -g root /dev/stdin /mnt/$(VM)/root/.ssh/authorized_keys
 
 	sudo mkdir -p /var/lib/xen/$(VM)
 
@@ -191,36 +261,45 @@ web_vm:
 
 web_sandbox:
 	# No `bash -c`: ssh joins its arguments, so it would run only `apt`.
-	ssh root@$(VMIP) 'apt update; \
+	#
+	# Safe to run again since 2026-11-03. Until then a second run dropped the
+	# Postgres cluster -- every job row and manifest -- cloned over an
+	# existing checkout, rewrote /etc/garage.toml with new secrets over the
+	# live store, appended a second JWT key to api.env and moved a new CA
+	# inside the old one. Now the remote script stops at its first failure
+	# (set -e), and each thing it would create is kept when it already exists.
+	ssh root@$(VMIP) 'set -e; apt update; \
 	apt install -y postgresql postgresql-contrib python3 python3-venv python3-pip ca-certificates curl gnupg git libmagic1t64; \
 	systemctl enable --now postgresql; \
-	pg_dropcluster --stop  17 main; \
+	useradd -r -m -s /usr/sbin/nologin platform || true; \
+	if su - postgres -c "psql -lqt" | grep -qw sandbox_platform; then echo "sandbox_platform exists: keeping the cluster and the database"; else \
+	pg_dropcluster --stop 17 main; \
 	pg_createcluster 17 main --locale=C.UTF-8 --start; \
 	systemctl restart postgresql; \
-	useradd -r -m -s /usr/sbin/nologin platform || true; \
 	su - postgres -c "createuser platform"; \
 	su - postgres -c "createdb -O platform -E UTF8 -T template0 sandbox_platform"; \
+	fi; \
 	su - platform -s /bin/bash -c "psql -d sandbox_platform -tAc \"select current_user\""; \
 	apt-get install -y git; \
 	install -d -o platform -g platform /opt/platform; \
-	su - platform -s /bin/bash -c "git clone https://github.com/evilbootloader/drakvuf-multios-sandbox.git /opt/platform/src; \
-	cd /opt/platform/src/platform; \
-	python3 \-m venv .venv; \
-	.venv/bin/pip install \-r requirements.txt; \
-	  cd /opt/platform/src/platform; \
-	  export DATABASE_URL=\"postgresql:///sandbox_platform\"; \
-	  .venv/bin/python migrations/run.py --status; \
-	  .venv/bin/python migrations/run.py; \
+	if [ ! -d /opt/platform/src/.git ]; then su - platform -s /bin/bash -c "git clone --no-checkout https://github.com/evilbootloader/drakvuf-multios-sandbox.git /opt/platform/src"; fi; \
+	su - platform -s /bin/bash -c "git -C /opt/platform/src fetch --quiet origin && git -C /opt/platform/src checkout --quiet --detach $(PLATFORM_SHA) && git -C /opt/platform/src log -1 --format=\"platform at %h %s\""; \
+	su - platform -s /bin/bash -c "set -e; cd /opt/platform/src/platform; \
+	python3 -m venv .venv; \
+	.venv/bin/pip install --require-hashes -r requirements.txt; \
+	export DATABASE_URL=\"postgresql:///sandbox_platform\"; \
+	.venv/bin/python migrations/run.py --status; \
+	.venv/bin/python migrations/run.py; \
 	"; \
 	curl -fsSLo /usr/local/bin/garage.new "https://garagehq.deuxfleurs.fr/_releases/$(GARAGE_V)/x86_64-unknown-linux-musl/garage"; \
-	sha256sum /usr/local/bin/garage.new; \
+	echo "$(GARAGE_SHA256)  /usr/local/bin/garage.new" | sha256sum -c -; \
 	install -m 755 -o root -g root /usr/local/bin/garage.new /usr/local/bin/garage; \
 	rm /usr/local/bin/garage.new; \
-	adduser --system --group --no-create-home --home /nonexistent garage; \
+	id garage >/dev/null 2>&1 || adduser --system --group --no-create-home --home /nonexistent garage; \
+	if [ -f /etc/garage.toml ]; then echo "/etc/garage.toml exists: keeping the store, its secrets and its layout"; FIRST=0; else FIRST=1; \
 	RPC_SECRET=$$(openssl rand -hex 32); \
 	ADMIN_TOKEN=$$(openssl rand -base64 32); \
-	mkdir /srv/garagehq/meta; \
-	mkdir /srv/garagehq/data; \
+	mkdir -p /srv/garagehq/meta /srv/garagehq/data; \
 	chown -R garage:garage /srv/garagehq; \
 	printf "%s\n" \
 	"metadata_dir = \"/srv/garagehq/meta\"" \
@@ -249,7 +328,7 @@ web_sandbox:
 	"[admin]" \
 	"api_bind_addr = \"127.0.0.1:3903\"" \
 	"admin_token   = \"$$ADMIN_TOKEN\"" > /etc/garage.toml ; \
-	chown root:garage /etc/garage.toml && chmod 640 /etc/garage.toml; \
+	chown root:garage /etc/garage.toml && chmod 640 /etc/garage.toml; fi; \
 	printf "%s\n" \
 	"[Unit]" \
 	"Description=Garage object store (analysis bucket)" \
@@ -275,13 +354,14 @@ web_sandbox:
         systemctl daemon-reload && systemctl stop garage && sleep 3 && systemctl enable garage && systemctl start garage && sleep 3; \
 	G="garage -c /etc/garage.toml"; \
 	$$G status; \
-	NODE=$$($$G node id -q | cut -d@ -f1) ; \
+	if [ "$$FIRST" = 1 ]; then NODE=$$($$G node id -q | cut -d@ -f1) ; \
 	$$G layout assign -z lab -c $(S3_QUOTA)G "$$NODE"; \
-	$$G layout apply --version 1; \
+	$$G layout apply --version 1; fi; \
 	$$G layout show; \
 	$$G status; \
-	mkdir /etc/sandbox_platform ; \
+	mkdir -p /etc/sandbox_platform ; \
 	chown platform:platform /etc/sandbox_platform ; \
+	chmod 750 /etc/sandbox_platform ; \
 	BROWSER_ORIGIN=https://$(SANDBOX_WEB) BUCKET_QUOTA=$(S3_QUOTA)GiB RETENTION_DAYS=$(S3_RETENTION) /opt/platform/src/platform/garage/provision.sh; \
 	'
 	sed -e 's|@VMIP@|$(VMIP)|g' -e 's|@SANDBOX_WEB@|$(SANDBOX_WEB)|g' \
@@ -289,12 +369,30 @@ web_sandbox:
 	    -e 's|@ANALYSIS_USERNAME@|$(ANALYSIS_VM_USER)|g' \
 	    -e "s|@JWT_SIGNING_KEY@|$$(openssl rand -hex 32)|" \
 	    $(REPO_ROOT)/automation/api.env.example \
-	  | ssh root@$(VMIP) 'chmod 600 /etc/sandbox_platform/api.env && cat >> /etc/sandbox_platform/api.env'
-	ssh root@$(VMIP) 'grep -n "@[A-Z_]*@" /etc/sandbox_platform/api.env && echo "api.env: unrendered placeholder"; \
+	  | ssh root@$(VMIP) 'if grep -q "^JWT_SIGNING_KEY=" /etc/sandbox_platform/api.env 2>/dev/null; then echo "api.env already rendered: keeping it"; cat >/dev/null; else umask 077; cat >> /etc/sandbox_platform/api.env; fi'
+	# Appended, not written: provision.sh put the S3 keys in that file first.
+	# A placeholder left unrendered is a failure, not a line in the output.
+	#
+	# The CA (2026-11-03). This target has no workstation to make the CA on,
+	# so it makes it on the DomU, which tls/README.md forbids for the root
+	# key, and until now it LEFT it there, owned by the user the API runs as:
+	# code execution in the API could mint certificates Dom0 trusts. Now the
+	# three leaf certificates are issued and ca.key is destroyed in the same
+	# breath, so on a Makefile-built platform the root key exists nowhere.
+	# The cost: a renewal (leaves last 825 days) is a new CA and a new trust
+	# anchor on Dom0, which `make sandboxd` installs. A ca.key found on the
+	# platform at any later run stops the run and says how to remove it.
+	ssh root@$(VMIP) 'set -e; ! grep -n "@[A-Z_]*@" /etc/sandbox_platform/api.env || { echo "api.env: unrendered placeholder" >&2; exit 1; }; \
 	chmod 600 /etc/sandbox_platform/api.env; \
 	chown platform:platform /etc/sandbox_platform/api.env; \
+	if [ -d /etc/sandbox_platform/tls ]; then echo "/etc/sandbox_platform/tls exists: keeping the certificates"; else \
 	su - platform -s /bin/bash -c "export CA_ALLOW_HERE=1; /opt/platform/src/tls/issue-cert.sh init; /opt/platform/src/tls/issue-cert.sh server sandbox_web 127.0.0.1 $(SANDBOX_WEB) $(VMIP); /opt/platform/src/tls/issue-cert.sh server s3bucket_web 127.0.0.1 $(SANDBOX_WEB) $(VMIP); /opt/platform/src/tls/issue-cert.sh server dom0-lab 127.0.0.1 $(SANDBOXDIP)"; \
 	mv /opt/platform/src/tls/ca/ /etc/sandbox_platform/tls; \
+	openssl x509 -in /etc/sandbox_platform/tls/ca.crt -noout -fingerprint -sha256 -enddate; \
+	shred -u /etc/sandbox_platform/tls/ca.key /etc/sandbox_platform/tls/ca.srl 2>/dev/null || rm -f /etc/sandbox_platform/tls/ca.key /etc/sandbox_platform/tls/ca.srl; \
+	echo "ca.key destroyed on this host; the three leaf certificates are issued for 825 days. A renewal is a new CA: rm -r /etc/sandbox_platform/tls; make web_sandbox; make sandboxd (installs the new ca.crt on Dom0)."; \
+	fi; \
+	test ! -f /etc/sandbox_platform/tls/ca.key || { echo "/etc/sandbox_platform/tls/ca.key exists on the platform. The CA root key must not live here (tls/README.md, Custody): shred -u /etc/sandbox_platform/tls/ca.key /etc/sandbox_platform/tls/ca.srl, then run this again." >&2; exit 1; }; \
 	chown -R platform:platform /etc/sandbox_platform/; \
 	printf "%s\n" \
 	"[Unit]" \
@@ -345,7 +443,7 @@ web_sandbox:
 	    --ca /etc/sandbox_platform/tls/ca.crt; \
 	cd /opt/platform/src/platform; \
 	sudo -u platform DATABASE_URL=postgresql:///sandbox_platform \
-	 .venv/bin/python create_worker.py dom0-1; \
+	 .venv/bin/python create_worker.py dom0-1 || echo "worker dom0-1 exists already; make sandboxd rotates its token"; \
 	'
 
 sandboxd:
@@ -372,20 +470,26 @@ sandboxd:
 	cd $(REPO_ROOT)/drakvuf/volatility3; \
 	git fetch origin $(VOLATILITY3_PR650); \
 	git switch -C pr-650 $(VOLATILITY3_PR650); \
-	python3 ./setup.py build; \
-	sudo python3 ./setup.py install; \
+	# Not installed (review L-7, 2026-11-04): scripts/windows-symbol-profiles.py \
+	# runs pdbconv.py out of this checkout with PYTHONPATH set to it, and a \
+	# system-wide install of a pull-request branch was what it had to work \
+	# around. pdbconv's own imports come from the distribution instead. \
+	sudo apt-get install -y python3-pefile python3-construct; \
 	cd $(REPO_ROOT)/drakvuf; \
-	# threadsafety: required by --parallel-events \
-	meson setup build --native-file llvm.ini -Dthreadsafety=true; \
+	# threadsafety: required by --parallel-events. On a build/ that exists, \
+	# plain `meson setup` is a no-op that keeps the old options and the old \
+	# `git describe` banner (review L-8): reconfigure it. \
+	if [ -f build/build.ninja ]; then meson setup --reconfigure build --native-file llvm.ini -Dthreadsafety=true; \
+	else meson setup build --native-file llvm.ini -Dthreadsafety=true; fi; \
 	ninja -C build; \
 	ninja -C build install; \
 	# Egress responders: tor for `tor`, FakeNet-NG for `simulated`, docs/runbooks/13-verify-egress-modes.md \
 	apt-get install -y tor python3-pip python3-venv; \
 	install -m 0644 $(REPO_ROOT)/automation/torrc /etc/tor/torrc; \
 	python3 -m venv /opt/fakenet-ng; \
-	/opt/fakenet-ng/bin/pip install -r $(REPO_ROOT)/automation/fakenet-requirements.txt; \
+	/opt/fakenet-ng/bin/pip install --require-hashes -r $(REPO_ROOT)/automation/fakenet-requirements.txt; \
 	# Reinstalled before patching, every time: patch --forward skips a file it finds partly patched \
-	/opt/fakenet-ng/bin/pip install --no-deps --force-reinstall 'git+https://github.com/mandiant/flare-fakenet-ng@v3.5'; \
+	/opt/fakenet-ng/bin/pip install --no-deps --force-reinstall 'git+https://github.com/mandiant/flare-fakenet-ng@$(FAKENET_COMMIT)'; \
 	install -m 0644 $(REPO_ROOT)/automation/fakenet.ini /etc/fakenet.ini; \
 	mkdir -p /var/lib/fakenet/root; \
 	SP="$$(/opt/fakenet-ng/bin/python -c 'import fakenet, os; print(os.path.dirname(os.path.dirname(fakenet.__file__)))')"; \
@@ -395,6 +499,8 @@ sandboxd:
 	test "$$(grep -c "fn_addr = '0.0.0.0'" "$$SP/fakenet/fakenet.py")" -eq 2; \
 	test "$$(grep -c "self.__diverter is None" "$$SP/fakenet/diverters/diverterbase.py")" -eq 3; \
 	test "$$(grep -c "Inadmissible SNI" "$$SP/fakenet/listeners/ssl_utils/__init__.py")" -eq 1; \
+	test "$$(grep -c "if diverter is not None else None" "$$SP/fakenet/listeners/ProxyListener.py")" -eq 1; \
+	test "$$(grep -c "except ssl.SSLError" "$$SP/fakenet/listeners/ProxyListener.py")" -eq 1; \
 	install -m 0644 $(REPO_ROOT)/automation/fakenet.service /etc/systemd/system/; \
 	install -m 0644 $(REPO_ROOT)/automation/drakvuf-egress.target /etc/systemd/system/; \
 	systemctl daemon-reload; \
@@ -407,24 +513,46 @@ sandboxd:
 	scp $(VMIP):/etc/sandbox_platform/tls/dom0-lab.key /etc/sandboxd/tls/; \
 	cd $(REPO_ROOT); \
 	python3 -m venv .venv-sandboxd; \
-	.venv-sandboxd/bin/pip install -r sandboxd/requirements.txt; \
+	.venv-sandboxd/bin/pip install --require-hashes -r sandboxd/requirements.txt; \
+	# Dom0's lvm2 must never parse a clone volume: automation/lvmlocal.conf, \
+	# appended once (its first line is the marker) and validated. \
+	grep -q 'DRAKVUF clone volumes' /etc/lvm/lvmlocal.conf 2>/dev/null || sudo tee -a /etc/lvm/lvmlocal.conf < $(REPO_ROOT)/automation/lvmlocal.conf >/dev/null; \
+	sudo lvmconfig --validate; \
+	sudo lvmconfig devices/global_filter; \
 	# sandboxd's environment, from automation/sandboxd.env.example. REPLACED, not
 	# appended to: `>>` added a second copy of every line on each re-run. The
 	# token is this host's own, rotated on the platform; written under umask 077
 	# so it is never readable by anyone else, even for a moment.
 	TOKEN=$$(ssh $(VMIP) 'sudo -u platform DATABASE_URL=postgresql:///sandbox_platform /opt/platform/src/platform/.venv/bin/python /opt/platform/src/platform/create_worker.py dom0-1 --rotate;' | grep -Eo 'WORKER_TOKEN=.*' | cut -d= -f2-); \
 	test -n "$$TOKEN"; \
-	TOTAL_MIB=$$(( $$(xl info | grep free_mem | cut -d':' -f2) - 2000 )); \
+	# From the totals, not from free_memory at this moment (review L-6): \
+	# the host's RAM less Dom0's fixed allocation (dom0_mem=...,max:), less \
+	# the platform's (its cfg), less 2000 MiB for Xen's own use. The free \
+	# figure counted whatever happened to be running and was wrong in both \
+	# directions; this one is the same on every run. \
+	TOTAL_MIB=$$(( $$(xl info | awk '/^total_memory/ { print $$3 }') \
+		- $$(xl list Domain-0 | awk 'NR == 2 { print $$3 }') \
+		- $$(sed -n 's/^memory *= *\([0-9]*\).*/\1/p' $(CFG)) - 2000 )); \
+	test "$$TOTAL_MIB" -gt 0; \
 	(umask 077; sed -e 's|@VMIP@|$(VMIP)|g' -e "s|@TOTAL_MIB@|$$TOTAL_MIB|" -e "s|@WORKER_TOKEN@|$$TOKEN|" \
+		-e 's|@REPO_ROOT@|$(REPO_ROOT)|g' -e 's|@ANALYSIS_VM_USER@|$(ANALYSIS_VM_USER)|g' \
 		$(REPO_ROOT)/automation/sandboxd.env.example > /etc/sandboxd/sandboxd.env.new); \
+	# The injection PIDs survive a re-run: setup_hooks_* wrote them, and a \
+	# daemon without them injects into PID 1 on Windows, which does not exist. \
+	grep -E '^SANDBOXD_INJECTION_PID_' /etc/sandboxd/sandboxd.env >> /etc/sandboxd/sandboxd.env.new 2>/dev/null || true; \
 	if grep -n '@[A-Z_]*@' /etc/sandboxd/sandboxd.env.new; then \
 		echo 'sandboxd.env: unrendered placeholder' >&2; exit 1; \
 	fi; \
 	install -m 600 /etc/sandboxd/sandboxd.env.new /etc/sandboxd/sandboxd.env; \
 	rm -f /etc/sandboxd/sandboxd.env.new; \
-	sed -i 's|/root/drakvuf-multios-sandbox|$(REPO_ROOT)|g' $(REPO_ROOT)/sandboxd/config.py; \
-	sed -i 's/ANALYSIS_USERNAME =.*/ANALYSIS_USERNAME = "$(ANALYSIS_VM_USER)"/g' $(REPO_ROOT)/sandboxd/config.py; \
-	sudo lvcreate --type thin-pool -l 90%FREE --poolmetadatasize 16G -n thinpool vg-root
+	# Nothing is sed-edited into sandboxd/config.py any more (2026-11-03): the
+	# checkout path and the analysis user travel in sandboxd.env above, which
+	# config.py reads. The two seds that used to be here dirtied Dom0's
+	# checkout on every deploy and stopped `git pull --ff-only` on the one file
+	# the CPU partition is generated from.
+	# The thin pool is no longer created here (Dom0's change, merged
+	# 2026-11-03): it exists from the first `make web_vm`, and creating it at
+	# the end of this target failed every re-run.
 
 
 
@@ -452,6 +580,7 @@ ubuntu_analysis_vm:
 	"  codecs:" \
 	"    install: true" \
 	"  packages:" \
+	"    - ubuntu-desktop" \
 	"    - git" \
 	"    - curl" \
 	"    - python3" \
@@ -462,7 +591,6 @@ ubuntu_analysis_vm:
 	"    - curtin in-target --target=/target -- apt-get install -y ubuntu-dbgsym-keyring" \
 	"    - curtin in-target --target=/target -- sh -c 'printf \"Types\072 deb\nURIs\072 http://ddebs.ubuntu.com/\nSuites\072 \$$(lsb_release -cs) \$$(lsb_release -cs)-updates \$$(lsb_release -cs)-proposed\nComponents\072 main restricted universe multiverse\nSigned-By\072 /usr/share/keyrings/ubuntu-dbgsym-keyring.gpg\n\" | tee /etc/apt/sources.list.d/ddebs.sources'" \
 	"    - curtin in-target --target=/target -- apt-get update" \
-	"    - curtin in-target --target=/target -- snap install firefox" \
 	"    - curtin in-target --target=/target -- bash -c 'KVER=\$$(ls /boot/vmlinuz-* | sed \"s|/boot/vmlinuz-||\" | sort -V | tail -1); apt-get install -y linux-image-\$${KVER}-dbgsym'" \
 	"    - curtin in-target --target=/target -- mkdir -p /etc/gdm3" \
 	"    - curtin in-target --target=/target -- sh -c 'printf \"[daemon]\nAutomaticLoginEnable=true\nAutomaticLogin=$(ANALYSIS_VM_USER)\n\" > /etc/gdm3/custom.conf'" \
@@ -476,8 +604,15 @@ ubuntu_analysis_vm:
 		"$(REPO_ROOT)/misc/iso/cidata/user-data" \
 		"$(REPO_ROOT)/misc/iso/cidata/meta-data"; \
 	\
-	wget "https://releases.ubuntu.com/jammy/ubuntu-22.04.5-live-server-amd64.iso" -O $(REPO_ROOT)/misc/iso/ubuntu-22.04.5-live-server-amd64.iso ; \
-	mount $(REPO_ROOT)/misc/iso/ubuntu-22.04.5-desktop-amd64.iso  /mnt; \
+	# Downloaded once: 6 GB per run otherwise, and `wget -O` truncates the \
+	# file before fetching, so a failed download used to leave nothing; the \
+	# download lands in .part and is renamed whole. The checksum is checked \
+	# on every run, download or not, against the signed list's value. The \
+	# kernel and initrd come from the SAME server ISO the installer boots; \
+	# until 2026-11-03 this mounted a desktop ISO nothing had downloaded. \
+	test -f $(REPO_ROOT)/misc/iso/ubuntu-22.04.5-live-server-amd64.iso || { wget "$(UBUNTU_ISO_URL)" -O $(REPO_ROOT)/misc/iso/ubuntu-22.04.5-live-server-amd64.iso.part && mv $(REPO_ROOT)/misc/iso/ubuntu-22.04.5-live-server-amd64.iso.part $(REPO_ROOT)/misc/iso/ubuntu-22.04.5-live-server-amd64.iso; }; \
+	echo "$(UBUNTU_ISO_SHA256)  $(REPO_ROOT)/misc/iso/ubuntu-22.04.5-live-server-amd64.iso" | sha256sum -c -; \
+	mount $(REPO_ROOT)/misc/iso/ubuntu-22.04.5-live-server-amd64.iso  /mnt; \
 	cp /mnt/casper/initrd /mnt/casper/vmlinuz $(REPO_ROOT)/misc/iso/; \
 	umount /mnt; \
 	# The guest's hardware identity: docs/architecture/guest-identity.md \
@@ -497,7 +632,7 @@ ubuntu_analysis_vm:
 	"on_reboot = 'restart'" \
 	"on_crash = 'destroy'" \
 	"vnc = 1" \
-	"vnclisten = '0.0.0.0'" \
+	"vnclisten = '127.0.0.1'" \
 	"vga = 'stdvga'" \
 	"usb = 1" \
 	"usbdevice = 'tablet'" \
@@ -521,19 +656,40 @@ ubuntu_analysis_vm:
 	# thin_pool_autoextend_percent   = 20
 	# sudo systemctl restart lvm2-monitor
 
-windows_analysis_vm:
+win_installers:
+	# What the Windows golden image installs, downloaded ONCE and verified
+	# against automation/win-installers.list before any image is built from
+	# it (2026-11-03). Until then misc/xen-vms/autounattend.xml fetched every
+	# installer over HTTPS at install time with no check, three of them from
+	# unversioned redirects, and ran a script from a third-party host as
+	# SYSTEM; whatever those hosts served that day became the trust root of
+	# every Windows clone, and no two builds of the image were the same. A
+	# hash mismatch refuses the build; the fix is to look, then re-pin.
+	set -e; \
+	mkdir -p $(WIN_INSTALLERS); \
+	grep -vE '^\s*(#|$$)' $(WIN_INSTALLERS_LIST) | while read -r file sha url; do \
+	  if [ ! -f "$(WIN_INSTALLERS)/$$file" ]; then \
+	    wget -O "$(WIN_INSTALLERS)/$$file.part" "$$url" && mv "$(WIN_INSTALLERS)/$$file.part" "$(WIN_INSTALLERS)/$$file"; \
+	  fi; \
+	  echo "$$sha  $(WIN_INSTALLERS)/$$file" | sha256sum -c -; \
+	done
+
+windows_analysis_vm: win_installers
 	@echo "Installing Windows 11 23H2 analysis VM"; \
 	set -e; \
 	apt install wget genisoimage -y; \
 	rm -rf /tmp/win11iso/; \
 	mkdir /tmp/win11iso/; \
-	wget $(WIN_ISO_URL) -O $(REPO_ROOT)/misc/iso/Win11_23H2_EnglishInternational_x64.iso ; \
+	test -f $(REPO_ROOT)/misc/iso/Win11_23H2_EnglishInternational_x64.iso || wget $(WIN_ISO_URL) -O $(REPO_ROOT)/misc/iso/Win11_23H2_EnglishInternational_x64.iso ; \
 	# Checked before anything reads it: the mirror can replace the file \
 	echo "$(WIN_ISO_SHA256)  $(REPO_ROOT)/misc/iso/Win11_23H2_EnglishInternational_x64.iso" | sha256sum -c -; \
 	sudo mount -o loop,ro $(REPO_ROOT)/misc/iso/Win11_23H2_EnglishInternational_x64.iso /mnt; \
 	sudo cp -r /mnt/* /tmp/win11iso/; \
 	sudo umount /mnt; \
 	cp $(REPO_ROOT)/misc/xen-vms/autounattend.xml /tmp/win11iso/; \
+	# The verified installers ride on the media; the answer file installs \
+	# from there and makes no download but Office's own (win_installers). \
+	cp -r $(WIN_INSTALLERS) /tmp/win11iso/installers; \
 	sed -i 's|<Name>carlos</Name>|<Name>$(ANALYSIS_VM_USER)</Name>|g' /tmp/win11iso/autounattend.xml; \
 	sed -i 's|<DisplayName>carlos</DisplayName>|<DisplayName>$(ANALYSIS_VM_USER)</DisplayName>|g' /tmp/win11iso/autounattend.xml; \
 	sed -i 's|<Username>carlos</Username>|<Username>$(ANALYSIS_VM_USER)</Username>|g' /tmp/win11iso/autounattend.xml; \
@@ -563,7 +719,7 @@ windows_analysis_vm:
 	"on_reboot = 'restart'" \
 	"on_crash = 'destroy'" \
 	"vnc = 1" \
-	"vnclisten = '0.0.0.0'" \
+	"vnclisten = '127.0.0.1'" \
 	"vga = 'stdvga'" \
 	"usb = 1" \
 	"usbdevice = 'tablet'" \
@@ -579,11 +735,16 @@ windows_analysis_vm:
 	xl create $(REPO_ROOT)/misc/xen-vms/windows.cfg
 
 modify_windows:
-	@echo "Connect through VNC and tune Windows installation, then run setup_hooks"
+	@echo "VNC is on Dom0's loopback: ssh -L 5900:127.0.0.1:5900 root@dom0, connect to localhost:5900, tune the Windows installation, then run setup_hooks_windows"
+	# vnclisten is 127.0.0.1 since 2026-11-03. It was 0.0.0.0 with no
+	# password on a domain whose vif sits on the LAN uplink, so anyone on the
+	# LAN had the console of the image every clone is snapshotted from.
+	# The clone templates (misc/xen-vms/*_sandbox.cfg) were on loopback
+	# already; this is the same pattern evasion-tests/rdtsc_vnc.sh documents.
 	xl create $(REPO_ROOT)/misc/xen-vms/windows.cfg
 
 modify_ubuntu:
-	@echo "Connect through VNC and tune Ubuntu installation"
+	@echo "VNC is on Dom0's loopback: ssh -L 5900:127.0.0.1:5900 root@dom0, connect to localhost:5900, then tune the Ubuntu installation"
 	xl create $(REPO_ROOT)/misc/xen-vms/ubuntu.cfg
 
 
@@ -591,7 +752,8 @@ setup_hooks_windows:
 	kpartx -a /dev/vg-root/windows; \
 	mount -o ro /dev/mapper/vg--root-windows2 /mnt/; \
 	cd $(REPO_ROOT); \
-	python3 drakvuf/volatility3/volatility3/framework/symbols/windows/pdbconv.py --guid $$(python3 drakvuf/tools/pdbguid.py /mnt/Windows/System32/ntoskrnl.exe | grep GUID | cut -d' ' -f 2) -p $$(python3 drakvuf/tools/pdbguid.py /mnt/Windows/System32/ntoskrnl.exe | grep Filename | cut -d' ' -f 2) -o $(REPO_ROOT)/profiles/windows.json ; \
+	# Every profile, the kernel's windows.json included, fetched over TLS: \
+	# pdbconv's own fetch is cleartext http (review M-1) \
 	python3 $(REPO_ROOT)/scripts/windows-symbol-profiles.py	--drakvuf $(REPO_ROOT)/drakvuf; \
 	umount /mnt; \
 	kpartx -d /dev/vg-root/windows; \
@@ -630,16 +792,40 @@ setup_hooks_windows:
 	INJECTION_PID=$$(vmi-process-list -d $$(xl domid windows_analysis_sandbox) -j $(REPO_ROOT)/profiles/windows.json \
 	    | grep -Eo "\[\s*[0-9]+\]\s*explorer\.exe" | cut -d']' -f1 | grep -Eo "[0-9]+"); \
 	echo "INJECTION_PID=$$INJECTION_PID"; \
-	xl save windows_analysis_sandbox $(REPO_ROOT)/state/windows_sandbox.bak $(REPO_ROOT)/misc/xen-vms/windows_sandbox.cfg; \
-	sed -Ei "s/INJECTION_PID_WINDOWS = .*/INJECTION_PID_WINDOWS = $$INJECTION_PID/g" $(REPO_ROOT)/sandboxd/config.py
+	# Exactly one number, or stop: an empty match used to be sed-edited into \
+	# sandboxd/config.py as `INJECTION_PID_WINDOWS = ` and the daemon no \
+	# longer imported; several lines (two explorer.exe) is an anchor injector \
+	# would silently attach to the wrong one of. Recorded in the untracked \
+	# env file since 2026-11-03, not in the tracked config. \
+	case "$$INJECTION_PID" in ''|*[!0-9]*) echo "explorer.exe not found exactly once in the process list (got '$$INJECTION_PID'); the anchor PID was NOT recorded" >&2; exit 1;; esac; \
+	if grep -q '^SANDBOXD_INJECTION_PID_WINDOWS=' /etc/sandboxd/sandboxd.env; then sed -i "s/^SANDBOXD_INJECTION_PID_WINDOWS=.*/SANDBOXD_INJECTION_PID_WINDOWS=$$INJECTION_PID/" /etc/sandboxd/sandboxd.env; else echo "SANDBOXD_INJECTION_PID_WINDOWS=$$INJECTION_PID" >> /etc/sandboxd/sandboxd.env; fi; \
+	# The save is the operator's, by hand (decision 2026-11-03): this target \
+	# used to run it here, two minutes after the domain came up, whether or \
+	# not the desktop was settled. Let the guest run at least 20 minutes \
+	# first: the saved state carries its uptime into every clone, and a \
+	# machine that has been up for two minutes is one of the first things a \
+	# sample checks. The PID above is the running explorer.exe, so the guest \
+	# must not be restarted between now and the save. \
+	echo "windows_analysis_sandbox is running with INJECTION_PID=$$INJECTION_PID recorded."; \
+	echo "Leave it running for AT LEAST 20 MINUTES before saving: every clone restores with this uptime, and a two-minute uptime is a sandbox tell samples check. Do not restart the guest. Then, by hand:"; \
+	echo "  xl save windows_analysis_sandbox $(REPO_ROOT)/state/windows_sandbox.bak $(REPO_ROOT)/misc/xen-vms/windows_sandbox.cfg"
 
 setup_hooks_ubuntu:
+	# The golden Ubuntu root is READ here, never written, and Dom0 never
+	# stays attached to the guest's LVM (2026-11-03). Until then both mounts
+	# were read-write -- journal replay and atime wrote to the golden volume
+	# every clone starts from, and Dom0's ext4 parsed guest-authored metadata
+	# with write access -- and a failed step left ubuntu-vg active on Dom0.
+	# `noload` skips the journal replay a read-only mount would still do; the
+	# trap detaches everything on any exit, in reverse order, quietly.
+	set -e; \
+	trap 'umount /mnt/boot 2>/dev/null; umount /mnt 2>/dev/null; lvchange -an ubuntu-vg/ubuntu-lv 2>/dev/null; vgchange -an ubuntu-vg 2>/dev/null; kpartx -d /dev/mapper/vg--root-ubuntu3 2>/dev/null; kpartx -d /dev/vg-root/ubuntu 2>/dev/null; true' EXIT; \
 	kpartx -a /dev/vg-root/ubuntu; \
 	kpartx -a /dev/mapper/vg--root-ubuntu3; \
 	vgchange -ay ubuntu-vg; \
 	lvchange -ay ubuntu-vg/ubuntu-lv; \
-	mount /dev/mapper/ubuntu--vg-ubuntu--lv /mnt; \
-	mount /dev/mapper/vg--root-ubuntu2 /mnt/boot/; \
+	mount -o ro,noload /dev/mapper/ubuntu--vg-ubuntu--lv /mnt; \
+	mount -o ro,noload /dev/mapper/vg--root-ubuntu2 /mnt/boot/; \
 	cd $(REPO_ROOT)/drakvuf/dwarf2json; \
 	go build; \
 	./dwarf2json linux --system-map /mnt/boot/System.map-*-generic --elf /mnt/usr/lib/debug/boot/vmlinux-*-generic > $(REPO_ROOT)/profiles/linux.json; \
@@ -681,6 +867,14 @@ setup_hooks_ubuntu:
 		> $(REPO_ROOT)/misc/xen-vms/ubuntu_sandbox.cfg; \
 	python3 $(XEN_IDENTITY) xl-cfg $(GUEST_FIRMWARE) >> $(REPO_ROOT)/misc/xen-vms/ubuntu_sandbox.cfg; \
 	xl create $(REPO_ROOT)/misc/xen-vms/ubuntu_sandbox.cfg; \
-	sleep 120; \
-	xl save ubuntu_analysis_sandbox $(REPO_ROOT)/state/ubuntu_sandbox.bak $(REPO_ROOT)/misc/xen-vms/ubuntu_sandbox.cfg; \
-	sed -Ei "s/INJECTION_PID_UBUNTU = .*/INJECTION_PID_UBUNTU = 1/g" $(REPO_ROOT)/sandboxd/config.py
+	# PID 1 by design (systemd); written to the env file like Windows's, \
+	# not sed-edited into sandboxd/config.py (2026-11-03). \
+	if grep -q '^SANDBOXD_INJECTION_PID_UBUNTU=' /etc/sandboxd/sandboxd.env; then sed -i "s/^SANDBOXD_INJECTION_PID_UBUNTU=.*/SANDBOXD_INJECTION_PID_UBUNTU=1/" /etc/sandboxd/sandboxd.env; else echo "SANDBOXD_INJECTION_PID_UBUNTU=1" >> /etc/sandboxd/sandboxd.env; fi; \
+	# The save is the operator's, by hand (decision 2026-11-03): this target \
+	# used to sleep 120 s and save whatever state the guest was in by then. \
+	# Let the guest run at least 20 minutes first: the saved state carries \
+	# its uptime into every clone, and a two-minute uptime is a sandbox tell. \
+	# Ubuntu anchors on PID 1, so nothing else needs the domain running. \
+	echo "ubuntu_analysis_sandbox is running."; \
+	echo "Leave it running for AT LEAST 20 MINUTES before saving: every clone restores with this uptime, and a two-minute uptime is a sandbox tell samples check. Then, by hand:"; \
+	echo "  xl save ubuntu_analysis_sandbox $(REPO_ROOT)/state/ubuntu_sandbox.bak $(REPO_ROOT)/misc/xen-vms/ubuntu_sandbox.cfg"

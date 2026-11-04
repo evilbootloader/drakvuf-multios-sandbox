@@ -23,6 +23,15 @@ ConditionPathExists=/proc/xen/capabilities
 [Service]
 Type=oneshot
 ExecStart=/usr/local/sbin/xl debug-keys d
+# The key only sets a flag and `xl debug-keys` exits 0 whatever Xen did with
+# it, so until 2026-11-03 this unit was "active (exited)" on a boot where the
+# compensation never came on -- xenstored late, a Xen without the patch -- and
+# every analysis ran in the detectable mode with no symptom anywhere. Xen
+# reports the switch in its log; the unit now FAILS unless it finds that line,
+# the same one evasion-tests/search_common.sh checks before a run, and
+# sandboxd logs a warning at startup if the boot line asked for rdtsc-poc=1
+# and the line is missing.
+ExecStartPost=/bin/sh -c '/usr/local/sbin/xl dmesg | grep -q "RDTSC_POC: compensation enabled"'
 RemainAfterExit=yes
 
 [Install]

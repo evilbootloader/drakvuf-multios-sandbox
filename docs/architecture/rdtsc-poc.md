@@ -40,6 +40,16 @@ vCPU slept returns the guest TSC.
 A compressed value is never below the guest's pvclock `tsc_timestamp`; below it
 a clock read would wrap decades forward.
 
+**RDTSCP keeps its third register.** Xen's own `EXIT_REASON_RDTSCP` case
+stores the vCPU's `IA32_TSC_AUX` in `RCX` and falls through into the
+`EXIT_REASON_RDTSC` case the patch changes, so a compensated read lands in
+`RAX:RDX` with `RCX` already set, exactly as an uncompensated intercept does.
+The 2026-11-02 review (M-15) read the patch's hunk on its own and reported
+`RCX` stale; the hunk's first context line is that fall-through
+(`xen/arch/x86/hvm/vmx/vmx.c`, 4.20.1). Its candidate check C-15, an `rdtscp`
+in a disposable clone printing `RCX`, is still a cheap confirmation on Dom0
+and has not been run.
+
 ### 1.1 Why the kernel keeps the real TSC
 
 The Linux guests run the `xen` clocksource and clockevent: the kernel turns the
@@ -112,6 +122,6 @@ detects.
 | | |
 |---|---|
 | Boot option | `rdtsc-poc=1` (`XEN_CMDLINE`) |
-| Turn on | `xl debug-keys d`, once per boot; `xen-rdtsc-poc.service` does it |
+| Turn on | `xl debug-keys d`, once per boot; `xen-rdtsc-poc.service` does it — and since 2026-11-03 **fails unless `xl dmesg` then shows `RDTSC_POC: compensation enabled`**, the line the searches check too. `xl debug-keys` exits 0 whatever Xen did, so before that the unit read "active (exited)" on a boot where the compensation never came on. `sandboxd` logs a warning at startup when the boot line carries `rdtsc-poc=1` and the line is missing |
 | Inspect | `xl debug-keys t; xl dmesg \| grep RDTSC_POC`: per vCPU the program timeline (`prog_reads`, `prog_compressed`, `prog_far`, `prog_slept`, `prog_lag`, `prog_pvclock`, `prog_max_hidden`, `prog_pure`) and the last red pill like pairs, each with host time, stolen time, guest run time, exits and the delta returned |
 | Tune | the `#define`s in `xen/arch/x86/hvm/vmx/vmx.c`: `RDTSC_USER_CLOSE`, `RDTSC_USER_LAG_MAX`, `RDTSC_USER_RIP_MAX`, `RDTSC_USER_EXE_LO`/`_HI`, `RDTSC_USER_PURE`, `RDTSC_KERNEL_ADJUST` (1 compresses kernel reads too, which freezes Linux guests) |

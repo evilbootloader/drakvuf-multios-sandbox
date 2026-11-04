@@ -120,16 +120,35 @@ DLL or driver — the `--json-*` table in `sandboxd/guests.py`
 (`SYMBOL_PROFILES`). Each is volatility3 `pdbconv.py` output for the exact
 binary in the golden image, keyed by the PDB GUID `tools/pdbguid.py` reads
 off it; `windows_symbols.md` has the kernel one and `tcpip.json` done by
-hand. `scripts/windows-symbol-profiles.py` does the whole table, on Dom0,
-with the golden Windows LV mounted read-only:
+hand. `scripts/windows-symbol-profiles.py` does the whole table, the kernel's
+`windows.json` included as its `windows` row, on Dom0, with the golden
+Windows LV mounted read-only:
 
 ```bash
 kpartx -a /dev/vg-root/windows
 mount -o ro /dev/mapper/vg--root-windows2 /mnt
-scripts/windows-symbol-profiles.py            # every row; or name stems: tcpip ntdll
+scripts/windows-symbol-profiles.py            # every row; or name stems: windows tcpip ntdll
 umount /mnt && kpartx -d /dev/vg-root/windows
 ```
 
+The script fetches each PDB itself, over TLS with the certificate verified,
+and hands `pdbconv.py` the file: `pdbconv.py`'s own fetch is cleartext
+`http://msdl.microsoft.com`, and volatility3's TLS path retries unverified
+after a certificate failure, so a substituted PDB would have become a
+profile that silently blinds every Windows hook (review M-1, 2026-11-03).
+
 Every row is attempted and the failures are summarised at the end; a row
 that fails leaves no file behind. Rerun after any Windows update in the
-golden image — the GUIDs change with the binaries.
+golden image — the GUIDs change with the binaries. The summary prints the
+SHA-256 of every PDB fetched and every profile written, and the rows for
+the table below.
+
+#### Recorded Windows profiles
+
+None yet: the profiles on Dom0 were produced before the script hashed
+anything. Paste the `profiles/README.md rows` block of the next run here,
+with its date, so a staged profile can be checked against the one that run
+produced.
+
+| File | SHA-256 | Size | PDB, GUID |
+|---|---|---|---|

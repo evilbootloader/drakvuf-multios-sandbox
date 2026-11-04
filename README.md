@@ -175,23 +175,40 @@ for general guidance on the tool itself.
 sudo su
 cd ~/path/to/repo/misc/xen-vms
 ssh-keygen # Don't add a password to the key
-# Update Makefile lines with the key between the quotes and the domain.
-# RSA_KEY	:= 
-# SANDBOX_WEB :=
+# Put this host's values in an UNTRACKED Makefile.local at the repository root.
+# The Makefile reads it first and every default yields to it. At least:
+#   RSA_KEY := ssh-ed25519 AAAA... root@dom0     # the PUBLIC key, one line
+#   SANDBOX_WEB := sandbox.example.com
+#   ANALYSIS_VM_USER := user                      # the analysis guests' user
+#   ANALYSIS_VM_PASS := ...
 cd ~/path/to/repo/
 make xen
 reboot
 make web_vm
 make web_sandbox
 make sandboxd
+# Runs `make win_installers` first: the installers the image gets (Chrome,
+# Acrobat Reader, 7-Zip, Python, .NET, the Office Deployment Tool) are
+# downloaded once into misc/iso/win-installers/ and verified against
+# automation/win-installers.list; the image installs them from the media and
+# downloads nothing else but Office. A hash mismatch refuses the build.
 make windows_analysis_vm
 
-# Connect through VNC. When it is completely installed shut it down through VNC, then run:
+# Connect through VNC (ssh -L 5900:127.0.0.1:5900 root@dom0, then localhost:5900).
+# When it is completely installed shut it down through VNC, then run:
 make setup_hooks_windows
+# The target leaves windows_analysis_sandbox running and prints the save
+# command. Let the guest run for AT LEAST 20 MINUTES first -- the saved state
+# carries its uptime into every clone, and a two-minute uptime is a sandbox
+# tell -- and do not restart it (the recorded injection PID is the running
+# explorer.exe). Then, by hand:
+xl save windows_analysis_sandbox state/windows_sandbox.bak misc/xen-vms/windows_sandbox.cfg
 
 make ubuntu_analysis_vm
-# Connect through VNC. When it is completely installed shut it down through VNC, then run:
+# Connect through VNC the same way. When it is completely installed shut it down through VNC, then run:
 make setup_hooks_ubuntu
+# Same rule: at least 20 minutes of uptime, then by hand:
+xl save ubuntu_analysis_sandbox state/ubuntu_sandbox.bak misc/xen-vms/ubuntu_sandbox.cfg
 
 # Run the sandbox with
 set -a; . /etc/sandboxd/sandboxd.env; set +a

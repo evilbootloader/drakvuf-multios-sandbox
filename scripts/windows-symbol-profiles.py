@@ -5,8 +5,13 @@
 profile per Windows DLL or driver its plugins hook, beside the kernel one.
 Each is volatility3 `pdbconv.py` output for the exact build of that binary in
 the golden image: `tools/pdbguid.py` reads the PDB GUID and name off the file,
-`pdbconv.py` fetches that PDB from Microsoft's symbol server and converts it.
+this script fetches that PDB from Microsoft's symbol server over TLS with the
+certificate verified, and `pdbconv.py` converts the file. The kernel's own
+profile, `windows.json`, is the `windows` row and is produced by default.
 `windows_symbols.md` has the two done by hand; this does the whole table.
+
+The summary prints the SHA-256 of every PDB fetched and every profile written,
+and a row per profile for the table in `profiles/README.md`.
 
 Run on Dom0, as root, with the golden Windows LV mounted read-only:
 
@@ -37,11 +42,16 @@ after a Windows update, and restore them to guests.py if they succeed.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import os
 import re
 import shlex
+import ssl
 import subprocess
 import sys
+import tempfile
+import urllib.error
+import urllib.request
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -69,6 +79,18 @@ PROFILES: tuple[tuple[str, str, str], ...] = (
     ("--json-ndis",         "ndis.json",        "Windows/System32/drivers/ndis.sys"),
     ("--json-services",     "services.json",    "Windows/System32/services.exe"),
 )
+
+#: The kernel's profile, the one DRAKVUF takes as `-r`. Kept out of PROFILES,
+#: which test_guests.py holds equal to guests.py's `--json-*` table.
+KERNEL: tuple[str, str, str] = ("-r", "windows.json", "Windows/System32/ntoskrnl.exe")
+
+#: Where the PDBs come from, over TLS with the certificate verified, and no
+#: unverified retry. volatility3's own PdbRetreiver fetches in the clear from
+#: http://msdl.microsoft.com, and where it does use TLS, resources.py retries
+#: with CERT_NONE after a verification failure. A substituted PDB would turn
+#: into a profile that silently blinds every Windows hook, so pdbconv.py is
+#: handed the file this fetched instead (review M-1, 2026-11-03).
+SYMBOL_SERVER = "https://msdl.microsoft.com/download/symbols"
 
 # Where the evidence in windows_symbols.md found them.
 DEFAULT_MOUNT = Path("/mnt")
@@ -174,18 +196,49 @@ def pdb_identity(drakvuf: Path, binary: Path) -> tuple[str, str]:
     return guid.group(1), name.group(1).replace("\\", "/").rsplit("/", 1)[-1]
 
 
-def convert(drakvuf: Path, guid: str, pdb: str, out: Path) -> None:
-    """Fetch `pdb` by `guid` and write the profile to `out`, atomically."""
+def fetch_pdb(guid: str, pdb: str, dest: Path) -> str:
+    """Download `pdb` for `guid` into `dest`; return the file's SHA-256."""
+    url = f"{SYMBOL_SERVER}/{pdb}/{guid}/{pdb}"
+    print(f"+ fetch {url}", flush=True)
+    digest = hashlib.sha256()
+    try:
+        with (urllib.request.urlopen(url, context=ssl.create_default_context(),
+                                     timeout=300) as resp,
+              open(dest, "wb") as fh):
+            while chunk := resp.read(1 << 20):
+                fh.write(chunk)
+                digest.update(chunk)
+    except urllib.error.HTTPError as e:
+        if e.code == 404:
+            raise RuntimeError(
+                f"the symbol server has no {pdb} for {guid} (a compressed .pd_ "
+                "may exist there, which pdbconv.py cannot read)") from None
+        raise RuntimeError(f"fetching {url}: HTTP {e.code}") from None
+    except urllib.error.URLError as e:
+        # A failed certificate verification lands here too; it is final
+        raise RuntimeError(f"fetching {url}: {e.reason}") from None
+    if dest.stat().st_size == 0:
+        raise RuntimeError(f"{url} was empty")
+    return digest.hexdigest()
+
+
+def convert(drakvuf: Path, guid: str, pdb: str, out: Path) -> tuple[str, str]:
+    """Fetch `pdb` by `guid`, convert it, write the profile to `out`
+    atomically; return the PDB's and the profile's SHA-256."""
     part = out.with_name(out.name + ".part")
     try:
-        run([sys.executable, str(drakvuf / PDBCONV),
-             "--guid", guid, "-p", pdb, "-o", str(part)],
-            env=volatility_environment(drakvuf))
+        with tempfile.TemporaryDirectory(prefix="pdb-") as tmp:
+            pdb_file = Path(tmp) / pdb
+            pdb_sha = fetch_pdb(guid, pdb, pdb_file)
+            run([sys.executable, str(drakvuf / PDBCONV),
+                 "-f", str(pdb_file), "-p", pdb, "-o", str(part)],
+                env=volatility_environment(drakvuf))
         if not part.is_file() or part.stat().st_size == 0:
             raise RuntimeError("pdbconv.py exited 0 but wrote nothing")
         os.replace(part, out)
     finally:
         part.unlink(missing_ok=True)
+    return pdb_sha, hashlib.sha256(out.read_bytes()).hexdigest()
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -206,11 +259,11 @@ def main(argv: list[str] | None = None) -> int:
                         help="print the commands without running them")
     args = parser.parse_args(argv)
 
-    known = {row[1].removesuffix(".json"): row for row in PROFILES}
+    known = {row[1].removesuffix(".json"): row for row in (KERNEL, *PROFILES)}
     unknown = [n for n in args.names if n not in known]
     if unknown:
         parser.error(f"not in the table: {', '.join(unknown)}; rows are {', '.join(known)}")
-    rows = [known[n] for n in args.names] if args.names else list(PROFILES)
+    rows = [known[n] for n in args.names] if args.names else [KERNEL, *PROFILES]
 
     for tool in (PDBGUID, PDBCONV):
         if not (args.drakvuf / tool).is_file():
@@ -228,6 +281,7 @@ def main(argv: list[str] | None = None) -> int:
         args.out.mkdir(parents=True, exist_ok=True)
 
     results: list[tuple[str, str]] = []
+    recorded: list[tuple[str, str, int, str, str]] = []
     for option, name, relpath in rows:
         print(f"\n=== {option} -> {name}", flush=True)
         binary = locate(args.mount, relpath)
@@ -236,15 +290,16 @@ def main(argv: list[str] | None = None) -> int:
             continue
         if args.dry_run:
             print("+ " + shlex.join([sys.executable, str(args.drakvuf / PDBGUID), str(binary)]))
+            print(f"+ fetch {SYMBOL_SERVER}/<Filename>/<GUID>/<Filename>")
             print("+ " + shlex.join(["env", "PYTHONPATH=" + volatility_environment(args.drakvuf)["PYTHONPATH"],
                                      sys.executable, str(args.drakvuf / PDBCONV),
-                                     "--guid", "<GUID>", "-p", "<Filename>",
+                                     "-f", "<fetched PDB>", "-p", "<Filename>",
                                      "-o", str(args.out / name)]))
             results.append((name, f"dry run, from {binary}"))
             continue
         try:
             guid, pdb = pdb_identity(args.drakvuf, binary)
-            convert(args.drakvuf, guid, pdb, args.out / name)
+            pdb_sha, profile_sha = convert(args.drakvuf, guid, pdb, args.out / name)
         except subprocess.CalledProcessError as e:
             # The tool's own stderr went straight through above.
             results.append((name, f"FAILED: {Path(e.cmd[1]).name} exited {e.returncode}"))
@@ -253,12 +308,18 @@ def main(argv: list[str] | None = None) -> int:
             results.append((name, f"FAILED: {e}"))
             continue
         size = (args.out / name).stat().st_size
-        results.append((name, f"ok  {guid} {pdb}  {size / 1e6:.1f} MB"))
+        print(f"sha256 {pdb_sha}  {pdb}\nsha256 {profile_sha}  {name}")
+        results.append((name, f"ok  {guid} {pdb}  {size / 1e6:.1f} MB  {profile_sha}"))
+        recorded.append((name, profile_sha, size, guid, pdb))
 
     width = max(len(name) for name, _ in results)
     print("\n=== summary")
     for name, outcome in results:
         print(f"{name:<{width}}  {outcome}")
+    if recorded:
+        print("\n=== profiles/README.md rows: the profile's SHA-256; the PDB's is printed above it")
+        for name, sha, size, guid, pdb in recorded:
+            print(f"| `{name}` | `{sha}` | {size} | `{pdb}` {guid} |")
     failed = sum(outcome.startswith("FAILED") for _, outcome in results)
     if failed:
         print(f"\n{failed} of {len(results)} failed", flush=True)

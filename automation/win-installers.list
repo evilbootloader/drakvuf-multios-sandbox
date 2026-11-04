@@ -1,0 +1,29 @@
+# The installers the Windows golden image gets (misc/xen-vms/autounattend.xml,
+# "Software installs"), vendored into the modified ISO by `make win_installers`.
+#
+# One per line: <file>  <sha256>  <url>. The target downloads each file ONCE
+# into misc/iso/win-installers/ and verifies it with `sha256sum -c` before any
+# image is built from it -- the check the Windows ISO already had, extended to
+# what the answer file used to fetch at install time with no check at all.
+# A mismatch refuses the build. It is never skipped: re-pin on purpose, by
+# changing the hash here after looking at what changed, not by deleting it.
+#
+# Hashes recorded 2026-11-03 from what each vendor served that day, from the
+# development container. The first `make win_installers` on Dom0 is the
+# independent confirmation; a mismatch THERE means one of the two downloads got
+# something else and the file must not be used until that is understood.
+#
+# Chrome has no versioned download URL, so its line pins today's file and a
+# vendor update shows up as a refused build. .NET 4.8 and .NET 8 are pinned to
+# the versioned files the vendors' redirects resolved to on that day (the
+# runtime is 8.0.33); 7-Zip, Python, Acrobat Reader and the Office Deployment
+# Tool were versioned already. Office itself is not here: the Deployment Tool
+# downloads it from Microsoft's CDN by design.
+googlechromestandaloneenterprise64.msi  ecf1b28bf4e8e8b3434a844eb915118935e6525768efe3dbe622c2a20cba9ec9  https://dl.google.com/dl/chrome/install/googlechromestandaloneenterprise64.msi
+AcroRdrDCx642100720099_MUI.exe  591b458bf74e7cc0bd14f98f160ead20ad6c8d74d326fcb1faed94aa16dce164  https://ardownload2.adobe.com/pub/adobe/acrobat/win/AcrobatDC/2100720099/AcroRdrDCx642100720099_MUI.exe
+7z2408-x64.exe  67cb9d3452c9dd974b04f4a5fd842dbcba8184f2344ff72e3662d7cdb68b099b  https://www.7-zip.org/a/7z2408-x64.exe
+python-3.12.0-amd64.exe  c6bdf93f4b2de6dfa1a3a847e7c24ae10edf7f6318653d452cd4381415700ada  https://www.python.org/ftp/python/3.12.0/python-3.12.0-amd64.exe
+ndp48-x86-x64-allos-enu.exe  0a3a390c47e639d0f7fc65b21195fee6b7f65b066f80f70c60fab191d14b7e40  https://download.microsoft.com/download/f/3/a/f3a6af84-da23-40a5-8d1c-49cc10c8e76f/NDP48-x86-x64-AllOS-ENU.exe
+dotnet-runtime-8.0-win-x64.exe  00ae8b7bab1e8de69162aebbcc518789ccdcad1bd98aff4f08556812604867ea  https://builds.dotnet.microsoft.com/dotnet/Runtime/8.0.33/dotnet-runtime-8.0.33-win-x64.exe
+dotnet-runtime-8.0-win-x86.exe  dfbf5dca6a6c37a1ee316e37227f2aaa6e0be3a42305534636ad8e2c6c980294  https://builds.dotnet.microsoft.com/dotnet/Runtime/8.0.33/dotnet-runtime-8.0.33-win-x86.exe
+officedeploymenttool_20228-20124.exe  92a3cbd56191533e36bde1c6e4640883c900c00d1b5d43a974c870893681e0d4  https://download.microsoft.com/download/6c1eeb25-cf8b-41d9-8d0d-cc1dbc032140/officedeploymenttool_20228-20124.exe
