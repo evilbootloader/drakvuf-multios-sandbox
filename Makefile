@@ -77,8 +77,22 @@ PLATFORM_SHA ?= $(shell git -C $(REPO_ROOT) rev-parse HEAD)
 # names each file, its SHA-256 and where it comes from.
 WIN_INSTALLERS := $(REPO_ROOT)/misc/iso/win-installers
 WIN_INSTALLERS_LIST := $(REPO_ROOT)/automation/win-installers.list
+# The installers' mirror (2026-11-04): a static directory the platform's nginx
+# serves to Dom0 over the internal CA, automation/win-installers-mirror.conf.
+# `win_installers` fetches each file from here first and from the vendor's URL
+# only when the mirror has no such file or is not there yet; the hash check is
+# the same either way. `win_installers_mirror` publishes Dom0's verified cache
+# to it. Why: Chrome's URL is an unversioned redirect, and the first Dom0 run
+# refused the build one day after the pin because Google had shipped a release
+# in between (docs/TROUBLESHOOTING.md, "make win_installers refuses the
+# build"). With the mirror, what the image gets is what this lab verified
+# once, not what a vendor serves today. Empty disables it.
+INSTALLERS_MIRROR ?= https://$(VMIP):9100/win-installers
+INSTALLERS_MIRROR_CA ?= /etc/sandboxd/tls/ca.crt
+INSTALLERS_MIRROR_DIR := /srv/vendor/win-installers
+INSTALLERS_MIRROR_CONF := $(REPO_ROOT)/automation/win-installers-mirror.conf
 
-.PHONY: xen web_vm web_sandbox sandboxd
+.PHONY: xen web_vm web_sandbox sandboxd win_installers win_installers_mirror
 
 xen:
 	@echo "Building and installing Xen with the altp2m deadlock fix and RDTSC compensation, then reboot into it"
@@ -665,13 +679,63 @@ win_installers:
 	# SYSTEM; whatever those hosts served that day became the trust root of
 	# every Windows clone, and no two builds of the image were the same. A
 	# hash mismatch refuses the build; the fix is to look, then re-pin.
+	#
+	# The mirror first, the vendor second (2026-11-04). A file the mirror does
+	# not have -- a fresh lab, a newly added installer -- comes from the vendor
+	# and is verified the same way; `win_installers_mirror` then publishes it.
+	# wget's exit code decides, not its silence (review 2026-11-04, item 3):
+	# 8 is the mirror answering without the file and 4 is no mirror to answer,
+	# both the normal case before it exists, so they fall back to the vendor
+	# and say which; 5 is a certificate that did not verify against the CA,
+	# which is a misconfigured or tampered mirror and STOPS the run rather
+	# than quietly detouring around it. --no-config so that no wgetrc on Dom0
+	# can turn the verification off. A .part left by a refused fetch is removed
+	# before the vendor's download, so a 404 body can never be renamed into
+	# place.
 	set -e; \
 	mkdir -p $(WIN_INSTALLERS); \
 	grep -vE '^\s*(#|$$)' $(WIN_INSTALLERS_LIST) | while read -r file sha url; do \
 	  if [ ! -f "$(WIN_INSTALLERS)/$$file" ]; then \
-	    wget -O "$(WIN_INSTALLERS)/$$file.part" "$$url" && mv "$(WIN_INSTALLERS)/$$file.part" "$(WIN_INSTALLERS)/$$file"; \
+	    rm -f "$(WIN_INSTALLERS)/$$file.part"; rc=0; \
+	    if [ -n "$(INSTALLERS_MIRROR)" ] && [ -r "$(INSTALLERS_MIRROR_CA)" ]; then \
+	      wget -q --no-config --ca-certificate="$(INSTALLERS_MIRROR_CA)" -O "$(WIN_INSTALLERS)/$$file.part" "$(INSTALLERS_MIRROR)/$$file" || rc=$$?; \
+	    else rc=4; fi; \
+	    case "$$rc" in \
+	      0) echo "$$file: from the mirror";; \
+	      5) echo "$$file: the mirror's certificate did not verify against $(INSTALLERS_MIRROR_CA). NOT falling back to the vendor: a mirror that is there and fails TLS is a stop, not a detour" >&2; exit 1;; \
+	      8) rm -f "$(WIN_INSTALLERS)/$$file.part"; echo "$$file: not on the mirror (HTTP error), from the vendor: $$url"; wget -O "$(WIN_INSTALLERS)/$$file.part" "$$url";; \
+	      *) rm -f "$(WIN_INSTALLERS)/$$file.part"; echo "$$file: mirror unreachable or unset (wget exit $$rc), from the vendor: $$url"; wget -O "$(WIN_INSTALLERS)/$$file.part" "$$url";; \
+	    esac; \
+	    mv "$(WIN_INSTALLERS)/$$file.part" "$(WIN_INSTALLERS)/$$file"; \
 	  fi; \
 	  echo "$$sha  $(WIN_INSTALLERS)/$$file" | sha256sum -c -; \
+	done
+
+win_installers_mirror: win_installers
+	# Publishes the verified cache to the platform's mirror (2026-11-04):
+	# every file is checked against the list again, copied to a .part name,
+	# renamed into place, and the nginx listener installed or refreshed from
+	# automation/win-installers-mirror.conf. Then every file is fetched back
+	# THROUGH the mirror and hashed, so a mirror that serves the wrong thing,
+	# or nothing, fails here and not in the next Windows build. LAN only: the
+	# tunnel's ingress names 8000 and 9000 and nothing else. The ssh inside
+	# the loop is `ssh -n` (review 2026-11-04, item 1): without it ssh drains
+	# the loop's stdin, the rest of the list, and only the first file is
+	# published -- evasion-tests/search_common.sh met the same thing.
+	set -e; \
+	test -n "$(INSTALLERS_MIRROR)" || { echo "INSTALLERS_MIRROR is empty: nothing to publish to" >&2; exit 1; }; \
+	test -r "$(INSTALLERS_MIRROR_CA)" || { echo "$(INSTALLERS_MIRROR_CA) is not readable: run make sandboxd first, it installs the CA Dom0 verifies the mirror with" >&2; exit 1; }; \
+	ssh root@$(VMIP) 'install -d -m 755 -o root -g root $(INSTALLERS_MIRROR_DIR)'; \
+	grep -vE '^\s*(#|$$)' $(WIN_INSTALLERS_LIST) | while read -r file sha url; do \
+	  echo "$$sha  $(WIN_INSTALLERS)/$$file" | sha256sum -c - >/dev/null; \
+	  scp -q "$(WIN_INSTALLERS)/$$file" "root@$(VMIP):$(INSTALLERS_MIRROR_DIR)/$$file.part"; \
+	  ssh -n root@$(VMIP) "chmod 644 '$(INSTALLERS_MIRROR_DIR)/$$file.part' && mv '$(INSTALLERS_MIRROR_DIR)/$$file.part' '$(INSTALLERS_MIRROR_DIR)/$$file'"; \
+	  echo "$$file: published"; \
+	done; \
+	sed -e 's|@VMIP@|$(VMIP)|g' -e 's|@MIRROR_DIR@|$(INSTALLERS_MIRROR_DIR)|g' $(INSTALLERS_MIRROR_CONF) | ssh root@$(VMIP) 'cat > /etc/nginx/conf.d/win-installers-mirror.conf && nginx -t && systemctl reload nginx'; \
+	grep -vE '^\s*(#|$$)' $(WIN_INSTALLERS_LIST) | while read -r file sha url; do \
+	  if wget -q --no-config --ca-certificate="$(INSTALLERS_MIRROR_CA)" -O - "$(INSTALLERS_MIRROR)/$$file" | sha256sum | grep -q "^$$sha "; then echo "$$file: served by the mirror, hash verified"; \
+	  else echo "$$file: the mirror serves something else, or nothing" >&2; exit 1; fi; \
 	done
 
 windows_analysis_vm: win_installers

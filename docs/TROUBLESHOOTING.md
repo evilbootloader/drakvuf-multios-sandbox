@@ -1755,6 +1755,136 @@ marked as read only"* — the deploy key is intentionally read-only.
 commit from. Inspect and discard local changes there rather than merging around
 them.
 
+### `git reset --hard origin/master` on Dom0 refused: a cfg is `not uptodate`
+
+**Symptom.** On Dom0, `git reset --hard origin/master` stops with
+
+```
+error: Entry 'misc/xen-vms/ubuntu.cfg' not uptodate. Cannot merge.
+fatal: Could not reset index file to revision 'origin/master'.
+```
+
+although `git status` never listed that file as modified, before or after.
+Hit 2026-11-04, the first step of `deploy-with-makefile.md`.
+
+**Cause.** The four cfgs the Makefile writes — `misc/xen-vms/ubuntu.cfg`,
+`ubuntu_sandbox.cfg`, `windows.cfg`, `windows_sandbox.cfg` — carry git's
+**skip-worktree** bit in Dom0's index (`git ls-files -v` prints them with an
+`S`). The bit makes `git status` and `git diff` ignore the working-tree copy,
+which is how the tree looked clean while every `make *_analysis_vm` and
+`make setup_hooks_*` rewrote those files. `reset --hard` normally overwrites a
+modified file without comment, but git's up-to-date check is only bypassed for
+ordinary entries: a skip-worktree (or assume-unchanged) entry whose
+working-tree content differs from the index, and whose content differs between
+the two commits, is refused with exactly this message. Here both held: the
+tracked copies changed on 2026-11-03 (`vnclisten` to loopback), and Dom0's
+copies differ from them anyway, because **the tracked files are stale against
+the Makefile** — `shadow_memory = 32` tracked, `128` written; `ubuntu.cfg`
+and `windows.cfg` tracked with 4096–6144 MiB and 2 vCPUs, written with 8192
+and 4 — and because the Makefile writes **the deployment's identity** into
+them (`scripts/xen-identity.py xl-cfg`): the guest's `mac=`, `smbios`,
+`smbios_firmware`, `acpi_firmware`, `xen_platform_pci = 0`,
+`device_model_args_hvm`, lines the tracked copies have never had. That gap is
+what the bit was hiding.
+
+**`git diff` lies about a skip-worktree file.** `git diff origin/master --
+misc/xen-vms/ubuntu_sandbox.cfg` on Dom0 showed one line, `shadow_memory`,
+because it compared the **index** copy with `origin/master`; the file on disk,
+written by `make setup_hooks_ubuntu` on 2026-11-02, also carried the six
+identity lines. Read the file, not the diff, before deciding what a reset will
+cost.
+
+**Fix.** Clear the bit on the four files, keep a copy of Dom0's versions, then
+reset:
+
+```bash
+# DOM0
+cd /root/drakvuf-multios-sandbox && git ls-files -v | grep -v '^H ' && git update-index --no-skip-worktree misc/xen-vms/ubuntu.cfg misc/xen-vms/ubuntu_sandbox.cfg misc/xen-vms/windows.cfg misc/xen-vms/windows_sandbox.cfg && git ls-files -v | grep -c '^S '
+```
+
+Expect the four `S` lines, then `0`. `deploy-with-makefile.md` §1.1 has the
+reset that follows — a mixed reset and a checkout, because `reset --hard`
+would also have deleted `.venv-sandboxd/` and `misc/iso/cidata/user-data`,
+tracked only by Dom0's local commits — and then puts Dom0's copies of the two
+clone templates back: the saved states of 2026-11-02 were made with them, and
+a clone restored under the tracked `shadow_memory = 32`, without the identity
+lines, is an experiment nobody has run. The two files then show as modified,
+and that is the honest state. Do not set the bit again, and **do not commit
+them**: the identity is per deployment and unpublished by design
+(`docs/architecture/guest-identity.md`), and these two files are the only
+place it appears outside `state/`. The tracked copies have to be brought to
+the Makefile's values, or the Makefile has to write somewhere untracked; that
+decision is open in the same runbook.
+
+### A `make web_vm` domain drops to the initramfs shell: its root label does not exist
+
+**Symptom.** The domain `make web_vm` created is in `xl list` but never
+answers ssh (`No route to host`). On its console (`xl console <VM>`) the
+initramfs ends with `Gave up waiting for root file system device` and
+`ALERT!  LABEL=<VM>-root does not exist.  Dropping to a shell!`. Hit
+2026-11-04 with `VM=platform-test`, the throwaway of
+`deploy-with-makefile.md` §3b.
+
+**Cause.** An ext4 label is **16 bytes**. `web_vm` labels the two
+filesystems `<VM>-root` and `<VM>-data`, and writes `root=LABEL=<VM>-root`
+into the cfg's `extra` and both labels into the DomU's fstab. For a `VM`
+longer than 11 characters `mkfs.ext4 -L` truncates the label —
+`platform-test-root` became `platform-test-ro`, `platform-test-data` became
+`platform-test-da` — and says so once, `Warning: label too long; will be
+truncated to '...'`, early in a few thousand lines of debootstrap output. The
+recipe does not check it, and the domain is created anyway. The default
+`platform` is 8 characters and never hits this.
+
+**Fix.** A `VM` of at most 11 characters; the retry used `ptest`. Destroy the
+half-built domain and remove its two volumes by hand first (the runbook's 3b
+has the block). Candidate for the recipe: refuse a `VM` longer than 11
+characters before the first `lvcreate`, or compare `e2label` with the intended
+label after each `mkfs.ext4`.
+
+### `make win_installers` refuses the build: an installer's checksum did not match
+
+**Symptom.** `make windows_analysis_vm` (which runs `win_installers` first)
+downloads an installer and stops:
+
+```
+/root/drakvuf-multios-sandbox/misc/iso/win-installers/googlechromestandaloneenterprise64.msi: FAILED
+sha256sum: WARNING: 1 computed checksum did NOT match
+make: *** [Makefile:660: win_installers] Error 1
+```
+
+Hit 2026-11-04 on the first Dom0 run of the target, one day after the pins in
+`automation/win-installers.list` were recorded.
+
+**Cause.** The list pins each installer's SHA-256, and Chrome's URL is an
+unversioned redirect that serves whatever Google's current release is. Google
+had replaced the file at 21:21 UTC on 2026-11-03 (`curl -sI`'s
+`Last-Modified`), after the pin was taken that day, so the first Dom0
+download got the newer release. That is the refusal working as designed: the
+file is not used until the difference is understood. **The downloaded file
+stays on disk**, so a re-run does not download again; it only re-checks, and
+keeps failing until the hash is re-pinned or the file is deleted.
+
+**Fix.** Understand first, then re-pin — never skip the check. What "understand"
+meant here: download the same URL on a second machine the same day and compare
+(`sha256sum` and size equal on Dom0 and in the development container:
+`55edacd3…`, 171,970,560 bytes), check the vendor's `Last-Modified` against the
+pin's date, and read the file's embedded version strings (`strings -n 8 … |
+grep -E '^1[0-9]{2}\.0\.[0-9]{4}\.[0-9]{1,3}$'`). No Authenticode check is
+available on Dom0 or in the container. Then change the hash in the list, with a
+dated comment, and run the target again: it re-checks the file on disk and
+goes on to the next installer. Until the commit carrying the new pin reaches
+Dom0, the same one-line change there by hand (`git status` then shows the list
+modified; `git checkout -- automation/win-installers.list` after the pull).
+
+**The lasting fix, decided the same day: the lab's own mirror.** `make
+win_installers_mirror` publishes Dom0's verified cache to a static directory
+the platform's nginx serves on 9100 over the internal CA
+(`automation/win-installers-mirror.conf`), and `win_installers` fetches from
+there first, from the vendor only for a file the mirror lacks, with the same
+hash check either way. A vendor's release then changes nothing until someone
+re-pins on purpose. The first lab, and any newly added installer, still meets
+the vendor once; that is where the refusal above belongs.
+
 ### `sandboxd` stopped claiming after the mTLS listener was disabled
 
 **Symptom.** Every queued job stays `queued`. The platform is healthy, the UI

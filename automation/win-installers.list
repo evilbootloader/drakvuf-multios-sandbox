@@ -14,12 +14,25 @@
 # something else and the file must not be used until that is understood.
 #
 # Chrome has no versioned download URL, so its line pins today's file and a
-# vendor update shows up as a refused build. .NET 4.8 and .NET 8 are pinned to
+# vendor update shows up as a refused build. That happened on the first Dom0
+# run, 2026-11-04: Google's file had changed at 21:21 UTC on 2026-11-03
+# (its Last-Modified), after the pin, and `make win_installers` refused.
+# Re-pinned 2026-11-04 to the file Google served that day, downloaded on Dom0
+# and in the development container, 171,970,560 bytes both, same sha256;
+# its embedded version strings read 157.0.8089.0. No Authenticode check was
+# possible here (no osslsigncode); two downloads agreeing is the confirmation
+# this file's scheme provides. docs/TROUBLESHOOTING.md, "make win_installers
+# refuses the build". Since that day the target fetches from the lab's own
+# mirror first (INSTALLERS_MIRROR in the Makefile, published by `make
+# win_installers_mirror`), and the vendor URL below is where a file comes from
+# when the mirror has none -- and the provenance of the hash beside it. A
+# vendor's release then changes nothing until someone re-pins on purpose.
+# .NET 4.8 and .NET 8 are pinned to
 # the versioned files the vendors' redirects resolved to on that day (the
 # runtime is 8.0.33); 7-Zip, Python, Acrobat Reader and the Office Deployment
 # Tool were versioned already. Office itself is not here: the Deployment Tool
 # downloads it from Microsoft's CDN by design.
-googlechromestandaloneenterprise64.msi  ecf1b28bf4e8e8b3434a844eb915118935e6525768efe3dbe622c2a20cba9ec9  https://dl.google.com/dl/chrome/install/googlechromestandaloneenterprise64.msi
+googlechromestandaloneenterprise64.msi  55edacd348b4c1c9b291dab19e4665929c7a127c013d9625970be924f893273f  https://dl.google.com/dl/chrome/install/googlechromestandaloneenterprise64.msi
 AcroRdrDCx642100720099_MUI.exe  591b458bf74e7cc0bd14f98f160ead20ad6c8d74d326fcb1faed94aa16dce164  https://ardownload2.adobe.com/pub/adobe/acrobat/win/AcrobatDC/2100720099/AcroRdrDCx642100720099_MUI.exe
 7z2408-x64.exe  67cb9d3452c9dd974b04f4a5fd842dbcba8184f2344ff72e3662d7cdb68b099b  https://www.7-zip.org/a/7z2408-x64.exe
 python-3.12.0-amd64.exe  c6bdf93f4b2de6dfa1a3a847e7c24ae10edf7f6318653d452cd4381415700ada  https://www.python.org/ftp/python/3.12.0/python-3.12.0-amd64.exe
