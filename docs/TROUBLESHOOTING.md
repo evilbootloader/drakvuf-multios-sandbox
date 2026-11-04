@@ -1914,6 +1914,34 @@ Candidate: skip `preconfig.log` (and any other non-plugin log the stages
 write) in the indexer's glob, and log a skipped file at DEBUG. Until then,
 three of these per job are noise, and a fourth is not.
 
+### `make setup_hooks_ubuntu` ends with `Error 32` after every step succeeded
+
+**Symptom.** The target writes `profiles/linux.json`, creates
+`ubuntu_sandbox`, writes the cfg, boots `ubuntu_analysis_sandbox`, records
+`SANDBOXD_INJECTION_PID_UBUNTU=1`, prints its two closing lines with the
+`xl save` command — and `make` ends with
+`make: *** [Makefile:878: setup_hooks_ubuntu] Error 32`. Hit three times on
+2026-11-04, the first day the target ran as written. The same `32` shows
+when a step really fails (a run against an existing `ubuntu_sandbox` failed
+at `lvcreate` and still said 32), so the code tells nothing.
+
+**Cause.** The recipe sets `set -e` and an EXIT trap that detaches the golden
+volume's mounts and mappings, each command with `2>/dev/null`, ending in
+`true`. The trap runs under the recipe's `set -e`: on a run that had already
+unmounted and detached everything in order, the trap's first command,
+`umount /mnt/boot`, exits 32 (not mounted), `set -e` ends the trap there,
+and 32 becomes the shell's exit status. The `true` at the end was never
+reached, and on a real failure the trap's 32 replaced the real code.
+
+**Fix.** `set +e` as the trap's first command (Makefile, 2026-11-04), so
+every detach runs and the recipe's own status is what `make` reports. A
+`32` from a Makefile without that is a false failure if the two closing
+lines were printed: check `xl list`, `profiles/linux.json` and the env file
+before doing anything, and do not re-run the target over a running
+`ubuntu_analysis_sandbox` — the second run fails at `lvcreate` because the
+snapshot exists, and the third, after an `lvremove`, makes a new snapshot
+and a new domain, so the twenty minutes of uptime start again.
+
 ### `sandboxd` stopped claiming after the mTLS listener was disabled
 
 **Symptom.** Every queued job stays `queued`. The platform is healthy, the UI

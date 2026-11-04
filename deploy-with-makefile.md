@@ -2333,8 +2333,51 @@ it once with `make modify_ubuntu` to check the desktop logs in as
 `ANALYSIS_VM_USER`, and shut it down from inside.
 
 ```
-EVIDENCE 6c-install
+EVIDENCE 6c-install                                               2026-11-04
+root@dom0:~/drakvuf-multios-sandbox# B=/srv/drakvuf-out/backup-$(date +%Y%m%d); mkdir -p $B; xl destroy ubuntu_analysis 2>/dev/null; xl destroy ubuntu_analysis_sandbox 2>/dev/null; lvremove -y vg-root/ubuntu_sandbox vg-root/ubuntu && mv /root/drakvuf-multios-sandbox/state/ubuntu_sandbox.bak $B/ubuntu_sandbox.bak.removed; lvs --noheadings -o lv_name vg-root | tr -d ' ' | grep -cxE 'ubuntu|ubuntu_sandbox'
+  Consider pruning vg-root VG archive with more then 120 MiB in 15018 files (check archiving is needed in lvm.conf).
+  Consider pruning vg-root VG archive with more then 120 MiB in 15019 files (check archiving is needed in lvm.conf).
+  Logical volume "ubuntu" successfully removed.
+  Failed to find logical volume "vg-root/ubuntu_sandbox"
+0
+root@dom0:~/drakvuf-multios-sandbox# cd /root/drakvuf-multios-sandbox && make ubuntu_analysis_vm 2>&1 | tee /root/make-ubuntu_analysis_vm-$(date +%Y%m%d-%H%M).log | tail -25; xl list; grep -cE '^(kernel|ramdisk|extra)' misc/xen-vms/ubuntu.cfg; git status --short misc/
+Installing ubuntu analysis VM
+
+WARNING: apt does not have a stable CLI interface. Use with caution in scripts.
+
+Reading package lists...
+Building dependency tree...
+Reading state information...
+cloud-image-utils is already the newest version (0.33-1).
+wget is already the newest version (1.21.4-1ubuntu4.5).
+0 upgraded, 0 newly installed, 0 to remove and 11 not upgraded.
+/root/drakvuf-multios-sandbox/misc/iso/ubuntu-22.04.5-live-server-amd64.iso: OK
+mount: /mnt: WARNING: source write-protected, mounted read-only.
+Wrote /root/drakvuf-multios-sandbox/state/firmware/smbios.bin and /root/drakvuf-multios-sandbox/state/firmware/ssdt.aml
+  WARNING: Sum of all thin volume sizes (4.62 TiB) exceeds the size of thin pool vg-root/thinpool and the size of whole volume group (<1.82 TiB).
+  Consider pruning vg-root VG archive with more then 120 MiB in 15020 files (check archiving is needed in lvm.conf).
+  Consider pruning vg-root VG archive with more then 120 MiB in 15021 files (check archiving is needed in lvm.conf).
+  Logical volume "ubuntu" created.
+Parsing config from /root/drakvuf-multios-sandbox/misc/xen-vms/ubuntu.cfg
+Name                                        ID   Mem VCPUs    State    Time(s)
+Domain-0                                     0  8192     6     r-----    2748.0
+platform                                     1  4096     4     -b----     196.4
+ubuntu_analysis                             13  8192     1     ------       0.0
+0
+ M misc/xen-vms/ubuntu.cfg
+ M misc/xen-vms/ubuntu_sandbox.cfg
+ M misc/xen-vms/windows.cfg
+ M misc/xen-vms/windows_sandbox.cfg
 ```
+
+`ubuntu_sandbox` was already gone when the removal ran (the `Failed to
+find`), so `lvremove` exited non-zero and the `&& mv` of the old `.bak` did
+not run; the copy 6a made at `/srv/drakvuf-out/backup-20261104/state/` is
+the old state's keeper, and the `xl save` below overwrites the file. The
+install: ISO verified against the signed checksum, the identity's firmware
+written, the 1 T volume created, the installer booted with the cfg's
+`kernel`/`ramdisk`/`extra` lines stripped again (`0`). The autoinstall
+powered the guest off by itself before the hooks ran.
 
 `setup_hooks_ubuntu` maps the volume, activates the guest's `ubuntu-vg`,
 mounts root and `/boot` **read-only with `noload`** under a trap that detaches
@@ -2351,7 +2394,11 @@ Expect `go build` silent, a `linux.json` of tens of MB, **`0` and `0`**: the
 guest's `ubuntu-vg` no longer visible to Dom0 and none of the `kpartx`
 partition mappings (`vg--root-ubuntu1..3`) or the guest's LV left (the trap's
 job), the domain running and the two closing `echo` lines. The golden LV's
-own mapping, `vg--root-ubuntu`, is supposed to stay and is not matched. Then the same 20 minutes and
+own mapping, `vg--root-ubuntu`, is supposed to stay and is not matched.
+**A Makefile before 2026-11-04's fix ends with `Error 32` after all of that**,
+from its own EXIT trap, and the run is still good if the two closing lines
+printed — do not re-run it
+([TROUBLESHOOTING](docs/TROUBLESHOOTING.md#make-setup_hooks_ubuntu-ends-with-error-32-after-every-step-succeeded)). Then the same 20 minutes and
 the printed save:
 
 ```bash
@@ -2363,7 +2410,86 @@ Start `sandboxd` (5b) and run one Ubuntu job: the evidenced path, on the
 rebuilt image, is the last thing this part has to show.
 
 ```
-EVIDENCE 6c-hooks
+EVIDENCE 6c-hooks, the hooks                                      2026-11-04
+root@dom0:~/drakvuf-multios-sandbox# xl list ubuntu_analysis 2>/dev/null && echo "STOP: shut the guest down first" || { cd /root/drakvuf-multios-sandbox && make setup_hooks_ubuntu 2>&1 | tee /root/make-setup_hooks_ubuntu-$(date +%Y%m%d-%H%M).log | tail -25; ls -la profiles/linux.json; vgs --noheadings -o vg_name | grep -c ubuntu-vg; dmsetup ls | grep -cE 'vg--root-ubuntu[0-9]|ubuntu--vg'; }
+[... the recipe's last lines, echoed by make ...]
+  1 logical volume(s) in volume group "ubuntu-vg" now active
+  0 logical volume(s) in volume group "ubuntu-vg" now active
+  WARNING: Sum of all thin volume sizes (5.62 TiB) exceeds the size of thin pool vg-root/thinpool and the size of whole volume group (<1.82 TiB).
+  Consider pruning vg-root VG archive with more then 120 MiB in 15022 files (check archiving is needed in lvm.conf).
+  Consider pruning vg-root VG archive with more then 120 MiB in 15023 files (check archiving is needed in lvm.conf).
+  Logical volume "ubuntu_sandbox" created.
+Wrote /root/drakvuf-multios-sandbox/state/firmware/smbios.bin and /root/drakvuf-multios-sandbox/state/firmware/ssdt.aml
+Parsing config from /root/drakvuf-multios-sandbox/misc/xen-vms/ubuntu_sandbox.cfg
+ubuntu_analysis_sandbox is running.
+Leave it running for AT LEAST 20 MINUTES before saving: every clone restores with this uptime, and a two-minute uptime is a sandbox tell samples check. Then, by hand:
+  xl save ubuntu_analysis_sandbox /root/drakvuf-multios-sandbox/state/ubuntu_sandbox.bak /root/drakvuf-multios-sandbox/misc/xen-vms/ubuntu_sandbox.cfg
+make: *** [Makefile:878: setup_hooks_ubuntu] Error 32
+-rw-r--r-- 1 root root 45387399 Nov  4 16:05 profiles/linux.json
+0
+0
+root@dom0:~/drakvuf-multios-sandbox# xl list
+Name                                        ID   Mem VCPUs    State    Time(s)
+Domain-0                                     0  8192     6     r-----    3315.7
+platform                                     1  4096     4     -b----     220.6
+ubuntu_analysis_sandbox                     14  8176     4     -b----      17.1
+root@dom0:~/drakvuf-multios-sandbox# xl destroy ubuntu_analysis_sandbox
+root@dom0:~/drakvuf-multios-sandbox# [the same command again]
+[... the recipe's last lines ...]
+  1 logical volume(s) in volume group "ubuntu-vg" now active
+  0 logical volume(s) in volume group "ubuntu-vg" now active
+  Logical Volume "ubuntu_sandbox" already exists in volume group "vg-root"
+make: *** [Makefile:878: setup_hooks_ubuntu] Error 32
+-rw-r--r-- 1 root root 45387399 Nov  4 16:06 profiles/linux.json
+0
+0
+root@dom0:~/drakvuf-multios-sandbox# lvremove /dev/vg-root/ubuntu_sandbox 
+Do you really want to remove active logical volume vg-root/ubuntu_sandbox? [y/n]: y
+  Consider pruning vg-root VG archive with more then 120 MiB in 15024 files (check archiving is needed in lvm.conf).
+  Consider pruning vg-root VG archive with more then 120 MiB in 15025 files (check archiving is needed in lvm.conf).
+  Logical volume "ubuntu_sandbox" successfully removed.
+root@dom0:~/drakvuf-multios-sandbox# [the same command a third time]
+[... the recipe's last lines ...]
+  1 logical volume(s) in volume group "ubuntu-vg" now active
+  0 logical volume(s) in volume group "ubuntu-vg" now active
+  WARNING: Sum of all thin volume sizes (5.62 TiB) exceeds the size of thin pool vg-root/thinpool and the size of whole volume group (<1.82 TiB).
+  Consider pruning vg-root VG archive with more then 120 MiB in 15026 files (check archiving is needed in lvm.conf).
+  Consider pruning vg-root VG archive with more then 120 MiB in 15027 files (check archiving is needed in lvm.conf).
+  Logical volume "ubuntu_sandbox" created.
+Wrote /root/drakvuf-multios-sandbox/state/firmware/smbios.bin and /root/drakvuf-multios-sandbox/state/firmware/ssdt.aml
+Parsing config from /root/drakvuf-multios-sandbox/misc/xen-vms/ubuntu_sandbox.cfg
+ubuntu_analysis_sandbox is running.
+Leave it running for AT LEAST 20 MINUTES before saving: every clone restores with this uptime, and a two-minute uptime is a sandbox tell samples check. Then, by hand:
+  xl save ubuntu_analysis_sandbox /root/drakvuf-multios-sandbox/state/ubuntu_sandbox.bak /root/drakvuf-multios-sandbox/misc/xen-vms/ubuntu_sandbox.cfg
+make: *** [Makefile:878: setup_hooks_ubuntu] Error 32
+-rw-r--r-- 1 root root 45387399 Nov  4 16:06 profiles/linux.json
+```
+
+**The first run had already done everything**; the `Error 32` after its
+closing lines is the trap bug (the FINDING below), and reading it as a
+failure cost two more runs: the second stopped at `lvcreate` because the
+snapshot existed, the third, after an `lvremove` by hand, made a new snapshot
+and a new domain. Read over ssh right after: `ubuntu_analysis_sandbox` is
+domain 15, up since 16:06; the env file has `SANDBOXD_INJECTION_PID_UBUNTU=1`
+and `..._WINDOWS=4724`; the template carries its five identity lines,
+8192 MiB, 4 vCPUs, `shadow_memory = 128`, VNC on loopback; `vgs` shows
+`vg-root` only, no `kpartx` mapping and nothing mounted at `/mnt` — the trap
+did its work on every exit, which is why the false code was the only harm.
+**The twenty minutes count from 16:06.**
+
+> **FINDING (2026-11-04).** `setup_hooks_ubuntu`'s EXIT trap runs under the
+> recipe's `set -e`; on a run that had already unmounted everything the
+> trap's first `umount` exits 32 and ends the trap, and 32 becomes the
+> target's exit code — on success and on failure alike, so the code tells
+> nothing. Fixed in the Makefile the same day (`set +e` first in the trap);
+> [TROUBLESHOOTING](docs/TROUBLESHOOTING.md#make-setup_hooks_ubuntu-ends-with-error-32-after-every-step-succeeded).
+> `setup_hooks_windows` has no trap and was not affected. The removal block
+> of this step also has a small flaw: `lvremove a b && mv` skips the `mv`
+> when one of the two volumes is already gone, as it was here; harmless
+> because 6a keeps a copy and the save overwrites the file.
+
+```
+EVIDENCE 6c-hooks, the save and the job
 ```
 
 ---
