@@ -1885,6 +1885,35 @@ hash check either way. A vendor's release then changes nothing until someone
 re-pins on purpose. The first lab, and any newly added installer, still meets
 the vendor once; that is where the refusal above belongs.
 
+### `sandboxd` logs `Failed to process entry in preconfig.log` three times per job, and the job completes
+
+**Symptom.** In the daemon's log, during a job's postprocessing:
+
+```
+ERROR sandboxd.postprocessing.indexer: Failed to process entry in preconfig.log
+Traceback (most recent call last):
+  File ".../sandboxd/postprocessing/indexer.py", line 34, in index_log_file
+    entry = orjson.loads(entry_data)
+orjson.JSONDecodeError: unexpected character, expected a JSON value: line 1 column 1 (char 0)
+```
+
+three times, then the artifacts upload and the job ends `completed (clean)`.
+Seen on an Ubuntu job and a Windows job on 2026-11-04
+(`deploy-with-makefile.md` EVIDENCE 5 and 6b-hooks); older logs most likely
+carry it too.
+
+**Cause.** The indexer parses every `*.log` in the job's results directory
+as JSON lines (`indexer.py`, `analysis_dir.glob("*.log")`), and
+`preconfig.log` is the preconfig stage's plain-text output
+(`stages.py::PRECONFIG_LOG`), not a DRAKVUF plugin log. Each of its lines
+fails to decode and is logged at ERROR, which makes a clean job read like a
+broken one.
+
+**Fix.** None applied yet: shared code on the evidenced Ubuntu path.
+Candidate: skip `preconfig.log` (and any other non-plugin log the stages
+write) in the indexer's glob, and log a skipped file at DEBUG. Until then,
+three of these per job are noise, and a fourth is not.
+
 ### `sandboxd` stopped claiming after the mTLS listener was disabled
 
 **Symptom.** Every queued job stays `queued`. The platform is healthy, the UI

@@ -6,8 +6,10 @@
 > built and provisioned from nothing and torn down, `web_sandbox` re-run on
 > the real platform after its CA-key guard fired and the key was moved off,
 > `make sandboxd` with DRAKVUF at the pin and an Ubuntu job `completed
-> (clean)`. **§6b is in progress**: the Windows golden image is removed and
-> the first install attempt was refused at the Chrome pin, now re-pinned.
+> (clean)`, and **§6b complete**: the Windows golden image reinstalled by the
+> Makefile after the Chrome pin was refused and re-pinned, the installers
+> mirrored on the platform, the sandbox state saved, and **a Windows job
+> `completed (clean)` with a transcript, the first ever** (EVIDENCE 6b-hooks).
 > **§6c, §7 and §8 are NOT YET EXECUTED**: every command there is
 > **Candidate**, and every `EVIDENCE` block there is empty until an operator
 > pastes real output into it.
@@ -1918,12 +1920,14 @@ command above again, in a terminal you watch:
 
 ```bash
 # DOM0 (Xen), as root
-cd /root/drakvuf-multios-sandbox && make windows_analysis_vm 2>&1 | tee /root/make-windows_analysis_vm-$(date +%Y%m%d-%H%M).log | grep -vE '^ *[0-9.]+%' | grep -nE ': OK$|FAILED|did NOT match|genisoimage|Total|lvcreate|Logical volume|Parsing config|Error' | head -30; xl list; git status --short misc/
+cd /root/drakvuf-multios-sandbox && make windows_analysis_vm 2>&1 | tee /root/make-windows_analysis_vm-$(date +%Y%m%d-%H%M).log | grep -vE '^ *[0-9.]+%' | grep -nE ': OK$|FAILED|did NOT match|genisoimage|Total|lvcreate|Logical volume|Parsing config|Error'; xl list; git status --short misc/
 ```
 
 Expect eight `: OK` lines (the installers), the ISO's `OK`, `genisoimage`'s
 summary, `Logical volume "windows" created`, `Parsing config` and the domain
-in `xl list`.
+in `xl list`. No `head` on this pipeline: a `head` that exits early closes
+the pipe under wget, which then writes `wget-log` files into the checkout
+(6b-mirror's evidence has four of them).
 
 > **FINDING (2026-11-04).** A pin against an unversioned vendor URL rots with
 > every release of that product, and Chrome releases about weekly: the first
@@ -2010,6 +2014,11 @@ VNC, so this evidence is transcribed or a screenshot; say which.
 EVIDENCE 6b-authenticode
 ```
 
+Attested by the operator on 2026-11-04 ("1 works": the PowerShell block ran
+in the guest and passed), not pasted; the console is VNC. A transcription or
+screenshot would turn this into pasted evidence. The derived table in
+`CURRENT-STATE.md` §3 counts neither, and that is correct.
+
 #### 6b-mirror — publish the verified installers (Candidate)
 
 Runs after 6b-authenticode said who signed the files; it touches the platform
@@ -2051,7 +2060,85 @@ Expect `7z2408-x64.exe: from the mirror`, eight `OK`, `same bytes`, and
 `404` twice: no listing, nothing at the root.
 
 ```
-EVIDENCE 6b-mirror
+EVIDENCE 6b-mirror                                                2026-11-04
+root@dom0:~/drakvuf-multios-sandbox# cd /root/drakvuf-multios-sandbox && git checkout -- automation/win-installers.list && git pull --ff-only && git log --oneline -1 && git status --short
+remote: Enumerating objects: 21, done.
+remote: Counting objects: 100% (21/21), done.
+remote: Compressing objects: 100% (4/4), done.
+remote: Total 12 (delta 8), reused 12 (delta 8), pack-reused 0 (from 0)
+Unpacking objects: 100% (12/12), 65.48 KiB | 1.31 MiB/s, done.
+From https://github.com/evilbootloader/drakvuf-multios-sandbox
+   2b433f4..08688b4  master     -> origin/master
+Updating 2b433f4..08688b4
+Fast-forward
+ Makefile                              |   70 ++++-
+ README.md                             |  269 +++++++++++++----
+ automation/win-installers-mirror.conf |   51 ++++
+ automation/win-installers.list        |   17 +-
+ deploy-with-makefile.md               | 2312 ++++++++++++++++++++++++++++++++
+ docs/CURRENT-STATE.md                 |   28 +-
+ docs/INDEX.md                         |  169 +++++------
+ docs/TROUBLESHOOTING.md               |  130 ++++++++
+ 8 files changed, 2889 insertions(+), 157 deletions(-)
+ create mode 100644 automation/win-installers-mirror.conf
+ create mode 100644 deploy-with-makefile.md
+08688b4 (HEAD -> master, origin/master, origin/HEAD) Mirror the Windows installers on the platform; re-pin Chrome; park runbook 18
+ m drakvuf
+ M misc/xen-vms/ubuntu_sandbox.cfg
+ M misc/xen-vms/windows.cfg
+ M misc/xen-vms/windows_sandbox.cfg
+?? wget-log
+?? wget-log.1
+?? wget-log.2
+?? wget-log.3
+root@dom0:~/drakvuf-multios-sandbox#  make win_installers_mirror
+[... the two recipes, echoed by make ...]
+/root/drakvuf-multios-sandbox/misc/iso/win-installers/googlechromestandaloneenterprise64.msi: OK
+/root/drakvuf-multios-sandbox/misc/iso/win-installers/AcroRdrDCx642100720099_MUI.exe: OK
+/root/drakvuf-multios-sandbox/misc/iso/win-installers/7z2408-x64.exe: OK
+/root/drakvuf-multios-sandbox/misc/iso/win-installers/python-3.12.0-amd64.exe: OK
+/root/drakvuf-multios-sandbox/misc/iso/win-installers/ndp48-x86-x64-allos-enu.exe: OK
+/root/drakvuf-multios-sandbox/misc/iso/win-installers/dotnet-runtime-8.0-win-x64.exe: OK
+/root/drakvuf-multios-sandbox/misc/iso/win-installers/dotnet-runtime-8.0-win-x86.exe: OK
+/root/drakvuf-multios-sandbox/misc/iso/win-installers/officedeploymenttool_20228-20124.exe: OK
+googlechromestandaloneenterprise64.msi: published
+AcroRdrDCx642100720099_MUI.exe: published
+7z2408-x64.exe: published
+python-3.12.0-amd64.exe: published
+ndp48-x86-x64-allos-enu.exe: published
+dotnet-runtime-8.0-win-x64.exe: published
+dotnet-runtime-8.0-win-x86.exe: published
+officedeploymenttool_20228-20124.exe: published
+nginx: the configuration file /etc/nginx/nginx.conf syntax is ok
+nginx: configuration file /etc/nginx/nginx.conf test is successful
+googlechromestandaloneenterprise64.msi: served by the mirror, hash verified
+AcroRdrDCx642100720099_MUI.exe: served by the mirror, hash verified
+7z2408-x64.exe: served by the mirror, hash verified
+python-3.12.0-amd64.exe: served by the mirror, hash verified
+ndp48-x86-x64-allos-enu.exe: served by the mirror, hash verified
+dotnet-runtime-8.0-win-x64.exe: served by the mirror, hash verified
+dotnet-runtime-8.0-win-x86.exe: served by the mirror, hash verified
+officedeploymenttool_20228-20124.exe: served by the mirror, hash verified
+```
+
+**The mirror is live**, published and proven on 2026-11-04 from the
+commit's first pull: eight files re-checked, published, the listener
+installed with nginx's test passing, eight fetched back through it with the
+pinned hashes. It ran **before** 6b-authenticode, in the other order from
+the one written above: if the guest-side check finds a file whose signature
+is not `Valid` from its vendor, that file is removed from
+`/srv/vendor/win-installers/` on the platform as well as from the image.
+The one-file proof (`7z2408-x64.exe` moved aside) is still to run.
+
+The four `wget-log*` files in the checkout are mine: the install command
+of 6b piped `make` into `head -30`, which closed the pipe after thirty
+lines, and wget, writing progress to a closed pipe, switched to its
+`wget-log` fallback. They are noise, not evidence; the command keeps `head`
+out from now on. Remove them:
+
+```bash
+# DOM0 (Xen), as root
+cd /root/drakvuf-multios-sandbox && rm -f wget-log wget-log.[0-9]* && git status --short
 ```
 
 `setup_hooks_windows` needs the domain **down**: it maps the volume, mounts
@@ -2083,8 +2170,131 @@ end-to-end Windows run ever and the first with a transcript; paste the
 daemon's lines for it and the UI row, and note which plugins produced output.
 
 ```
-EVIDENCE 6b-hooks
+EVIDENCE 6b-hooks                                                 2026-11-04
+root@dom0:~/drakvuf-multios-sandbox# xl create misc/xen-vms/windows.cfg 
+Parsing config from misc/xen-vms/windows.cfg
+root@dom0:~/drakvuf-multios-sandbox# xl list
+Name                                        ID   Mem VCPUs    State    Time(s)
+Domain-0                                     0  8192     6     r-----    2198.1
+platform                                     1  4096     4     -b----     152.4
+root@dom0:~/drakvuf-multios-sandbox# xl list windows_analysis 2>/dev/null && echo "STOP: shut the guest down first" || { cd /root/drakvuf-multios-sandbox && make setup_hooks_windows 2>&1 | tee /root/make-setup_hooks_windows-$(date +%Y%m%d-%H%M).log | tail -25; }
+
+| `kernel32.json` | `fdebece71ae5484d8f52bcfa608faa3c67f287a1baab28dea2ef251553331638` | 603395 | `kernel32.pdb` a651e6da598d55318b7fbe3a9aa66b081 |
+| `kernelbase.json` | `a20890113b68dab174813094d103804c4c429e7d00ee76abf01bb2acfcdc1589` | 6474292 | `kernelbase.pdb` fd716fb42da11292354efd1727dba7751 |
+| `kernel32wow.json` | `5e2d9a6efdc3afef3973eafdcc78ec0cc50561c34a65655bfd172eca0ecd4b03` | 918218 | `wkernel32.pdb` 6f8b32c9ba711005892405cb420b9ff81 |
+| `ntdll.json` | `30b678d91e6c07e81158c75d110a566d5f097aa309b2a9e53b843229ae4d0327` | 1888554 | `ntdll.pdb` 158a782afae4e837a58b83204612935f1 |
+| `iphlpapi.json` | `4c7f3f270c4b09906252946c20fc14a2400e3e19b9819ee6c2344a259f8b98a0` | 105866 | `iphlpapi.pdb` 029a4c798a7df515597e19696269acf11 |
+| `ole32.json` | `38a81d80d3703a3d241c6cda4da2622560fc0d370cec22957ad017fbe3b3b7ef` | 8598517 | `ole32.pdb` 1954734c7516142c6be6ef3ede2b5edd1 |
+| `clr.json` | `8800398e7db2f12c79e6c10fdafa38706347a278a931feffe741bcb03618b034` | 7338999 | `clr.pdb` cd3a60d2c15743e19d1b3fa75975b4ab3 |
+| `mscorwks.json` | `67ecd1cad988f7ce55cf862537f93d96b93f0d6f9afad6e052847336317d16cb` | 9311612 | `mscorwks.pdb` 3fec42966262426db4f7b6d05f9711831 |
+| `hal.json` | `7cb521b6e8d7bf30e933a0285ea43644af366ea39925b60f04a027ac28ae0965` | 483 | `hal.pdb` d94118e82a0b0f856dfaf2d544a1afe81 |
+| `fwpkclnt.json` | `0bc5fb9979dfdcc12aba5dde48fc8171343810af131325db2a6e49a13fcf0e13` | 227835 | `fwpkclnt.pdb` d365d02e056b9b4201fb95c631afc0611 |
+| `fltmgr.json` | `3b3d2b4d98266720cd1d6e5f3cfb22fc262201c59640e30378568f000f26e091` | 764626 | `fltMgr.pdb` 51a8be994a72880ed05e344baf51e04c1 |
+| `ci.json` | `a4164f758ded40e9ace66d8a1fb37ff1632f9a330a0692115e5432555dd7f517` | 204910 | `ci.pdb` 61243e0e4335dd435f66b5b5465fae201 |
+| `netio.json` | `d3456a22b11a0609b0e458b3b00211d14be72e31131b5a098dace455f3bfe458` | 231474 | `netio.pdb` 856c165442882498f31ce9049ab60fd21 |
+| `ndis.json` | `1e6f3e15d1748a046dccdaec90fb600f59a7b1a8502e8d7bb8ad836d56ab6c48` | 2926056 | `ndis.pdb` 5b1895cd6aa48156dd0be888f5e0a1911 |
+| `services.json` | `03335e1858dd3480484afdd0df134659aa49930635083129503a4e7449557998` | 482500 | `services.pdb` 4dc9525884803948178db21e987405f01 |
+  WARNING: Sum of all thin volume sizes (5.62 TiB) exceeds the size of thin pool vg-root/thinpool and the size of whole volume group (<1.82 TiB).
+  Consider pruning vg-root VG archive with more then 120 MiB in 15006 files (check archiving is needed in lvm.conf).
+  Consider pruning vg-root VG archive with more then 120 MiB in 15007 files (check archiving is needed in lvm.conf).
+  Logical volume "windows_sandbox" created.
+Wrote /root/drakvuf-multios-sandbox/state/firmware/smbios.bin and /root/drakvuf-multios-sandbox/state/firmware/ssdt.aml
+Parsing config from /root/drakvuf-multios-sandbox/misc/xen-vms/windows_sandbox.cfg
+INJECTION_PID=4724
+windows_analysis_sandbox is running with INJECTION_PID=4724 recorded.
+Leave it running for AT LEAST 20 MINUTES before saving: every clone restores with this uptime, and a two-minute uptime is a sandbox tell samples check. Do not restart the guest. Then, by hand:
+  xl save windows_analysis_sandbox /root/drakvuf-multios-sandbox/state/windows_sandbox.bak /root/drakvuf-multios-sandbox/misc/xen-vms/windows_sandbox.cfg
+root@dom0:~/drakvuf-multios-sandbox# cd /root/drakvuf-multios-sandbox && xl uptime windows_analysis_sandbox && xl save windows_analysis_sandbox state/windows_sandbox.bak misc/xen-vms/windows_sandbox.cfg && ls -la state/windows_sandbox.bak && grep SANDBOXD_INJECTION_PID_WINDOWS /etc/sandboxd/sandboxd.env | cut -d= -f1
+Name                                ID Uptime
+windows_analysis_sandbox            10  0:20:36
+Saving to state/windows_sandbox.bak new xl format (info 0x3/0x0/4248)
+xc: info: Saving domain 10, type x86 HVM
+xc: Frames: 2162816/2162816  100%
+xc: End of stream: 0/0    0%
+-rw-r--r-- 1 root root 8607815072 Nov  4 15:25 state/windows_sandbox.bak
+#SANDBOXD_INJECTION_PID_WINDOWS
+SANDBOXD_INJECTION_PID_WINDOWS
+root@dom0:~/drakvuf-multios-sandbox# cd /root/drakvuf-multios-sandbox && mkdir -p /var/log/sandboxd && set -a && . /etc/sandboxd/sandboxd.env && set +a && .venv-sandboxd/bin/python -m sandboxd.daemon 2>&1 | tee -a /var/log/sandboxd/$(date +%Y%m%d-%H%M).log
+2026-11-04 15:25:53,949 INFO    sandboxd: host values: SANDBOXD_REPO_ROOT=/root/drakvuf-multios-sandbox, SANDBOXD_ANALYSIS_USERNAME=carlos, SANDBOXD_INJECTION_PID_UBUNTU=1, SANDBOXD_INJECTION_PID_WINDOWS=4724, SANDBOXD_INJECTION_PID_ANDROID=<default>
+2026-11-04 15:25:53,949 INFO    sandboxd: provisioning the analysis network for 1 clone slot(s)
+2026-11-04 15:25:54,090 INFO    sandboxd: egress exits offered: offline (offline), tor-default (tor), sim-local (simulated)
+2026-11-04 15:25:54,203 INFO    sandboxd: sweep: nothing to reclaim, Dom0 was already clean
+2026-11-04 15:25:54,208 INFO    sandboxd: RDTSC compensation is on (RDTSC_POC: compensation enabled)
+2026-11-04 15:25:54,208 INFO    sandboxd: capacity: 1 vlan(s) usable, 18317 MiB, 1 slot(s)
+2026-11-04 15:25:54,221 INFO    httpx: HTTP Request: POST https://192.168.1.12:8000/api/v1/worker/register "HTTP/1.1 204 No Content"
+2026-11-04 15:25:54,223 INFO    httpx: HTTP Request: POST https://192.168.1.12:8000/api/v1/worker/reconcile "HTTP/1.1 200 OK"
+2026-11-04 15:26:14,271 INFO    httpx: HTTP Request: POST https://192.168.1.12:8000/api/v1/worker/claim "HTTP/1.1 200 OK"
+2026-11-04 15:26:30,315 INFO    httpx: HTTP Request: POST https://192.168.1.12:8000/api/v1/worker/claim "HTTP/1.1 200 OK"
+2026-11-04 15:26:30,321 INFO    httpx: HTTP Request: GET https://192.168.1.12:9000/analysis/u/ecf3da57-8c29-4fa1-a910-bb6ae4b8372e/438/samples/438fb6f9-8828-4ed2-9076-dd84794608be/31a444b389a43bff77feb8e14c1d776490b998327f4b41aa5d47edccf2557826.exe?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=REDACTED&X-Amz-Date=20261104T152629Z&X-Amz-Expires=120&X-Amz-SignedHeaders=host&X-Amz-Signature=REDACTED "HTTP/1.1 200 OK"
+2026-11-04 15:26:37,243 INFO    sandboxd.stages: job 438fb6f9-8828-4ed2-9076-dd84794608be: egress tor via no interface (nothing is forwarded)
+2026-11-04 15:26:37,254 INFO    httpx: HTTP Request: POST https://192.168.1.12:8000/api/v1/worker/jobs/438fb6f9-8828-4ed2-9076-dd84794608be/state "HTTP/1.1 204 No Content"
+2026-11-04 15:26:37,256 INFO    sandboxd.vnc: console dialled out for job 438fb6f9-8828-4ed2-9076-dd84794608be
+2026-11-04 15:26:37,256 INFO    sandboxd.vnc: console bridged to 127.0.0.1:5900
+2026-11-04 15:26:37,356 INFO    sandboxd.vnc: viewer left the console for 127.0.0.1:5900; waiting for another
+2026-11-04 15:26:37,443 INFO    sandboxd.vnc: console bridged to 127.0.0.1:5900
+2026-11-04 15:26:37,723 INFO    httpx: HTTP Request: POST https://192.168.1.12:8000/api/v1/worker/jobs/438fb6f9-8828-4ed2-9076-dd84794608be/state "HTTP/1.1 204 No Content"
+2026-11-04 15:26:37,866 INFO    sandboxd.vnc: viewer left the console for 127.0.0.1:5900; waiting for another
+2026-11-04 15:26:37,941 INFO    sandboxd.vnc: console bridged to 127.0.0.1:5900
+2026-11-04 15:26:50,336 INFO    httpx: HTTP Request: POST https://192.168.1.12:8000/api/v1/worker/jobs/438fb6f9-8828-4ed2-9076-dd84794608be/heartbeat "HTTP/1.1 200 OK"
+[... five more heartbeats, 20 s apart ...]
+2026-11-04 15:28:43,827 INFO    sandboxd.vnc: console session for 127.0.0.1:5900 ended
+2026-11-04 15:28:46,298 INFO    httpx: HTTP Request: POST https://192.168.1.12:8000/api/v1/worker/jobs/438fb6f9-8828-4ed2-9076-dd84794608be/state "HTTP/1.1 204 No Content"
+2026-11-04 15:28:50,448 INFO    httpx: HTTP Request: POST https://192.168.1.12:8000/api/v1/worker/jobs/438fb6f9-8828-4ed2-9076-dd84794608be/heartbeat "HTTP/1.1 200 OK"
+2026-11-04 15:29:04,914 INFO    sandboxd.postprocessing: postprocessing of 438fb6f9-8828-4ed2-9076-dd84794608be: peak RSS 144 MiB of the 3072 MiB limit
+2026-11-04 15:29:04,914 INFO    sandboxd.postprocessing: postprocessing of 438fb6f9-8828-4ed2-9076-dd84794608be:
+…ing.plugins.process_extracted: extracted file file.000021.mm has no fileextractor record; kept unattributed
+[... the same WARNING for file.000022.mm to file.000035.mm, fourteen more lines ...]
+2026-11-04 15:29:02,732 WARNING sandboxd.postprocessing.postprocess: compress_ipt won't be run because ipt does not exist
+2026-11-04 15:29:02,840 WARNING sandboxd.postprocessing.postprocess: get_falco_info won't be run because falco.json does not exist
+2026-11-04 15:29:04,760 WARNING sandboxd.postprocessing.indexer: cpuidmon.log: 284 events from 3 PIDs absent from the process tree were not indexed (PIDs: 1648, 4184, 6900)
+2026-11-04 15:29:04,864 ERROR sandboxd.postprocessing.indexer: Failed to process entry in preconfig.log
+Traceback (most recent call last):
+  File "/root/drakvuf-multios-sandbox/sandboxd/postprocessing/indexer.py", line 34, in index_log_file
+    entry = orjson.loads(entry_data)
+            ^^^^^^^^^^^^^^^^^^^^^^^^
+orjson.JSONDecodeError: unexpected character, expected a JSON value: line 1 column 1 (char 0)
+[... the same ERROR twice more, columns 2 and 1 ...]
+2026-11-04 15:29:04,968 INFO    httpx: HTTP Request: POST https://192.168.1.12:8000/api/v1/worker/jobs/438fb6f9-8828-4ed2-9076-dd84794608be/artifacts "HTTP/1.1 200 OK"
+2026-11-04 15:29:04,982 INFO    httpx: HTTP Request: POST https://192.168.1.12:9000/analysis "HTTP/1.1 204 No Content"
+[... about ninety more artifact POSTs to /analysis, all 204, and a second /artifacts 200 ...]
+2026-11-04 15:29:05,532 INFO    httpx: HTTP Request: POST https://192.168.1.12:8000/api/v1/worker/jobs/438fb6f9-8828-4ed2-9076-dd84794608be/state "HTTP/1.1 204 No Content"
+2026-11-04 15:29:05,542 INFO    httpx: HTTP Request: POST https://192.168.1.12:8000/api/v1/worker/jobs/438fb6f9-8828-4ed2-9076-dd84794608be/complete "HTTP/1.1 204 No Content"
+2026-11-04 15:29:05,550 INFO    sandboxd: job 438fb6f9-8828-4ed2-9076-dd84794608be -> completed (clean)
 ```
+
+Elided on purpose, and said so where: the presigned URL's credential and
+signature (REDACTED), five heartbeats, fourteen identical `.mm` warnings,
+two identical tracebacks, about ninety identical artifact uploads. The
+operator booted the golden image once more by hand (`xl create
+misc/xen-vms/windows.cfg`, what `modify_windows` does) for the PowerShell
+check and shut it down from inside before `setup_hooks_windows` ran.
+
+**Windows is evidenced end to end with a transcript, 2026-11-04**, the first
+time: job `438fb6f9`, a sample `.exe`, claimed 15:26:30, traced with the
+console bridged, `completed (clean)` 15:29:05, artifacts uploaded, on the
+image rebuilt that day with the identity, anchor `explorer.exe` 4724, the
+state saved after 20:36 of uptime (8.6 GB), under `make xen`'s Xen with the
+compensation on and DRAKVUF `3c3b73a6`. `setup_hooks_windows` fetched the
+DLL profiles over TLS, wrote the firmware files from the identity and found
+`explorer.exe` exactly once. The env file holds the commented example
+`#SANDBOXD_INJECTION_PID_WINDOWS` from the template and the real line: both
+`grep` hits are expected.
+
+> **FINDING (2026-11-04), shared, pre-existing.** Postprocessing logs
+> `Failed to process entry in preconfig.log` with a `JSONDecodeError` three
+> times per job, at ERROR, and the job completes. The indexer parses every
+> `*.log` in the results directory as JSON lines (`indexer.py:89`,
+> `analysis_dir.glob("*.log")`), and `preconfig.log` is the preconfig
+> stage's plain-text output (`stages.py`, `PRECONFIG_LOG`). The Ubuntu job of
+> §5b logged the same three. Candidate fix: skip `preconfig.log` in the
+> indexer's glob. Not touched here: shared code, the Ubuntu path.
+> **Observation, Windows only**: fifteen extracted files `file.000021.mm` to
+> `file.000035.mm` had no fileextractor record and were kept unattributed,
+> the path `process_extracted.py` handles by design; and `cpuidmon` events
+> from three PIDs absent from the process tree (processes older than the
+> trace) were not indexed. Neither is a failure; both are what "no
+> per-plugin validation" in `CURRENT-STATE.md` §1.5 means in practice, and
+> the first per-plugin look at a Windows job's artifacts is still to be done.
 
 ## 6c. Ubuntu
 
