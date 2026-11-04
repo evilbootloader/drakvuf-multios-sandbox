@@ -130,6 +130,26 @@ set -a; . /etc/sandboxd/sandboxd.env; set +a
 Then back up `state/` (the saved guests and the identity) and `profiles/`:
 none of it is tracked, and the identity cannot be drawn again.
 
+Feeding it from MalwareBazaar, from a workstation that reaches both abuse.ch
+and the platform: `scripts/bazaar-submit.py` asks for the abuse.ch Auth-Key
+and the platform login, pulls recent `exe` and `elf` samples, keeps the ones
+whose headers say x86 or x86-64, submits each to the matching guest with a
+trace length drawn at random between 120 and 1200 seconds, waits for the job
+to end, and publishes it, readable by every account on the platform, before
+the next; `--private` leaves each analysis to the submitting account. Samples
+over `--max-bytes` are skipped, by default
+just under 100 MB: the upload crosses the Cloudflare tunnel, whose free plan
+stops a request body there, well before the platform's own 1 GiB cap. Samples
+live only under its `--workdir`, are never executed there, and are deleted
+after upload. Needs `pyzipper` or a `7z` binary for abuse.ch's AES zips.
+
+```bash
+# WORKSTATION
+platform/.venv/bin/pip install pyzipper          # once; not in the pinned requirements, which install on the DomU
+platform/.venv/bin/python scripts/bazaar-submit.py --platform https://sandbox.example.com --count 5
+platform/.venv/bin/python scripts/bazaar-submit.py --platform https://sandbox.example.com --os ubuntu --seconds 600 --dry-run
+```
+
 Creating users when registration is not active:
 ```
 # PLATFORM DOMU, as root
