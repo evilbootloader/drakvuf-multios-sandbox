@@ -882,8 +882,14 @@ setup_hooks_ubuntu:
 	# with write access -- and a failed step left ubuntu-vg active on Dom0.
 	# `noload` skips the journal replay a read-only mount would still do; the
 	# trap detaches everything on any exit, in reverse order, quietly.
+	# `set +e` first inside the trap (2026-11-04): the trap runs under the
+	# recipe's `set -e`, and on a run that had already unmounted everything
+	# its first `umount` exits 32, which ended the trap there and became the
+	# target's exit code -- `Error 32` after every step had succeeded, three
+	# times on the day the target first ran as written. docs/TROUBLESHOOTING.md,
+	# "make setup_hooks_ubuntu ends with Error 32".
 	set -e; \
-	trap 'umount /mnt/boot 2>/dev/null; umount /mnt 2>/dev/null; lvchange -an ubuntu-vg/ubuntu-lv 2>/dev/null; vgchange -an ubuntu-vg 2>/dev/null; kpartx -d /dev/mapper/vg--root-ubuntu3 2>/dev/null; kpartx -d /dev/vg-root/ubuntu 2>/dev/null; true' EXIT; \
+	trap 'set +e; umount /mnt/boot 2>/dev/null; umount /mnt 2>/dev/null; lvchange -an ubuntu-vg/ubuntu-lv 2>/dev/null; vgchange -an ubuntu-vg 2>/dev/null; kpartx -d /dev/mapper/vg--root-ubuntu3 2>/dev/null; kpartx -d /dev/vg-root/ubuntu 2>/dev/null; true' EXIT; \
 	kpartx -a /dev/vg-root/ubuntu; \
 	kpartx -a /dev/mapper/vg--root-ubuntu3; \
 	vgchange -ay ubuntu-vg; \
