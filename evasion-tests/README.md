@@ -22,11 +22,16 @@ on Dom0, reboots into it and runs the tests. A variant with no `#define`s
 > `rdtsc-poc.md` and `guest-identity.md`, run until then from a working
 > directory outside this repository on the lab's Dom0 (i9-13900KF). In that
 > move they gained `site.conf`, the Dom0-tree mode, the DRAKVUF source check
-> and the clone-disk check. **None of those has run on a Dom0 yet.** Neither
-> has what review M-9 changed on 2026-11-04: the plain kernel as the default
-> entry while a search runs, each variant's Xen booted once with
-> `grub-reboot`, Dom0 put back as `make xen` left it when the search ends,
-> and `restore_dom0.sh` (§5).
+> and the clone-disk check, and on 2026-11-04 what review M-9 changed: the
+> plain kernel as the default entry while a search runs, each variant's Xen
+> booted once with `grub-reboot`, Dom0 put back as `make xen` left it when
+> the search ends, and `restore_dom0.sh` (§5). **All of that ran on the
+> lab's Dom0 on 2026-11-04** (`deploy-with-makefile.md` §7, parked at the
+> repository root until it is filed): one `baseline` search from this
+> checkout, two reboots and a build in six minutes, Dom0 back on `make xen`'s
+> package at the end. The first verdict is still to come: that run's test
+> gave `none` because `site.conf` sent the detector to an in-guest path the
+> rebuilt guest no longer had. `restore_dom0.sh` has not been needed yet.
 
 ---
 

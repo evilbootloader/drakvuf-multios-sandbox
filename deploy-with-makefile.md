@@ -2826,6 +2826,105 @@ apt-get install -y psmisc && command -v fuser
 Then the search again, the same command:
 
 ```
+EVIDENCE 7.4, second attempt                                      2026-11-04
+root@dom0:~/drakvuf-multios-sandbox/evasion-tests# apt-get install -y psmisc && command -v fuser
+[... apt's install of psmisc 23.7-1build1, needrestart's notes ...]
+vscode ➜ /workspaces/work/sandbox_project (master) $ cd /workspaces/work/sandbox_project/evasion-tests && nohup env TESTS=1 ONLY=baseline VNC=0 ./rdtsc_search.sh > /workspaces/work/rdtsc-search-$(date +%Y%m%d-%H%M).log 2>&1 & sleep 2; tail -f /workspaces/work/rdtsc-search-*.log
+[1] 1049989
+==> /workspaces/work/rdtsc-search-20261104-1702.log <==
+[2026-11-04 17:02:48] DRAKVUF source, the same on both sides: . 3c3b73a6ad246dbda7d8c44370abcf1150e25ea2 e3b0c44298fc1c14; libvmi ab06c1fdae4959d26dfe7436f6d5dba489ef5681 e3b0c44298fc1c14
+[2026-11-04 17:02:48] Building drakvuf and libvmi in root@192.168.1.6:/root/drakvuf-multios-sandbox/drakvuf (log: /workspaces/work/rdtsc-search/20261104-170247/drakvuf-build.log)
+[2026-11-04 17:03:05] Results in /workspaces/work/rdtsc-search/20261104-170247, dom0 output in /srv/drakvuf-out/rdtsc-search/20261104-170247
+[2026-11-04 17:03:05] Xen sources: root@192.168.1.6:/root/drakvuf-multios-sandbox/drakvuf/xen as make xen left it; files a variant uploads: xen/arch/x86/hvm/vmx/vmx.c xen/arch/x86/include/asm/hvm/vmx/vmcs.h
+[2026-11-04 17:03:06] Xen package make xen installed, kept to put back: /root/drakvuf-multios-sandbox/drakvuf/xen/dist (811a3052042de933)
+[2026-11-04 17:03:08] GRUB default on dom0: native
+[2026-11-04 17:03:08] ===== Variant baseline (25842c1f00a20370): 
+[2026-11-04 17:03:09] Rebooting dom0 into native
+[2026-11-04 17:04:00] dom0 runs native
+[2026-11-04 17:04:01] baseline: building and installing Xen, try 1 of 3 (log: /workspaces/work/rdtsc-search/20261104-170247/baseline/build.log)
+[2026-11-04 17:05:34] Rebooting dom0 into xen
+[2026-11-04 17:06:25] dom0 runs xen
+[2026-11-04 17:06:57] baseline test 1 dev-syscalls: detector false=0 true=0, syscalls=0, status=1 -> none (DRAKVUF failed)
+[2026-11-04 17:06:57] baseline test 1 dev-all: detector false=0 true=0, syscalls=0, status=1 -> none (DRAKVUF failed)
+[2026-11-04 17:06:58] baseline: test 1 gave no result, the streak starts again (1 of 5)
+[2026-11-04 17:06:58] Variant baseline: no-result, 0 consecutive tests passed of 1 run, detector runs mean,min 0.0,0
+[2026-11-04 17:06:58] Putting dom0 back as make xen left it
+[2026-11-04 17:07:00] Rebooting dom0 into native
+[2026-11-04 17:07:51] dom0 runs native
+[2026-11-04 17:07:51] Sources in /root/drakvuf-multios-sandbox/drakvuf/xen as make xen left them
+[2026-11-04 17:07:55] make xen's Xen package installed again
+[2026-11-04 17:07:59] GRUB default on dom0: xen
+[2026-11-04 17:07:59] Rebooting dom0 into xen
+[2026-11-04 17:08:50] dom0 runs xen
+[2026-11-04 17:08:50] dom0 runs make xen's Xen, the default entry again
+Detector runs per configuration run (expected 11; slow = fewer than 8)
+variant                      result       tests none true | syscalls true/runs min | all true/runs min     | stable firstslow score  run
+baseline                     no-result        1    1    0 |    0/0    min 0       |    0/0    min 0       |     0%         1  0.00  20261104-170247
+[2026-11-04 17:08:50] No variant passed 1 consecutive tests, see /workspaces/work/rdtsc-search/20261104-170247/variants.csv
+vscode ➜ /workspaces/work/sandbox_project (master) $ cat   /workspaces/work/rdtsc-search/20261104-170247/results.csv 
+variant,test,config,detector_false,detector_true,syscalls,drakvuf_status,verdict,reason,outdirs
+baseline,1,dev-syscalls,0,0,0,1,none,DRAKVUF failed,/srv/drakvuf-out/rdtsc-search/20261104-170247/baseline/t01/vm2
+baseline,1,dev-all,0,0,0,1,none,DRAKVUF failed,/srv/drakvuf-out/rdtsc-search/20261104-170247/baseline/t01/vm1
+root@dom0:~# xen-detect 
+Running in PV context on Xen V4.20.
+root@dom0:~# grep -q control_d /proc/xen/capabilities && echo xen; xl info | grep cc_compile_date; ls /root/evasion-tests/; grep -n 'XEN_OVERRIDE_GRUB_DEFAULT' /etc/default/grub.d/xen.cfg; xl list
+xen
+cc_compile_date        : Wed Nov  4 13:06:39 UTC 2026
+baseline-t01.log  baseline-t01.rc  baseline-t01.sid  build-baseline.log  build-baseline.rc  build-baseline.sid  drakvuf-build.log  drakvuf-build.rc  drakvuf-build.sid
+19:# Uncommenting XEN_OVERRIDE_GRUB_DEFAULT=0 below, then update-grub2, boots
+23:#XEN_OVERRIDE_GRUB_DEFAULT=0
+24:if [ "${XEN_OVERRIDE_GRUB_DEFAULT:-1}" != 0 ]; then
+Name                                        ID   Mem VCPUs    State    Time(s)
+Domain-0                                     0  8192     6     r-----      24.0
+platform                                     1  4096     4     -b----       4.1
+```
+
+**The harness ran through, for the first time from this repository's
+scripts, and put Dom0 back.** Six minutes from the first reboot to the test:
+`make xen`'s package kept, the plain kernel made the default, Dom0 booted
+without Xen, `baseline` built on the E-cores in 93 s and installed, Dom0
+booted into it once, the test run; then, after the no-result, the sources
+put back, `make xen`'s package installed again, Xen the default, Dom0 booted
+into it — `cc_compile_date` 13:06:39, the override commented, no
+`known-good/` or `orig/` left, the platform started by the operator. That
+is everything the 2026-11-04 status paragraph of `evasion-tests/README.md`
+said had not run on a Dom0 yet: `site.conf`, the Dom0-tree mode, the source
+check, the clone-disk check, the plain-kernel default, the one-shot boot,
+the restore.
+
+**The test gave nothing because of one `site.conf` value.** DRAKVUF's own
+log for the run (`01-dev-syscalls.log.gz` on Dom0, read over ssh):
+
+```
+syscall return code: -2
+Could not open file in guest
+{"Plugin": "inject", "TimeStamp": "1793811997.326853", "Method": "WriteFile", "Status": "PrematureBreak"}
+File copying failed
+Failed to copy file (/home/user/detector) into VM!
+```
+
+The restore itself succeeded (`xen-restore.log.gz`: `Restore successful`
+from `/home/user/ubuntu_sandbox2.cfg`) and the guest ran: the `RDTSC_POC`
+dump in `baseline-t01.log` counts reads on all four vCPUs with
+`prog_reads=0`, a guest whose program never started. `site.conf` carried
+`DETECTOR_DST=/home/user/detector`, the in-guest path from the 2026-11-02
+searches, and the guest rebuilt today (§6c) has no `/home/user`: its account
+is `carlos`. The benchmark by hand in 7.3 had worked because it uses its own
+workload at `/tmp/drakvuf-workload.sh`. The search's default,
+`/tmp/detector`, needs no account at all.
+
+> **FINDING (2026-11-04).** An in-guest path in `site.conf` outlived the
+> guest it was written for. `DETECTOR_DST` is now its default,
+> `/tmp/detector`; `REMOTE_DETECTOR=/home/user/detector` is a Dom0 path and
+> stays. `site.conf.example` already shows `/tmp/detector`; the lesson is
+> that `site.conf` holds guest paths too, and a rebuilt guest is a reason to
+> re-read it. The run also shows the harness's cost on this Dom0: about 3
+> minutes for the two reboots and the build, as §5 of the README says, and
+> a test slot of 30 s when nothing runs in the guest.
+
+Then the search a third time, the same command:
+
+```
 EVIDENCE 7.4
 ```
 
