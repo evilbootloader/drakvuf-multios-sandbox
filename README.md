@@ -10,14 +10,217 @@ Xen Dom0 on bare metal + DRAKVUF/LibVMI
 └── platform                     (PVH DomU: Postgres, Garage, the web API)
 ```
 
-Until 2026-08-28 this ran nested inside Proxmox, three layers deep. Proxmox was
-erased in the bare-metal migration; documents naming `pve1`, VM 101 or CT 102
-predate it. `docs/CURRENT-STATE.md` §2a lists what that invalidated.
-
 A sample is analysed under DRAKVUF inside a disposable clone of the guest for
 its target OS, and the clone is destroyed afterwards. **There is one way in:**
 a sample is uploaded through the web UI, queued in Postgres, and claimed by
 `sandboxd` on Dom0 over mutual TLS.
+
+## Installing the lab
+
+The install is `make`-driven and runs **as root on Dom0, from the checkout**.
+`docs/runbooks/18-deploy-with-makefile.md` is the step-by-step, run top to
+bottom on 2026-11-04 with every step's output: what each target does, what
+its output looks like, and what to do when it refuses. This is the summary.
+The `stable` branch of this repository, and of the `drakvuf` and `libvmi`
+forks it pins, marks what that run deployed; `master` and the forks'
+`develop` and `feature/vcpu-parallel-events` move ahead of it.
+
+### What the host needs first
+
+None of this is done by a target.
+
+- **An Intel CPU with VT-x and EPT.** DRAKVUF's altp2m needs EPT, and the
+  RDTSC compensation is VMX code. There is nothing to run on AMD.
+- **RAM.** The boot line fixes Dom0 at 8192 MiB; the platform takes 4096 and
+  each analysis guest 8192. The lab has 32 GiB.
+- **Ubuntu Server 24.04**, on bare metal.
+- **LVM, laid out for the Makefile.** A volume group named **`vg-root`** (the
+  name is hardcoded in every `lvcreate` and every guest config), root on a
+  **thick** LV, `/boot` on a **plain partition** (GRUB multiboots Xen from it,
+  and the evasion searches need `grub-reboot`, which cannot clear its one-shot
+  entry on LVM), and the rest of the VG **left free**: `make web_vm` creates the
+  thin pool from 90 % of it. `lvm2`, `thin-provisioning-tools` and
+  `lvm2-monitor` enabled, autoextend configured. Runbook 12 §B0 has the layout
+  this host was built with.
+- **Two bridges.** `xenbr0`, a Linux bridge carrying the uplink NIC with Dom0's
+  address, set up in netplan (apply it with `netplan try`: it carries your ssh
+  session). `xenbr1`, an Open vSwitch bridge, created once:
+  `apt install -y openvswitch-switch && ovs-vsctl add-br xenbr1`. `sandboxd`
+  configures the per-VLAN analysis networks on it at every start and refuses
+  to run without it, but does not create it.
+- **Root's ssh key on Dom0, without a passphrase.** The Makefile reaches the
+  platform DomU as root with it, hundreds of lines deep.
+- **A DNS name** for the browser-facing side, and a Cloudflare account for the
+  tunnel (below).
+- **Disk on `/`** for the ISOs (2.1 GB Ubuntu server, 6.7 GB Windows 11) and the
+  Xen and DRAKVUF builds; `misc/iso/` is in `.gitignore`.
+
+### `Makefile.local`
+
+Host values live in an **untracked** `Makefile.local` at the repository root.
+The Makefile reads it first and every default yields to it. Four are required:
+
+```make
+RSA_KEY := ssh-ed25519 AAAA... root@dom0   # Dom0 root's PUBLIC key, one line: goes into the DomU and the Ubuntu guest
+SANDBOX_WEB := sandbox.example.com         # the browser-facing name: TLS SANs, BROWSER_ORIGIN, api.env
+ANALYSIS_VM_USER := user                   # the analysis guests' user; also SANDBOXD_ANALYSIS_USERNAME
+ANALYSIS_VM_PASS := ...                    # the analysis guests' password
+# Only when the Makefile's defaults are wrong for this host:
+#VMADDR := 192.168.1.12/24                 # the platform DomU's address, written into it and dialled afterwards
+#VMROUTE := 192.168.1.1                    # its gateway
+#SANDBOXDIP := 192.168.1.6                 # Dom0's address: a SAN of the dom0-lab certificate
+#S3_QUOTA := 400                           # GiB: the object store's layout and bucket quota
+#S3_RETENTION := 30                        # days
+#INSTALLERS_MIRROR := https://192.168.1.12:9100/win-installers   # where win_installers looks first; empty disables it
+```
+
+`scripts/check-secrets.sh` does not read Makefiles. The file being untracked
+is what keeps the password out of history; never commit it.
+
+### The sequence
+
+Three places. **Dom0 (no Xen)** is the plain Ubuntu kernel, the only boot
+`make xen` may run on; on an existing Dom0 the switch is `evasion-tests/README.md`
+§7.7. **Dom0** is Dom0 booted on Xen, as root, in the checkout. **VNC** is a
+guest's console on Dom0's loopback: `ssh -L 5900:127.0.0.1:5900 root@dom0`
+from your machine, then a viewer on `localhost:5900`. The platform DomU is
+reached by the Makefile itself, over ssh as root.
+
+```bash
+# DOM0 (no Xen), as root
+git clone --recursive -b stable https://github.com/evilbootloader/drakvuf-multios-sandbox.git /root/drakvuf-multios-sandbox
+cd /root/drakvuf-multios-sandbox
+test -f /root/.ssh/id_ed25519.pub || ssh-keygen -t ed25519 -N '' -f /root/.ssh/id_ed25519
+$EDITOR Makefile.local                 # the block above; RSA_KEY is the content of /root/.ssh/id_ed25519.pub
+make xen                               # builds Xen with the patches and the host's identity, installs it, makes it the GRUB default
+# On a CPU that crashes the toolchain under a full build (the lab's i9-13900KF does):
+#   taskset -c 16-31 make xen           -- docs/TROUBLESHOOTING.md, "make xen -- internal compiler error"
+reboot
+
+# DOM0 (Xen), as root
+cd /root/drakvuf-multios-sandbox
+xl dmesg | grep RDTSC_POC              # "compensation enabled"; xen-rdtsc-poc.service fails otherwise
+make web_vm                            # the platform DomU from nothing. Asks for its root password. REFUSES to run over an existing one
+make web_sandbox                       # Postgres, migrations, Garage, TLS, the API, nginx. Re-runnable: keeps what exists.
+                                       # It checks out THIS checkout's HEAD on the DomU from GitHub, so that commit must be pushed
+make sandboxd                          # libvmi + DRAKVUF, tor + FakeNet-NG, Dom0's certificates, the daemon's venv and env file. Re-runnable
+
+make windows_analysis_vm               # win_installers first: 8 installers fetched once -- from the lab's mirror, or from the vendor when
+                                       # the mirror has none -- and verified against automation/win-installers.list; a mismatch refuses the build.
+                                       # Then the modified ISO and the installer booted. VNC: wait for the desktop, shut down from inside
+make win_installers_mirror             # once the eight files verified: publish them to the platform's mirror (nginx on 9100, LAN only),
+                                       # so a vendor's next release changes nothing until someone re-pins on purpose
+make modify_windows                    # boots it again to tune (Defender, updates, ...); shut down from inside
+make setup_hooks_windows               # guest DOWN first. Profiles, the sandbox snapshot, boots it, records explorer.exe's PID
+#   Leave it running AT LEAST 20 MINUTES: every clone restores with this uptime, and a two-minute uptime is a sandbox tell.
+#   Do not restart it (the PID is the running explorer.exe). Then, by hand:
+xl save windows_analysis_sandbox state/windows_sandbox.bak misc/xen-vms/windows_sandbox.cfg
+
+make ubuntu_analysis_vm                # autoinstall from the server ISO; the guest powers itself off when done. Watch it over VNC
+make modify_ubuntu                     # optional: boot it, check the desktop logs in; shut down from inside
+make setup_hooks_ubuntu                # guest DOWN first. linux.json from the debug kernel, the snapshot, boots it, anchor PID 1
+#   Same 20 minutes, then by hand:
+xl save ubuntu_analysis_sandbox state/ubuntu_sandbox.bak misc/xen-vms/ubuntu_sandbox.cfg
+
+# DOM0 (Xen), as root, in tmux: the daemon runs in the foreground and has no systemd unit
+set -a; . /etc/sandboxd/sandboxd.env; set +a
+.venv-sandboxd/bin/python -m sandboxd.daemon
+```
+
+Then back up `state/` (the saved guests and the identity) and `profiles/`:
+none of it is tracked, and the identity cannot be drawn again.
+
+Creating users when registration is not active:
+```
+# PLATFORM DOMU, as root
+ssh <PLATFORM_VM_IP>
+cd /opt/platform/src/platform
+sudo -u platform DATABASE_URL=postgresql:///sandbox_platform \
+  .venv/bin/python create_user.py you@example.com --balance 100000  # balance is in seconds
+```
+
+### Cloudflare tunnel on WEB SANDBOX
+
+Everything in this block runs on the platform DomU, as root.
+
+```
+# PLATFORM DOMU, as root
+ssh <PLATFORM_VM_IP>
+
+sed 's/TRUSTED_CLIENT_IP_HEADER=/TRUSTED_CLIENT_IP_HEADER=CF-Connecting-IP/g' -i /etc/sandbox_platform/api.env
+
+curl -fsSL https://pkg.cloudflare.com/cloudflare-main.gpg \
+  -o /usr/share/keyrings/cloudflare-main.gpg
+echo "deb [signed-by=/usr/share/keyrings/cloudflare-main.gpg] https://pkg.cloudflare.com/cloudflared any main" \
+  > /etc/apt/sources.list.d/cloudflared.list
+apt-get update && apt-get install -y cloudflared
+
+cloudflared tunnel login
+cloudflared tunnel create sandbox-platform
+cloudflared tunnel route dns sandbox-platform <SANDBOX_DOMAIN>
+
+install -d -m 750 /etc/cloudflared
+mv ~/.cloudflared/<UUID>.json /etc/cloudflared/
+chmod 600 /etc/cloudflared/<UUID>.json
+
+useradd --system --no-create-home --shell /usr/sbin/nologin cloudflared || true
+cp /etc/sandbox_platform/tls/ca.crt /etc/cloudflared/ca.crt
+chown -R cloudflared:cloudflared /etc/cloudflared
+
+cat > /etc/systemd/system/cloudflared.service <<EOF
+[Unit]
+Description=Cloudflare Tunnel (browser-facing ingress)
+After=network-online.target sandbox-api.service
+Wants=network-online.target
+
+[Service]
+Type=notify
+User=cloudflared
+Group=cloudflared
+ExecStart=/usr/bin/cloudflared --no-autoupdate --config /etc/cloudflared/config.yml tunnel run
+Restart=on-failure
+RestartSec=5
+TimeoutStartSec=0
+
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
+EOF
+systemctl daemon-reload
+
+cat > /etc/cloudflared/config.yml <<EOF
+tunnel: UUID
+credentials-file: /etc/cloudflared/UUID.json
+# /etc/cloudflared/config.yml
+ingress:
+  # bucket FIRST -- cloudflared matches in order
+  - hostname: SANDBOX_DOMAIN
+    path: ^/analysis(/|$)
+    service: https://VM_IP:9000
+    originRequest:
+      caPool: /etc/cloudflared/ca.crt
+  - hostname: SANDBOX_DOMAIN
+    path: ^/api/v1/worker(/|$)
+    service: http_status:404
+  - hostname: SANDBOX_DOMAIN
+    service: https://VM_IP:8000
+    originRequest:
+      caPool: /etc/cloudflared/ca.crt
+  - service: http_status:404
+EOF
+chown cloudflared:cloudflared /etc/cloudflared/config.yml
+cloudflared --config /etc/cloudflared/config.yml tunnel ingress validate
+systemctl enable --now cloudflared
+systemctl status cloudflared --no-pager | head -5
+```
+
+Until 2026-08-28 this ran nested inside Proxmox, three layers deep. Proxmox was
+erased in the bare-metal migration; documents naming `pve1`, VM 101 or CT 102
+predate it. `docs/CURRENT-STATE.md` §2a lists what that invalidated.
 
 The original path — dropping a file into `/malware_incoming/<os>/` for a per-OS
 `dirwatch` watcher to pick up — was **removed on 2026-09-15**, along with the
@@ -189,206 +392,6 @@ project-specific rules; see Anthropic's
 [Claude Code best practices](https://code.claude.com/docs/en/best-practices)
 for general guidance on the tool itself.
 
-
-## Installing the lab
-
-The install is `make`-driven and runs **as root on Dom0, from the checkout**.
-`docs/runbooks/18-deploy-with-makefile.md` is the step-by-step, run top to
-bottom on 2026-11-04 with every step's output: what each target does, what
-its output looks like, and what to do when it refuses. This is the summary.
-
-### What the host needs first
-
-None of this is done by a target.
-
-- **An Intel CPU with VT-x and EPT.** DRAKVUF's altp2m needs EPT, and the
-  RDTSC compensation is VMX code. There is nothing to run on AMD.
-- **RAM.** The boot line fixes Dom0 at 8192 MiB; the platform takes 4096 and
-  each analysis guest 8192. The lab has 32 GiB.
-- **Ubuntu Server 24.04**, on bare metal.
-- **LVM, laid out for the Makefile.** A volume group named **`vg-root`** (the
-  name is hardcoded in every `lvcreate` and every guest config), root on a
-  **thick** LV, `/boot` on a **plain partition** (GRUB multiboots Xen from it,
-  and the evasion searches need `grub-reboot`, which cannot clear its one-shot
-  entry on LVM), and the rest of the VG **left free**: `make web_vm` creates the
-  thin pool from 90 % of it. `lvm2`, `thin-provisioning-tools` and
-  `lvm2-monitor` enabled, autoextend configured. Runbook 12 §B0 has the layout
-  this host was built with.
-- **Two bridges.** `xenbr0`, a Linux bridge carrying the uplink NIC with Dom0's
-  address, set up in netplan (apply it with `netplan try`: it carries your ssh
-  session). `xenbr1`, an Open vSwitch bridge, created once:
-  `apt install -y openvswitch-switch && ovs-vsctl add-br xenbr1`. `sandboxd`
-  configures the per-VLAN analysis networks on it at every start and refuses
-  to run without it, but does not create it.
-- **Root's ssh key on Dom0, without a passphrase.** The Makefile reaches the
-  platform DomU as root with it, hundreds of lines deep.
-- **A DNS name** for the browser-facing side, and a Cloudflare account for the
-  tunnel (below).
-- **Disk on `/`** for the ISOs (2.1 GB Ubuntu server, 6.7 GB Windows 11) and the
-  Xen and DRAKVUF builds; `misc/iso/` is in `.gitignore`.
-
-### `Makefile.local`
-
-Host values live in an **untracked** `Makefile.local` at the repository root.
-The Makefile reads it first and every default yields to it. Four are required:
-
-```make
-RSA_KEY := ssh-ed25519 AAAA... root@dom0   # Dom0 root's PUBLIC key, one line: goes into the DomU and the Ubuntu guest
-SANDBOX_WEB := sandbox.example.com         # the browser-facing name: TLS SANs, BROWSER_ORIGIN, api.env
-ANALYSIS_VM_USER := user                   # the analysis guests' user; also SANDBOXD_ANALYSIS_USERNAME
-ANALYSIS_VM_PASS := ...                    # the analysis guests' password
-# Only when the Makefile's defaults are wrong for this host:
-#VMADDR := 192.168.1.12/24                 # the platform DomU's address, written into it and dialled afterwards
-#VMROUTE := 192.168.1.1                    # its gateway
-#SANDBOXDIP := 192.168.1.6                 # Dom0's address: a SAN of the dom0-lab certificate
-#S3_QUOTA := 400                           # GiB: the object store's layout and bucket quota
-#S3_RETENTION := 30                        # days
-#INSTALLERS_MIRROR := https://192.168.1.12:9100/win-installers   # where win_installers looks first; empty disables it
-```
-
-`scripts/check-secrets.sh` does not read Makefiles. The file being untracked
-is what keeps the password out of history; never commit it.
-
-### The sequence
-
-Three places. **Dom0 (no Xen)** is the plain Ubuntu kernel, the only boot
-`make xen` may run on; on an existing Dom0 the switch is `evasion-tests/README.md`
-§7.7. **Dom0** is Dom0 booted on Xen, as root, in the checkout. **VNC** is a
-guest's console on Dom0's loopback: `ssh -L 5900:127.0.0.1:5900 root@dom0`
-from your machine, then a viewer on `localhost:5900`. The platform DomU is
-reached by the Makefile itself, over ssh as root.
-
-```bash
-# DOM0 (no Xen), as root
-git clone --recursive https://github.com/evilbootloader/drakvuf-multios-sandbox.git /root/drakvuf-multios-sandbox
-cd /root/drakvuf-multios-sandbox
-test -f /root/.ssh/id_ed25519.pub || ssh-keygen -t ed25519 -N '' -f /root/.ssh/id_ed25519
-$EDITOR Makefile.local                 # the block above; RSA_KEY is the content of /root/.ssh/id_ed25519.pub
-make xen                               # builds Xen with the patches and the host's identity, installs it, makes it the GRUB default
-# On a CPU that crashes the toolchain under a full build (the lab's i9-13900KF does):
-#   taskset -c 16-31 make xen           -- docs/TROUBLESHOOTING.md, "make xen -- internal compiler error"
-reboot
-
-# DOM0 (Xen), as root
-cd /root/drakvuf-multios-sandbox
-xl dmesg | grep RDTSC_POC              # "compensation enabled"; xen-rdtsc-poc.service fails otherwise
-make web_vm                            # the platform DomU from nothing. Asks for its root password. REFUSES to run over an existing one
-make web_sandbox                       # Postgres, migrations, Garage, TLS, the API, nginx. Re-runnable: keeps what exists.
-                                       # It checks out THIS checkout's HEAD on the DomU from GitHub, so that commit must be pushed
-make sandboxd                          # libvmi + DRAKVUF, tor + FakeNet-NG, Dom0's certificates, the daemon's venv and env file. Re-runnable
-
-make windows_analysis_vm               # win_installers first: 8 installers fetched once -- from the lab's mirror, or from the vendor when
-                                       # the mirror has none -- and verified against automation/win-installers.list; a mismatch refuses the build.
-                                       # Then the modified ISO and the installer booted. VNC: wait for the desktop, shut down from inside
-make win_installers_mirror             # once the eight files verified: publish them to the platform's mirror (nginx on 9100, LAN only),
-                                       # so a vendor's next release changes nothing until someone re-pins on purpose
-make modify_windows                    # boots it again to tune (Defender, updates, ...); shut down from inside
-make setup_hooks_windows               # guest DOWN first. Profiles, the sandbox snapshot, boots it, records explorer.exe's PID
-#   Leave it running AT LEAST 20 MINUTES: every clone restores with this uptime, and a two-minute uptime is a sandbox tell.
-#   Do not restart it (the PID is the running explorer.exe). Then, by hand:
-xl save windows_analysis_sandbox state/windows_sandbox.bak misc/xen-vms/windows_sandbox.cfg
-
-make ubuntu_analysis_vm                # autoinstall from the server ISO; the guest powers itself off when done. Watch it over VNC
-make modify_ubuntu                     # optional: boot it, check the desktop logs in; shut down from inside
-make setup_hooks_ubuntu                # guest DOWN first. linux.json from the debug kernel, the snapshot, boots it, anchor PID 1
-#   Same 20 minutes, then by hand:
-xl save ubuntu_analysis_sandbox state/ubuntu_sandbox.bak misc/xen-vms/ubuntu_sandbox.cfg
-
-# DOM0 (Xen), as root, in tmux: the daemon runs in the foreground and has no systemd unit
-set -a; . /etc/sandboxd/sandboxd.env; set +a
-.venv-sandboxd/bin/python -m sandboxd.daemon
-```
-
-Then back up `state/` (the saved guests and the identity) and `profiles/`:
-none of it is tracked, and the identity cannot be drawn again.
-
-Creating users when registration is not active:
-```
-# PLATFORM DOMU, as root
-ssh <PLATFORM_VM_IP>
-cd /opt/platform/src/platform
-sudo -u platform DATABASE_URL=postgresql:///sandbox_platform \
-  .venv/bin/python create_user.py you@example.com --balance 100000  # balance is in seconds
-```
-
-### Cloudflare tunnel on WEB SANDBOX
-
-Everything in this block runs on the platform DomU, as root.
-
-```
-# PLATFORM DOMU, as root
-ssh <PLATFORM_VM_IP>
-
-sed 's/TRUSTED_CLIENT_IP_HEADER=/TRUSTED_CLIENT_IP_HEADER=CF-Connecting-IP/g' -i /etc/sandbox_platform/api.env
-
-curl -fsSL https://pkg.cloudflare.com/cloudflare-main.gpg \
-  -o /usr/share/keyrings/cloudflare-main.gpg
-echo "deb [signed-by=/usr/share/keyrings/cloudflare-main.gpg] https://pkg.cloudflare.com/cloudflared any main" \
-  > /etc/apt/sources.list.d/cloudflared.list
-apt-get update && apt-get install -y cloudflared
-
-cloudflared tunnel login
-cloudflared tunnel create sandbox-platform
-cloudflared tunnel route dns sandbox-platform <SANDBOX_DOMAIN>
-
-install -d -m 750 /etc/cloudflared
-mv ~/.cloudflared/<UUID>.json /etc/cloudflared/
-chmod 600 /etc/cloudflared/<UUID>.json
-
-useradd --system --no-create-home --shell /usr/sbin/nologin cloudflared || true
-cp /etc/sandbox_platform/tls/ca.crt /etc/cloudflared/ca.crt
-chown -R cloudflared:cloudflared /etc/cloudflared
-
-cat > /etc/systemd/system/cloudflared.service <<EOF
-[Unit]
-Description=Cloudflare Tunnel (browser-facing ingress)
-After=network-online.target sandbox-api.service
-Wants=network-online.target
-
-[Service]
-Type=notify
-User=cloudflared
-Group=cloudflared
-ExecStart=/usr/bin/cloudflared --no-autoupdate --config /etc/cloudflared/config.yml tunnel run
-Restart=on-failure
-RestartSec=5
-TimeoutStartSec=0
-
-NoNewPrivileges=true
-ProtectSystem=strict
-ProtectHome=true
-PrivateTmp=true
-
-[Install]
-WantedBy=multi-user.target
-EOF
-systemctl daemon-reload
-
-cat > /etc/cloudflared/config.yml <<EOF
-tunnel: UUID
-credentials-file: /etc/cloudflared/UUID.json
-# /etc/cloudflared/config.yml
-ingress:
-  # bucket FIRST -- cloudflared matches in order
-  - hostname: SANDBOX_DOMAIN
-    path: ^/analysis(/|$)
-    service: https://VM_IP:9000
-    originRequest:
-      caPool: /etc/cloudflared/ca.crt
-  - hostname: SANDBOX_DOMAIN
-    path: ^/api/v1/worker(/|$)
-    service: http_status:404
-  - hostname: SANDBOX_DOMAIN
-    service: https://VM_IP:8000
-    originRequest:
-      caPool: /etc/cloudflared/ca.crt
-  - service: http_status:404
-EOF
-chown cloudflared:cloudflared /etc/cloudflared/config.yml
-cloudflared --config /etc/cloudflared/config.yml tunnel ingress validate
-systemctl enable --now cloudflared
-systemctl status cloudflared --no-pager | head -5
-```
 
 ## Evasion tests — RDTSC and al-khaser
 

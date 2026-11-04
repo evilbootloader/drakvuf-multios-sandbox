@@ -97,6 +97,7 @@ CT 102, and everything `qm` and `pct` could do.
 | Scheduler | Credit**1** (`sched=credit`), not Xen 4.20's default Credit2 | 2026-08-27 |
 | Python | **3.12.3** (`python3 -V`, operator-confirmed). Old enough that the `websockets==16.1.1` pin in both requirements files still stands; new enough for `flare-capa==9.4.0`, which needs ≥3.10. The development container runs 3.14, so a wheel that resolves there is not proof it resolves here — `sandboxd/requirements.txt` says how that was checked | 2026-09-18 |
 | Repo checkout | `/root/drakvuf-multios-sandbox` | 2026-08-19 |
+| Branches | **`stable`, created 2026-11-04 on all three repositories at what runbook 18 deployed**: this one at the filing commit, `evilbootloader/drakvuf` at `3c3b73a6` (the submodule pin, tip of `develop` that day), `evilbootloader/libvmi` at `ab06c1f` (tip of `feature/vcpu-parallel-events`). A `git clone --recursive -b stable` of this repository checks the pinned submodule commits out, which are those; `.gitmodules` still names `develop` and `feature/vcpu-parallel-events` as the branches `submodule update --remote` would follow, so `--remote` moves off `stable` -- pointing `.gitmodules` at `stable` is a decision not taken here. `master` and the forks' branches move ahead; `stable` moves when a runbook says so | 2026-11-04 |
 | Volume group | `vg-root` | 2026-08-28 |
 | Analysis bridge | `xenbr1`, per-VLAN `172.16.<vlan>.0/24` | — |
 
