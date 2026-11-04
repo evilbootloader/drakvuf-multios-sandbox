@@ -498,7 +498,10 @@ sandboxd:
 	ninja -C build; \
 	ninja -C build install; \
 	# Egress responders: tor for `tor`, FakeNet-NG for `simulated`, docs/runbooks/13-verify-egress-modes.md \
-	apt-get install -y tor python3-pip python3-venv; \
+	# psmisc for `fuser` (2026-11-04): the evasion searches refuse to start \
+	# unless they can see whether sandboxd holds /run/lock/sandboxd.lock, and \
+	# no target installed it -- the first search stopped on that. \
+	apt-get install -y tor python3-pip python3-venv psmisc; \
 	install -m 0644 $(REPO_ROOT)/automation/torrc /etc/tor/torrc; \
 	python3 -m venv /opt/fakenet-ng; \
 	/opt/fakenet-ng/bin/pip install --require-hashes -r $(REPO_ROOT)/automation/fakenet-requirements.txt; \
