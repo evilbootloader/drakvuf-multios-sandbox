@@ -1793,6 +1793,48 @@ opposite — that `sandboxd` reached `:8000` already and was unaffected.
 
 ---
 
+### A job's Behaviour tab returns 500, and the log ends in `KeyError` from `lineage`
+
+Every other tab of that job renders. `GET /ui/jobs/<id>/tabs?tab=behaviour` is
+a 500, and `journalctl -u sandbox-api` ends:
+
+```
+  File "/opt/platform/src/platform/sandbox_platform/report.py", line 379, in lineage
+    sample = full[target]
+KeyError: 217
+```
+
+The number is the sample's `seqid`. It reads like a process missing from the
+report and is not one: the process is there, and the forest built from the
+report is what is empty.
+
+**Cause.** A loop of parents in `report.json`. `swapper/0` (seqid 0) had
+`parent_seqid` 1 and `systemd` (seqid 1) had `parent_seqid` 0, so no process was
+a root and all 340 in the job were in no tree. One line of `procmon.log` made
+the loop:
+
+```
+{"PID": 0, "PPID": 1, "ProcessName": "swapper/1", "Method": "send_signal", ..., "TargetProcessName": "/usr/sbin/anacron", "SignalStr": "SIGALRM"}
+```
+
+Every CPU's idle task is PID 0, and `swapper/1` has PPID 1 where `swapper/0` has
+0. A signal sent while CPU 1 is idle is logged in that task's context,
+`send_signal` has no parser of its own, and the generic branch of `tree_from_log`
+read the line as `swapper/0` changing parent, which moved it under its own
+child. It takes such a signal during the trace, so it is intermittent: one job
+of the 14 on the platform that day.
+
+**Fix.** Update the platform; the job need not run again. `Report._parents`
+(`82cb3b0`) cuts a loop at its lowest seqid, so a report already stored renders
+with `swapper/0` as its root. `Process.change_parent` (`950426b`) refuses a move
+under a descendant, so a report postprocessed by an updated Dom0 has no loop. A
+stored report keeps its data: that job's `swapper/0` still shows "child of"
+`systemd` in its process details, which print `parent_seqid` as stored.
+
+Hit on 2026-11-03, job `4d8c1c25`.
+
+---
+
 # Guest execution and samples
 
 ### `can't execute: Permission denied` for a file staged in Android external storage
