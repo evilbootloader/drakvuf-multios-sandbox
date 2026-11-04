@@ -1973,6 +1973,24 @@ Candidate: in `parse_memdump`, return `None` for a record without
 records into the index as memdump events with their own fields. Until then
 the lines are noise at ERROR, and a `KeyError` on any other key is not.
 
+### `rdtsc_search.sh`: `dom0 has no fuser to check for a running sandboxd`
+
+**Symptom.** The search's preflight compares the DRAKVUF sources, builds
+them on Dom0, prints where the results go, then stops:
+`ERROR: dom0 has no fuser to check for a running sandboxd: apt-get install
+psmisc there`. Hit on the first search from this repository's scripts,
+2026-11-04. Nothing on Dom0 needs putting back: the check comes before the
+search keeps `make xen`'s package or touches GRUB.
+
+**Cause.** The searches refuse to run while `sandboxd` holds
+`/run/lock/sandboxd.lock`, because every reboot would kill its clones, and
+`fuser` is how they look. It comes from `psmisc`, which Ubuntu Server does
+not install and no Makefile target did; the requirements in
+`evasion-tests/README.md` §2 named `git` and `gcc` only.
+
+**Fix.** `apt-get install -y psmisc` on Dom0, then the search again. `make
+sandboxd` installs it since 2026-11-04 and both READMEs name it.
+
 ### `sandboxd` stopped claiming after the mTLS listener was disabled
 
 **Symptom.** Every queued job stays `queued`. The platform is healthy, the UI

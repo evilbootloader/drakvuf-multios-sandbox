@@ -70,7 +70,10 @@ configurations run at the same time, one per VM, and swap VMs every test.
     `setup_hooks_ubuntu` and `windows_analysis_vm` + `modify_windows` +
     `setup_hooks_windows`. That gives `state/*_sandbox.bak`, `profiles/` and
     `INJECTION_PID_WINDOWS` in `sandboxd/config.py`.
-  - Dom0 needs `git` and `gcc`, which `make xen` installs.
+  - Dom0 needs `git` and `gcc`, which `make xen` installs, and `fuser` from
+    `psmisc`, which `make sandboxd` installs since 2026-11-04: the searches
+    refuse to start when they cannot see whether `sandboxd` holds its lock
+    (`apt-get install -y psmisc` on an older install).
 - **The same commit on both checkouts**, this one and Dom0's. The searches
   compare the Xen patch and the `drakvuf` submodule (§4) and refuse to run if
   they differ. The benchmark itself runs from Dom0's `evasion-tests/`.

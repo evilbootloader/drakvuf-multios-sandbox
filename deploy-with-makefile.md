@@ -2627,14 +2627,31 @@ root ssh with a key.
 
 ```bash
 # WORKSTATION, in evasion-tests/. site.conf is untracked
-cd /workspaces/work/sandbox_project/evasion-tests && test -f site.conf || cp site.conf.example site.conf; grep -E '^(DOM0|SSH_KEY|REMOTE_REPO|REMOTE_OUT_BASE|BUILD_CPUS|LINUX_VM[12]|WINDOWS_VM[12])=' site.conf
+cd /workspaces/work/sandbox_project/evasion-tests && test -f site.conf || cp site.conf.example site.conf; grep -vE '^\s*(#|$)' site.conf
 ```
 
-Set, for this host: `DOM0=root@192.168.1.6`, `SSH_KEY=/workspaces/work/id_ed25519`,
-`BUILD_CPUS=16-31` (the E-cores, §2), and
-`REMOTE_OUT_BASE=/srv/drakvuf-out/evasion-tests` — the default is under
-`/root`, on a root filesystem with 81 G free, and an al-khaser test writes
-tens of GB. Leave `REMOTE_REPO` and `REMOTE_STATE` at their defaults.
+The operator's `site.conf` predates this runbook (read 2026-11-04):
+`DOM0=root@192.168.1.6`, `SSH_KEY=/workspaces/work/id_ed25519`,
+`REMOTE_REPO` at its default, `REMOTE_OUT_BASE=/srv/drakvuf-out` (the 600 G
+volume, 489 G free), `RESULTS_BASE=/workspaces/work`, `BUILD_CPUS=16-31`
+(the E-cores, §2), the test VMs as `/home/user/ubuntu_sandbox.cfg` with
+`CLONE_NAME=ubuntu_sandbox-clone` and `ubuntu_sandbox2.cfg` with `-clone2`
+(Windows alike), `VNC=1` with `VNC_HOST=192.168.1.6`, and a pre-built
+detector: `REMOTE_DETECTOR=/home/user/detector`, `BUILD_DETECTOR=0`. Three
+things about those values:
+
+- **The detector stays pre-built.** The guest is 22.04 (glibc 2.35); Dom0
+  is 24.04 (2.39) and this container 26.04 (2.43), so neither can build a
+  binary the guest will start (`evasion-tests/README.md` §3.3). The one at
+  `/home/user/detector` is the binary the 2026-11-01 and 11-02 searches ran
+  in the same guest release.
+- **`VNC=0` on the command line for a run from this container**: it has a
+  `vncviewer` but no display, and `site.conf`'s `VNC=${VNC:-1}` lets the
+  command line win. `VNC_HOST=192.168.1.6` means the test cfgs listen on the
+  LAN, as the operator's did before (§7.6 of the README: no password there).
+- **The `-clone` suffix is fine.** `automation/lvmlocal.conf`'s filter keeps
+  Dom0's lvm2 from scanning inside such volumes; it does not stop `lvcreate`
+  or `lvs` from managing them.
 
 ## 7.2 The one-shot boot
 
@@ -2671,32 +2688,93 @@ The block of `evasion-tests/README.md` §3.2 for Ubuntu, then its §3.5 step 2.
 Never onto the origin: the benchmark refuses a cfg whose `disk` is not its
 `CLONE_NAME` ([TROUBLESHOOTING](docs/TROUBLESHOOTING.md#a-templates-disk-drifted-away-from-its-saved-memory-image)).
 
+The two cfgs `site.conf` names exist on Dom0 from the 2026-11-02 searches,
+but the state they restore was saved **today** (§6c), so they are rewritten
+from today's template: same names, each its own snapshot, VNC on the LAN as
+before, VM2 without the template's `mac=` so two guests never share one MAC
+on one bridge (the tests do not use the network). The old files are kept
+with a dated suffix, and the `diff` shows what the rewrite changed.
+
 ```bash
-# DOM0 (Xen), as root. Writes new files only
-mkdir -p /root/evasion-tests && for n in 1 2; do sed -e "s|^name *=.*|name = 'ubuntu_test$n'|" -e "s|/dev/vg-root/ubuntu_sandbox,|/dev/vg-root/ubuntu_sandbox-test$n,|" /root/drakvuf-multios-sandbox/misc/xen-vms/ubuntu_sandbox.cfg > /root/evasion-tests/ubuntu_test$n.cfg && echo "vncdisplay = $((n - 1))" >> /root/evasion-tests/ubuntu_test$n.cfg; done; grep -H -E '^(name|disk|vcpus|memory|vif|vncdisplay|vnclisten)' /root/evasion-tests/ubuntu_test*.cfg
+# DOM0 (Xen), as root. Rewrites the two test cfgs site.conf names; keeps the old ones beside them
+cd /root/drakvuf-multios-sandbox && for n in "" 2; do d=0; [ -n "$n" ] && d=1; f=/home/user/ubuntu_sandbox$n.cfg; cp -p $f $f.bak-$(date +%Y%m%d) 2>/dev/null; sed -e "s|^name *=.*|name = 'ubuntu_analysis_sandbox$n'|" -e "s|/dev/vg-root/ubuntu_sandbox,|/dev/vg-root/ubuntu_sandbox-clone$n,|" -e "s|^vnclisten *=.*|vnclisten = '0.0.0.0'|" misc/xen-vms/ubuntu_sandbox.cfg > $f; echo "vncdisplay = $d" >> $f; done && sed -i -E 's/mac=[0-9A-Fa-f:]+,//' /home/user/ubuntu_sandbox2.cfg && grep -H -E "^(name|disk|vcpus|memory|vif|vncdisplay|vnclisten|shadow_memory)" /home/user/ubuntu_sandbox.cfg /home/user/ubuntu_sandbox2.cfg | sed -E 's/mac=[0-9A-Fa-f:]+/mac=<redacted>/'; diff /home/user/ubuntu_sandbox.cfg.bak-$(date +%Y%m%d) /home/user/ubuntu_sandbox.cfg | sed -E 's/mac=[0-9A-Fa-f:]+/mac=<redacted>/'
 ```
 
-Expect each `disk` to name `-test1` or `-test2`. The two VMs share a `vif`
-line: give VM2 another MAC or bridge by hand before a two-VM search
-(`evasion-tests/README.md` §3.2's table). Then, `sandboxd` stopped:
+Expect `disk` naming `ubuntu_sandbox-clone` and `-clone2`, `vcpus = 4`,
+`memory = 8192`, `shadow_memory = 128`, `vncdisplay` 0 and 1, VM1's `vif`
+with the guest's MAC and VM2's without. The `sed` on the output hides the
+MAC; paste it as printed. Then, `sandboxd` stopped:
 
 ```bash
 # DOM0 (Xen), as root, sandboxd stopped. Snapshot, restore, 30 s of DRAKVUF, teardown
-cd /root/drakvuf-multios-sandbox/evasion-tests && GUEST=linux CFG=/root/evasion-tests/ubuntu_test1.cfg CLONE_NAME=ubuntu_sandbox-test1 CONFIGS=dev-syscalls DRAKVUF_TIMEOUT=30 ./benchmark_drakvuf.sh 2>&1 | tail -15; lvs vg-root | grep -c test1; xl list
+cd /root/drakvuf-multios-sandbox/evasion-tests && GUEST=linux CFG=/home/user/ubuntu_sandbox.cfg CLONE_NAME=ubuntu_sandbox-clone CONFIGS=dev-syscalls DRAKVUF_TIMEOUT=30 ./benchmark_drakvuf.sh 2>&1 | tail -15; lvs vg-root | grep -c 'ubuntu_sandbox-clone'; xl list
 ```
 
 Expect `dev-syscalls: status=0`, an output directory with one log, and `0`:
 the snapshot removed and the domain gone.
 
 ```
-EVIDENCE 7.3
+EVIDENCE 7.3                                                      2026-11-04
+root@dom0:~/drakvuf-multios-sandbox# cd /root/drakvuf-multios-sandbox && for n in "" 2; do d=0; [ -n "$n" ] && d=1; f=/home/user/ubuntu_sandbox$n.cfg; cp -p $f $f.bak-$(date +%Y%m%d) 2>/dev/null; sed -e "s|^name *=.*|name = 'ubuntu_analysis_sandbox$n'|" -e "s|/dev/vg-root/ubuntu_sandbox,|/dev/vg-root/ubuntu_sandbox-clone$n,|" -e "s|^vnclisten *=.*|vnclisten = '0.0.0.0'|" misc/xen-vms/ubuntu_sandbox.cfg > $f; echo "vncdisplay = $d" >> $f; done && sed -i -E 's/mac=[0-9A-Fa-f:]+,//' /home/user/ubuntu_sandbox2.cfg && grep -H -E "^(name|disk|vcpus|memory|vif|vncdisplay|vnclisten|shadow_memory)" /home/user/ubuntu_sandbox.cfg /home/user/ubuntu_sandbox2.cfg | sed -E 's/mac=[0-9A-Fa-f:]+/mac=<redacted>/'; diff /home/user/ubuntu_sandbox.cfg.bak-$(date +%Y%m%d) /home/user/ubuntu_sandbox.cfg | sed -E 's/mac=[0-9A-Fa-f:]+/mac=<redacted>/'
+/home/user/ubuntu_sandbox.cfg:name = 'ubuntu_analysis_sandbox'
+/home/user/ubuntu_sandbox.cfg:memory = 8192
+/home/user/ubuntu_sandbox.cfg:vcpus = 4
+/home/user/ubuntu_sandbox.cfg:vnclisten = '0.0.0.0'
+/home/user/ubuntu_sandbox.cfg:shadow_memory = 128
+/home/user/ubuntu_sandbox.cfg:vif = [ 'type=ioemu,model=e1000,mac=<redacted>,script=vif-openvswitch,bridge=xenbr1' ]
+/home/user/ubuntu_sandbox.cfg:disk = ['phy:/dev/vg-root/ubuntu_sandbox-clone,hda,w' ]
+/home/user/ubuntu_sandbox.cfg:vncdisplay = 0
+/home/user/ubuntu_sandbox2.cfg:name = 'ubuntu_analysis_sandbox2'
+/home/user/ubuntu_sandbox2.cfg:memory = 8192
+/home/user/ubuntu_sandbox2.cfg:vcpus = 4
+/home/user/ubuntu_sandbox2.cfg:vnclisten = '0.0.0.0'
+/home/user/ubuntu_sandbox2.cfg:shadow_memory = 128
+/home/user/ubuntu_sandbox2.cfg:vif = [ 'type=ioemu,model=e1000,script=vif-openvswitch,bridge=xenbr1' ]
+/home/user/ubuntu_sandbox2.cfg:disk = ['phy:/dev/vg-root/ubuntu_sandbox-clone2,hda,w' ]
+/home/user/ubuntu_sandbox2.cfg:vncdisplay = 1
+29c29,30
+< device_model_args_hvm = [ <REDACTED: the identity's disk and CD-ROM model and serial, three '-global' pairs> ]
+---
+> device_model_args_hvm = [ <REDACTED: the same, six '-global' pairs: the 2026-11-02 copy lacked ide-hd.ver, ide-cd.serial and ide-cd.ver, which the identity gained in commit 99ea78d> ]
+> vncdisplay = 0
+root@dom0:~/drakvuf-multios-sandbox# cd /root/drakvuf-multios-sandbox/evasion-tests && GUEST=linux CFG=/home/user/ubuntu_sandbox.cfg CLONE_NAME=ubuntu_sandbox-clone CONFIGS=dev-syscalls DRAKVUF_TIMEOUT=30 ./benchmark_drakvuf.sh 2>&1 | tail -15; lvs vg-root | grep -c 'ubuntu_sandbox-clone'; xl list
+dev-syscalls                1     1106744     1106744     1106744    1.00x      0.0       0.0    100.0%      0.00%       0.4%
+
+syscall_*:  syscall records per run (median, minimum, maximum), vs_ref: median against dev-syscalls
+cpu_s:      median DRAKVUF CPU seconds (user + system, start-up included), us/record: median per record
+ret/call:   sysret records per syscall record
+not_inner:  sysrets that do not close the innermost open call of their thread, see *.pairing.txt
+other_vcpu: matched sysrets on another vCPU than their syscall
+
+Median records per plugin:
+dev-syscalls             cpuidmon=19508 syscall=1106744 sysret=1106389
+[2026-11-04 16:55:29] Destroying Xen domain ubuntu_analysis_sandbox (id 19)
+[2026-11-04 16:55:31] Removing previous thin snapshot /dev/vg-root/ubuntu_sandbox-clone
+  Consider pruning vg-root VG archive with more then 120 MiB in 15038 files (check archiving is needed in lvm.conf).
+  Consider pruning vg-root VG archive with more then 120 MiB in 15039 files (check archiving is needed in lvm.conf).
+  Logical volume "ubuntu_sandbox-clone" successfully removed.
+0
+Name                                        ID   Mem VCPUs    State    Time(s)
+Domain-0                                     0  8192     6     r-----    3790.5
+platform                                     1  4096     4     -b----     290.3
 ```
+
+The identity's device strings in the `diff` were in the paste and are
+redacted here, as in 1.1d; the `diff` itself says what the rewrite changed:
+the 2026-11-02 copy's `device_model_args_hvm` had three of the six pairs
+today's identity carries, and the rest of the file was already equal. The
+benchmark: the state saved at 16:40 restored under the test cfg onto a
+fresh snapshot, 30 s of `dev-syscalls` with 1,106,744 syscall records and
+1,106,389 sysrets (`1.00` per call, `0.00%` not inner), the domain
+destroyed and the snapshot removed. `dev-syscalls: status=0` was above the
+`tail`; the summary table is the line that follows it.
 
 ## 7.4 One short search
 
 ```bash
-# WORKSTATION, in evasion-tests/, in tmux. Reboots Dom0 twice; the platform is down meanwhile
-cd /workspaces/work/sandbox_project/evasion-tests && TESTS=1 ONLY=baseline ./rdtsc_search.sh
+# WORKSTATION, in evasion-tests/. Reboots Dom0 twice; the platform is down meanwhile.
+# No tmux and no display in this container: nohup, VNC=0, and a log to follow
+cd /workspaces/work/sandbox_project/evasion-tests && nohup env TESTS=1 ONLY=baseline VNC=0 ./rdtsc_search.sh > /workspaces/work/rdtsc-search-$(date +%Y%m%d-%H%M).log 2>&1 & sleep 2; tail -f /workspaces/work/rdtsc-search-*.log
 ```
 
 Expect the preflight to pass — `sandboxd` down, the two checkouts equal, the
@@ -2713,6 +2791,39 @@ grep -q control_d /proc/xen/capabilities && echo xen; xl info | grep cc_compile_
 
 If the search stopped without putting Dom0 back, `./restore_dom0.sh` from the
 workstation, or [TROUBLESHOOTING](docs/TROUBLESHOOTING.md#dom0-comes-back-on-the-plain-kernel-after-an-evasion-search).
+
+```
+EVIDENCE 7.4, first attempt                                       2026-11-04
+vscode ➜ /workspaces/work/sandbox_project (master) $ cd /workspaces/work/sandbox_project/evasion-tests && nohup env TESTS=1 ONLY=baseline VNC=0 ./rdtsc_search.sh > /workspaces/work/rdtsc-search-$(date +%Y%m%d-%H%M).log 2>&1 & sleep 2; tail -f /workspaces/work/rdtsc-search-*.log
+[1] 1037718
+[2026-11-04 16:56:27] DRAKVUF source, the same on both sides: . 3c3b73a6ad246dbda7d8c44370abcf1150e25ea2 e3b0c44298fc1c14; libvmi ab06c1fdae4959d26dfe7436f6d5dba489ef5681 e3b0c44298fc1c14
+[2026-11-04 16:56:27] Building drakvuf and libvmi in root@192.168.1.6:/root/drakvuf-multios-sandbox/drakvuf (log: /workspaces/work/rdtsc-search/20261104-165625/drakvuf-build.log)
+[2026-11-04 16:56:45] Results in /workspaces/work/rdtsc-search/20261104-165625, dom0 output in /srv/drakvuf-out/rdtsc-search/20261104-165625
+[2026-11-04 16:56:45] Xen sources: root@192.168.1.6:/root/drakvuf-multios-sandbox/drakvuf/xen as make xen left it; files a variant uploads: xen/arch/x86/hvm/vmx/vmx.c xen/arch/x86/include/asm/hvm/vmx/vmcs.h
+ERROR: dom0 has no fuser to check for a running sandboxd: apt-get install psmisc there
+```
+
+The preflight's first checks passed — both checkouts' `drakvuf` at
+`3c3b73a6` with no uncommitted change (the `e3b0c4…` hash is sha256 of
+nothing), `libvmi` at `ab06c1f`, DRAKVUF rebuilt incrementally on Dom0 in
+18 s with nothing to do — and the run stopped at the `sandboxd` lock check,
+**before** anything that needs putting back: read over ssh after, Dom0 has
+only the build's log, rc and sid under `/root/evasion-tests/`, no
+`known-good/` or `orig/`, the GRUB override still commented, the platform
+up. The script said what to do and was right.
+
+> **FINDING (2026-11-04).** `fuser` is how the searches see whether
+> `sandboxd` holds `/run/lock/sandboxd.lock`, and no Makefile target
+> installed `psmisc`; the requirements of `evasion-tests/README.md` §2 named
+> `git` and `gcc` only. `make sandboxd` installs it since the same day, and
+> both READMEs say so. On this Dom0, by hand:
+
+```bash
+# DOM0 (Xen), as root
+apt-get install -y psmisc && command -v fuser
+```
+
+Then the search again, the same command:
 
 ```
 EVIDENCE 7.4

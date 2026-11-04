@@ -427,7 +427,8 @@ the line is missing.
 - `/boot` on a plain partition: `grub-probe --target=abstraction
   /boot/grub/grubenv` on Dom0 must print nothing.
 - **`sandboxd` stopped.** Two orchestrators never share a host, and every
-  reboot would kill its clones.
+  reboot would kill its clones. The search checks with `fuser`, from
+  `psmisc`, which `make sandboxd` installs; it refuses to start without it.
 - Host values in `evasion-tests/site.conf`, untracked; copy
   `site.conf.example` and fill it in. Point `REMOTE_OUT_BASE` at a disk with
   room: an al-khaser test writes tens of GB.
