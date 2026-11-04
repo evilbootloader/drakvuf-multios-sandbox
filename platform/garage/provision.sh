@@ -43,6 +43,13 @@
 
 set -eu
 
+# Every file this script creates holds a credential. Created unreadable to
+# anyone but the owner, before the first one is written (2026-11-03): api.env
+# below used to land under root's default umask, inside a directory already
+# owned by the API's user, and was world-readable until a chmod several ssh
+# sessions later in the Makefile -- M-12 of the 2026-11-02 review.
+umask 077
+
 # `$0`, not `${BASH_SOURCE[0]}` -- the latter is empty under dash and would
 # silently resolve the interpreter against $PWD. Issue #4 lost an afternoon to
 # it, and `platform/minio/provision.sh` carries the same note.
@@ -328,5 +335,24 @@ step "state"
 g bucket info "$BUCKET"
 
 step "done"
-echo  "S3_ACCESS_KEY=$api_id\nS3_SECRET_KEY=$(key_secret_of "$API_KEY_NAME")" > /etc/sandbox_platform/api.env
+# The API's S3 credential, into the environment file the Makefile then appends
+# the rest to. Three things changed on 2026-11-03: `printf`, because `\n`
+# inside `echo` is dash's reading of it and not sh's; the file is born mode
+# 600 (the umask above) instead of being fixed up later; and an existing file
+# is updated in place, never truncated -- the `>` here threw away the JWT
+# signing key and every other line on a re-run, which the idempotency the
+# runbook measured (Part K7) never covered because that run had no api.env.
+api_env=/etc/sandbox_platform/api.env
+api_secret=$(key_secret_of "$API_KEY_NAME")
+if [ -f "$api_env" ]; then
+  tmp=$(mktemp "$api_env.XXXXXX")
+  grep -vE '^S3_(ACCESS|SECRET)_KEY=' "$api_env" > "$tmp" || true
+  printf 'S3_ACCESS_KEY=%s\nS3_SECRET_KEY=%s\n' "$api_id" "$api_secret" >> "$tmp"
+  chown --reference="$api_env" "$tmp"
+  chmod 600 "$tmp"
+  mv "$tmp" "$api_env"
+else
+  printf 'S3_ACCESS_KEY=%s\nS3_SECRET_KEY=%s\n' "$api_id" "$api_secret" > "$api_env"
+  chmod 600 "$api_env"
+fi
 

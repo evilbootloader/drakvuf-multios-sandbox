@@ -26,8 +26,11 @@ nothing in the schema depends on the difference.
 
 ```bash
 python3 -m venv .venv
-.venv/bin/pip install -r requirements.txt
+.venv/bin/pip install --require-hashes -r requirements.txt
 ```
+
+`requirements.txt` is generated from `requirements.in` with the hash of every
+file it installs; `docs/DEVELOPING.md` 5.2 has the command that regenerates it.
 
 Then bring up Postgres and MinIO. **`scripts/dev-services.sh` does this and is
 idempotent** — it starts the cluster, creates `sandbox_platform_test`, starts

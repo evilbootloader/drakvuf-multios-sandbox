@@ -441,6 +441,7 @@ def test_hostile_filenames_round_trip_through_submission(registered, put_object,
     "sample\n.exe",              # forges a log line
     "a" * 513,                   # over the byte ceiling
     "é" * 300,              # 600 bytes: max_length in CHARS missed this
+    "back\\slash.bin",           # refused for EVERY target since 2026-11-03: Dom0 refuses it
 ])
 def test_a_filename_that_cannot_be_a_path_component_is_refused(client, name):
     """Refused at submission, before a row exists or a URL is signed.
@@ -720,7 +721,7 @@ def test_a_name_ntfs_refuses_is_refused_for_windows(client, name):
 
 @pytest.mark.parametrize("target", ["ubuntu", "android"])
 @pytest.mark.parametrize("name", [
-    "payload:1.bin", 'quote".bin', "wild*card.exe", "back\\slash.exe",
+    "payload:1.bin", 'quote".bin', "wild*card.exe",
     "CON", "trailing.exe.", "trailing ",
 ])
 def test_the_same_names_are_legal_on_a_linux_guest(client, target, name):
@@ -730,6 +731,13 @@ def test_the_same_names_are_legal_on_a_linux_guest(client, target, name):
     an Ubuntu or Android sample would discard evidence -- the submitted name is
     part of what is being analysed (DRAFT-030) -- to satisfy a constraint that
     does not apply to that guest.
+
+    `back\\slash.exe` was in this list until 2026-11-03. It is an ordinary ext4
+    name too, but Dom0's `sample_name_admissible` and the manifest rule refuse
+    it for every target, so admitting it here produced a job no host could
+    claim: leased, refused, leased again, until the reaper took it. The three
+    copies of the rule must not disagree (CLAUDE.md), and the refusal is in
+    `test_a_filename_that_cannot_be_a_path_component_is_refused`.
     """
     r = client.post("/api/v1/jobs", json={
         "target_os": target, "filename": name, "size_bytes": 4, "plugins":["syscalls"], "timeout":180, "disable_sysret": True,

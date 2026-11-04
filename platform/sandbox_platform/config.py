@@ -102,6 +102,17 @@ class Settings:
     upload_ttl: int = _int("S3_UPLOAD_TTL", 900)        # 15 min
     artifact_get_ttl: int = _int("S3_ARTIFACT_GET_TTL", 300)   # 5 min
 
+    # A worker's artifact tickets, separately from the browser's sample
+    # upload above (2026-11-03). They shared `upload_ttl` until then, which
+    # tied the push window of a finished analysis to the abandon sweep's
+    # arithmetic (`abandon_margin`): raising one for Dom0's benefit would have
+    # kept dead submissions a quarter of an hour longer. sandboxd mints a
+    # ticket immediately before sending its batch (stages._collect), so what
+    # this must cover is one batch of up to 64 artifacts, not the whole run;
+    # its collect phase is bounded by `timing.COLLECT_BUDGET` (900 s), and
+    # this exceeds it so a ticket never expires inside that window.
+    artifact_upload_ttl: int = _int("S3_ARTIFACT_UPLOAD_TTL", 1800)   # 30 min
+
     # How long the store keeps an object before its lifecycle rule expires it
     # (issue #37). **This does not enforce anything** -- the store does the
     # deleting, from the rule its provisioning script installs. It exists so the
@@ -200,10 +211,22 @@ class Settings:
     # Ceiling on a SINGLE uploaded artifact, bound into the presigned POST
     # policy the same way max_sample_bytes is (issue #37).
     #
-    # **This number is not measured.** `sandboxd` has never run, so no real
-    # result set from this lab has been sized. 2 GiB is a ceiling well above
-    # any single file the pipeline plausibly produces -- a dropped executable
-    # or a pcap over a 180s trace -- not a size anything was observed to need.
+    # **4 GiB minus 16 bytes, and the odd number is the point.** It is
+    # `packaging._MAX_ENTRY`: the download path wraps every artifact in a
+    # single-pass ZIP whose local header carries 32-bit sizes, so one entry
+    # above that value cannot be served at all (`packaging.EntryTooLarge`).
+    # An artifact the store accepts but the browser can never fetch is the
+    # worse failure, so this cap is the zip's and `test_packaging` pins the
+    # two together. Raising it past the zip ceiling means the download path
+    # needs Zip64 local headers, which a single pass cannot write; and past
+    # 5 GB a presigned POST cannot carry the object either -- S3's
+    # single-request limit, which only multipart upload gets around, and
+    # neither form here provides that.
+    #
+    # 2 GiB until 2026-11-03, raised with the per-job budget below when runs
+    # went to 20 minutes: the largest result set to that date was 1.74 GB
+    # whole, so the old ceiling had never bound, but a 20-minute `dumps.zip`
+    # or pcap can plausibly reach it.
     #
     # It caps ONE object and does not bound a job, which is a different
     # question: `memdump` dumps the memory regions a process writes, so a run
@@ -211,11 +234,7 @@ class Settings:
     # the request bounds names per call rather than per job -- a worker may
     # call the endpoint repeatedly. `max_job_result_bytes` below is the bound
     # that matters.
-    #
-    # Neither this nor a presigned PUT can carry an object past S3's 5 GB
-    # single-request limit. Anything larger needs multipart upload, which
-    # neither form provides.
-    max_artifact_bytes: int = _int("MAX_ARTIFACT_BYTES", 2 * 1024 * 1024 * 1024)
+    max_artifact_bytes: int = _int("MAX_ARTIFACT_BYTES", 0xFFFFFFF0)
 
     # Total result bytes one attempt may be issued upload tickets for, summed
     # in DECLARED sizes and enforced when a ticket is minted -- before the
@@ -237,13 +256,18 @@ class Settings:
     # each upload to the size it was declared with, so a worker cannot declare
     # one byte and upload a gigabyte.
     #
-    # 4 GiB is unmeasured, like max_artifact_bytes -- no real result set from
-    # this lab has been sized. Set it from the arithmetic that actually
+    # 8 GiB since 2026-11-03, for 20-minute traces (the submit ceiling went
+    # from 600 s to 1200 s on 2026-11-02); 4 GiB before, unmeasured. Measured
+    # at the change: the largest completed result set in the preceding 14
+    # days was 1.74 GB, none truncated -- so the old value had not yet bound,
+    # and this one is headroom for runs seven times longer than the 180 s
+    # ones those sets came from. Set it from the arithmetic that actually
     # matters: (jobs expected inside the retention window) x (this value)
     # should stay under the bucket quota, or the store fills before retention
-    # reclaims anything.
+    # reclaims anything. At 8 GiB against the Makefile's 100 GiB quota that
+    # is twelve full-size jobs in thirty days.
     max_job_result_bytes: int = _int(
-        "MAX_JOB_RESULT_BYTES", 4 * 1024 * 1024 * 1024
+        "MAX_JOB_RESULT_BYTES", 8 * 1024 * 1024 * 1024
     )
 
     # How much of a sample libmagic sees. It needs a header, not a file, and

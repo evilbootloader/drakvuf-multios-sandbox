@@ -157,8 +157,8 @@ def _reject_unsafe_filename(name: str, target: TargetOs | None = None) -> str:
 
     | Guest | Staging path | Forbidden |
     |---|---|---|
-    | Ubuntu | `/home/<user>/Desktop` (ext4) | `/`, NUL |
-    | Android | `/data/local/tmp` (ext4/f2fs) | `/`, NUL |
+    | Ubuntu | `/home/<user>/Desktop` (ext4) | `/`, `\\`, NUL |
+    | Android | `/data/local/tmp` (ext4/f2fs) | `/`, `\\`, NUL |
     | Windows | NTFS | `<>:"/\\|?*`, device names, trailing dot/space |
 
     macOS is not a target of this project (CLAUDE.md names three), so no APFS
@@ -199,7 +199,15 @@ def _reject_unsafe_filename(name: str, target: TargetOs | None = None) -> str:
     """
     if len(name.encode()) > _MAX_SAMPLE_NAME:
         raise ValueError(f"filename exceeds {_MAX_SAMPLE_NAME} bytes")
-    if "/" in name:
+    if "/" in name or "\\" in name:
+        # The backslash is universal since 2026-11-03, not Windows-only. The
+        # other two copies of this rule refuse it for every target --
+        # `sample_name_admissible` because it is a separator on the Windows
+        # reader of the same name, `reject_unsafe_name` because the key is
+        # ambiguous evidence -- so a Linux job named with one was admitted
+        # here, then refused by Dom0 on every claim, and cycled its lease at
+        # the head of the queue until the reaper took it. Three copies that
+        # disagree is exactly what CLAUDE.md says must not happen.
         raise ValueError(f"filename contains a path separator: {name!r}")
     if name in (".", ".."):
         raise ValueError(f"filename is a directory entry, not a sample: {name!r}")

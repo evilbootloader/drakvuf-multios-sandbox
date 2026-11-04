@@ -239,8 +239,20 @@ def test_real_archives_still_take_the_ordinary_path():
 def test_an_entry_too_large_for_one_pass_is_refused(monkeypatch):
     """Zip64 in a local header needs the compressed size before the bytes are
     written, which a single pass cannot know. `max_artifact_bytes` defaults to
-    2 GiB, so this guards a reconfigured deployment rather than a normal run."""
+    exactly `_MAX_ENTRY` (the test below), so this guards a reconfigured
+    deployment rather than a normal run."""
     monkeypatch.setattr(packaging, "_MAX_ENTRY", 16)
 
     with pytest.raises(packaging.EntryTooLarge, match="single pass"):
         build({"huge.dmp": b"x" * 64}, chunk=8)
+
+
+def test_the_artifact_cap_never_exceeds_what_one_pass_can_serve():
+    """`config.max_artifact_bytes` is bound into every upload ticket. An
+    artifact the store accepts but this module cannot wrap is a 500 at
+    download time, after the analysis is over and those bytes are the only
+    copy -- so the two values are pinned together here (2026-11-03, when the
+    cap went from 2 GiB to the zip's own ceiling)."""
+    from sandbox_platform.config import settings
+
+    assert settings.max_artifact_bytes <= packaging._MAX_ENTRY

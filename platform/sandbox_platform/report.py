@@ -319,22 +319,53 @@ class Report(_Lenient):
     def by_seqid(self) -> dict[int, Process]:
         return {p.seqid: p for p in self.processes}
 
+    def _parents(self) -> dict[int, int | None]:
+        """Each process's parent as the forest draws it, None for a root.
+
+        `parent_seqid` with everything that cannot be an edge of a forest cut
+        away: a parent missing from the list, a process its own parent, and a
+        loop. A loop is the one that hides processes rather than misplacing
+        them -- no process in it has a missing parent, so none of it, and
+        nothing under it, reaches a root. Job 4d8c1c25 (2026-11-03) had
+        swapper/0 and systemd each the other's parent and drew an empty
+        forest of 340 processes. A loop is cut at its lowest seqid, the
+        process procmon saw first."""
+        seqids = {p.seqid for p in self.processes}
+        parent_of = {p.seqid: p.parent_seqid
+                     if p.parent_seqid in seqids and p.parent_seqid != p.seqid else None
+                     for p in self.processes}
+        ON_PATH, DONE = 1, 2
+        state: dict[int, int] = {}
+        for start in parent_of:
+            path: list[int] = []
+            seqid = start
+            while seqid is not None and seqid not in state:
+                state[seqid] = ON_PATH
+                path.append(seqid)
+                seqid = parent_of[seqid]
+            if seqid is not None and state[seqid] == ON_PATH:
+                parent_of[min(path[path.index(seqid):])] = None
+            for seqid in path:
+                state[seqid] = DONE
+        return parent_of
+
     @property
     def tree(self) -> list[Node]:
         """The processes as a forest, built from `parent_seqid`.
 
         A child whose parent is not in the list becomes a root rather than
         vanishing: the report is evidence, and a dangling reference is a fact
-        about procmon's view, not a reason to hide the process."""
+        about procmon's view, not a reason to hide the process. A loop of
+        parents likewise, through `_parents`."""
+        parent_of = self._parents()
         nodes = {p.seqid: Node(p) for p in self.processes}
         roots: list[Node] = []
-        for node in nodes.values():
-            parent = nodes.get(node.process.parent_seqid) \
-                if node.process.parent_seqid is not None else None
-            if parent is None or parent is node:
+        for seqid, node in nodes.items():
+            parent = parent_of[seqid]
+            if parent is None:
                 roots.append(node)
             else:
-                parent.children.append(node)
+                nodes[parent].children.append(node)
         return roots
 
     @property
@@ -358,29 +389,28 @@ class Report(_Lenient):
         The forest with every sibling pruned off the path from a root to the
         sample -- the picture that answers "what did it spawn, and what spawned
         it" without the OS's hundred idle services around it. Empty when the
-        report does not say which process the sample was."""
+        report does not say which process the sample was, or names one the
+        list does not have.
+
+        The path up is `_parents`, the same edges `tree` draws, so it ends at
+        a root of that forest: walking raw `parent_seqid` went round a loop
+        from wherever it entered, and past a dangling parent into a seqid
+        `by_seqid` does not have."""
         target = self.startup.process
         if target is None:
             return []
-        parent_of = {p.seqid: p.parent_seqid for p in self.processes}
-        if target not in parent_of:
-            return []
-        path: list[int] = []
-        seqid: int | None = target
-        seen: set[int] = set()
-        while seqid is not None and seqid not in seen:
-            seen.add(seqid)
-            path.append(seqid)
-            seqid = parent_of.get(seqid)
-        path.reverse()  # root first
-
-        by_seqid = self.by_seqid
         full = {n.process.seqid: n for root in self.tree for n in root.walk()}
-        sample = full[target]
-        chain: Node | None = None
-        for ancestor in reversed(path[:-1]):
-            chain = Node(by_seqid[ancestor], [chain or sample])
-        return [chain or sample]
+        sample = full.get(target)
+        if sample is None:
+            return []
+        parent_of = self._parents()
+        by_seqid = self.by_seqid
+        chain = sample
+        ancestor = parent_of[target]
+        while ancestor is not None:  # nearest first; _parents has no loop
+            chain = Node(by_seqid[ancestor], [chain])
+            ancestor = parent_of[ancestor]
+        return [chain]
 
     def diagram(self, everything: bool = False) -> Diagram:
         roots = self.tree if everything else (self.lineage() or self.tree)

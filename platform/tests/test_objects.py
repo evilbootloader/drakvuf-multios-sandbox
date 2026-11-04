@@ -191,6 +191,14 @@ def test_the_ttls_are_the_ones_that_were_decided():
 
     assert settings.upload_ttl == 900            # browser upload, 15 min
     assert settings.artifact_get_ttl == 300      # browser artifact GET, 5 min
+    # The worker's artifact tickets (2026-11-03): separate from the browser's
+    # upload so a longer push window never lengthens the abandon sweep, and
+    # longer than sandboxd's 900 s collect budget so a ticket minted at the
+    # start of a slow batch cannot expire inside it.
+    assert settings.artifact_upload_ttl == 1800  # worker artifact POST, 30 min
+    ticket = objects.presigned_artifact_upload("results/x/a.bin", 10,
+                                               ttl=settings.artifact_upload_ttl)
+    assert ticket.expires_in == settings.artifact_upload_ttl
 
     # A worker's sample URL is useless once its lease lapses, so it is signed
     # for exactly that long rather than for a fixed window.

@@ -47,14 +47,16 @@ Format notes, so the next reader does not have to re-derive them:
     past 4 GiB: the 32-bit offset field can then only hold the escape value
     0xFFFFFFFF, and the escape is meaningless unless the extra field carrying
     the real offset is written beside it.
-  - A single entry over 4 GiB is refused instead of escaped
-    (`EntryTooLarge`), because the sizes live in the LOCAL header, which is
-    written before the bytes are read. `max_artifact_bytes` defaults to 2 GiB,
-    so that is a guard against a reconfigured deployment rather than a routine
-    path. The archive TOTAL is a different question and not guarded at all:
-    `max_job_result_bytes` defaults to exactly 4 GiB, so one full-run download
-    can reach the offsets that need escaping without anything being
-    misconfigured.
+  - A single entry over `_MAX_ENTRY` (4 GiB minus 16) is refused instead of
+    escaped (`EntryTooLarge`), because the sizes live in the LOCAL header,
+    which is written before the bytes are read. `config.max_artifact_bytes`
+    defaults to exactly `_MAX_ENTRY` since 2026-11-03 (2 GiB before), and
+    `test_packaging` pins it at or below this value: an artifact the store
+    accepts but this module cannot serve would be the worse failure. The
+    archive TOTAL is a different question and not guarded at all:
+    `max_job_result_bytes` defaults to 8 GiB (4 until 2026-11-03), so one
+    full-run download routinely reaches the offsets that need escaping without
+    anything being misconfigured.
 """
 
 from __future__ import annotations

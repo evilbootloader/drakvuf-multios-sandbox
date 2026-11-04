@@ -148,6 +148,46 @@ def test_a_dangling_parent_makes_a_root_not_a_missing_process():
     assert [n.process.pid for n in r.tree] == [10]
 
 
+def linux_loop(sample_parent: int) -> dict:
+    """Job 4d8c1c25's shape (2026-11-03): sandboxd rebound swapper/0 under
+    systemd, so pid 0 and pid 1 are each the other's parent and nothing in
+    the list has a missing one."""
+    return sample_report(
+        startup={"status": "Success", "pid": 4242, "process": 2},
+        processes=[process(0, 0, 1, "swapper/0"),
+                   process(1, 1, 0, "/usr/lib/systemd/systemd"),
+                   process(2, 4242, sample_parent, "/tmp/sample"),
+                   process(3, 4243, 2, "/bin/sh")])
+
+
+def test_a_loop_of_parents_is_cut_at_its_first_process_not_dropped():
+    r = R.parse(json.dumps(linux_loop(sample_parent=1)).encode()).report
+    [root] = r.tree
+    assert root.process.name == "swapper/0"
+    assert [n.process.seqid for n in root.walk()] == [0, 1, 2, 3]
+    assert r.sample_tree == {2, 3}
+
+
+@pytest.mark.parametrize("sample_parent, chain", [(1, [0, 1, 2, 3]), (0, [0, 2, 3])])
+def test_the_lineage_through_a_loop_follows_the_tree(sample_parent, chain):
+    """Entering the loop from either side gives the tree's path, not one
+    that starts wherever the walk came back round. The page that raised
+    KeyError: 217 rendered this diagram."""
+    r = R.parse(json.dumps(linux_loop(sample_parent)).encode()).report
+    [root] = r.lineage()
+    assert [n.process.seqid for n in root.walk()] == chain
+    assert r.diagram().shown == len(chain)
+
+
+def test_a_sample_with_a_dangling_parent_is_the_root_of_its_lineage():
+    """The old walk took the missing parent's seqid into the path and
+    raised KeyError on `by_seqid`."""
+    doc = sample_report(processes=[process(4, 7208, 99, "sample.exe"),
+                                   process(5, 7300, 4, "cmd.exe")])
+    [root] = R.parse(json.dumps(doc).encode()).report.lineage()
+    assert [n.process.seqid for n in root.walk()] == [4, 5]
+
+
 # --- the diagram -------------------------------------------------------------
 
 def test_the_lineage_is_the_path_to_the_sample_and_its_subtree():
@@ -179,6 +219,13 @@ def test_the_layout_is_one_row_per_leaf_and_marks_the_sample_subtree():
 
 def test_without_a_known_sample_the_diagram_is_everything():
     doc = sample_report(startup={"status": "Success", "pid": 1, "process": None})
+    r = R.parse(json.dumps(doc).encode()).report
+    assert r.lineage() == []
+    assert r.diagram().shown == 6
+
+
+def test_a_sample_the_list_does_not_have_has_no_lineage():
+    doc = sample_report(startup={"status": "Success", "pid": 1, "process": 99})
     r = R.parse(json.dumps(doc).encode()).report
     assert r.lineage() == []
     assert r.diagram().shown == 6
@@ -318,6 +365,16 @@ def test_the_tabs_render_the_report(client, conn, put_object):
     assert "CurrentVersion\\Run" in registry
     assert "Vendor\\Sub" in registry and "Old" in registry
     assert "unattributed" in registry
+
+
+def test_the_behaviour_tab_renders_a_loop_of_parents(client, conn, put_object):
+    """The request that returned 500 (KeyError: 217) on 2026-11-03."""
+    job_id = _job_with_report(conn, put_object, linux_loop(sample_parent=1),
+                              target_os="ubuntu")
+    response = client.get(f"/ui/jobs/{job_id}/tabs?tab=behaviour")
+    assert response.status_code == 200
+    assert 'id="proc-2"' in response.text and "<svg" in response.text
+    assert "swapper/0" in response.text and "systemd" in response.text
 
 
 def test_filled_tabs_follow_the_report(client, conn, put_object):

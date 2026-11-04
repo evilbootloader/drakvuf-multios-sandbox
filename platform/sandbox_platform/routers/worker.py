@@ -581,8 +581,8 @@ def artifact_urls(job: LeasedJob,
     # charged for every name in it and then refused with zero tickets minted.
     # Reproduced against the test database: results_bytes 0 -> 2147483659 for a
     # request that answered 413. The defaults make that sharp, since
-    # max_artifact_bytes is 2 GiB against a max_job_result_bytes of 4 GiB, so
-    # one refused request burned half the job's entire allowance for nothing
+    # max_artifact_bytes was then 2 GiB against a max_job_result_bytes of 4 GiB,
+    # so one refused request burned half the job's entire allowance for nothing
     # and no path reclaims it. sandboxd/stages.py::_collect asks for tickets one
     # TICKET_BATCH (64 names) at a time and `memdump` routinely produces more
     # than 64 files, so a single oversized dump in a late batch could push the
@@ -653,6 +653,10 @@ def artifact_urls(job: LeasedJob,
         ticket = objects.presigned_artifact_upload(
             f"{objects.result_prefix(job["id"], job["key_prefix"])}{name}",
             min(size, settings.max_artifact_bytes),
+            # The worker's own lifetime, not the browser's (config.py): a
+            # batch of a 20-minute run's artifacts takes longer to push than
+            # a sample takes to arrive.
+            ttl=settings.artifact_upload_ttl,
         )
         tickets[name] = ArtifactTicket(url=ticket.url, fields=ticket.fields,
                                        expires_in=ticket.expires_in)

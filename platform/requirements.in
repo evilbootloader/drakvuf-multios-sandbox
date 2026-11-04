@@ -1,0 +1,77 @@
+# The platform's dependencies: the SOURCE of platform/requirements.txt, which
+# is generated from this file with the sha256 of every distribution file and
+# installed in hash-checking mode (Makefile web_sandbox, CI, docs/DEVELOPING.md
+# 5.2). Edit here, then regenerate, in the dev container:
+#
+#     uv pip compile --universal --generate-hashes \
+#         -c sandboxd/requirements.in \
+#         platform/requirements.in -o platform/requirements.txt
+#
+# The constraint keeps the packages shared with sandboxd at sandboxd's
+# versions, since CI installs both files into one interpreter;
+# sandboxd/tests/test_requirements.py checks it, offline.
+#
+# Password hashing for the credentials this platform issues itself (DRAFT-061
+# decision 3). argon2id, and the parameters are NOT left to the library's
+# default: `config.Settings` derives them from `RFC_9106_LOW_MEMORY` -- 64 MiB,
+# t=3, p=4 -- and caps concurrent hashes, because each one holds its memory cost
+# for the whole hash and a burst of logins allocates all of them at once. That
+# is a memory bound a rate limiter cannot enforce; see `rate_limit.count` in
+# migration 0009.
+#
+# The module is `argon2`; `argon2-cffi` is only the distribution name.
+# `argon2-cffi-bindings` is pinned beside it deliberately rather than floated as
+# a transitive: it carries the compiled Argon2 reference implementation, so it
+# is the one to look at on a rebuild that behaves differently.
+argon2-cffi==25.1.0
+argon2-cffi-bindings==26.1.0
+boto3==1.43.78
+botocore==1.43.78
+fastapi==0.141.1
+httpx==0.28.1
+# The UI (#38). Server-rendered, so the escaping rule is structural:
+# autoescape is on by default and the dangerous thing becomes an explicit
+# `| safe` a reviewer can grep for. htmx is vendored, not fetched -- a strict
+# CSP blocks external hosts, and a malware-analysis platform is the last place
+# to introduce an npm dependency tree.
+jinja2==3.1.6
+pyjwt[crypto]==2.10.1
+# TOTP for the second factor (DRAFT-061 decision 3). Pure Python and offline:
+# no provider, no per-message cost, and nothing outbound on the login path.
+# Chosen over SMS-to-Telegram even though signup already proves a Telegram
+# account, because a messaging channel is a delivery mechanism someone else can
+# take over -- the Telegram link is a signup gate, not an authentication factor.
+pyotp==2.10.0
+psycopg==3.3.4
+psycopg-binary==3.3.4
+psycopg-pool==3.3.1
+pydantic==2.13.4
+# The per-process log viewer (sandbox_platform/logview.py) reads `log_index`,
+# which sandboxd/postprocessing/indexer.py writes as msgpack. Same pin as
+# sandboxd/requirements.txt: the writer and the reader are developed together.
+msgpack==1.2.2
+pydantic_core==2.46.4
+pytest==9.1.1
+# Browser-level tests for the UI (#38). These assert what a source-reading
+# test cannot: that a hostile filename does not EXECUTE, judged by an engine
+# that parses HTML the way an attacker's target does. Needs a browser:
+#   playwright install chromium
+pytest-playwright==0.9.0
+python-magic==0.4.27
+starlette==1.6.0
+uvicorn==0.52.4
+# uvicorn does NOT implement the WebSocket protocol itself. Without one of
+# these it does not handle an upgrade at all: the request is treated as a plain
+# HTTP GET, no HTTP route matches the socket path, and the client gets a 404
+# from uvicorn with the route perfectly well registered (DRAFT-056, F6).
+#
+# That failure is invisible to the test suite, because TestClient speaks ASGI
+# directly and never goes through uvicorn's protocol layer -- so a WebSocket
+# test can pass while the deployed server cannot serve one.
+#
+# 16.1.1 rather than 17: sandboxd uses the same library on Dom0, whose Python
+# is older than this container's, and 17 has no distribution for it. Pinning
+# what the DEVELOPMENT container happened to have made an install that could
+# not succeed on the machine it was for. One version both hosts can take is
+# worth more than the newest one here.
+websockets==16.1.1

@@ -470,23 +470,31 @@ def test_a_job_cannot_exceed_its_result_budget(client, worker_headers, conn):
     from sandbox_platform.config import settings
 
     job_id = leased_and_cleaning(client, worker_headers, conn)
-    half = settings.max_job_result_bytes // 2
+    cap, piece = settings.max_job_result_bytes, settings.max_artifact_bytes
 
-    first = client.post(
-        f"/api/v1/worker/jobs/{job_id}/artifacts", headers=worker_headers,
-        json={"artifacts": {"memdump/a.bin": half}})
-    assert first.status_code == 200
+    # Fill the budget with artifacts each at the per-artifact ceiling -- two
+    # of them at the defaults, 8 GiB against 4 GiB - 16 -- so what is left is
+    # smaller than anything that ceiling could catch.
+    n = cap // piece
+    for i in range(n):
+        r = client.post(
+            f"/api/v1/worker/jobs/{job_id}/artifacts", headers=worker_headers,
+            json={"artifacts": {f"memdump/{i}.bin": piece}})
+        assert r.status_code == 200, r.text[:200]
+    filled = n * piece
+    assert cap - filled + 1 <= piece, "the remainder must fit one artifact"
 
-    # Same size again: fits on its own, does not fit on top of the first.
-    # The per-artifact cap cannot catch this, which is the whole point.
-    second = client.post(
+    # One byte more than what is left: fits on its own, does not fit on top of
+    # the others. The per-artifact cap cannot catch this, which is the whole
+    # point.
+    over = client.post(
         f"/api/v1/worker/jobs/{job_id}/artifacts", headers=worker_headers,
-        json={"artifacts": {"memdump/b.bin": half + 1}})
-    assert second.status_code == 413
+        json={"artifacts": {"memdump/last.bin": cap - filled + 1}})
+    assert over.status_code == 413
 
     assert conn.execute(
         "SELECT results_bytes FROM jobs WHERE id = %s", (job_id,)
-    ).fetchone()[0] == half, "a refused request must not be charged"
+    ).fetchone()[0] == filled, "a refused request must not be charged"
 
 
 def test_one_oversized_name_costs_the_job_nothing(client, worker_headers, conn):

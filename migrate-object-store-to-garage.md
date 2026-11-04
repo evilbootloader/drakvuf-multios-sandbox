@@ -12,6 +12,13 @@
 > cannot speak for Dom0, the tunnel, the LAN certificate or the real data — see
 > the closing table for exactly which rows it did and did not settle.
 >
+> **Part L — the data volume to 512 G and the quota to 400 GiB — was EXECUTED
+> on Dom0 and the DomU on 2026-11-03**, against a Garage that was already
+> serving the deployment (`garage bucket info analysis`: bucket created
+> 2026-11-02 08:34). Whether Parts B–I ran or `make web_sandbox` built the
+> DomU with Garage from nothing is not recorded here; their `EVIDENCE` blocks
+> are still empty.
+>
 > **Parked at the repository root**, and it belongs at
 > `docs/runbooks/18-migrate-object-store-to-garage.md`.
 > `scripts/gen-current-state.py` counts `docs.rglob("*.md")` off the filesystem,
@@ -190,13 +197,18 @@ Everything that talks to the store names `https://192.168.1.10:9000` or
 Also unchanged by decision: bucket **`analysis`** (the name is load-bearing —
 `cloudflared` routes `^/analysis(/|$)` and path-style addressing puts the bucket
 first in the URL), region **`eu-central-1`** (part of the SigV4 scope, and
-DRAFT-022's GDPR position rests on it), quota **200 GiB**, retention **30 days**.
+DRAFT-022's GDPR position rests on it), quota **200 GiB** (the Makefile
+deployed 100 GiB; **400 GiB since 2026-11-03, Part L**), retention **30 days**.
 
 ## A4. Storage, and why the mount point keeps a wrong name
 
 `vg-root/platform_data` is attached as `xvdb` and mounted at `/srv/minio`
 (`misc/platform.cfg`), 256 G, inside the `vg-root/thinpool` that the golden
 images and every clone snapshot also share.
+
+> **Grown to 512 G on 2026-11-03 — Part L.** And on the DomU the Makefile
+> built, the mount point is **`/srv/garagehq`** (`web_vm` writes that
+> `fstab`), not `/srv/minio`: `docs/CURRENT-STATE.md` §2b.
 
 > **DECISION A4.** Garage's metadata and data go to
 > **`/srv/minio/garage/{meta,data}`**, and the mount point keeps its name
@@ -1328,3 +1340,141 @@ documentation. What that bought:
 | Garage's throughput against MinIO's, for a trace that writes many small artifacts | **unmeasured**, by the rehearsal or this runbook |
 | Everything that is Dom0, the tunnel, `cloudflared`, the real certificate, the real thin pool, the 256 G volume, and the real data | **cannot be tested in a container.** Parts B, G, H and I are the only things that settle these, and H5/H6 need an operator on Dom0 |
 | Whether anything outside this repository uses `mc` or `/minio/health/live` on this host | **unknown** — Part B's `ss`/`systemctl` output is the only place it would show |
+
+---
+
+# Part L — grow the data volume to 512 G and the quota to 400 GiB
+
+> **Status: EXECUTED on Dom0 and the platform DomU, 2026-11-03.** Three
+> commands, in the order below, with no reboot of either. The reason: the
+> per-job result budget went from 4 GiB to 8 GiB the same day
+> (`platform/sandbox_platform/config.py`, `max_job_result_bytes`) for
+> 20-minute traces, and at 100 GiB the bucket would hold twelve full-size
+> jobs inside the 30-day retention window.
+
+## L1 — what the thin pool can back, before growing anything
+
+`platform_data` is a **thin** volume. Growing it costs nothing until bytes
+are written, and the number that bounds the quota is the pool's real free
+space shared with every golden image and clone, not the volume's size.
+
+```bash
+# DOM0
+vgs vg-root && lvs -a -o lv_name,lv_size,data_percent,metadata_percent,pool_lv vg-root
+```
+
+```text
+EVIDENCE L1                                                     2026-11-03
+root@dom0:~# vgs vg-root && lvs -a -o lv_name,lv_size,data_percent,metadata_percent,pool_lv vg-root
+  VG      #PV #LV #SN Attr   VSize  VFree
+  vg-root   1  15   0 wz--n- <1.82t <48.30g
+  LV                      LSize    Data%  Meta%  Pool
+  android                  128.00g 7.02          thinpool
+  android_sandbox          128.00g 7.07          thinpool
+  debian                   128.00g 12.36         thinpool
+  drakvuf-out              600.00g 23.08         thinpool
+  [lvol0_pmspare]          <15.88g
+  platform                  20.00g 15.20         thinpool
+  platform_data            256.00g 0.64          thinpool
+  router                    20.00g 7.09          thinpool
+  sistemesinformacio        64.00g 9.19          thinpool
+  sistemesinformacio-snap   64.00g               thinpool
+  thinpool                   1.38t 16.10  0.65
+  [thinpool_tdata]           1.38t
+  [thinpool_tmeta]         <15.88g
+  ubuntu                     1.00t 2.11          thinpool
+  ubuntu-lv               <362.70g
+  ubuntu_sandbox             1.00t 2.11          thinpool
+  windows                    1.00t 2.54          thinpool
+  windows_sandbox            1.00t 2.75          thinpool
+```
+
+> ### FINDING L-1 — the pool is the limit, and it had room
+>
+> 1.38 T at 16.1 % used leaves about 1.16 T real; 5.62 T of thin volumes are
+> provisioned over it. A 400 GiB quota fits under that with the golden
+> images' growth and the clones' writes in hand, which is the arithmetic
+> `provision.sh` asks for ("size it below the data volume") restated for a
+> thin volume: **below the pool's free space**, because a full pool surfaces
+> as I/O errors on every thin volume at once, golden images included. Watch
+> `data_percent` as the bucket fills.
+
+## L2 — grow the volume on Dom0, then the filesystem in the DomU, online
+
+```bash
+# DOM0
+lvextend -L 512G vg-root/platform_data && lvs -o lv_name,lv_size vg-root/platform_data
+```
+
+```text
+EVIDENCE L2                                                     2026-11-03
+root@dom0:~# lvextend -L 512G vg-root/platform_data && lvs -o lv_name,lv_size vg-root/platform_data
+  Size of logical volume vg-root/platform_data changed from 256.00 GiB (65536 extents) to 512.00 GiB (131072 extents).
+  Consider pruning vg-root VG archive with more then 120 MiB in 14979 files (check archiving is needed in lvm.conf).
+  WARNING: Sum of all thin volume sizes (5.62 TiB) exceeds the size of thin pool vg-root/thinpool and the size of whole volume group (<1.82 TiB).
+  Logical volume vg-root/platform_data successfully resized.
+  LV            LSize
+  platform_data 512.00g
+```
+
+The DomU saw the new size without a restart: blkfront picks up the backend's
+new sector count, and ext4 grows mounted.
+
+```bash
+# PLATFORM
+resize2fs /dev/xvdb && df -h /srv/garagehq
+```
+
+```text
+EVIDENCE L2a                                                    2026-11-03
+root@platform:~# resize2fs /dev/xvdb && df -h /srv/garagehq
+resize2fs 1.47.2 (1-Jan-2025)
+Filesystem at /dev/xvdb is mounted on /srv/garagehq; on-line resizing required
+old_desc_blocks = 32, new_desc_blocks = 64
+The filesystem on /dev/xvdb is now 134217728 (4k) blocks long.
+
+Filesystem      Size  Used Avail Use% Mounted on
+/dev/xvdb       511G  577M  488G   1% /srv/garagehq
+```
+
+> **DECISION L2.** `platform_data` is grown, not replaced, and the
+> `web_vm` target now creates 512 G for a rebuild (`Makefile`); Part B-alt's
+> second volume stays what it was written for, the case where two stores
+> must coexist.
+
+## L3 — raise the bucket quota
+
+```bash
+# PLATFORM
+garage -c /etc/garage.toml bucket set-quotas analysis --max-size 400GiB && garage -c /etc/garage.toml bucket info analysis | grep -iE 'quota|maximum'
+```
+
+```text
+EVIDENCE L3                                                     2026-11-03
+root@platform:~# garage -c /etc/garage.toml bucket set-quotas analysis --max-size 400GiB && garage -c /etc/garage.toml bucket info analysis | grep -iE 'quota|maximum'
+==== BUCKET INFORMATION ====
+Bucket:          de728ea57126c4eb1ac127cfd692f1e1b640be8e538871539cd0c5de83b49e71
+Created:         2026-11-02 08:34:59.161 +00:00
+
+Size:            4.1 GB (3.8 GiB)
+Objects:         1872
+
+Website access:  false
+
+Quotas:          enabled
+  maximum size:  429.5 GB (400.0 GiB)
+
+Global alias:    analysis
+
+==== KEYS FOR THIS BUCKET ====
+Permissions  Access key                               Local aliases
+RW           REDACTED  objects-api
+Quotas:          enabled
+  maximum size:  429.5 GB (400.0 GiB)
+```
+
+`S3_QUOTA := 400` in the Makefile matches, so a rebuild provisions the same
+number. The 8 GiB job budget against it: fifty full-size jobs in a retention
+window — and the 20-minute Windows trace of 2026-11-02 left 3.9 GB of
+`apimon.log` alone, uploaded raw, so a job of that shape is half the budget
+before its dumps and pcap are counted.
