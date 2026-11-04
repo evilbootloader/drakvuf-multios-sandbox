@@ -2,8 +2,10 @@
 	path = drakvuf
 	url = https://github.com/evilbootloader/drakvuf.git
 	ignore = untracked
-	# develop is where the pins come from; `main` here let `git submodule
-	# update --remote` move the pin to a commit never deployed (review L-23)
+	# stable is what the lab runs (docs/runbooks/18-deploy-with-makefile.md);
+	# develop moves ahead of it. `main` here once let `git submodule update
+	# --remote` move the pin to a commit never deployed (review L-23), and
+	# develop could do the same, so --remote follows stable (2026-11-04)
 	branch = stable
 [submodule "sandboxd/data/protections-artifacts"]
 	path = sandboxd/data/protections-artifacts
