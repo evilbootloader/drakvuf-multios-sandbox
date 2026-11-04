@@ -1765,7 +1765,7 @@ fatal: Could not reset index file to revision 'origin/master'.
 ```
 
 although `git status` never listed that file as modified, before or after.
-Hit 2026-11-04, the first step of `deploy-with-makefile.md`.
+Hit 2026-11-04, the first step of `docs/runbooks/18-deploy-with-makefile.md`.
 
 **Cause.** The four cfgs the Makefile writes — `misc/xen-vms/ubuntu.cfg`,
 `ubuntu_sandbox.cfg`, `windows.cfg`, `windows_sandbox.cfg` — carry git's
@@ -1802,7 +1802,7 @@ reset:
 cd /root/drakvuf-multios-sandbox && git ls-files -v | grep -v '^H ' && git update-index --no-skip-worktree misc/xen-vms/ubuntu.cfg misc/xen-vms/ubuntu_sandbox.cfg misc/xen-vms/windows.cfg misc/xen-vms/windows_sandbox.cfg && git ls-files -v | grep -c '^S '
 ```
 
-Expect the four `S` lines, then `0`. `deploy-with-makefile.md` §1.1 has the
+Expect the four `S` lines, then `0`. `docs/runbooks/18-deploy-with-makefile.md` §1.1 has the
 reset that follows — a mixed reset and a checkout, because `reset --hard`
 would also have deleted `.venv-sandboxd/` and `misc/iso/cidata/user-data`,
 tracked only by Dom0's local commits — and then puts Dom0's copies of the two
@@ -1823,7 +1823,7 @@ answers ssh (`No route to host`). On its console (`xl console <VM>`) the
 initramfs ends with `Gave up waiting for root file system device` and
 `ALERT!  LABEL=<VM>-root does not exist.  Dropping to a shell!`. Hit
 2026-11-04 with `VM=platform-test`, the throwaway of
-`deploy-with-makefile.md` §3b.
+`docs/runbooks/18-deploy-with-makefile.md` §3b.
 
 **Cause.** An ext4 label is **16 bytes**. `web_vm` labels the two
 filesystems `<VM>-root` and `<VM>-data`, and writes `root=LABEL=<VM>-root`
@@ -1899,7 +1899,7 @@ orjson.JSONDecodeError: unexpected character, expected a JSON value: line 1 colu
 
 three times, then the artifacts upload and the job ends `completed (clean)`.
 Seen on an Ubuntu job and a Windows job on 2026-11-04
-(`deploy-with-makefile.md` EVIDENCE 5 and 6b-hooks); older logs most likely
+(`docs/runbooks/18-deploy-with-makefile.md` EVIDENCE 5 and 6b-hooks); older logs most likely
 carry it too.
 
 **Cause.** The indexer parses every `*.log` in the job's results directory
@@ -1954,7 +1954,7 @@ KeyError: 'DumpsCount'
 ```
 
 then `Filtered out 0 dumps.` and the job ends `completed (clean)`. Seen on
-both Ubuntu jobs of 2026-11-04 (`deploy-with-makefile.md` EVIDENCE 5 and
+both Ubuntu jobs of 2026-11-04 (`docs/runbooks/18-deploy-with-makefile.md` EVIDENCE 5 and
 6c-hooks), three lines each.
 
 **Cause.** DRAKVUF's memdump plugin writes two shapes of `memdump` record.

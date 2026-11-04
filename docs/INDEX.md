@@ -19,15 +19,15 @@ It maps **headings, not content**: a fact stated in the middle of a section is n
   - `docs/CURRENT-STATE.md:209` — [1.3 The `platform` DomU](CURRENT-STATE.md#13-the-platform-domu)
   - `docs/CURRENT-STATE.md:256` — [1.4 Per-OS names](CURRENT-STATE.md#14-per-os-names)
   - `docs/CURRENT-STATE.md:281` — [1.5 What is evidenced, and what is not](CURRENT-STATE.md#15-what-is-evidenced-and-what-is-not)
-    - `docs/CURRENT-STATE.md:297` — [On bare metal, since 2026-08-28](CURRENT-STATE.md#on-bare-metal-since-2026-08-28)
-- `docs/CURRENT-STATE.md:333` — [2. Superseded facts — do not cite these](CURRENT-STATE.md#2-superseded-facts--do-not-cite-these)
-  - `docs/CURRENT-STATE.md:339` — [2a. Superseded by the bare-metal migration, 2026-08-28](CURRENT-STATE.md#2a-superseded-by-the-bare-metal-migration-2026-08-28)
-  - `docs/CURRENT-STATE.md:360` — [2b. Superseded for other reasons](CURRENT-STATE.md#2b-superseded-for-other-reasons)
-- `docs/CURRENT-STATE.md:395` — [3. Derived from the repository](CURRENT-STATE.md#3-derived-from-the-repository)
-    - `docs/CURRENT-STATE.md:401` — [Runbooks, oldest to newest](CURRENT-STATE.md#runbooks-oldest-to-newest)
-    - `docs/CURRENT-STATE.md:425` — [How components are started](CURRENT-STATE.md#how-components-are-started)
-    - `docs/CURRENT-STATE.md:431` — [Environment read by `sandboxd.daemon`](CURRENT-STATE.md#environment-read-by-sandboxddaemon)
-    - `docs/CURRENT-STATE.md:435` — [Repository size](CURRENT-STATE.md#repository-size)
+    - `docs/CURRENT-STATE.md:298` — [On bare metal, since 2026-08-28](CURRENT-STATE.md#on-bare-metal-since-2026-08-28)
+- `docs/CURRENT-STATE.md:334` — [2. Superseded facts — do not cite these](CURRENT-STATE.md#2-superseded-facts--do-not-cite-these)
+  - `docs/CURRENT-STATE.md:340` — [2a. Superseded by the bare-metal migration, 2026-08-28](CURRENT-STATE.md#2a-superseded-by-the-bare-metal-migration-2026-08-28)
+  - `docs/CURRENT-STATE.md:361` — [2b. Superseded for other reasons](CURRENT-STATE.md#2b-superseded-for-other-reasons)
+- `docs/CURRENT-STATE.md:396` — [3. Derived from the repository](CURRENT-STATE.md#3-derived-from-the-repository)
+    - `docs/CURRENT-STATE.md:402` — [Runbooks, oldest to newest](CURRENT-STATE.md#runbooks-oldest-to-newest)
+    - `docs/CURRENT-STATE.md:427` — [How components are started](CURRENT-STATE.md#how-components-are-started)
+    - `docs/CURRENT-STATE.md:433` — [Environment read by `sandboxd.daemon`](CURRENT-STATE.md#environment-read-by-sandboxddaemon)
+    - `docs/CURRENT-STATE.md:437` — [Repository size](CURRENT-STATE.md#repository-size)
 
 ## `docs/DEVELOPING.md`
 
@@ -1514,6 +1514,50 @@ It maps **headings, not content**: a fact stated in the middle of a section is n
   - `docs/runbooks/17-deploy-own-identity.md:676` — [Rollback](runbooks/17-deploy-own-identity.md#rollback)
   - `docs/runbooks/17-deploy-own-identity.md:703` — [Known gaps](runbooks/17-deploy-own-identity.md#known-gaps)
 
+## `docs/runbooks/18-deploy-with-makefile.md`
+
+- `docs/runbooks/18-deploy-with-makefile.md:1` — [Deploy the lab with the Makefile — every target, in order, on Dom0](runbooks/18-deploy-with-makefile.md#deploy-the-lab-with-the-makefile--every-target-in-order-on-dom0)
+  - `docs/runbooks/18-deploy-with-makefile.md:34` — [Where each command runs](runbooks/18-deploy-with-makefile.md#where-each-command-runs)
+- `docs/runbooks/18-deploy-with-makefile.md:53` — [0. Before anything](runbooks/18-deploy-with-makefile.md#0-before-anything)
+  - `docs/runbooks/18-deploy-with-makefile.md:55` — [0.1 The targets parse](runbooks/18-deploy-with-makefile.md#01-the-targets-parse)
+  - `docs/runbooks/18-deploy-with-makefile.md:85` — [0.2 What the Makefile assumes the host already has](runbooks/18-deploy-with-makefile.md#02-what-the-makefile-assumes-the-host-already-has)
+  - `docs/runbooks/18-deploy-with-makefile.md:106` — [0.3 This host, as read on 2026-11-04](runbooks/18-deploy-with-makefile.md#03-this-host-as-read-on-2026-11-04)
+- `docs/runbooks/18-deploy-with-makefile.md:232` — [1. The checkout and `Makefile.local`](runbooks/18-deploy-with-makefile.md#1-the-checkout-and-makefilelocal)
+  - `docs/runbooks/18-deploy-with-makefile.md:234` — [1.1 Bring Dom0's checkout to `origin/master`](runbooks/18-deploy-with-makefile.md#11-bring-dom0s-checkout-to-originmaster)
+    - `docs/runbooks/18-deploy-with-makefile.md:260` — [1.1a The env file first](runbooks/18-deploy-with-makefile.md#11a-the-env-file-first)
+    - `docs/runbooks/18-deploy-with-makefile.md:284` — [1.1b What the reset will change](runbooks/18-deploy-with-makefile.md#11b-what-the-reset-will-change)
+    - `docs/runbooks/18-deploy-with-makefile.md:320` — [1.1c Keep, clear, reset, check out](runbooks/18-deploy-with-makefile.md#11c-keep-clear-reset-check-out)
+    - `docs/runbooks/18-deploy-with-makefile.md:367` — [1.1d What the saved states were made with](runbooks/18-deploy-with-makefile.md#11d-what-the-saved-states-were-made-with)
+    - `docs/runbooks/18-deploy-with-makefile.md:426` — [1.1e Put the kept copies back](runbooks/18-deploy-with-makefile.md#11e-put-the-kept-copies-back)
+  - `docs/runbooks/18-deploy-with-makefile.md:479` — [1.2 Write `Makefile.local`](runbooks/18-deploy-with-makefile.md#12-write-makefilelocal)
+- `docs/runbooks/18-deploy-with-makefile.md:546` — [2. `make xen`](runbooks/18-deploy-with-makefile.md#2-make-xen)
+  - `docs/runbooks/18-deploy-with-makefile.md:561` — [2a. Boot Dom0 without Xen](runbooks/18-deploy-with-makefile.md#2a-boot-dom0-without-xen)
+  - `docs/runbooks/18-deploy-with-makefile.md:593` — [2b. Build and install](runbooks/18-deploy-with-makefile.md#2b-build-and-install)
+  - `docs/runbooks/18-deploy-with-makefile.md:729` — [2c. Reboot into Xen and verify](runbooks/18-deploy-with-makefile.md#2c-reboot-into-xen-and-verify)
+- `docs/runbooks/18-deploy-with-makefile.md:814` — [3. `make web_vm` — the platform DomU from nothing](runbooks/18-deploy-with-makefile.md#3-make-web_vm--the-platform-domu-from-nothing)
+  - `docs/runbooks/18-deploy-with-makefile.md:822` — [3a. The refusal, against the real platform](runbooks/18-deploy-with-makefile.md#3a-the-refusal-against-the-real-platform)
+  - `docs/runbooks/18-deploy-with-makefile.md:843` — [3b. The real path, on a throwaway domain](runbooks/18-deploy-with-makefile.md#3b-the-real-path-on-a-throwaway-domain)
+  - `docs/runbooks/18-deploy-with-makefile.md:1067` — [3c. `make web_sandbox` on the throwaway](runbooks/18-deploy-with-makefile.md#3c-make-web_sandbox-on-the-throwaway)
+  - `docs/runbooks/18-deploy-with-makefile.md:1178` — [3d. Tear the throwaway down](runbooks/18-deploy-with-makefile.md#3d-tear-the-throwaway-down)
+- `docs/runbooks/18-deploy-with-makefile.md:1223` — [4. `make web_sandbox` — the re-run path, on the real platform](runbooks/18-deploy-with-makefile.md#4-make-web_sandbox--the-re-run-path-on-the-real-platform)
+  - `docs/runbooks/18-deploy-with-makefile.md:1335` — [4b. Satisfy the guard, then the re-run](runbooks/18-deploy-with-makefile.md#4b-satisfy-the-guard-then-the-re-run)
+- `docs/runbooks/18-deploy-with-makefile.md:1434` — [5. `make sandboxd`](runbooks/18-deploy-with-makefile.md#5-make-sandboxd)
+  - `docs/runbooks/18-deploy-with-makefile.md:1478` — [5b. Start the daemon and run one Ubuntu job](runbooks/18-deploy-with-makefile.md#5b-start-the-daemon-and-run-one-ubuntu-job)
+- `docs/runbooks/18-deploy-with-makefile.md:1779` — [6. The guests: `*_analysis_vm`, `modify_*`, `setup_hooks_*`](runbooks/18-deploy-with-makefile.md#6-the-guests-_analysis_vm-modify_-setup_hooks_)
+  - `docs/runbooks/18-deploy-with-makefile.md:1801` — [6a. Back up what the targets will replace](runbooks/18-deploy-with-makefile.md#6a-back-up-what-the-targets-will-replace)
+  - `docs/runbooks/18-deploy-with-makefile.md:1823` — [6b. Windows](runbooks/18-deploy-with-makefile.md#6b-windows)
+  - `docs/runbooks/18-deploy-with-makefile.md:2293` — [6c. Ubuntu](runbooks/18-deploy-with-makefile.md#6c-ubuntu)
+- `docs/runbooks/18-deploy-with-makefile.md:2620` — [WORKSTATION, in evasion-tests/. site.conf is untracked](runbooks/18-deploy-with-makefile.md#workstation-in-evasion-tests-siteconf-is-untracked)
+- `docs/runbooks/18-deploy-with-makefile.md:2654` — [DOM0 (Xen), as root. Two reboots: plain kernel, then Xen once, then it would be the plain kernel again](runbooks/18-deploy-with-makefile.md#dom0-xen-as-root-two-reboots-plain-kernel-then-xen-once-then-it-would-be-the-plain-kernel-again)
+- `docs/runbooks/18-deploy-with-makefile.md:2659` — [DOM0 (no Xen), as root](runbooks/18-deploy-with-makefile.md#dom0-no-xen-as-root)
+- `docs/runbooks/18-deploy-with-makefile.md:2664` — [DOM0 (Xen), as root. Back on Xen once; put Xen back as the default now](runbooks/18-deploy-with-makefile.md#dom0-xen-as-root-back-on-xen-once-put-xen-back-as-the-default-now)
+- `docs/runbooks/18-deploy-with-makefile.md:2690` — [DOM0 (Xen), as root. Rewrites the two test cfgs site.conf names; keeps the old ones beside them](runbooks/18-deploy-with-makefile.md#dom0-xen-as-root-rewrites-the-two-test-cfgs-siteconf-names-keeps-the-old-ones-beside-them)
+- `docs/runbooks/18-deploy-with-makefile.md:2700` — [DOM0 (Xen), as root, sandboxd stopped. Snapshot, restore, 30 s of DRAKVUF, teardown](runbooks/18-deploy-with-makefile.md#dom0-xen-as-root-sandboxd-stopped-snapshot-restore-30-s-of-drakvuf-teardown)
+- `docs/runbooks/18-deploy-with-makefile.md:2766` — [WORKSTATION, in evasion-tests/. Reboots Dom0 twice; the platform is down meanwhile.](runbooks/18-deploy-with-makefile.md#workstation-in-evasion-tests-reboots-dom0-twice-the-platform-is-down-meanwhile)
+- `docs/runbooks/18-deploy-with-makefile.md:2767` — [No tmux and no display in this container: nohup, VNC=0, and a log to follow](runbooks/18-deploy-with-makefile.md#no-tmux-and-no-display-in-this-container-nohup-vnc0-and-a-log-to-follow)
+- `docs/runbooks/18-deploy-with-makefile.md:2779` — [DOM0 (Xen), as root. Read-only](runbooks/18-deploy-with-makefile.md#dom0-xen-as-root-read-only)
+- `docs/runbooks/18-deploy-with-makefile.md:2813` — [DOM0 (Xen), as root](runbooks/18-deploy-with-makefile.md#dom0-xen-as-root)
+
 ## `docs/workflow-ci.md`
 
 - `docs/workflow-ci.md:1` — [CI / self-hosted runner design](workflow-ci.md#ci--self-hosted-runner-design)
@@ -1546,4 +1590,4 @@ It maps **headings, not content**: a fact stated in the middle of a section is n
 
 ---
 
-*1404 headings across 44 documents.*
+*1445 headings across 45 documents.*

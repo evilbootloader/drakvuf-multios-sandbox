@@ -26,12 +26,14 @@ on Dom0, reboots into it and runs the tests. A variant with no `#define`s
 > plain kernel as the default entry while a search runs, each variant's Xen
 > booted once with `grub-reboot`, Dom0 put back as `make xen` left it when
 > the search ends, and `restore_dom0.sh` (§5). **All of that ran on the
-> lab's Dom0 on 2026-11-04** (`deploy-with-makefile.md` §7, parked at the
+> lab's Dom0 on 2026-11-04** (`docs/runbooks/18-deploy-with-makefile.md` §7, parked at the
 > repository root until it is filed): one `baseline` search from this
 > checkout, two reboots and a build in six minutes, Dom0 back on `make xen`'s
-> package at the end. The first verdict is still to come: that run's test
-> gave `none` because `site.conf` sent the detector to an in-guest path the
-> rebuilt guest no longer had. `restore_dom0.sh` has not been needed yet.
+> package at the end. The first run's test gave `none` because `site.conf`
+> sent the detector to an in-guest path the rebuilt guest no longer had; the
+> second, the same evening, gave the first verdict: `baseline` **passes**,
+> ten detector runs returning false in each configuration, 1.5 M and 1.3 M
+> syscall records in the traces. `restore_dom0.sh` has not been needed yet.
 
 ---
 

@@ -1,27 +1,18 @@
 # Deploy the lab with the Makefile — every target, in order, on Dom0
 
-> **Status: written 2026-11-04 and executed the same day through §6a**
-> (EVIDENCE 0 to 6a, pasted by the operator): the checkout reset, `make xen`
-> as a target for the first time, the `web_vm` guard, a throwaway platform
-> built and provisioned from nothing and torn down, `web_sandbox` re-run on
-> the real platform after its CA-key guard fired and the key was moved off,
-> `make sandboxd` with DRAKVUF at the pin and an Ubuntu job `completed
-> (clean)`, and **§6b complete**: the Windows golden image reinstalled by the
-> Makefile after the Chrome pin was refused and re-pinned, the installers
-> mirrored on the platform, the sandbox state saved, and **a Windows job
-> `completed (clean)` with a transcript, the first ever** (EVIDENCE 6b-hooks);
-> **§6c complete** the same evening: the Ubuntu image rebuilt with the
-> identity, the hooks target's false `Error 32` found and fixed, the state
-> saved, and an Ubuntu job `completed (clean)` on it (EVIDENCE 6c-hooks).
-> **§7 and §8 are NOT YET EXECUTED**: every command there is **Candidate**,
-> and every `EVIDENCE` block there is empty until an operator pastes real
-> output into it.
->
-> **Parked at the repository root**, and it belongs at
-> `docs/runbooks/18-deploy-with-makefile.md`. `scripts/gen-current-state.py`
-> counts `docs/**/*.md` off the filesystem, so a new file under `docs/` fails
-> `sandboxd/tests/test_current_state.py` until the generator is re-run. Move
-> and rename in the change that fills the evidence (§8).
+> **Status: EXECUTED on Dom0 and the platform DomU on 2026-11-04, §0 to §7**,
+> from a checkout at `2b433f4` and the commits of that day, the output of
+> every step pasted by the operator: the checkout reset past four
+> skip-worktree bits, `make xen` as a target for the first time, a throwaway
+> platform built from nothing and torn down, `web_sandbox` re-run on the real
+> platform after its CA-key guard fired and the key was moved off, `make
+> sandboxd` with DRAKVUF at its pin, both golden images rebuilt with the
+> hardware identity and saved, an Ubuntu and a Windows job completed clean on
+> them — the first Windows run with a transcript — the installers mirrored on
+> the platform, and the first evasion search from these scripts, `baseline`,
+> passing. Two exceptions, both said where they stand: 6b-authenticode is
+> attested rather than pasted, and the one-file mirror proof of 6b-mirror did
+> not run. Filed the same evening (§8).
 >
 > **What this proves.** That the README's install sequence — `make xen`,
 > `web_vm`, `web_sandbox`, `sandboxd`, the two guest chains and the hooks
@@ -101,10 +92,10 @@ this host already is, as §0.3 reads it.
 | **An Intel CPU with VT-x and EPT** | DRAKVUF's altp2m needs EPT; the RDTSC compensation is VMX code | i9-13900KF, `docs/CURRENT-STATE.md` §1.1 |
 | **RAM for Dom0 + the platform + one guest at least**: 8192 + 4096 + 8192 MiB on this host, with 32 GiB total | `XEN_CMDLINE` fixes Dom0 at 8192 MiB; the guests' cfgs say 8192; the platform's 4096 | `Makefile`, `misc/xen-vms/platform.cfg` |
 | **Ubuntu Server 24.04** | what Dom0 runs; `make xen`'s package list and GRUB handling are Ubuntu's | `docs/CURRENT-STATE.md` §1.1 |
-| **A volume group named `vg-root`**, root on a **thick** LV, the rest of the VG **left free** | every `lvcreate` names `vg-root`; `web_vm` makes `vg-root/thinpool` from `90%FREE` of what is left | runbook 12 [§B0](docs/runbooks/12-baremetal-trial.md#b0-disk-layout-and-the-thin-pool-erase-route): ESP 1 G, `/boot` 2 G, PV on the rest |
+| **A volume group named `vg-root`**, root on a **thick** LV, the rest of the VG **left free** | every `lvcreate` names `vg-root`; `web_vm` makes `vg-root/thinpool` from `90%FREE` of what is left | runbook 12 [§B0](12-baremetal-trial.md#b0-disk-layout-and-the-thin-pool-erase-route): ESP 1 G, `/boot` 2 G, PV on the rest |
 | **`/boot` on a plain partition, not LVM** | GRUB boots Xen by multiboot; and the evasion searches need `grub-reboot`, which cannot clear its one-shot entry on LVM or RAID | same; §7.1 checks it |
-| `lvm2`, `thin-provisioning-tools`, `lvm2-monitor` enabled, autoextend set | a pool without the tools does not activate at boot; autoextend is inert without the monitor | runbook 12 [§B0a](docs/runbooks/12-baremetal-trial.md#b0a-packages--two-that-are-easy-to-miss); see [TROUBLESHOOTING](docs/TROUBLESHOOTING.md#a-thin-pool-that-will-not-activate-at-boot-long-after-it-was-created-fine) |
-| **`xenbr0`**: a Linux bridge carrying the uplink NIC, with Dom0's address | the platform's and the golden guests' `vif` name it; `network-setup.sh` masquerades out of it | runbook 12, the `xenbr0` note after §D2 — netplan, applied with `netplan try`; see [TROUBLESHOOTING](docs/TROUBLESHOOTING.md#a-headless-box-never-came-back-after-bridging-its-nic) |
+| `lvm2`, `thin-provisioning-tools`, `lvm2-monitor` enabled, autoextend set | a pool without the tools does not activate at boot; autoextend is inert without the monitor | runbook 12 [§B0a](12-baremetal-trial.md#b0a-packages--two-that-are-easy-to-miss); see [TROUBLESHOOTING](../TROUBLESHOOTING.md#a-thin-pool-that-will-not-activate-at-boot-long-after-it-was-created-fine) |
+| **`xenbr0`**: a Linux bridge carrying the uplink NIC, with Dom0's address | the platform's and the golden guests' `vif` name it; `network-setup.sh` masquerades out of it | runbook 12, the `xenbr0` note after §D2 — netplan, applied with `netplan try`; see [TROUBLESHOOTING](../TROUBLESHOOTING.md#a-headless-box-never-came-back-after-bridging-its-nic) |
 | **`xenbr1`**: an Open vSwitch bridge, created once | the clone templates' `vif` use `script=vif-openvswitch,bridge=xenbr1`; `network-setup.sh` refuses to run without it | `apt install -y openvswitch-switch && ovs-vsctl add-br xenbr1`, runbook 12 after §D2; `docs/architecture/networking.md` |
 | **Root ssh key on Dom0, no passphrase** | `web_vm` installs its public half in the DomU; `web_sandbox` and `sandboxd` then ssh there as root hundreds of lines deep; `ubuntu_analysis_vm` puts it in the guest | `ssh-keygen -t ed25519 -N '' -f /root/.ssh/id_ed25519` if `/root/.ssh/id_ed25519.pub` does not exist |
 | **A DNS name** for the browser-facing side, `SANDBOX_WEB` | the TLS certificates' SANs, `BROWSER_ORIGIN`, the API's `api.env`. Reaching it from the Internet is the Cloudflare tunnel, after `web_sandbox` (README) | `sandbox.evilbootloader.com` |
@@ -139,7 +130,7 @@ this procedure starts from, and why some steps below take the re-run path.
 > rebuilds, the output volume and the platform's job history. Every target can
 > be exercised from the state it expects by removing exactly what it creates,
 > and the golden guests must be reinstalled in any case to pick up the
-> hardware identity ([guest-identity.md §4](docs/architecture/guest-identity.md#4-why-a-reinstall)).
+> hardware identity ([guest-identity.md §4](../architecture/guest-identity.md#4-why-a-reinstall)).
 > A fresh-host run of this document belongs on a spare Intel machine, or in a
 > nested VM for the sequence alone — Xen and DRAKVUF ran nested in this
 > project until 2026-08-28 — and not on this Dom0.
@@ -254,7 +245,7 @@ clean while they differ from `HEAD`. Three consequences shape the steps:
 
 - The first attempt, `git reset --hard origin/master`, **failed** on the
   skip-worktree files
-  ([TROUBLESHOOTING](docs/TROUBLESHOOTING.md#git-reset---hard-originmaster-on-dom0-refused-a-cfg-is-not-uptodate)),
+  ([TROUBLESHOOTING](../TROUBLESHOOTING.md#git-reset---hard-originmaster-on-dom0-refused-a-cfg-is-not-uptodate)),
   and had it succeeded it would have **deleted** `.venv-sandboxd/` and
   `user-data` from disk, as files tracked here and absent upstream. So the
   reset below is a **mixed** one followed by a checkout: the index and the
@@ -390,7 +381,7 @@ what `scripts/xen-identity.py xl-cfg` and `mac` wrote on 2026-11-02 — the
 guest's `mac=`, `smbios`, `smbios_firmware`, `acpi_firmware`,
 `xen_platform_pci = 0` and `device_model_args_hvm` — lines the tracked files
 have never had, which the skip-worktree bit kept out of every `git diff`
-([TROUBLESHOOTING](docs/TROUBLESHOOTING.md#git-reset---hard-originmaster-on-dom0-refused-a-cfg-is-not-uptodate)).
+([TROUBLESHOOTING](../TROUBLESHOOTING.md#git-reset---hard-originmaster-on-dom0-refused-a-cfg-is-not-uptodate)).
 `sandboxd/clone.py::rewrite_config` passes all of them through to every clone
 and keeps `mac=`, so every clone since 2026-11-02 has been restored with them;
 a template without them gives the restored guest a device model started with
@@ -561,7 +552,7 @@ running `xen-upstream`, writes `/etc/default/grub.d/xen.cfg` with
 kernel**, for two reasons: the recipe removes and reinstalls the Xen tools the
 running domains' backends come from, and this CPU crashes the toolchain under
 full builds unless pinned to its E-cores
-([TROUBLESHOOTING](docs/TROUBLESHOOTING.md#make-xen--internal-compiler-error-segmentation-fault-or-the-assemblers-internal-error));
+([TROUBLESHOOTING](../TROUBLESHOOTING.md#make-xen--internal-compiler-error-segmentation-fault-or-the-assemblers-internal-error));
 Dom0 under Xen has 6 vCPUs and no E-core to pin to.
 
 **The platform is down from 2a to 2c**, and so is analysis. `sandboxd` is not
@@ -586,7 +577,7 @@ grep control_d /proc/xen/capabilities 2>&1; uname -r; nproc; cat /sys/devices/cp
 
 Expect `grep` to fail (no `/proc/xen`), `nproc` **32**, and `16-31` for the
 E-cores. If it came back on Xen, see
-[TROUBLESHOOTING](docs/TROUBLESHOOTING.md#uncommenting-xen_override_grub_default0-still-boots-xen).
+[TROUBLESHOOTING](../TROUBLESHOOTING.md#uncommenting-xen_override_grub_default0-still-boots-xen).
 
 ```
 EVIDENCE 2a                                                       2026-11-04
@@ -632,7 +623,7 @@ line **commented again**: `make xen` installed a fresh `xen.cfg` from
 `automation/xen-grub.cfg`, so Xen is the default entry without a step of
 yours. The `grep` for errors matches `0 Errors` summaries and paths with
 `Error` in them; read the hits, do not count them. A `pod2man` failure in `docs/` is
-[TROUBLESHOOTING](docs/TROUBLESHOOTING.md#make-xen--pod2man-cant-open-entering-no-such-file-or-directory),
+[TROUBLESHOOTING](../TROUBLESHOOTING.md#make-xen--pod2man-cant-open-entering-no-such-file-or-directory),
 fixed in the recipe since 2026-11-01.
 
 ```
@@ -754,7 +745,7 @@ Expect `cc_compile_date` today, `xen_commandline` with `rdtsc-poc=1`,
 unit is generated from the init script the package installs, repeats what the
 native units already did, and fails on every Xen boot; what the 2026-11-03
 change fixed is that `xen-rdtsc-poc` no longer depends on it
-([TROUBLESHOOTING](docs/TROUBLESHOOTING.md#xen-rdtsc-pocservice--dependency-failed-and-no-rdtsc_poc-in-xl-dmesg)).
+([TROUBLESHOOTING](../TROUBLESHOOTING.md#xen-rdtsc-pocservice--dependency-failed-and-no-rdtsc_poc-in-xl-dmesg)).
 `xl list` shows `Domain-0` at 8192 MiB and 6 vCPUs and nothing else; the
 `grep -c` after `debug-keys t` is `1` on a boot where no guest has run yet,
 since the dump is per guest vCPU. The platform is not started by a unit; start
@@ -866,7 +857,7 @@ copies the kernel to `/var/lib/xen/<VM>/`, and creates `vg-root/<VM>` and
 fewer**: an ext4 label is 16 bytes, and `mkfs.ext4` truncates `<VM>-root`
 silently past that, which is how the first attempt, `platform-test`, ended in
 the initramfs shell
-([TROUBLESHOOTING](docs/TROUBLESHOOTING.md#a-make-web_vm-domain-drops-to-the-initramfs-shell-its-root-label-does-not-exist);
+([TROUBLESHOOTING](../TROUBLESHOOTING.md#a-make-web_vm-domain-drops-to-the-initramfs-shell-its-root-label-does-not-exist);
 its evidence is at the end of this step).
 
 ```bash
@@ -1794,7 +1785,7 @@ root@dom0:~/drakvuf-multios-sandbox# grep -E 'job [0-9a-f-]{8}.*(claimed|restor|
 > case for doing it now: the identity `make xen` installed reaches a guest only
 > at a cold install — a saved state keeps the firmware it booted with, and
 > Windows keeps the devices it once saw
-> ([guest-identity.md §4](docs/architecture/guest-identity.md#4-why-a-reinstall)) —
+> ([guest-identity.md §4](../architecture/guest-identity.md#4-why-a-reinstall)) —
 > so the images have to be rebuilt for that work to count at all. Windows
 > first: it is the path to re-confirm (`CURRENT-STATE.md` §1.5). Ubuntu after,
 > so the evidenced guest is the last one taken down.
@@ -1907,7 +1898,7 @@ matched the hash pinned on 2026-11-03. The refusal is the recipe doing what
 `Last-Modified` for the file is 2026-11-03 21:21 UTC, after the pin; the file
 Dom0 got and the file the development container got minutes later are the
 same, `55edacd3…`, 171,970,560 bytes, version strings `157.0.8089.0`
-([TROUBLESHOOTING](docs/TROUBLESHOOTING.md#make-win_installers-refuses-the-build-an-installers-checksum-did-not-match)).
+([TROUBLESHOOTING](../TROUBLESHOOTING.md#make-win_installers-refuses-the-build-an-installers-checksum-did-not-match)).
 The list is re-pinned in this checkout; until that commit reaches Dom0, the
 same line by hand there:
 
@@ -2311,7 +2302,7 @@ the installer; its final `sed` strips the installer lines from the cfg.
 > **Watch the vCPU count.** The cfg the target writes says `vcpus = 4`. The
 > trace's injection anchors on PID 1 and has failed on a 3-vCPU guest when
 > another `systemd` reached the breakpoint first
-> ([TROUBLESHOOTING](docs/TROUBLESHOOTING.md#the-traces-injection-fails-with-could-not-create-argv-arrays)).
+> ([TROUBLESHOOTING](../TROUBLESHOOTING.md#the-traces-injection-fails-with-could-not-create-argv-arrays)).
 > If the first jobs after this rebuild fail that way, that entry is the cause
 > to check, and the saved state's `vcpus` is not a knob you can turn without
 > saving again.
@@ -2401,7 +2392,7 @@ own mapping, `vg--root-ubuntu`, is supposed to stay and is not matched.
 **A Makefile before 2026-11-04's fix ends with `Error 32` after all of that**,
 from its own EXIT trap, and the run is still good if the two closing lines
 printed — do not re-run it
-([TROUBLESHOOTING](docs/TROUBLESHOOTING.md#make-setup_hooks_ubuntu-ends-with-error-32-after-every-step-succeeded)). Then the same 20 minutes and
+([TROUBLESHOOTING](../TROUBLESHOOTING.md#make-setup_hooks_ubuntu-ends-with-error-32-after-every-step-succeeded)). Then the same 20 minutes and
 the printed save:
 
 ```bash
@@ -2485,7 +2476,7 @@ did its work on every exit, which is why the false code was the only harm.
 > trap's first `umount` exits 32 and ends the trap, and 32 becomes the
 > target's exit code — on success and on failure alike, so the code tells
 > nothing. Fixed in the Makefile the same day (`set +e` first in the trap);
-> [TROUBLESHOOTING](docs/TROUBLESHOOTING.md#make-setup_hooks_ubuntu-ends-with-error-32-after-every-step-succeeded).
+> [TROUBLESHOOTING](../TROUBLESHOOTING.md#make-setup_hooks_ubuntu-ends-with-error-32-after-every-step-succeeded).
 > `setup_hooks_windows` has no trap and was not affected. The removal block
 > of this step also has a small flaw: `lvremove a b && mv` skips the `mv`
 > when one of the two volumes is already gone, as it was here; harmless
@@ -2686,7 +2677,7 @@ EVIDENCE 7.2
 
 The block of `evasion-tests/README.md` §3.2 for Ubuntu, then its §3.5 step 2.
 Never onto the origin: the benchmark refuses a cfg whose `disk` is not its
-`CLONE_NAME` ([TROUBLESHOOTING](docs/TROUBLESHOOTING.md#a-templates-disk-drifted-away-from-its-saved-memory-image)).
+`CLONE_NAME` ([TROUBLESHOOTING](../TROUBLESHOOTING.md#a-templates-disk-drifted-away-from-its-saved-memory-image)).
 
 The two cfgs `site.conf` names exist on Dom0 from the 2026-11-02 searches,
 but the state they restore was saved **today** (§6c), so they are rewritten
@@ -2790,7 +2781,7 @@ grep -q control_d /proc/xen/capabilities && echo xen; xl info | grep cc_compile_
 ```
 
 If the search stopped without putting Dom0 back, `./restore_dom0.sh` from the
-workstation, or [TROUBLESHOOTING](docs/TROUBLESHOOTING.md#dom0-comes-back-on-the-plain-kernel-after-an-evasion-search).
+workstation, or [TROUBLESHOOTING](../TROUBLESHOOTING.md#dom0-comes-back-on-the-plain-kernel-after-an-evasion-search).
 
 ```
 EVIDENCE 7.4, first attempt                                       2026-11-04
@@ -2925,38 +2916,96 @@ workload at `/tmp/drakvuf-workload.sh`. The search's default,
 Then the search a third time, the same command:
 
 ```
-EVIDENCE 7.4
+EVIDENCE 7.4                                                      2026-11-04
+vscode ➜ /workspaces/work/sandbox_project (master) $ cd /workspaces/work/sandbox_project/evasion-tests && nohup env TESTS=1 ONLY=baseline VNC=0 ./rdtsc_search.sh > /workspaces/work/rdtsc-search-$(date +%Y%m%d-%H%M).log 2>&1 & sleep 2; tail -f /workspaces/work/rdtsc-search-*.log
+[1] 1065682
+==> /workspaces/work/rdtsc-search-20261104-1718.log <==
+[2026-11-04 17:18:39] DRAKVUF source, the same on both sides: . 3c3b73a6ad246dbda7d8c44370abcf1150e25ea2 e3b0c44298fc1c14; libvmi ab06c1fdae4959d26dfe7436f6d5dba489ef5681 e3b0c44298fc1c14
+[2026-11-04 17:18:40] Building drakvuf and libvmi in root@192.168.1.6:/root/drakvuf-multios-sandbox/drakvuf (log: /workspaces/work/rdtsc-search/20261104-171838/drakvuf-build.log)
+[2026-11-04 17:18:56] Results in /workspaces/work/rdtsc-search/20261104-171838, dom0 output in /srv/drakvuf-out/rdtsc-search/20261104-171838
+[2026-11-04 17:18:56] Xen sources: root@192.168.1.6:/root/drakvuf-multios-sandbox/drakvuf/xen as make xen left it; files a variant uploads: xen/arch/x86/hvm/vmx/vmx.c xen/arch/x86/include/asm/hvm/vmx/vmcs.h
+[2026-11-04 17:18:57] Xen package make xen installed, kept to put back: /root/drakvuf-multios-sandbox/drakvuf/xen/dist (811a3052042de933)
+[2026-11-04 17:18:59] GRUB default on dom0: native
+[2026-11-04 17:18:59] ===== Variant baseline (25842c1f00a20370): 
+[2026-11-04 17:19:01] Rebooting dom0 into native
+[2026-11-04 17:19:52] dom0 runs native
+[2026-11-04 17:19:52] baseline: building and installing Xen, try 1 of 3 (log: /workspaces/work/rdtsc-search/20261104-171838/baseline/build.log)
+[2026-11-04 17:21:25] Rebooting dom0 into xen
+[2026-11-04 17:22:16] dom0 runs xen
+[2026-11-04 17:23:50] baseline test 1 dev-syscalls: detector false=10 true=0, syscalls=1529803, status=0 -> pass (detector returned false 10 times)
+[2026-11-04 17:23:51] baseline test 1 dev-all: detector false=10 true=0, syscalls=1324461, status=0 -> pass (detector returned false 10 times)
+[2026-11-04 17:23:57] baseline: test 1 passed, 1 of 1 in a row
+[2026-11-04 17:23:57] Variant baseline: pass, 1 consecutive tests passed of 1 run, detector runs mean,min 10.0,10
+[2026-11-04 17:23:57] Putting dom0 back as make xen left it
+[2026-11-04 17:23:58] Rebooting dom0 into native
+[2026-11-04 17:24:49] dom0 runs native
+[2026-11-04 17:24:49] Sources in /root/drakvuf-multios-sandbox/drakvuf/xen as make xen left them
+[2026-11-04 17:24:53] make xen's Xen package installed again
+[2026-11-04 17:24:57] GRUB default on dom0: xen
+[2026-11-04 17:24:58] Rebooting dom0 into xen
+[2026-11-04 17:25:48] dom0 runs xen
+[2026-11-04 17:25:48] dom0 runs make xen's Xen, the default entry again
+Detector runs per configuration run (expected 11; slow = fewer than 8)
+variant                      result       tests none true | syscalls true/runs min | all true/runs min     | stable firstslow score  run
+baseline                     pass             1    0    0 |    0/10   min 10      |    0/10   min 10      |   100%         -  0.91  20261104-171838
+[2026-11-04 17:25:49] Winners: baseline, see /workspaces/work/rdtsc-search/20261104-171838/WINNERS.txt and /workspaces/work/rdtsc-search/20261104-171838/ranking.txt
+vscode ➜ /workspaces/work/sandbox_project (master) $ cat /workspaces/work/rdtsc-search/20261104-171838/WINNERS.txt
+===== Variant: baseline (25842c1f00a20370)
+Defines: 
+Passed 1 consecutive tests of dev-syscalls dev-all (1 tests run).
+
+baseline,1,pass,1,/srv/drakvuf-out/rdtsc-search/20261104-171838/baseline/t01/vm1 /srv/drakvuf-out/rdtsc-search/20261104-171838/baseline/t01/vm2
+
+baseline,1,dev-syscalls,10,0,1529803,0,pass,detector returned false 10 times,/srv/drakvuf-out/rdtsc-search/20261104-171838/baseline/t01/vm2
+baseline,1,dev-all,10,0,1324461,0,pass,detector returned false 10 times,/srv/drakvuf-out/rdtsc-search/20261104-171838/baseline/t01/vm1
+vscode ➜ /workspaces/work/sandbox_project (master) $ cat /workspaces/work/rdtsc-search/20261104-171838/results.csv 
+variant,test,config,detector_false,detector_true,syscalls,drakvuf_status,verdict,reason,outdirs
+baseline,1,dev-syscalls,10,0,1529803,0,pass,detector returned false 10 times,/srv/drakvuf-out/rdtsc-search/20261104-171838/baseline/t01/vm2
+baseline,1,dev-all,10,0,1324461,0,pass,detector returned false 10 times,/srv/drakvuf-out/rdtsc-search/20261104-171838/baseline/t01/vm1
 ```
+
+**The first verdict from this repository's scripts: `baseline` passes.**
+On the guest rebuilt today with the identity, under a Xen built from
+`make xen`'s sources with the compensation's shipped values, the red pill
+ran ten times in each of the two configurations, `dev-syscalls` and
+`dev-all` on the two test VMs at once, and returned false every time, with
+1,529,803 and 1,324,461 syscall records in the 55 s traces. Seven minutes
+from the first reboot to the verdict, and Dom0 back on `make xen`'s Xen
+as the default entry at the end. `ONLY=baseline TESTS=1` is the smallest
+search there is; the variants of `variants/rdtsc.txt` and the al-khaser
+search on the Windows guest are the work this harness now exists for, and
+they are not part of this runbook. The platform is started by hand after
+the last reboot, as after every one.
 
 ---
 
-# 8. Record what happened
+# 8. Filed
 
-In the change that fills the evidence:
+Filed on 2026-11-04 as `docs/runbooks/18-deploy-with-makefile.md`, the
+evening the last part ran, in the change that regenerated
+`docs/CURRENT-STATE.md` and `docs/INDEX.md` and pointed the README at the
+new path. What the day left for others:
 
-1. `git mv deploy-with-makefile.md docs/runbooks/18-deploy-with-makefile.md`,
-   point `README.md`'s links at the new path (`scripts/check-refs.py` fails
-   until they are), and rewrite the status banner to what ran and what did
-   not. Parts not run are **pending**, not abandoned, unless §6's decision
-   went the other way; say which.
-2. `docs/CURRENT-STATE.md` rows, dated: §1.2 Xen (`make xen` **has** run as
-   a target; `cc_compile_date`), "Dom0 checkout" (at `origin/master`, the
-   local commit on a branch, `Makefile.local` present), DRAKVUF (built from
-   the pin), "Env file template" (the renderings have run); §1.5 Windows if
-   6b ran; the evasion README's status paragraph.
-3. Whatever went wrong → `docs/TROUBLESHOOTING.md`, symptom-first, and the
-   wrong step here **replaced** with a pointer.
-4. The FINDINGs above that turned into fixes → the Makefile and
-   `automation/sandboxd.env.example`, in their own commits, with this
-   runbook's step updated to match.
-5. Regenerate and check:
-
-   ```bash
-   # DEV CONTAINER
-   scripts/gen-current-state.py && scripts/gen-doc-index.py && scripts/check-refs.py && platform/.venv/bin/python -m pytest sandboxd/tests -q
-   ```
-
-6. Confirm the new row reads `yes` in `CURRENT-STATE.md` §3.
+- **Recorded the same day.** `CURRENT-STATE.md` rows for Xen, DRAKVUF, the
+  Dom0 checkout, the platform's address, services, listeners (9100), source
+  and TLS, the Windows and Ubuntu rows of §1.5, the clone's vCPUs, the
+  evasion searches. `TROUBLESHOOTING.md` entries for the skip-worktree reset
+  refusal, the 16-byte ext4 label, the installer checksum, the hooks target's
+  `Error 32`, the indexer's `preconfig.log`, the memdump parser's
+  `DumpsCount`, the missing `fuser`. Three fixes through the review gate: the
+  installers' mirror with the Chrome re-pin, the trap, `psmisc`.
+- **Candidate fixes named above and not applied**, each a FINDING where it
+  was found: `ubuntu_analysis_vm` and `windows_analysis_vm` writing the
+  tracked cfg before their LV guard (6b, 6c); `web_sandbox`'s re-run path
+  not restarting the API (§4); the worker token in a comment line of the
+  rendered env file and the `.bashrc` append on every `make sandboxd` (§5);
+  `web_vm`'s unchecked label length (3b); `xencommons.service` failing on
+  every Xen boot (2c); the LVM archive of 15,000 files (3d); the indexer and
+  memdump parser errors on every job (5b, 6c).
+- **Evidence that is attested, not pasted**: 6b-authenticode. **Not run**:
+  the one-file mirror proof of 6b-mirror. **Not part of this runbook**: the
+  per-plugin look at a Windows job's artifacts, the variants of
+  `variants/rdtsc.txt` and the al-khaser search.
 
 ## Open questions this run should settle
 

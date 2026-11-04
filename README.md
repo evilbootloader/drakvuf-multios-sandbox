@@ -44,7 +44,7 @@ All three are current, at different stages:
 |---|---|
 | **Ubuntu** | Evidenced end to end, including through the platform |
 | **Android/BlissOS** | Automation complete, in `sandboxd/guests.py`. **Both sample kinds evidenced through the platform** — native ELF, and APK install + `am start` |
-| **Windows** | Ran end to end once (operator-confirmed, 2026-09-05) with **no runbook and no per-plugin validation** behind it. The weakest of the three, and the one to re-confirm rather than assert; `deploy-with-makefile.md` §6b is the planned re-run |
+| **Windows** | Evidenced end to end with a transcript on 2026-11-04 (`docs/runbooks/18-deploy-with-makefile.md` §6b), on the image the Makefile builds; before that, one operator-confirmed run on 2026-09-05. **No per-plugin validation yet**: a job completing does not mean every plugin produced what it should |
 
 ## Running it
 
@@ -89,8 +89,8 @@ guest state in `state/`; neither is git-tracked. See `profiles/README.md`,
   `ubuntu.cfg` / `windows.cfg`, their `*_sandbox.cfg` clone templates, and
   `autounattend.xml`. A second set, `misc/*.cfg`, is where
   `scripts/gen-xen-configs.py` writes the CPU partition; the two disagree, and
-  reconciling them is an open item (`deploy-with-makefile.md`, "Open
-  questions").
+  reconciling them is an open item (`docs/runbooks/18-deploy-with-makefile.md`,
+  "Open questions").
 - `evasion-tests/` — the RDTSC and al-khaser searches: do the guests give the
   sandbox away under DRAKVUF, and which Xen build hides it best. Run from a
   second machine, because they reboot Dom0. See below, and
@@ -153,7 +153,8 @@ cd platform && .venv/bin/python -m pytest -q             # platform; needs both
 
 The Makefile's targets run only on Dom0, so `make -n` is all a development
 container can do with them. Running them for real, in order, with what to
-expect from each, is `deploy-with-makefile.md`.
+expect from each, is `docs/runbooks/18-deploy-with-makefile.md`, run top to
+bottom on 2026-11-04.
 
 **Never run the platform suite against the deployment.** Its `conn` fixture
 truncates the jobs table. `TEST_DATABASE_URL` defaults to
@@ -192,10 +193,9 @@ for general guidance on the tool itself.
 ## Installing the lab
 
 The install is `make`-driven and runs **as root on Dom0, from the checkout**.
-`deploy-with-makefile.md` is the step-by-step: what each target does, what its
-output should look like, and what to do when it refuses. It is parked at the
-repository root until it has been run top to bottom and moves to
-`docs/runbooks/18-` then. This is the summary.
+`docs/runbooks/18-deploy-with-makefile.md` is the step-by-step, run top to
+bottom on 2026-11-04 with every step's output: what each target does, what
+its output looks like, and what to do when it refuses. This is the summary.
 
 ### What the host needs first
 
@@ -435,7 +435,8 @@ the line is missing.
 - For al-khaser: LLVM and [xwin](https://github.com/Jake-Shadle/xwin) on your
   machine to cross-build it, which means accepting Microsoft's SDK license.
 
-**First run**, in this order; `deploy-with-makefile.md` §7 records it:
+**First run**, in this order; `docs/runbooks/18-deploy-with-makefile.md` §7
+records it, with a `baseline` pass on 2026-11-04:
 
 ```bash
 # DOM0 (Xen), as root
