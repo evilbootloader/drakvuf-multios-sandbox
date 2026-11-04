@@ -22,7 +22,11 @@ on Dom0, reboots into it and runs the tests. A variant with no `#define`s
 > `rdtsc-poc.md` and `guest-identity.md`, run until then from a working
 > directory outside this repository on the lab's Dom0 (i9-13900KF). In that
 > move they gained `site.conf`, the Dom0-tree mode, the DRAKVUF source check
-> and the clone-disk check. **None of those has run on a Dom0 yet.**
+> and the clone-disk check. **None of those has run on a Dom0 yet.** Neither
+> has what review M-9 changed on 2026-11-04: the plain kernel as the default
+> entry while a search runs, each variant's Xen booted once with
+> `grub-reboot`, Dom0 put back as `make xen` left it when the search ends,
+> and `restore_dom0.sh` (§5).
 
 ---
 
@@ -40,6 +44,7 @@ takes hours.
 | `variants/*.txt` | — | the variants each search tries by default |
 | `rdtsc_rank.py`, `alkhaser_rank.py` | your machine | rank a search's variants, `ranking.txt` |
 | `rdtsc_vnc.sh` | your machine | VNC viewers on the test VMs while a search runs (`VNC=1`) |
+| `restore_dom0.sh` | your machine | puts Dom0 back as `make xen` left it after a search that could not (§5) |
 | `build_al_khaser.sh`, `al-khaser.patch` | your machine | cross-build `build/al-khaser_x64.exe` |
 | `benchmark_drakvuf.sh` | Dom0, as root | one test: thin snapshot, `xl restore`, DRAKVUF with the workload injected, teardown |
 | `check_sysret_pairing.py` | Dom0 | called by the benchmark after each run |
@@ -71,15 +76,27 @@ configurations run at the same time, one per VM, and swap VMs every test.
   they differ. The benchmark itself runs from Dom0's `evasion-tests/`.
 - **Root ssh to Dom0 with a key**, no password: the search logs in hundreds of
   times.
-- **GRUB that boots Dom0 without Xen, unattended.** Dom0 builds Xen booted on
-  its plain kernel, the only boot Xen may be built on. `make xen`'s
-  `/etc/default/grub.d/xen.cfg` switches the default entry with one commented
-  line (`XEN_OVERRIDE_GRUB_DEFAULT=0`), and the search flips it. Try it once
-  by hand before the first search (§7.7).
+- **GRUB that boots Dom0 both ways, unattended.** Dom0 builds Xen booted on
+  its plain kernel, the only boot Xen may be built on. While a search runs the
+  plain kernel is the GRUB default (`XEN_OVERRIDE_GRUB_DEFAULT=0` in
+  `make xen`'s `/etc/default/grub.d/xen.cfg`, uncommented) and each variant's
+  Xen is booted once with `grub-reboot`, so a Xen that panics at boot, a crash
+  of the search or a power cut leaves Dom0 reachable on its plain kernel
+  rather than looping on an unreviewed Xen. That needs `/boot` on a plain
+  partition: GRUB cannot clear the one-shot entry on LVM or RAID, and the
+  search refuses to start there (`grub-probe --target=abstraction
+  /boot/grub/grubenv` must print nothing). Try both switches once by hand
+  before the first search (§7.7).
+- **`make xen` run from Dom0's checkout**, so that its package is in
+  `drakvuf/xen/dist/`: the search keeps a copy before the first variant and
+  installs it again when it ends. A Dom0 the scripts before 2026-11-04 left on
+  a variant needs `make xen` once (§5).
 - **Disk on Dom0** for the output: an al-khaser test writes tens of GB (§7.5).
 - **Nothing else using the guests.** Stop `sandboxd` in its terminal; it has
-  no systemd unit, and two orchestrators must never share a host. Each reboot
-  also takes down the platform DomU.
+  no systemd unit, and two orchestrators must never share a host. The search
+  refuses to start while `sandboxd` holds `/run/lock/sandboxd.lock`, because
+  every reboot would kill its clones. Each reboot also takes down the platform
+  DomU.
 - On your machine: `bash`, `ssh`/`scp`, `git`, `python3`. For the al-khaser
   build also LLVM (`clang-cl`, `lld-link`, `llvm-ml`) and
   [xwin](https://github.com/Jake-Shadle/xwin), whose `splat` unpacks
@@ -236,13 +253,16 @@ timing checks would otherwise sleep 600 s each.
    commit and applies this checkout's `automation/xen-rdtsc-poc.patch` to them.
    It first checks that the patch is identical to Dom0's copy.
 2. It writes the variant's values over the `#define`s.
-3. It uploads only those two files, keeping the first original of each in
-   `REMOTE_STATE/orig/`.
+3. It uploads only those two files, keeping the original of each under
+   `REMOTE_STATE/orig/`, at its path in the tree, until the search ends.
 
 The rest of Dom0's tree stays as `make xen` left it, so the guest identity's
 strings in hvmloader and libacpi survive, and so does QEMU's CD-ROM patch.
-After a search, Dom0 runs the last variant built. `make xen` puts the shipped
-Xen back.
+When a search ends, however it ends, it puts the originals back, installs the
+package `make xen` built again (kept in `REMOTE_STATE/known-good/`, from
+`drakvuf/xen/dist/`, before the first variant) and boots Xen as the default
+entry (§5). Until 2026-11-04 a search left Dom0 on the last variant built, an
+unreviewed Xen (review M-9).
 
 `LOCAL_XEN=<tree>` is for developing the patch itself. It uploads every file
 that tree changed from `XEN_BASE` to `REMOTE_XEN`. **A tree like that lacks
@@ -294,9 +314,9 @@ ALKHASER_ARGS='--check TIMING_ATTACKS --sleep 1' DRAKVUF_TIMEOUT=300 TESTS=6 ./a
 
 **Per variant:**
 
-1. Boot Dom0 without Xen.
+1. Boot Dom0 without Xen, the default entry while the search runs.
 2. Upload, build and install Xen. A hung build is retried.
-3. Boot back into Xen.
+3. Boot that Xen, once (`grub-reboot`).
 4. Press `xl debug-keys d` once if `xen-rdtsc-poc.service` has not.
 5. Run `TESTS` tests.
 
@@ -308,9 +328,27 @@ A variant whose Xen Dom0 already runs goes straight to step 5.
 | An RDTSC test | about 2.5 min |
 | An al-khaser test (two VMs; `DRAKVUF_TIMEOUT` 1500 then, 1000 now) | 28–29 min (run `20261102-003810`) |
 
-**If you stop a search during a build**, Dom0 stays on its plain kernel.
-Comment `XEN_OVERRIDE_GRUB_DEFAULT=0` out again in
-`/etc/default/grub.d/xen.cfg`, then `update-grub2` and reboot.
+**Before the first variant** the search checks that `sandboxd` is down,
+keeps the package `make xen` built and makes the plain kernel the GRUB
+default. **When it ends**, however it ends — a winner, an error, Ctrl-C, a
+variant that panics at boot (Xen reboots after a panic, into the plain
+kernel) — it puts Dom0 back: the original sources, `make xen`'s package
+installed again on the plain kernel, Xen the default entry, booted. That is
+two reboots after a search that ended on a variant.
+
+**If a search stops** without putting Dom0 back — Dom0 unreachable when it
+ended, this machine down, the search killed — the next one refuses to start
+while `REMOTE_STATE/known-good/` or `REMOTE_STATE/orig/` exists. Run
+`./restore_dom0.sh`, which does the same steps. By hand, on Dom0: copy
+`/root/evasion-tests/orig/` over `drakvuf/xen/`, `dpkg -i` the package in
+`/root/evasion-tests/known-good/`, comment `XEN_OVERRIDE_GRUB_DEFAULT=0` out
+in `/etc/default/grub.d/xen.cfg`, `update-grub2`, reboot, then delete both
+directories. If `make xen` has been run since, just delete them: it reset the
+tree and installed its own package.
+
+**A Dom0 the scripts before 2026-11-04 left on a variant** (`installed.sha`
+in `/root/evasion-tests/`, no `known-good/`) needs `make xen` once: the search
+refuses to keep a variant as the package it puts back.
 
 ---
 
@@ -510,6 +548,19 @@ nothing. Then back:
 sed -i 's/^XEN_OVERRIDE_GRUB_DEFAULT=0/#XEN_OVERRIDE_GRUB_DEFAULT=0/' /etc/default/grub.d/xen.cfg &&
 grep -q '^#XEN_OVERRIDE_GRUB_DEFAULT=0' /etc/default/grub.d/xen.cfg && update-grub2 && reboot
 ```
+
+The search boots a variant's Xen with a one-shot entry while the plain kernel
+is the default. Try that too, booted on the plain kernel with the override
+uncommented, naming the entry as `grep menuentry /boot/grub/grub.cfg` shows it:
+
+```bash
+# DOM0, as root, booted without Xen. Boots Xen once; the boot after is the plain kernel again
+grub-probe --target=abstraction /boot/grub/grubenv; grub-reboot 'Ubuntu GNU/Linux, with Xen hypervisor' && reboot
+```
+
+`grub-probe` must print nothing: on LVM or RAID GRUB cannot clear the entry,
+every boot would be Xen, and the search refuses to start. Expect Xen back
+once, and `grub-editenv list` without `next_entry`.
 
 Without Xen, GRUB boots entry 0 of `/etc/default/grub`, which must be a working
 plain kernel. If it comes back on Xen anyway, see

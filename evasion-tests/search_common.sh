@@ -1,3 +1,4 @@
+# shellcheck shell=bash
 # Shared by rdtsc_search.sh and alkhaser_search.sh, which source it after site.conf: the host
 # settings, logging, dom0 access, detached dom0 jobs, the grub switch between Xen and the plain
 # kernel, and the Xen variants (the defines they may set, building and installing them).
@@ -43,6 +44,7 @@ BENCH_EXTRA_ENV=${BENCH_EXTRA_ENV-}
 VNC=${VNC:-0}
 VNC_HOST=${VNC_HOST:-${DOM0#*@}}
 GRUB_XEN_CFG=/etc/default/grub.d/xen.cfg
+GRUB_ENV=/boot/grub/grubenv
 # Time limits in seconds: a job is killed when it runs longer than its limit or its log does
 # not grow for its stall limit. A build takes 2-3 min.
 BUILD_LIMIT=${BUILD_LIMIT:-3600}
@@ -190,13 +192,20 @@ boot_mode() {
     rsh 'if grep -qs control_d /proc/xen/capabilities && xl info >/dev/null 2>&1; then echo xen; else echo native; fi'
 }
 
-# Switches grub between the plain kernel (native) and Xen (xen) and reboots dom0 into it.
-reboot_to() {
-    local want=$1 expr check old_boot new_boot deadline booted_at=0
-    if [[ "$(boot_mode)" == "$want" ]]; then
-        say "dom0 already runs $want"
-        return
-    fi
+# The GRUB default entry on dom0: xen (XEN_OVERRIDE_GRUB_DEFAULT=0 commented out in make xen's
+# xen.cfg) or native (uncommented: entry 0 of /etc/default/grub, the plain kernel).
+grub_default() {
+    rsh "if grep -q '^XEN_OVERRIDE_GRUB_DEFAULT=0' $GRUB_XEN_CFG; then echo native; else echo xen; fi"
+}
+
+# Makes the plain kernel (native) or Xen (xen) the default entry, for every boot from now on.
+# While a search runs the default is native (search_begin), so that a variant that panics at
+# boot (Xen reboots after a panic), a crash of this script or a power cut leaves dom0 reachable
+# on its plain kernel, not looping on an unreviewed Xen; each variant's Xen is booted one boot
+# at a time (grub_boot_xen_once). search_end gives Xen the default back (review M-9, 2026-11-04).
+set_grub_default() {
+    local want=$1 expr check
+    [[ "$(grub_default)" != "$want" ]] || return 0
     if [[ "$want" == native ]]; then
         expr='s/^#XEN_OVERRIDE_GRUB_DEFAULT=0/XEN_OVERRIDE_GRUB_DEFAULT=0/'
         check="grep -q '^XEN_OVERRIDE_GRUB_DEFAULT=0' $GRUB_XEN_CFG"
@@ -205,7 +214,36 @@ reboot_to() {
         check="grep -q '^#XEN_OVERRIDE_GRUB_DEFAULT=0' $GRUB_XEN_CFG"
     fi
     rsh "sed -i '$expr' $GRUB_XEN_CFG && $check && update-grub2" >>"$RESULTS/grub.log" 2>&1 \
-        || die "Could not set grub up for $want, see $RESULTS/grub.log"
+        || die "Could not make $want the default GRUB entry on dom0, see $RESULTS/grub.log"
+    say "GRUB default on dom0: $want"
+}
+
+# Boots Xen at the next boot only (grub-reboot, next_entry in grubenv, which GRUB clears as it
+# boots it): the default entry stays the plain kernel. The entry is the one xen.cfg makes the
+# default, read from grub.cfg as GRUB names it.
+grub_boot_xen_once() {
+    local title
+    title=$(rsh "sed -n \"s/^menuentry '\([^']*with Xen hypervisor\)'.*/\1/p\" /boot/grub/grub.cfg | head -1")
+    [[ -n "$title" ]] || die "No 'with Xen hypervisor' entry in $DOM0:/boot/grub/grub.cfg: run make xen on dom0"
+    rsh "grub-reboot $(printf '%q' "$title") && grub-editenv $GRUB_ENV list | grep -q '^next_entry='" \
+        >>"$RESULTS/grub.log" 2>&1 || die "grub-reboot failed on dom0, see $RESULTS/grub.log"
+}
+
+# Reboots dom0 into the plain kernel (native) or Xen (xen). Xen while it is not the default
+# entry is booted once, see set_grub_default.
+reboot_to() {
+    local want=$1 old_boot new_boot deadline booted_at=0
+    if [[ "$(boot_mode)" == "$want" ]]; then
+        say "dom0 already runs $want"
+        return
+    fi
+    if [[ "$want" == native ]]; then
+        set_grub_default native
+        # A one-shot entry still set (grubenv GRUB could not write) would boot Xen again
+        rsh "grub-editenv $GRUB_ENV unset next_entry" >>"$RESULTS/grub.log" 2>&1 || true
+    elif [[ "$(grub_default)" != xen ]]; then
+        grub_boot_xen_once
+    fi
     old_boot=$(rsh cat /proc/sys/kernel/random/boot_id)
     say "Rebooting dom0 into $want"
     rsh 'nohup sh -c "sleep 2; systemctl reboot" >/dev/null 2>&1 </dev/null &' || true
@@ -271,7 +309,8 @@ variant_sha() {
     for rel in "${MODIFIED[@]}"; do cat "$(source_of "$vdir" "$rel")"; done | sha256sum | cut -c1-16
 }
 
-# Copies the files that differ to dom0, keeping the first original of each.
+# Copies the files that differ to dom0, keeping the original of each under REMOTE_STATE/orig,
+# at its path in the tree, until search_end puts it back.
 upload_variant() {
     local vdir=$1 rel src lsum rsum
     for rel in "${MODIFIED[@]}"; do
@@ -279,8 +318,9 @@ upload_variant() {
         lsum=$(md5sum <"$src" | cut -c1-32)
         rsum=$(rsh "md5sum < $REMOTE_XEN/$rel" | cut -c1-32)
         if [[ "$lsum" != "$rsum" ]]; then
-            rsh "mkdir -p $REMOTE_STATE/orig && f=$REMOTE_STATE/orig/$(basename "$rel") &&" \
-                "{ [ -e \$f ] || cp -p $REMOTE_XEN/$rel \$f; }"
+            rsh "f=$REMOTE_STATE/orig/$rel && mkdir -p \$(dirname \$f) &&" \
+                "{ [ -e \$f ] || cp -p $REMOTE_XEN/$rel \$f; }" \
+                || die "Could not keep the original of $rel on dom0"
             rcp_to "$src" "$REMOTE_XEN/$rel"
             say "Uploaded $rel"
         fi
@@ -340,7 +380,88 @@ start_vnc() {
     local ports=${VNC_PORTS:-$1}
     (( VNC )) || return 0
     VNC_HOST=$VNC_HOST VNC_PORTS=$ports VNC_VIEW_ONLY=$2 "$SCRIPT_DIR/rdtsc_vnc.sh" >"$RESULTS/vnc.log" 2>&1 &
-    vnc_pid=$!
-    trap 'kill "$vnc_pid" 2>/dev/null || true' EXIT
+    vnc_pid=$!    # killed by on_exit
     say "VNC viewers on ports $ports of $VNC_HOST (log: $RESULTS/vnc.log)"
+}
+
+# What a search changes on dom0 and search_end puts back: the sources a variant overwrites
+# (REMOTE_STATE/orig), the Xen package (REMOTE_STATE/known-good, the one make xen installed,
+# taken from REMOTE_XEN/dist) and the GRUB default entry. Before the first variant.
+SEARCH_BEGUN=0
+SEARCH_ENDED=0
+search_begin() {
+    local state
+    trap on_exit EXIT
+    # The search reboots dom0: not under the orchestrator, whose clones and jobs it would kill
+    state=$(rsh 'command -v fuser >/dev/null || { echo nofuser; exit 0; }
+if fuser -s /run/lock/sandboxd.lock 2>/dev/null; then echo busy; else echo idle; fi') \
+        || die "Cannot reach $DOM0"
+    case "$state" in
+        idle) ;;
+        busy) die "sandboxd runs on dom0 (it holds /run/lock/sandboxd.lock): stop it first, the search reboots dom0" ;;
+        *) die "dom0 has no fuser to check for a running sandboxd: apt-get install psmisc there" ;;
+    esac
+    # GRUB cannot clear a one-shot entry on a grubenv it cannot write (LVM, RAID): every boot
+    # would then be the variant's
+    state=$(rsh "grub-probe --target=abstraction $GRUB_ENV 2>/dev/null || echo unknown")
+    [[ -z "$state" ]] || die "GRUB cannot write $GRUB_ENV on dom0 (grub-probe: $state): the search boots Xen with grub-reboot, which needs /boot on a plain partition"
+    state=$(rsh "set -e
+mkdir -p $REMOTE_STATE
+if [ -e $REMOTE_STATE/known-good ] || [ -e $REMOTE_STATE/orig ]; then echo leftover; exit 0; fi
+d=\$(ls -t $REMOTE_XEN/dist/xen-upstream-*.deb 2>/dev/null | head -1)
+[ -n \"\$d\" ] || { echo nodeb; exit 0; }
+if [ -e $REMOTE_STATE/installed.sha ] && ! [ \"\$d\" -nt $REMOTE_STATE/installed.sha ]; then echo variant; exit 0; fi
+mkdir -p $REMOTE_STATE/known-good && cp -p \"\$d\" $REMOTE_STATE/known-good/ && rm -f $REMOTE_STATE/installed.sha
+echo \"saved \$(sha256sum \"\$d\" | cut -c1-16)\"") || die "Could not keep the Xen package on dom0"
+    case "$state" in
+        saved*)
+            say "Xen package make xen installed, kept to put back: $REMOTE_XEN/dist (${state#saved })" ;;
+        leftover)
+            die "A previous search did not put dom0 back ($REMOTE_STATE/known-good or $REMOTE_STATE/orig exists): run $SCRIPT_DIR/restore_dom0.sh, or delete them if make xen has been run on dom0 since (README.md, \"If a search stops\")" ;;
+        nodeb)
+            die "No package in $DOM0:$REMOTE_XEN/dist: run make xen on dom0 first, its package is what the search puts back" ;;
+        variant)
+            die "dom0's Xen is a search variant ($REMOTE_STATE/installed.sha is newer than the package in $REMOTE_XEN/dist): run make xen on dom0 first" ;;
+        *) die "Unexpected answer from dom0: $state" ;;
+    esac
+    SEARCH_BEGUN=1
+    set_grub_default native
+}
+
+# Puts dom0 back as make xen left it, in the order a failure leaves the safest state: the
+# sources, then the package (installed on the plain kernel, as the variants are), then Xen as
+# the default entry, booted. Runs when a search ends, however it ends (on_exit); on its own
+# from restore_dom0.sh. Stops at the first failure and says what is left to do.
+search_end() {
+    (( ! SEARCH_ENDED )) || return 0
+    SEARCH_ENDED=1
+    say "Putting dom0 back as make xen left it"
+    rsh true || die "dom0 is unreachable. When it is back, run $SCRIPT_DIR/restore_dom0.sh (README.md, \"If a search stops\")"
+    # The package is installed on the plain kernel, as the variants are; nothing to install
+    # (restore_dom0.sh after a search that got that far) skips that boot
+    [[ -z "$(rsh "ls $REMOTE_STATE/known-good/xen-upstream-*.deb 2>/dev/null")" ]] || reboot_to native
+    rsh "set -e; cd $REMOTE_STATE/orig 2>/dev/null || exit 0
+for f in \$(find . -type f); do cp -p \"\$f\" \"$REMOTE_XEN/\$f\"; done
+cd / && rm -r $REMOTE_STATE/orig" \
+        || die "Could not put the sources back from $DOM0:$REMOTE_STATE/orig into $REMOTE_XEN. Left to do: that, then dpkg -i $REMOTE_STATE/known-good/*.deb, then Xen as the GRUB default (README.md, \"If a search stops\")"
+    say "Sources in $REMOTE_XEN as make xen left them"
+    rsh "set -e; d=\$(ls $REMOTE_STATE/known-good/xen-upstream-*.deb 2>/dev/null | head -1); [ -n \"\$d\" ] || exit 0
+dpkg -i \"\$d\" && ldconfig
+cp -p \"\$d\" $REMOTE_XEN/dist/ && rm -f $REMOTE_STATE/installed.sha && rm -r $REMOTE_STATE/known-good" \
+        >>"$RESULTS/restore.log" 2>&1 \
+        || die "Could not install $DOM0:$REMOTE_STATE/known-good/*.deb, see $RESULTS/restore.log. Left to do: that, then Xen as the GRUB default (README.md, \"If a search stops\")"
+    say "make xen's Xen package installed again"
+    set_grub_default xen
+    reboot_to xen
+    say "dom0 runs make xen's Xen, the default entry again"
+}
+
+on_exit() {
+    local rc=$?
+    trap - EXIT
+    [[ -z "${vnc_pid-}" ]] || kill "$vnc_pid" 2>/dev/null || true
+    if (( SEARCH_BEGUN )); then
+        search_end
+    fi
+    exit "$rc"
 }

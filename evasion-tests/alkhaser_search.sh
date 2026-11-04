@@ -6,8 +6,8 @@
 # First it checks that dom0's checkout of the drakvuf submodule is this one's and builds DRAKVUF
 # and libvmi there (search_common.sh, prepare_drakvuf): the benchmarks run that build.
 # Per variant:
-#   1. Build and install the variant's Xen, as rdtsc_search.sh does (search_common.sh). A
-#      variant whose Xen dom0 already runs goes straight to the tests.
+#   1. Build and install the variant's Xen and boot it once, as rdtsc_search.sh does
+#      (search_common.sh). A variant whose Xen dom0 already runs goes straight to the tests.
 #   2. A test is one run of dev-syscalls and one of dev-all, at the same time on two Windows VMs
 #      (WINDOWS_VM2), swapping VMs every test. The first test of a Xen boot presses xl debug-keys d
 #      first (once per boot). al-khaser starts from explorer.exe with ALKHASER_ARGS and has
@@ -32,7 +32,9 @@
 #   TESTS=3 ONLY="baseline" ./alkhaser_search.sh
 # Results: <RESULTS_BASE>/alkhaser-search/<timestamp>/ (results.csv per configuration run,
 # tests.csv, variants.csv, codes.tsv with the name of every check al-khaser started, ranking.txt,
-# one directory per variant). The full DRAKVUF logs stay gzipped on dom0 under REMOTE_OUT.
+# one directory per variant). The full DRAKVUF logs stay gzipped on dom0 under REMOTE_OUT. When
+# the search ends, however it ends, dom0 is put back as make xen left it: sources, package, Xen
+# as the GRUB default (search_common.sh, search_end).
 set -Eeuo pipefail
 IFS=$'\n\t'
 export LC_ALL=C
@@ -359,6 +361,7 @@ echo 'variant,result,tests,sha' >"$RESULTS/variants.csv"
 say "Results in $RESULTS, dom0 output in $REMOTE_OUT"
 say "Xen sources: ${LOCAL_XEN:-$DOM0:$REMOTE_XEN as make xen left it}; files a variant uploads: $(join_by ' ' "${MODIFIED[@]}")"
 say "al-khaser $(sha256sum <"$ALKHASER" | cut -c1-16) with '$ALKHASER_ARGS', DRAKVUF_TIMEOUT=$DRAKVUF_TIMEOUT, HIDSIM=$HIDSIM, disabled plugins: ${DISABLE_PLUGINS:-none}"
+search_begin
 start_vnc "5900${VM2_ENV:+ 5901}" "$VNC_VIEW_ONLY"
 
 mapfile -t VARIANT_LINES < <(sed -e 's/#.*//' -e '/^[[:space:]]*$/d' "$VARIANTS")
@@ -375,7 +378,6 @@ count_no_result() {
     if [[ "$1" == no-result || "$1" == build-failed ]]; then
         no_result_streak=$((no_result_streak + 1))
         if (( no_result_streak >= NO_RESULT_VARIANTS )); then
-            reboot_to xen
             die "$no_result_streak variants in a row gave no result or did not build; check the sandbox and the build"
         fi
     else
@@ -423,11 +425,10 @@ for line in "${VARIANT_LINES[@]}"; do
     count_no_result "$RESULT"
 done
 
-# The last variant may have left dom0 without Xen
-reboot_to xen
+search_end
 python3 "$SCRIPT_DIR/alkhaser_rank.py" "$RESULTS" | tee "$RESULTS/ranking.txt" || true
 if (( ${#winners[@]} == 0 )); then
     say "No variant left al-khaser without detections in $TESTS tests, see $RESULTS/ranking.txt"
     exit 1
 fi
-say "Clean: $(join_by ' ' "${winners[@]}"), see $RESULTS/ranking.txt; dom0 runs the last variant built"
+say "Clean: $(join_by ' ' "${winners[@]}"), see $RESULTS/ranking.txt"

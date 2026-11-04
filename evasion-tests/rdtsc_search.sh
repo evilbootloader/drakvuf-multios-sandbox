@@ -8,9 +8,9 @@
 # and libvmi there (search_common.sh, prepare_drakvuf): the benchmarks run that build.
 # Per variant:
 #   1. Write the variant's defines into vmx.c/vmcs.h (search_common.sh, prepare_xen_sources).
-#   2. Boot dom0 without Xen (XEN_OVERRIDE_GRUB_DEFAULT=0), upload the modified files, build and
-#      install Xen (OVMF sed, configure, dist-xen, dist-tools, debball, dpkg -i), boot with Xen
-#      again (#XEN_OVERRIDE_GRUB_DEFAULT=0). A build whose log stops growing for BUILD_STALL s
+#   2. Boot dom0 without Xen (the GRUB default while a search runs), upload the modified files,
+#      build and install Xen (OVMF sed, configure, dist-xen, dist-tools, debball, dpkg -i), boot
+#      that Xen once (grub-reboot). A build whose log stops growing for BUILD_STALL s
 #      (EDK2's build.py deadlocks now and then) is killed and run again, up to BUILD_TRIES times.
 #      A variant that does not build is marked build-failed. A variant whose Xen dom0 already
 #      runs goes straight to the tests.
@@ -34,8 +34,9 @@
 #   ONLY="baseline pure" ./rdtsc_search.sh         only those variants
 # Results: <RESULTS_BASE>/rdtsc-search/<timestamp>/ (results.csv per configuration run, tests.csv
 # per test, variants.csv, one directory per variant, WINNERS.txt, ranking.txt from rdtsc_rank.py).
-# The full DRAKVUF logs stay gzipped on dom0 under REMOTE_OUT. dom0 ends up running the last
-# variant built.
+# The full DRAKVUF logs stay gzipped on dom0 under REMOTE_OUT. When the search ends, however it
+# ends, dom0 is put back as make xen left it: sources, package, Xen as the GRUB default
+# (search_common.sh, search_end).
 set -Eeuo pipefail
 IFS=$'\n\t'
 export LC_ALL=C
@@ -322,6 +323,7 @@ echo 'variant,test,verdict,streak,outdirs' >"$RESULTS/tests.csv"
 echo 'variant,result,streak,tests,sha,runs_mean,runs_min' >"$RESULTS/variants.csv"
 say "Results in $RESULTS, dom0 output in $REMOTE_OUT"
 say "Xen sources: ${LOCAL_XEN:-$DOM0:$REMOTE_XEN as make xen left it}; files a variant uploads: $(join_by ' ' "${MODIFIED[@]}")"
+search_begin
 start_vnc "5900${VM2_ENV:+ 5901}" 1
 
 mapfile -t VARIANT_LINES < <(sed -e 's/#.*//' -e '/^[[:space:]]*$/d' "$VARIANTS")
@@ -338,7 +340,6 @@ count_no_result() {
     if [[ "$1" == no-result || "$1" == build-failed ]]; then
         no_result_streak=$((no_result_streak + 1))
         if (( no_result_streak >= NO_RESULT_VARIANTS )); then
-            reboot_to xen
             die "$no_result_streak variants in a row gave no result or did not build; check the sandbox, the build and the detector"
         fi
     else
@@ -403,11 +404,10 @@ for line in "${VARIANT_LINES[@]}"; do
     count_no_result "$RESULT"
 done
 
-# The last variant may have left dom0 without Xen
-reboot_to xen
+search_end
 python3 "$SCRIPT_DIR/rdtsc_rank.py" "$RESULTS" --expected "$(( DRAKVUF_TIMEOUT / 5 ))" --min-runs "$MIN_RUNS" | tee "$RESULTS/ranking.txt" || true
 if (( ${#winners[@]} == 0 )); then
     say "No variant passed $TESTS consecutive tests, see $RESULTS/variants.csv"
     exit 1
 fi
-say "Winners: $(join_by ' ' "${winners[@]}"), see $RESULTS/WINNERS.txt and $RESULTS/ranking.txt; dom0 runs the last variant built"
+say "Winners: $(join_by ' ' "${winners[@]}"), see $RESULTS/WINNERS.txt and $RESULTS/ranking.txt"

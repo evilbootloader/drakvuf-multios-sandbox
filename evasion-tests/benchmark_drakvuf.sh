@@ -390,13 +390,31 @@ domain_present() {
     xl list | awk -v id="$1" 'NR > 1 && $2 == id { found = 1 } END { exit !found }'
 }
 
+# PIDs of the device model of domain $1: a qemu-system-* whose argv has "-xen-domid" followed
+# by that id, as whole elements of /proc/<pid>/cmdline. Never a rendered command line
+# (CLAUDE.md, sandboxd/proc.py): a pattern over one is unanchored by default, and this host
+# may run sandboxd's clones beside the test VMs.
+dm_pids() {
+    local p prev a
+    for p in /proc/[0-9]*; do
+        prev=
+        while IFS= read -r -d '' a; do
+            if [[ "$prev" == -xen-domid && "$a" == "$1" ]]; then
+                read -r -d '' a <"$p/cmdline" 2>/dev/null || true
+                [[ "${a##*/}" != qemu-system-* ]] || echo "${p#/proc/}"
+                break
+            fi
+            prev=$a
+        done <"$p/cmdline" 2>/dev/null
+    done
+}
+
 destroy_vm() {
-    local domid i dm_pattern
+    local domid i dm
     if ! domid=$(xl domid "$DOMAIN" 2>/dev/null); then
         VM_OWNED=0
         return 0
     fi
-    dm_pattern="qemu-system-[^ ]* -xen-domid $domid( |\$)"
     say "Destroying Xen domain $DOMAIN (id $domid)"
     xl destroy "$domid" || return 1
     for ((i = 0; i < DESTROY_TIMEOUT; i++)); do
@@ -405,16 +423,26 @@ destroy_vm() {
             return 0
         fi
         # xl destroy can leave the device model running, its guest mappings keep the domain alive
-        if (( i == 3 )) && pkill -TERM -f "$dm_pattern"; then
-            say "Device model of domain $domid survived xl destroy; terminating it"
+        if (( i == 3 )); then
+            dm=$(dm_pids "$domid")
+            if [[ -n "$dm" ]]; then
+                say "Device model of domain $domid survived xl destroy (pid $dm); terminating it"
+                # shellcheck disable=SC2086
+                kill -TERM $dm || true
+            fi
         fi
         if (( i == 8 )); then
-            pkill -KILL -f "$dm_pattern" || true
+            dm=$(dm_pids "$domid")
+            # shellcheck disable=SC2086
+            [[ -z "$dm" ]] || kill -KILL $dm || true
         fi
         sleep 1
     done
     say "Domain $domid is still dying after ${DESTROY_TIMEOUT}s:"
     xl list | awk -v id="$domid" 'NR == 1 || $2 == id'
+    # A listing for the log, which nothing acts on; what acts on a process reads
+    # /proc/<pid>/cmdline (dm_pids)
+    # shellcheck disable=SC2009
     ps -eo pid,stat,wchan:32,etime,args | grep -E '[q]emu|[d]rakvuf' || true
     return 1
 }
@@ -497,8 +525,9 @@ reset_guest() {
 run_one() {
     local run_number=$1 round=$2 config=$3
     local executable=${CONFIG_BIN[$config]} libdir=${CONFIG_LIB[$config]}
-    local log="$OUT_DIR/$(printf '%02d' "$run_number")-${config}.log"
-    local cpu_file="$log.cpu"
+    local log cpu_file
+    log="$OUT_DIR/$(printf '%02d' "$run_number")-${config}.log"
+    cpu_file="$log.cpu"
     local start end wall cpu us_per_event rc entries returns lines
     local pairing=",,,,," innermost outer abandoned unmatched open cross_vcpu
     local -a args=()
