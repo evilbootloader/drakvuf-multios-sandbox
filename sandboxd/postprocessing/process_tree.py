@@ -48,11 +48,26 @@ class Process:
         }
 
     def change_parent(self, new_parent: "Process") -> None:
+        # The one place an edge of the tree moves, so the one place a loop
+        # could be made: add_process links a node that has no children yet.
+        # A loop leaves every process in it, and under it, with no root --
+        # job 4d8c1c25 (2026-11-03) uploaded a report whose 340 processes
+        # were all unreachable that way.
+        ancestor: Optional[Process] = new_parent
+        while ancestor is not None:
+            if ancestor is self:
+                logger.warning(
+                    f"Not moving {self} under {new_parent}, which is its own descendant"
+                )
+                return
+            ancestor = ancestor.parent
         if self.parent is not None:
             self.parent.children.remove(self)
         new_parent.children.append(self)
         self.parent = new_parent
-        self.ppid = new_parent.ppid
+        # The parent's PID. Upstream took the parent's own PPID, which made
+        # every later line for this process look reparented again.
+        self.ppid = new_parent.pid
 
 
 class ProcessTree:
@@ -454,7 +469,12 @@ def tree_from_log(file: TextIO, os_: TargetOs) -> ProcessTree:
                         )
                         parse_unknown_process_entry(pstree, entry)
                     elif process.ts_to is None and process.ppid != ppid:
-                        # Found elevated process: rebind to another parent
+                        # Found elevated process: rebind to another parent.
+                        # Not always that: on Linux every CPU's idle task is
+                        # PID 0, and swapper/1 and up have PPID 1, so a signal
+                        # sent from an idle CPU's interrupt reads as swapper/0
+                        # moving under systemd. change_parent refuses a move
+                        # under a descendant, which that one is.
                         new_parent = pstree.get_process(ppid)
                         if new_parent is not None:
                             process.change_parent(new_parent)

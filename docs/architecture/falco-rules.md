@@ -30,8 +30,14 @@ language is evaluated directly, and every field says where it comes from.
 | `inject.log` | -- | the sample's process: the scope is it and its descendants |
 
 Records are read, filtered to the sample's processes (`scope: sample`, the
-default) and sorted by `EventUID`, one counter across every plugin. procmon is
-read for every process, because a rule asks about ancestors.
+default) and replayed in `EventUID` order, one counter across every plugin.
+procmon is read for every process, because a rule asks about ancestors.
+**Streamed since 2026-11-03** (`events.Trace._records`): each log is a
+generator and a k-way merge interleaves them, with a window of
+`reorder_window` records per log (4096) for records DRAKVUF wrote a few lines
+out of order; until then every in-scope record was held in one sorted list,
+which on a 20-minute trace was most of what got the daemon OOM-killed.
+Every line is still read.
 
 **What a job needs for the rules to have data:** procmon (every exec rule),
 syscall returns (every file rule: `fd.num >= 0`), procmon's environment list

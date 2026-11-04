@@ -33,7 +33,7 @@ from typing import Any
 
 import httpx
 
-from . import naming
+from . import config, naming
 from .tls import ssl_context
 
 # The API long-polls /claim (20s in production) so an idle worker is not a
@@ -100,6 +100,23 @@ class Lease:
     drop_location: str | None = None
     drop_subdir: str | None = None
     arguments: str | None = None
+
+
+@dataclass(frozen=True)
+class Unusable:
+    """A lease for a job this host must fail, not run: the platform admitted a
+    sample name that `naming.sample_name_admissible` refuses.
+
+    Returned rather than raised (2026-11-03) because the job id is sound and
+    the job is the thing that is wrong, so the daemon can report it failed and
+    the queue moves on. Raised as a `ProtocolError`, it was treated as "the
+    two sides disagree" and the same job was leased again on every claim --
+    see `Daemon._claim_once`. A job id that is not a UUID is still a
+    `ProtocolError`: there is nothing sound to report against.
+    """
+
+    job_id: str
+    reason: str
 
 
 @dataclass(frozen=True)
@@ -281,17 +298,37 @@ class WorkerAPI:
         if status == "leased":
             # **Validated at the boundary, before anything joins them to a
             # path.** These two become directory and file names under root on
-            # Dom0; `naming` says why that cannot be left to the sender. A
-            # violation is a `ProtocolError` because it is exactly that -- the
-            # platform's own validator should have made it unreachable, so a
-            # lease carrying one means the two sides disagree about what a
-            # lease may say, and repeating the request cannot fix that.
+            # Dom0; `naming` says why that cannot be left to the sender.
+            #
+            # A job id that is not a UUID is a `ProtocolError`: the platform
+            # mints them, so one that fails the grammar means the two sides
+            # disagree about what a lease may say, and repeating the request
+            # cannot fix that. A sample NAME this side refuses is different
+            # (2026-11-03): the id is sound, the job is what is wrong, and
+            # raising here leased the same job again on every claim. It is
+            # returned as `Unusable` so the daemon fails that one job.
             try:
                 job_id = naming.job_id_admissible(str(body["job_id"]))
+            except ValueError as exc:
+                raise ProtocolError(f"unusable lease: {exc}") from exc
+            try:
                 filename = naming.sample_name_admissible(
                     body["submitted_filename"])
             except ValueError as exc:
-                raise ProtocolError(f"unusable lease: {exc}") from exc
+                return Unusable(job_id=job_id, reason=f"unusable lease: {exc}")
+
+            # The trace timeout becomes drakvuf's `-t` as the lease says it.
+            # The platform bounds it at submission; bounded again here, like
+            # the name, because a platform bug or compromise that said
+            # 10000000 would hold a VLAN and the clone's memory until the
+            # reaper noticed (review L-3). `True` is an int to Python and is
+            # not a timeout.
+            timeout = body.get("timeout", 180)
+            if (isinstance(timeout, bool) or not isinstance(timeout, int)
+                    or not 0 <= timeout <= config.TRACE_TIMEOUT_MAX):
+                return Unusable(job_id=job_id, reason=(
+                    f"unusable lease: timeout {timeout!r} is not an integer "
+                    f"from 0 to {config.TRACE_TIMEOUT_MAX}"))
 
             return Lease(
                 job_id=job_id,
@@ -325,7 +362,7 @@ class WorkerAPI:
                 # defaults" reading as `plugins` above -- it is what migration
                 # 0011 backfills onto rows queued before the column existed --
                 # so it has to reach `_trace_options` intact to mean that.
-                timeout=body.get("timeout", 180),
+                timeout=timeout,
                 disable_sysret=body.get("disable_sysret"),
                 # `.get` for the same skew. Not checked here: none of the
                 # three becomes a Dom0 path, so a bad one fails its own job

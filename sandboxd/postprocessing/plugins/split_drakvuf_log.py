@@ -3,10 +3,31 @@ import logging
 import re
 from collections import Counter
 
+import orjson
+
 from ..paths import TRACE_LOG
 from .plugin_base import PostprocessContext
 
 logger = logging.getLogger(__name__)
+
+# The per-plugin logs are written COMPACT (2026-11-03): no space after `,`
+# or `:`, non-ASCII as UTF-8 rather than `\uXXXX`. Until then each line was
+# re-serialised by `json.dumps` with its default separators, which made every
+# line longer than DRAKVUF's own by two bytes per key -- a tenth of a
+# syscall record -- on the largest files a job has, which every later pass
+# reads at least once and the platform's log viewer reads by byte range.
+# orjson is also several times faster than the stdlib on both halves of the
+# round trip, and a 20-minute trace is tens of millions of lines.
+
+
+def _compact(obj) -> bytes:
+    try:
+        return orjson.dumps(obj)
+    except (TypeError, orjson.JSONEncodeError):
+        # A lone surrogate the decoder let through, or a shape orjson will
+        # not take: the stdlib writes it, still without the spaces.
+        return json.dumps(obj, separators=(",", ":"), ensure_ascii=False).encode(
+            "utf-8", "surrogatepass")
 
 # What may become a per-plugin log's filename. The value is DRAKVUF's own
 # plugin name, so this is a guard on a trusted producer rather than on the
@@ -33,8 +54,11 @@ def split_drakvuf_log(context: PostprocessContext) -> None:
     with drakvuf_log_path.open("rb") as drakvuf_log:
         for line in drakvuf_log:
             try:
-                line_s = line.strip().decode()
-                obj = json.loads(line_s)
+                # orjson's decode error is a json.JSONDecodeError, so the
+                # handler below is unchanged; invalid UTF-8 raises it too.
+                obj = orjson.loads(line.strip())
+                if not isinstance(obj, dict):
+                    raise json.JSONDecodeError("not an object", "", 0)
 
                 plugin = obj.get("Plugin", "unknown")
                 if not isinstance(plugin, str) or not _PLUGIN_NAME.match(plugin):
@@ -43,10 +67,11 @@ def split_drakvuf_log(context: PostprocessContext) -> None:
                 if plugin not in plugin_files:
                     plugin_files[plugin] = (
                         drakvuf_log_path.with_name(f"{plugin}.log")
-                    ).open("w")
+                    ).open("wb")
 
                 plugin_file = plugin_files[plugin]
-                plugin_file.write(json.dumps(obj) + "\n")
+                plugin_file.write(_compact(obj))
+                plugin_file.write(b"\n")
             except (UnicodeDecodeError, json.JSONDecodeError):
                 # Log the failure and count statistics
                 match = _PLUGIN_HEURISTIC.search(line)

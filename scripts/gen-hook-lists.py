@@ -337,6 +337,12 @@ def resolve_windows(
                 better = [d for d, syms in profiles.items()
                           if candidate in syms and d not in KERNEL_MODULES]
                 if better:
+                    # Deterministic, and the forwarders' real home first. A
+                    # symbol several profiles hold went to whichever one the
+                    # directory listed first: GetThreadContext came out in
+                    # clr.dll on one run and in kernelbase on the next, and
+                    # clr's is a private copy apimon never resolves (2026-11-04).
+                    better.sort(key=lambda d: (d != "kernelbase", d))
                     dll = f"{better[0]}.dll"
                     prov = f"win32metadata, redirected to {dll} (profile)"
                     redirected.append(f"{candidate}: {stem}.dll -> {dll}")

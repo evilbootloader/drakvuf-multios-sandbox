@@ -23,10 +23,12 @@ seen. `condition` turns those into undetermined matches rather than alerts.
 """
 from __future__ import annotations
 
+import heapq
 import logging
 import pathlib
 import posixpath
 import re
+from collections import deque
 from dataclasses import dataclass, field
 from typing import Dict, FrozenSet, Iterable, Iterator, List, Optional, Set, Tuple
 
@@ -171,6 +173,18 @@ class TraceConfig:
     # given `--procmon-filter-file`. A variable outside it is unknown.
     env_filter: FrozenSet[str] = frozenset({"LD_PRELOAD", "PWD", "OLDPWD"})
     users: Dict[int, str] = field(default_factory=lambda: {0: "root"})
+    # How far out of `EventUID` order a record may sit in its own log and
+    # still be replayed in order (`Trace._records`). DRAKVUF assigns the UID
+    # and prints the record under two different locks, so under
+    # `--parallel-events` records land a few lines swapped. MEASURED on Dom0,
+    # 2026-11-03, job 88b44209 (a 20-minute Windows trace): syscall.log had
+    # 50 822 of 4 719 048 records out of place, the worst by 110 UIDs;
+    # sysret.log 18 006 of 4 700 309, worst 80; procmon and filetracer a
+    # handful, worst 2. So the disorder is real and small; 4096 is 37 times
+    # the worst seen. This is the whole of what the merge holds per log, so
+    # it is also the memory bound. A record further out than this is
+    # replayed late, not lost -- nothing here ever drops a record.
+    reorder_window: int = 4096
 
 
 @dataclass
@@ -355,8 +369,42 @@ def sample_scope(analysis_dir: pathlib.Path) -> Set[int]:
     return scope
 
 
+# The order of two records under the same EventUID, which is also the order
+# of the streams in the merge: a filetracer reading of a path precedes the
+# syscall it belongs to, procmon's clone precedes the child's own records,
+# and inject (UID -1 by construction) precedes everything.
+_KIND_RANK = {"procmon": 0, "inject": 1, "filetracer": 2, "syscall": 3,
+              "sysret": 4, "libmon": 5, "unixsocketmon": 6}
+
+
+def _windowed(stream: Iterable[tuple], window: int) -> Iterator[tuple]:
+    """`stream`, in key order, for a stream that is in key order except for
+    records at most `window` positions out of place. A bounded heap re-sorts
+    those exactly and never holds more than `window` records; a record
+    further out than that is yielded late, after its turn, never dropped."""
+    heap: list = []
+    seq = 0
+    for item in stream:
+        heapq.heappush(heap, (item[0], item[1], seq, item))
+        seq += 1
+        if len(heap) > window:
+            yield heapq.heappop(heap)[3]
+    while heap:
+        yield heapq.heappop(heap)[3]
+
+
 class Trace:
-    """Replays a job directory's logs as Falco events, in EventUID order."""
+    """Replays a job directory's logs as Falco events, in EventUID order.
+
+    **Streamed, not loaded** (2026-11-03). Until then every in-scope record
+    of every log was read into one list and sorted, which on a 20-minute
+    trace was most of the 6.7 GiB the daemon held when the kernel killed it
+    (TROUBLESHOOTING, "`sandboxd` disappears after a long trace"). Now each
+    log is a generator, a k-way merge (`heapq.merge`) interleaves them by
+    EventUID, and what exists at any moment is one record per log plus the
+    reorder window -- the engine consumes each event and lets it go. Every
+    line is still read; nothing is sampled or capped.
+    """
 
     def __init__(self, analysis_dir: pathlib.Path, config: TraceConfig,
                  syscall_types: Optional[Set[str]], libmon_types: Optional[Set[str]],
@@ -377,6 +425,13 @@ class Trace:
         self.stats.procmon = (analysis_dir / "procmon.log").exists()
         self.stats.libmon = (analysis_dir / "libmon.log").exists()
         self.socket_endpoints = (analysis_dir / "unixsocketmon.log").exists()
+        # filetracer's reading of a path, keyed by the EventUID of the
+        # syscall it belongs to. The merge delivers it just before that
+        # syscall (`_KIND_RANK`), so this holds a handful of records; the
+        # deque evicts the oldest past `reorder_window`, which bounds it when
+        # a syscall record never comes (a type the rules do not ask about).
+        self.filetracer: Dict[int, dict] = {}
+        self._filetracer_order: deque = deque()
 
     # -- reading --------------------------------------------------------------
 
@@ -387,69 +442,68 @@ class Trace:
         return (t in linux.STATE_EVENTS or self.syscall_emit is None
                 or t in self.syscall_emit)
 
-    def _collect(self) -> List[Tuple[int, int, str, dict]]:
-        items: List[Tuple[int, int, str, dict]] = []
-        seq = 0
-        counts = self.stats.records
+    def _sources(self) -> List[Tuple[str, pathlib.Path, object, Optional[int]]]:
+        """(kind, path, keep, fixed uid) per log, in `_KIND_RANK` order."""
+        backfill: Set[str] = set()
+        if not self.sysret:
+            for names in linux.LIBC_EQUIVALENTS.values():
+                backfill.update(names)
 
-        def add(kind: str, rec: dict, uid: Optional[int] = None) -> None:
-            nonlocal seq
-            items.append((_event_uid(rec) if uid is None else uid, seq, kind, rec))
-            seq += 1
-            counts[kind] = counts.get(kind, 0) + 1
+        def keep_syscall(r: dict) -> bool:
+            return self._in_scope(r) and self._wanted_syscall(r.get("Method"))
 
-        procmon = self.dir / "procmon.log"
-        if procmon.exists():
-            for rec in _read_jsonl(procmon, lambda r: True):
-                add("procmon", rec)
-        for rec in _read_jsonl(self.dir / "inject.log", lambda r: True) if (self.dir / "inject.log").exists() else ():
-            add("inject", rec, uid=-1)
+        def keep_libmon(r: dict) -> bool:
+            if r.get("Event") != "api_called" or not self._in_scope(r):
+                return False
+            m = r.get("Method")
+            return (self.libmon_emit is None or m in self.libmon_emit or m in backfill)
 
-        syscall = self.dir / "syscall.log"
-        if syscall.exists():
-            for rec in _read_jsonl(syscall, lambda r: self._in_scope(r)
-                                   and self._wanted_syscall(r.get("Method"))):
-                add("syscall", rec)
-        if self.sysret:
-            for rec in _read_jsonl(self.dir / "sysret.log", lambda r: self._in_scope(r)
-                                   and self._wanted_syscall(r.get("Method"))):
-                add("sysret", rec)
+        def keep_filetracer(r: dict) -> bool:
+            return self._in_scope(r) and r.get("Syscall") in linux.FILETRACER_PATH_ARG
 
-        libmon = self.dir / "libmon.log"
-        if libmon.exists():
-            backfill = set()
-            if not self.sysret:
-                for names in linux.LIBC_EQUIVALENTS.values():
-                    backfill.update(names)
+        return [
+            ("procmon", self.dir / "procmon.log", lambda r: True, None),
+            ("inject", self.dir / "inject.log", lambda r: True, -1),
+            ("filetracer", self.dir / "filetracer.log", keep_filetracer, None),
+            ("syscall", self.dir / "syscall.log", keep_syscall, None),
+            ("sysret", self.dir / "sysret.log", keep_syscall, None),
+            ("libmon", self.dir / "libmon.log", keep_libmon, None),
+            ("unixsocketmon", self.dir / "unixsocketmon.log", self._in_scope, None),
+        ]
 
-            def keep_libmon(r: dict) -> bool:
-                if r.get("Event") != "api_called" or not self._in_scope(r):
-                    return False
-                m = r.get("Method")
-                return (self.libmon_emit is None or m in self.libmon_emit or m in backfill)
-            for rec in _read_jsonl(libmon, keep_libmon):
-                add("libmon", rec)
+    def _tagged(self, kind: str, path: pathlib.Path, keep,
+                fixed_uid: Optional[int]) -> Iterator[Tuple[int, int, str, dict]]:
+        rank = _KIND_RANK[kind]
+        for rec in _read_jsonl(path, keep):
+            uid = fixed_uid if fixed_uid is not None else _event_uid(rec)
+            yield (uid, rank, kind, rec)
 
-        if self.socket_endpoints:
-            for rec in _read_jsonl(self.dir / "unixsocketmon.log", self._in_scope):
-                add("unixsocketmon", rec)
+    def _records(self) -> Iterator[Tuple[int, int, str, dict]]:
+        """Every in-scope record of every log, by EventUID, one at a time."""
+        streams = [
+            _windowed(self._tagged(kind, path, keep, uid), self.config.reorder_window)
+            for kind, path, keep, uid in self._sources() if path.exists()
+        ]
+        # Ties -- the same UID and rank -- keep stream order, which is
+        # `_sources` order, and within one stream file order.
+        return heapq.merge(*streams, key=lambda item: (item[0], item[1]))
 
-        self.filetracer: Dict[int, dict] = {}
-        ft = self.dir / "filetracer.log"
-        if ft.exists():
-            for rec in _read_jsonl(ft, lambda r: self._in_scope(r)
-                                   and r.get("Syscall") in linux.FILETRACER_PATH_ARG):
-                self.filetracer[_event_uid(rec)] = rec
-
-        items.sort(key=lambda x: (x[0], x[1]))
-        return items
+    def _remember_path(self, uid: int, rec: dict) -> None:
+        self.filetracer[uid] = rec
+        self._filetracer_order.append(uid)
+        while len(self._filetracer_order) > self.config.reorder_window:
+            self.filetracer.pop(self._filetracer_order.popleft(), None)
 
     def __iter__(self) -> Iterator[Event]:
-        for _, _, kind, rec in self._collect():
+        counts = self.stats.records
+        for uid, _, kind, rec in self._records():
+            counts[kind] = counts.get(kind, 0) + 1
             if kind == "procmon":
                 yield from self._procmon(rec)
             elif kind == "inject":
                 self._inject(rec)
+            elif kind == "filetracer":
+                self._remember_path(uid, rec)
             elif kind == "syscall":
                 yield from self._syscall(rec)
             elif kind == "sysret":
@@ -588,7 +642,9 @@ class Trace:
         proc = self._proc_for(rec)
         uid = _event_uid(rec)
         args = {k: v for k, v in rec.items() if k not in _COMMON_KEYS}
-        ft = self.filetracer.get(uid)
+        # `pop`: the reading belongs to this one syscall and is not needed
+        # again, so it leaves the window as soon as it has been used.
+        ft = self.filetracer.pop(uid, None)
         if ft is not None and ft.get("Syscall") == t:
             target = linux.FILETRACER_PATH_ARG.get(t)
             if target and isinstance(ft.get("FileName"), str):

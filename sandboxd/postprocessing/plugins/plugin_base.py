@@ -19,9 +19,9 @@ class CapaConfigSection(BaseModel):
     # "Postprocessing" section of sandboxd/requirements.txt has the trade.
     analyze_memdumps: bool = False
     # True here where upstream defaults to False: it is what bounds the memory
-    # of the capa pass to the sample's own processes (capa_processor.py,
-    # decode_json_lines). It needs the `inject` line in trace.log, which
-    # DRAKVUF's own -i/-e injection always writes.
+    # of the capa pass to the sample's own processes (capa_plugin/streaming.py
+    # drops the others at its index pass). It needs the `inject` line in
+    # trace.log, which DRAKVUF's own -i/-e injection always writes.
     analyze_only_malware_pids: bool = True
     worker_pool_processes: int = 2
 
@@ -86,14 +86,23 @@ class ExtractedConfigSection(BaseModel):
     the directory -- so these are this project's, not carried across. They
     exist because an extracted file is chosen by the SAMPLE: its size is
     attacker-controlled, and the per-job result budget (platform config.py,
-    `max_job_result_bytes`) is 4 GiB for everything a job uploads.
+    `max_job_result_bytes`) is 8 GiB for everything a job uploads (4 until
+    2026-11-03).
     """
 
     # Generous relative to a memory dump's 32 MiB: a file the sample wrote is
     # the artifact most likely to be wanted whole, and unlike a dump there is
-    # no second copy of it anywhere.
+    # no second copy of it anywhere. DRAKVUF's Linux fileextractor stops
+    # extracting a file at the same 128 MiB (fileextractor/linux.h,
+    # MAX_FILE_BYTES), so the two agree on what a file may be.
     max_single_extracted_size: int = 128 * 1024 * 1024
-    max_total_extracted_size: int = 512 * 1024 * 1024
+    # 3.5 GiB since 2026-11-03 (512 MiB before), the operator's decision when
+    # DRAKVUF's per-trace extraction cap went to 4 GiB. Everything under this
+    # is packed into ONE artifact, extracted.zip, and the download path
+    # refuses an entry over 4 GiB minus 16 bytes (platform packaging.py,
+    # _MAX_ENTRY), so this stays half a gigabyte under that: incompressible
+    # files make the archive slightly larger than its contents, never smaller.
+    max_total_extracted_size: int = 3584 * 1024 * 1024
 
 
 class PostprocessingConfig(BaseSettings):
@@ -108,11 +117,14 @@ class PostprocessingConfig(BaseSettings):
     extracted: ExtractedConfigSection = ExtractedConfigSection()
     yara: YaraConfigSection = YaraConfigSection()
     falco: FalcoConfigSection = FalcoConfigSection()
-    # Replace syscall.log / sysret.log with .gz copies. On by default where
-    # upstream defaults to False: a Windows syscall.log is over 1 GB
-    # (trace-windows.log, 2026-09-18; 50 MB gzipped), a quarter of the 4 GiB
-    # per-job result budget (platform config.py, max_job_result_bytes) on its
-    # own, before sysret.log, dumps.zip and the pcap are counted.
+    # Replace syscall.log / sysret.log / apimon.log with .gz copies
+    # (gzip_syscalls.GZIPPED_LOGS). On by default where upstream defaults to
+    # False: a Windows syscall.log is over 1 GB (trace-windows.log,
+    # 2026-09-18; 50 MB gzipped), an eighth of the 8 GiB per-job result
+    # budget (platform config.py, max_job_result_bytes) on its own, before
+    # sysret.log, dumps.zip and the pcap are counted -- and that was a 180 s
+    # trace. The 20-minute one of 2026-11-02 left 2.9 GB of syscall.log and
+    # 3.9 GB of apimon.log, which is why apimon joined the list.
     gzip_syscalls: bool = True
 
 
@@ -143,6 +155,16 @@ class PostprocessContext:
         self.extra_metadata = {}
         # More verbose data to be placed in report.json
         self.report = {}
+
+    def record_failure(self, plugin: str, exc: BaseException) -> None:
+        """A plugin that raised, for report.json (`generate_report` folds
+        `report` in). A job without `ttps.json` must say why where a reader
+        looks, not only in a log line on Dom0 -- and under the child's memory
+        limit (sandboxd/postprocessing/__main__.py) the usual reason is a
+        `MemoryError`, which is a fact about the trace's size worth keeping."""
+        self.report.setdefault("postprocessing_failures", []).append(
+            {"plugin": plugin,
+             "error": f"{type(exc).__name__}: {str(exc)[:300]}"})
 
     @property
     def process_tree(self) -> ProcessTree:

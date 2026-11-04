@@ -55,8 +55,9 @@ from .proc import CommandError
 from .postprocessing.paths import (DUMPS_DIR, DUMPS_ZIP, EXTRACTED_DIR,
                                    EXTRACTED_ZIP, IPT_DIR, IPT_ZIP, PROCDUMPS_DIR,
                                    SCREENSHOTS_DIR, SCREENSHOTS_INDEX)
-from .postprocessing.postprocess import postprocess_analysis_dir
-from .postprocessing.plugins.plugin_base import load_postprocessing_config
+# The child-process runner, not the plugins: since 2026-11-03 the daemon does
+# not import capa or vivisect at all (sandboxd/postprocessing/child.py).
+from .postprocessing.child import postprocess_in_child
 
 # Well inside LEASE_SECONDS=120: twelve beats per lease, so a run of failures
 # on a busy platform is survivable where a single missed beat used to eat a
@@ -263,6 +264,9 @@ class Config:
     # SANDBOXD_KEEP_RESULTS. See `_remove_results` for when a results
     # directory is deleted, and the two cases that keep it anyway.
     keep_results: bool = config.KEEP_RESULTS
+    # SANDBOXD_POSTPROCESS_MAX_MIB: the postprocessing child's RLIMIT_DATA.
+    # The arithmetic, and the OOM kill it answers, are at the constant.
+    postprocess_max_mib: int = config.POSTPROCESS_MAX_MIB
     api_base: str = ""
     # The listener the BROWSER reaches -- see Settings.console_api.
     console_api: str = ""
@@ -355,6 +359,11 @@ class Analysis:
         # and threading it through every stage signature would change all of
         # them for one observer.
         self._screens: screenshots.Capture | None = None
+        # What the manifest's `notes` will say about this run: the trace's
+        # exit and launch caveat (`_trace`), and the postprocessing child's
+        # outcome (`run`). Joined in `_collect`.
+        self._trace_note: str | None = None
+        self._postprocess_note: str | None = None
 
     def run(self, lease, vlan: int) -> Outcome:
         """Drive one analysis and return its terminal outcome.
@@ -471,9 +480,16 @@ class Analysis:
                 self._check(beat)
                 self._api.report_state(lease.job_id, "collecting")
 
-
-                postprocessing_config = load_postprocessing_config()
-                postprocess_analysis_dir(job_dir, postprocessing_config, os_, vlan)
+                # In a child process with a memory limit, through the Runner
+                # (sandboxd/postprocessing/child.py) -- in this process until
+                # 2026-11-03, which is how a 20-minute trace got the daemon
+                # OOM-killed. A failure here is a note on the manifest, never
+                # a failed job: the trace is the result and this derives from
+                # it. The heartbeat thread keeps the lease meanwhile.
+                self._postprocess_note = postprocess_in_child(
+                    self._runner, job_dir, os_.value, vlan,
+                    max_mib=self._cfg.postprocess_max_mib,
+                    timeout=timing.POSTPROCESS_BUDGET)
 
                 outcome = self._collect(lease, job_dir)
 
@@ -1171,9 +1187,12 @@ class Analysis:
                      if any(e["name"] == n for e in entries)]
         manifest = {"schema_version": 1, "artifacts": entries,
                     "documents": documents, "truncated": truncated}
-        note = getattr(self, "_trace_note", None)
-        if note:
-            manifest["notes"] = note
+        # The platform bounds `notes` at 4096 characters (result-schema.md
+        # 4.2); both parts are short sentences, the postprocessing one at
+        # most a list of plugin names.
+        notes = [n for n in (self._trace_note, self._postprocess_note) if n]
+        if notes:
+            manifest["notes"] = "; ".join(notes)[:4096]
         return Outcome(
             state="completed", manifest=manifest,
             artifacts=[e["name"] for e in entries],

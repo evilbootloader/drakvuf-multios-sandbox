@@ -312,11 +312,11 @@ ntdll.dll,RtlSecureZeroMemory,log,lpvoid,size_t
 kernel32.dll,CreateProcessA,log,lpcstr,lpstr,lpsecurity_attributes,lpsecurity_attributes,bool,dword,lpvoid,lpwstr,lpstartupinfo,lpprocess_information
 
 # BEGIN GENERATED -- scripts/gen-hook-lists.py
-# capa-rules v9.4.0, win32json 071df49. Regenerate with
+# capa-rules v10.0.0-2-g42cbfd4d, win32json 071df49. Regenerate with
 # scripts/gen-hook-lists.py; hand-curated lines above are preserved.
 #
-# 988 bare Win32 names in capa-rules -> 1267 hookable
-# lines (71 unresolved, see --report). A line with no argument
+# 991 bare Win32 names in capa-rules -> 1270 hookable
+# lines (72 unresolved, see --report). A line with no argument
 # types still yields capa its `api` feature, which is what matches a rule;
 # arguments only add String/Number features, and a WRONG arity manufactures
 # them. DLL names never participate in matching (capa.rules.trim_dll_part).
@@ -448,7 +448,6 @@ clfsw32.dll,ReadLogRecord,log,lpvoid,lpvoid,dword,lpvoid*,lpvoid,lpvoid,lpvoid,l
 clfsw32.dll,ReadNextLogRecord,log,lpvoid,lpvoid*,lpvoid,lpvoid,lpvoid,lpvoid,lpvoid,lpvoid,lpvoid
 clfsw32.dll,ReserveAndAppendLog,log,lpvoid,lpvoid,dword,lpvoid,lpvoid,dword,lpvoid,dword,lpvoid,lpvoid
 clfsw32.dll,ReserveAndAppendLogAligned,log,lpvoid,lpvoid,dword,dword,lpvoid,lpvoid,dword,lpvoid,dword,lpvoid,lpvoid
-clr.dll,GetLastError,log
 comctl32.dll,DPA_Create,log,dword
 comctl32.dll,DPA_EnumCallback,log,dword,dword,lpvoid
 comctl32.dll,DPA_SetPtr,log,dword,dword,lpvoid
@@ -774,6 +773,7 @@ kernelbase.dll,GetCurrentDirectoryW,log,dword,lpvoid
 kernelbase.dll,GetEnvironmentStringsW,log
 kernelbase.dll,GetEnvironmentVariableA,log,lpcstr,lpvoid,dword
 kernelbase.dll,GetEnvironmentVariableW,log,lpcwstr,lpvoid,dword
+kernelbase.dll,GetLastError,log
 kernelbase.dll,GetLocaleInfoA,log,dword,dword,lpvoid,dword
 kernelbase.dll,GetLocaleInfoEx,log,lpcwstr,dword,lpvoid,dword
 kernelbase.dll,GetLocaleInfoW,log,dword,dword,lpvoid,dword
@@ -783,6 +783,7 @@ kernelbase.dll,GetModuleHandleExW,log,dword,lpcwstr,lpvoid
 kernelbase.dll,GetModuleHandleW,log,lpcwstr
 kernelbase.dll,GetNativeSystemInfo,log,lpvoid
 kernelbase.dll,GetProcAddress,log,dword,lpcstr
+kernelbase.dll,GetProcessHeap,log
 kernelbase.dll,GetProductInfo,log,dword,dword,dword,dword,lpvoid
 kernelbase.dll,GetStartupInfoW,log,lpvoid
 kernelbase.dll,GetStdHandle,log,dword
@@ -833,6 +834,8 @@ kernelbase.dll,PssWalkSnapshot,log,dword,dword,dword,lpvoid,dword
 kernelbase.dll,QueueUserAPC,log,dword,dword,dword
 kernelbase.dll,ReadProcessMemory,log,dword,lpvoid,lpvoid,dword,lpvoid
 kernelbase.dll,ResumeThread,log,dword
+kernelbase.dll,SearchPathA,log,lpcstr,lpcstr,lpcstr,dword,lpvoid,lpcstr
+kernelbase.dll,SearchPathW,log,lpcwstr,lpcwstr,lpcwstr,dword,lpvoid,lpcwstr
 kernelbase.dll,SetCurrentDirectoryA,log,lpcstr
 kernelbase.dll,SetCurrentDirectoryW,log,lpcwstr
 kernelbase.dll,SetEnvironmentStringsW,log,lpcwstr

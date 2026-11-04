@@ -176,12 +176,37 @@ def config(tmp_path) -> S.Config:
                     screenshots_enabled=False)
 
 
+def inline_postprocess(argv):
+    """What the postprocessing child does, done in this process.
+
+    The fake records the child's argv and this runs the plugins over the job
+    directory exactly as `python -m sandboxd.postprocessing` would -- minus
+    the memory limit, which must not be applied to the test process -- so the
+    manifest tests see the split logs, the packed dumps and the removed
+    trace.log a real run produces. Returns what the child would exit with.
+    """
+    from sandboxd.postprocessing.__main__ import parse_args
+    from sandboxd.postprocessing.child import EXIT_PLUGIN_FAILED, FAILED_PREFIX
+    from sandboxd.postprocessing.plugins.plugin_base import load_postprocessing_config
+    from sandboxd.postprocessing.postprocess import postprocess_analysis_dir
+    from sandboxd.proc import Completed
+
+    args = parse_args(list(argv[3:]))
+    failed = postprocess_analysis_dir(args.analysis_dir, load_postprocessing_config(),
+                                      TargetOs(args.os_name), args.vlan)
+    return Completed(argv=tuple(argv),
+                     returncode=EXIT_PLUGIN_FAILED if failed else 0,
+                     stdout=f"{FAILED_PREFIX} {' '.join(failed)}\n" if failed else "",
+                     stderr="", duration=0.0)
+
+
 def runner_ready(clone="ubuntu_sandbox-3-clone", origin="ubuntu_sandbox"):
     r = FakeRunner()
     r.script(("xl", "domid", clone), rc=1, times=1)
     r.script(("lvdisplay", f"/dev/vg-root/{origin}"), rc=0)
     r.script(("lvdisplay", f"/dev/vg-root/{clone}"), rc=1)
     r.script(("xl", "domid", clone), rc=0, stdout="42\n")
+    r.hook((sys.executable, "-m", "sandboxd.postprocessing"), inline_postprocess)
     return r
 
 
@@ -1014,11 +1039,12 @@ def test_the_sample_is_still_staged_for_postprocessing(tmp_path, monkeypatch):
     goes only once collection is done."""
     seen = {}
 
-    def postprocess(job_dir, cfg, os_, vlan):
+    def postprocess(runner, job_dir, os_name, vlan, *, max_mib, timeout):
         seen["sample"] = (tmp_path / "staging" / FakeLease().job_id
                           / FakeLease().submitted_filename).exists()
+        return None
 
-    monkeypatch.setattr(S, "postprocess_analysis_dir", postprocess)
+    monkeypatch.setattr(S, "postprocess_in_child", postprocess)
     run(tmp_path)
 
     assert seen["sample"] is True, "the sample was removed before postprocessing"
@@ -1529,12 +1555,104 @@ def test_a_truncated_upload_keeps_its_results(tmp_path, monkeypatch):
 def test_a_trace_log_that_survived_its_split_keeps_its_results(tmp_path, monkeypatch):
     """`trace.log` never uploads; one still present means the split failed
     and it may be the only whole copy of the trace."""
-    monkeypatch.setattr(S, "postprocess_analysis_dir",
-                        lambda job_dir, *a: (job_dir / S.TRACE_LOG).write_text("{}\n"))
+    def leave_trace_log(runner, job_dir, *a, **k):
+        (job_dir / S.TRACE_LOG).write_text("{}\n")
+        return None
+
+    monkeypatch.setattr(S, "postprocess_in_child", leave_trace_log)
     outcome, _ = run(tmp_path)
 
     assert outcome.state == "completed"
     assert (_job_dir(tmp_path) / S.TRACE_LOG).exists()
+
+
+# --- postprocessing runs in a child with a memory limit (2026-11-03) --------
+
+def _postprocess_calls(r):
+    return [c for c in r.calls if c.kind == "run" and c.what == "postprocess"]
+
+
+def test_postprocessing_runs_in_a_child_with_the_memory_limit_and_budget(tmp_path):
+    """After a 20-minute trace the daemon itself was OOM-killed, with every
+    clone's bookkeeping (Dom0 2026-11-02). The plugins now run in a child the
+    Runner starts, under RLIMIT_DATA and a wall-clock budget, and the daemon
+    survives whatever the trace's size does to them."""
+    r = runner_ready()
+    outcome, api = run(tmp_path, runner=r)
+
+    assert outcome.state == "completed"
+    (call,) = _postprocess_calls(r)
+    assert call.argv[:3] == (sys.executable, "-m", "sandboxd.postprocessing")
+    assert call.argv[3] == str(_job_dir(tmp_path))
+    assert call.argv[4:6] == ("--os", "ubuntu")
+    limit = call.argv[call.argv.index("--max-mib") + 1]
+    assert limit == str(S.config.POSTPROCESS_MAX_MIB)
+    assert call.argv[-2:] == ("--vlan", "3")
+    assert call.timeout == T.POSTPROCESS_BUDGET
+    assert "notes" not in api.completed[0]
+
+
+def test_postprocessing_runs_after_the_domain_is_gone_and_before_the_upload(tmp_path):
+    """It reads files, so it needs no guest; and the manifest declares sizes,
+    so everything it writes must exist before `_collect` looks."""
+    r = runner_ready()
+    api = RecordingApi(r)
+    run(tmp_path, runner=r, api=api)
+
+    (call,) = _postprocess_calls(r)
+    at = r.calls.index(call)
+    assert at > destroys(r)[0]
+    assert at >= api.calls_at["collecting"]
+
+
+def test_a_failed_postprocessing_plugin_is_a_manifest_note_not_a_failed_job(tmp_path):
+    """The trace is the result; ttps.json and falco.json derive from it. A
+    plugin that raised -- MemoryError under the child's limit, typically --
+    is named where a reader of the job will see it."""
+    r = runner_ready()
+    r.script((sys.executable, "-m", "sandboxd.postprocessing"), rc=3,
+             stdout="postprocessing-failed: capa_analysis falco_analysis\n",
+             stderr="MemoryError\n")
+    outcome, api = run(tmp_path, runner=r)
+
+    assert outcome.state == "completed"
+    assert ("postprocessing: capa_analysis, falco_analysis failed"
+            in api.completed[0]["notes"])
+
+
+def test_a_postprocessing_child_past_its_budget_is_noted_and_the_run_completes(tmp_path):
+    r = runner_ready()
+    r.script((sys.executable, "-m", "sandboxd.postprocessing"), rc=None,
+             timed_out=True)
+    outcome, api = run(tmp_path, runner=r)
+
+    assert outcome.state == "completed"
+    assert "stopped at its 1800s budget" in api.completed[0]["notes"]
+
+
+def test_the_trace_note_and_the_postprocessing_note_share_the_field(tmp_path):
+    r = runner_ready()
+    r.script(("drakvuf",), rc=1)
+    r.script((sys.executable, "-m", "sandboxd.postprocessing"), rc=3,
+             stdout="postprocessing-failed: yara_analysis\n")
+    _, api = run(tmp_path, runner=r)
+
+    notes = api.completed[0]["notes"]
+    assert notes.startswith("drakvuf exited 1")
+    assert "; postprocessing: yara_analysis failed" in notes
+
+
+def test_the_daemon_no_longer_imports_the_plugins():
+    """The point of the child: capa and vivisect load in it, not in the
+    process that holds every clone's bookkeeping and the lease heartbeats."""
+    import subprocess
+    out = subprocess.run(
+        [sys.executable, "-c",
+         "import sys; import sandboxd.stages, sandboxd.daemon; "
+         "print(sorted(m for m in sys.modules "
+         "if m.split('.')[0] in ('capa', 'vivisect', 'yara')))"],
+        capture_output=True, text=True, cwd=ROOT, check=True)
+    assert out.stdout.strip() == "[]"
 
 
 def test_keep_results_keeps_a_completed_run(tmp_path):

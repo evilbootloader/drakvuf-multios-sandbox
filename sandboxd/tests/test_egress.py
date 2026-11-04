@@ -9,6 +9,7 @@ split exists to remove.
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import pytest
@@ -817,7 +818,7 @@ def test_fakenet_uplink_drops_cover_every_bound_port():
             for port in ports:
                 assert port in dropped[proto], (
                     f"[{name}] binds {proto}/{port} on 0.0.0.0 and "
-                    f"network-setup.sh does not DROP it on the uplink")
+                    f"network-setup.sh does not DROP it off the analysis VLANs")
 
         # pyftpdlib binds these on demand during a transfer, so they are absent
         # from `ss` at launch and are the ones a manual check misses.
@@ -829,7 +830,18 @@ def test_fakenet_uplink_drops_cover_every_bound_port():
             for port in range(low, high + 1):
                 assert port in dropped["tcp"], (
                     f"[{name}] passive-data port tcp/{port} is not dropped "
-                    f"on the uplink")
+                    f"off the analysis VLANs")
+
+    # Off every interface that is not an analysis VLAN, not just the uplink
+    # bridge: a tunnel or a second NIC added later must not reach them
+    # (review L-2). Loopback first, because the proxy listener reaches the
+    # protocol listeners over it.
+    for proto in ("tcp", "udp"):
+        assert (f'! -i "$ANALYSIS_BRIDGE.+" -p {proto} --dport "$fakenet_{proto}" -j DROP'
+                in setup), f"the fakenet {proto} DROP is not on every non-VLAN interface"
+        assert f'-i "$UPLINK_BRIDGE" -p {proto} --dport "$fakenet_{proto}"' not in setup
+    assert setup.index('-i lo -j RETURN') < setup.index('--dport "$fakenet_tcp"'), (
+        "loopback must be let through before the responder DROPs")
 
 
 def test_a_simulated_exit_must_disclose_the_tls_limit():
@@ -865,21 +877,31 @@ def test_fakenet_requirements_hold_pyopenssl_below_the_removal():
     exits before binding a single port. Upstream leaves the dependency
     unpinned, so a fresh install picks a version that cannot work.
     """
-    reqs = (Path(__file__).resolve().parents[2]
-            / "automation" / "fakenet-requirements.txt")
-    assert reqs.exists(), "the FakeNet dependency pin is not shipped"
+    automation = Path(__file__).resolve().parents[2] / "automation"
+    source = automation / "fakenet-requirements.in"
+    assert source.exists(), "the FakeNet dependency pin is not shipped"
 
-    lines = [line.split("#")[0].strip() for line in reqs.read_text().splitlines()]
+    lines = [line.split("#")[0].strip() for line in source.read_text().splitlines()]
     pins = [line for line in lines if line]
 
     assert "pyopenssl<26.2" in pins, (
         "pyopenssl is not pinned below 26.2; FakeNet will exit at startup with "
         "no attribute 'X509Extension'")
 
+    # What is installed is the generated, hashed file (test_requirements.py
+    # holds the two together): the version it resolved must honour the bound.
+    generated = automation / "fakenet-requirements.txt"
+    pinned = re.search(r"^pyopenssl==(\d+)\.(\d+)", generated.read_text(), re.M)
+    assert pinned, "fakenet-requirements.txt does not pin pyopenssl"
+    assert (int(pinned.group(1)), int(pinned.group(2))) < (26, 2), (
+        f"fakenet-requirements.txt resolved pyopenssl {pinned.group(0)}, at or past the removal")
+
     # Declared by upstream on Linux, imported only by the diverter this
     # configuration never starts, and the likeliest of the set to fail to
     # build. Installing FakeNet with --no-deps is what keeps it out.
-    assert not any(p.startswith("netfilterqueue") for p in pins)
+    installed = [line.split()[0] for line in generated.read_text().splitlines()
+                 if line and not line[0] in "# -"]
+    assert not any(p.startswith("netfilterqueue") for p in pins + installed)
 
 
 def test_fakenet_patch_is_shipped_and_pinned():
@@ -948,8 +970,12 @@ def test_the_tor_ports_agree_with_the_torrc():
     setup = (Path(__file__).resolve().parents[2]
              / "automation" / "network-setup.sh").read_text()
     assert f"{config.TOR_TRANS_PORT} {config.TOR_DNS_PORT}" in setup, (
-        "network-setup.sh's uplink DROP no longer covers both tor ports; "
-        "without it these listeners are reachable from the uplink")
+        "network-setup.sh's DROP no longer covers both tor ports; "
+        "without it these listeners are reachable off the analysis VLANs")
+    for proto in ("tcp", "udp"):
+        assert (f'! -i "$ANALYSIS_BRIDGE.+" -p {proto} --dport "$tor_port" -j DROP'
+                in setup), f"the tor {proto} DROP is not on every non-VLAN interface"
+        assert f'-i "$UPLINK_BRIDGE" -p {proto} --dport "$tor_port"' not in setup
 
 
 def test_tor_is_withheld_when_nothing_is_listening():

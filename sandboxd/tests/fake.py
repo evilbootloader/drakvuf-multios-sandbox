@@ -44,6 +44,15 @@ class FakeRunner:
     responses: list = field(default_factory=list)
     calls: list[Call] = field(default_factory=list)
     default: Completed | None = None
+    # Scripted SIDE EFFECTS: `(prefix, fn)` pairs consulted after `responses`,
+    # where `fn(argv) -> Completed` does what the real command would do to
+    # the filesystem. The one user is the postprocessing child
+    # (test_stages.runner_ready), which a real Dom0 runs as a separate
+    # process and the stage tests run inline -- the same reasoning as
+    # `_write_outputs`: a fake that produced no files would let every
+    # manifest test pass vacuously. A `.script()` for the same prefix wins,
+    # so a test about a FAILED child can still say so.
+    hooks: list = field(default_factory=list)
     # Present by default: this container has none of them, and a test about
     # lvcreate ordering should not have to declare that lvcreate exists. Set to
     # a set of names to make specific tools missing.
@@ -59,6 +68,11 @@ class FakeRunner:
         self.responses.append({"prefix": prefix, "rc": rc, "stdout": stdout,
                                "stderr": stderr, "timed_out": timed_out,
                                "times": times})
+        return self
+
+    def hook(self, prefix: tuple[str, ...], fn):
+        """Answer `prefix` by running `fn(argv)`, which returns the Completed."""
+        self.hooks.append((prefix, fn))
         return self
 
     # -- the Runner interface ------------------------------------------------
@@ -126,6 +140,9 @@ class FakeRunner:
             return Completed(argv=argv_t, returncode=rule["rc"],
                              stdout=rule["stdout"], stderr=rule["stderr"],
                              duration=0.0, timed_out=rule["timed_out"])
+        for prefix, fn in self.hooks:
+            if argv_t[:len(prefix)] == prefix:
+                return fn(argv_t)
         if self.default is not None:
             return self.default
 

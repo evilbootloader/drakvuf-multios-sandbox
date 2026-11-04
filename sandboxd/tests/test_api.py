@@ -33,8 +33,10 @@ os.environ.setdefault("DATABASE_URL", "postgresql:///unused")
 os.environ.setdefault("WORKER_TOKEN", "unused")
 
 from sandboxd.api import (  # noqa: E402
-    Idle, Lease, ProtocolError, Reserved, SampleMismatch, Ticket, WorkerAPI,
+    Idle, Lease, ProtocolError, Reserved, SampleMismatch, Ticket, Unusable,
+    WorkerAPI,
 )
+from sandboxd import config  # noqa: E402
 
 from sandbox_platform.routers.worker import (  # noqa: E402
     ArtifactRequest, ClaimRequest, CompleteRequest, LeaseResponse,
@@ -209,10 +211,64 @@ def test_a_lease_naming_a_path_is_refused(name):
     `shutil.rmtree`, both as root. An absolute name replaces the join outright
     and a relative one is left unnormalised, so without this the platform is
     the only thing standing between a lease and a write into /etc.
+
+    Returned as `Unusable`, not raised (2026-11-03): the job id is sound, so
+    the daemon fails that one job. Raised, the same job was leased again on
+    every claim and parked the host until the reaper took it.
     """
-    with pytest.raises(ProtocolError, match="unusable lease"):
-        api(ok(_leased(submitted_filename=name))).claim(
-            free_mib=8192, free_vlans=4, free_slots=2)
+    got = api(ok(_leased(submitted_filename=name))).claim(
+        free_mib=8192, free_vlans=4, free_slots=2)
+
+    assert isinstance(got, Unusable)
+    assert got.job_id == _leased()["job_id"]
+    assert "unusable lease" in got.reason
+
+
+def test_a_sample_name_over_the_platforms_byte_bound_is_refused_here_too():
+    """The platform bounds names at 512 BYTES; a Dom0 that admitted more would
+    stage a file the platform could not have accepted -- the three copies of
+    the rule must agree (CLAUDE.md)."""
+    got = api(ok(_leased(submitted_filename="é" * 300))).claim(
+        free_mib=8192, free_vlans=4, free_slots=2)
+
+    assert isinstance(got, Unusable)
+    assert "exceeds 512 bytes" in got.reason
+
+
+@pytest.mark.parametrize("timeout", [-1, 1201, 10000000, "600", 1.5, None, True])
+def test_a_lease_timeout_the_platform_could_not_have_issued_is_refused(timeout):
+    """It becomes drakvuf's `-t`. The platform bounds it at submission
+    (`catalogue.MAX_TRACE_TIMEOUT`); this side bounds it again because a
+    platform bug or compromise that said 10000000 would hold a VLAN and the
+    clone's memory until the reaper noticed (review L-3). Failed as one job,
+    not raised: the id is sound, and raising leased it again on every claim."""
+    got = api(ok(_leased(timeout=timeout))).claim(
+        free_mib=8192, free_vlans=4, free_slots=2)
+
+    assert isinstance(got, Unusable)
+    assert "timeout" in got.reason
+
+
+@pytest.mark.parametrize("timeout", [0, 1, config.TRACE_TIMEOUT_MAX])
+def test_a_lease_timeout_within_the_platforms_bound_is_kept(timeout):
+    """0 included: it means the measured default and must reach
+    `stages._trace_options` as 0."""
+    got = api(ok(_leased(timeout=timeout))).claim(
+        free_mib=8192, free_vlans=4, free_slots=2)
+
+    assert isinstance(got, Lease)
+    assert got.timeout == timeout
+
+
+def test_the_timeout_bound_is_the_platforms():
+    """Two copies of one number. Read as text: the sandboxd suite does not
+    import the platform package."""
+    import re
+    catalogue = (Path(__file__).resolve().parents[2]
+                 / "platform" / "sandbox_platform" / "catalogue.py").read_text()
+    match = re.search(r"^MAX_TRACE_TIMEOUT = (\d+)$", catalogue, re.MULTILINE)
+    assert match, "catalogue.py no longer defines MAX_TRACE_TIMEOUT"
+    assert int(match.group(1)) == config.TRACE_TIMEOUT_MAX
 
 
 @pytest.mark.parametrize("job_id", [

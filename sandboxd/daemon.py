@@ -49,8 +49,8 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import egress, guests, proc, resources, sweep
-from .api import Idle, Lease, ProtocolError, Reserved, WorkerAPI
+from . import config, egress, guests, proc, resources, sweep
+from .api import Idle, Lease, ProtocolError, Reserved, Unusable, WorkerAPI
 from .guests import TargetOs
 from .resources import Exhausted, ResourceTable, required_mib
 from .runner import Runner
@@ -72,6 +72,28 @@ DRAIN_TIMEOUT = 300.0
 # after a REFUSED claim -- reserved, or a transport failure the API layer
 # already retried through.
 IDLE_PAUSE = 5.0
+
+# The values of ONE Dom0 that `config.py` takes from the environment since
+# 2026-11-03 (it used to be sed-edited by the Makefile): where the checkout
+# is, which user the guests run as, and the PID each guest's injection anchors
+# on. Named here, each in its own quotes, so `scripts/gen-current-state.py`
+# lists them with the rest of what this daemon reads; `main` echoes them.
+HOST_VALUE_VARS = (
+    "SANDBOXD_REPO_ROOT",
+    "SANDBOXD_ANALYSIS_USERNAME",
+    "SANDBOXD_INJECTION_PID_UBUNTU",
+    "SANDBOXD_INJECTION_PID_WINDOWS",
+    "SANDBOXD_INJECTION_PID_ANDROID",
+)
+
+# What Xen prints when `xl debug-keys d` turned its RDTSC compensation on --
+# the line automation/xen-rdtsc-poc.service now requires and the evasion
+# searches check before a run. A Dom0 whose boot line carries `rdtsc-poc=1`
+# without this line in `xl dmesg` runs every guest's RDTSC through the plain
+# TSC: slower, and no less detectable (docs/architecture/rdtsc-poc.md).
+RDTSC_BOOT_OPTION = "rdtsc-poc=1"
+RDTSC_ENABLED_MARKER = "RDTSC_POC: compensation enabled"
+XL_INFO_TIMEOUT = 30.0
 
 
 class AlreadyRunning(RuntimeError):
@@ -130,6 +152,11 @@ class Settings:
     # its upload succeeded. On keeps every one, for runbooks and debugging.
     keep_results: bool = False
 
+    # SANDBOXD_POSTPROCESS_MAX_MIB: RLIMIT_DATA of the postprocessing child,
+    # in MiB. `config.POSTPROCESS_MAX_MIB` has the arithmetic and the OOM
+    # kill behind it; 0 removes the limit.
+    postprocess_max_mib: int = config.POSTPROCESS_MAX_MIB
+
     @classmethod
     def from_env(cls, env=None) -> Settings:
         env = env if env is not None else os.environ
@@ -170,6 +197,11 @@ class Settings:
         keep = env.get("SANDBOXD_KEEP_RESULTS", "")
         keep_results = keep.strip().lower() in {"1", "true", "yes", "on"}
 
+        # `int()` here so a typo fails at startup, not in the first job's
+        # collect phase.
+        postprocess_max_mib = int(env.get("SANDBOXD_POSTPROCESS_MAX_MIB",
+                                          str(config.POSTPROCESS_MAX_MIB)))
+
         return cls(
             api=env["SANDBOXD_API"],
             token=env["WORKER_TOKEN"],
@@ -178,6 +210,7 @@ class Settings:
             console_enabled=console_enabled,
             screenshots_enabled=screenshots_enabled,
             keep_results=keep_results,
+            postprocess_max_mib=postprocess_max_mib,
             total_mib=int(env["SANDBOXD_TOTAL_MIB"]),
             vlans=range(1, max_clones + 1),
             total_slots=int(env.get("SANDBOXD_MAX_SLOTS", str(max_clones))),
@@ -360,6 +393,16 @@ class Daemon:
         if settings.keep_results:
             log.info("results directories are kept after upload "
                      "(SANDBOXD_KEEP_RESULTS)")
+        self._cfg.postprocess_max_mib = settings.postprocess_max_mib
+        if settings.postprocess_max_mib <= 0:
+            # WARNING: this is the switch back to the shape that got the
+            # daemon OOM-killed on 2026-11-02, minus the daemon dying -- the
+            # child is still the largest process, so the kernel takes it
+            # first, but the host swaps on the way there.
+            log.warning("the postprocessing child runs with NO memory limit "
+                        "(SANDBOXD_POSTPROCESS_MAX_MIB=0); a 20-minute trace "
+                        "can take this host into swap before the kernel "
+                        "kills the child")
         if settings.cacert or settings.client_cert:
             from .tls import ssl_context
             self._cfg.ssl_context = ssl_context(settings.cacert,
@@ -369,6 +412,27 @@ class Daemon:
         self._workers: list[threading.Thread] = []
 
     # -- startup ------------------------------------------------------------
+
+    def _check_rdtsc_compensation(self) -> None:
+        """Warn when the boot line asked for the compensation and Xen never
+        reported it. Never fails the start: the host still analyses, only in
+        the mode a sample can see, and the operator must know that -- until
+        2026-11-03 nothing on this side looked (review M-13)."""
+        info = self._runner.run(["xl", "info"], timeout=XL_INFO_TIMEOUT,
+                                what="xl info")
+        if not info.ok or RDTSC_BOOT_OPTION not in info.stdout:
+            return
+        dmesg = self._runner.run(["xl", "dmesg"], timeout=XL_INFO_TIMEOUT,
+                                 what="xl dmesg")
+        if dmesg.ok and RDTSC_ENABLED_MARKER in dmesg.stdout:
+            log.info("RDTSC compensation is on (%s)", RDTSC_ENABLED_MARKER)
+            return
+        log.warning(
+            "the Xen boot line has %s but `xl dmesg` has no %r: the "
+            "compensation is OFF and every guest's RDTSC is answered with the "
+            "plain TSC, which samples can detect. Check xen-rdtsc-poc.service "
+            "(systemctl status xen-rdtsc-poc) and docs/architecture/rdtsc-poc.md",
+            RDTSC_BOOT_OPTION, RDTSC_ENABLED_MARKER)
 
     def start(self) -> ResourceTable:
         """Reclaim Dom0, learn what it can afford, and announce it."""
@@ -381,6 +445,7 @@ class Daemon:
                              # is already gone is still found and killed.
                              vlans=self._s.vlans)
         log.info("%s", report.summary())
+        self._check_rdtsc_compensation()
 
         table = ResourceTable(total_mib=self._s.total_mib,
                               vlans=self._s.vlans,
@@ -534,6 +599,25 @@ class Daemon:
                      got.blocking_job_id, got.need_mib, free.mib)
             return None
 
+        if isinstance(got, Unusable):
+            # A lease this host cannot use -- the platform admitted a sample
+            # name Dom0's rule refuses -- is the JOB's failure, not the
+            # protocol's (2026-11-03). It was a ProtocolError until then, which
+            # left the job `cloning` at the head of the queue: every claim
+            # leased it again, logged "claim refused", slept, and the lease
+            # cycled until the reaper marked it interrupted and the next
+            # retry repeated it -- one submission parked this host for the
+            # length of the reap timeout, over and over. Reported like the
+            # capacity refusal below: cleaning, then failed with the reason,
+            # and the queue moves on.
+            log.error("job %s cannot run here: %s", got.job_id, got.reason)
+            self._api.report_state(got.job_id, "cleaning",
+                                   cleanup_status="no clone was created")
+            self._api.report_state(
+                got.job_id, "failed", failure_stage="claim",
+                failure_reason=got.reason)
+            return None
+
         assert isinstance(got, Lease)
         try:
             held = table.acquire(got.job_id, got.required_mib)
@@ -666,6 +750,13 @@ def main(argv=None) -> int:
     except AlreadyRunning as exc:
         log.error("%s", exc)
         return 1
+
+    # What this host will inject into, and as whom -- the five values that
+    # used to live in a sed-edited config.py. Echoed at every start so a
+    # Windows anchor of 1 (the unset default: no such PID on Windows) is
+    # visible before the first job silently injects into nothing.
+    log.info("host values: %s", ", ".join(
+        f"{v}={os.environ.get(v) or '<default>'}" for v in HOST_VALUE_VARS))
 
     # After the lock, deliberately: provisioning rebuilds host-wide iptables
     # chains, and doing that while another orchestrator is mid-analysis would

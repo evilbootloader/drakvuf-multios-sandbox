@@ -89,11 +89,6 @@ POSTPROCESS_PLUGINS = [
     # sample_scope). Requires nothing for the same reason get_http_info
     # requires no log: what it reads is per-OS (falco_analysis.FALCO_PROFILES).
     PostprocessPlugin(function=falco_analysis, requires=[], generates=[FALCO_ALERTS]),
-    PostprocessPlugin(
-        function=gzip_syscalls,
-        requires=["syscall.log"],
-        generates=["syscall.log.gz", "sysret.log.gz"],
-    ),
     # **`apimon.log` is deliberately NOT required.** The log this reads is
     # per-OS (apimon on Windows, libmon on Linux -- get_http_info.HTTP_SOURCES),
     # and `requires` is one static list for every guest, so naming either one
@@ -135,6 +130,19 @@ POSTPROCESS_PLUGINS = [
     # Not gated on process_tree.json: alerts from a job without procmon are
     # still alerts, reported by PID with no process to link to.
     PostprocessPlugin(function=get_falco_info, requires=[FALCO_ALERTS], generates=[]),
+    # **After every reader of the logs it replaces**, and that is why it sits
+    # here rather than beside falco_analysis as it did until 2026-11-03: it
+    # gained apimon.log, which get_http_info reads, so gzipping before that
+    # plugin would have silently emptied the HTTP tab of every Windows job.
+    # Requires nothing: a job without syscall.log (syscalls not selected) can
+    # still have an apimon.log worth compressing, and the function skips what
+    # is absent. Before index_logs, so no gzipped log is ever in the index --
+    # platform logview.py relies on that.
+    PostprocessPlugin(
+        function=gzip_syscalls,
+        requires=[],
+        generates=["syscall.log.gz", "sysret.log.gz", "apimon.log.gz"],
+    ),
     # After every plugin that calls update_report and before index_logs,
     # which adds nothing to it. Always regenerated: the report is a function
     # of the files above it, and a stale one would describe a different run.

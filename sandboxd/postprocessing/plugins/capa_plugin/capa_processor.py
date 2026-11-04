@@ -3,6 +3,7 @@ import itertools
 import logging
 import multiprocessing
 import re
+import time
 import zipfile
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -14,7 +15,6 @@ from capa.capabilities.common import find_capabilities
 from capa.engine import MatchResults as EngineMatchResults
 from capa.features.common import Result
 from capa.features.extractors.base_extractor import ProcessFilter
-from capa.features.extractors.drakvuf.extractor import DrakvufExtractor
 from capa.helpers import get_auto_format
 from capa.loader import get_extractor
 from capa.main import (
@@ -30,6 +30,7 @@ from capa.rules import Rule, RuleSet, get_rules, get_rules_and_dependencies
 from ...paths import DUMPS_DIR, DUMPS_ZIP
 from ...drakvuf_records import DRAKVUF_STRING_ARG, unescape_drakvuf
 from ..plugin_base import PostprocessContext
+from .streaming import StreamingDrakvufExtractor
 
 logger = logging.getLogger(__name__)
 
@@ -115,50 +116,71 @@ def get_malware_processes(inject_path: Path, pstree_path: Path) -> List[int]:
 
 
 def get_drakvuf_feature_extractor(
-    calls: Iterator[Dict],
-) -> DrakvufExtractor:
-    """Wrapper routing for initializing the Drakvuf feature extractor"""
-    return DrakvufExtractor.from_report(calls)
+    analysis_dir: Path, malware_pids: Optional[List[int]],
+) -> StreamingDrakvufExtractor:
+    """The extractor over this job's call logs.
+
+    `StreamingDrakvufExtractor` (streaming.py) rather than capa's
+    `DrakvufExtractor.from_report` since 2026-11-03: capa's keeps every call
+    as a model for the whole pass, which is what put the daemon under the
+    OOM killer; this one keeps offsets and builds each call when asked.
+    `malware_pids` drops every other process's lines at the index pass,
+    before anything is kept -- capa's ProcessFilter does the same thing
+    after the fact, and lines without a PID are kept so nothing capa might
+    need is filtered on a guess.
+    """
+    return StreamingDrakvufExtractor(
+        analysis_dir, CALL_LOGS, normalise_record,
+        set(malware_pids) if malware_pids is not None else None)
+
+
+def normalise_record(data: Dict) -> None:
+    """One DRAKVUF record as capa must see it, in place.
+
+    Applied to every record in both of the extractor's passes (streaming.py),
+    so the thread a call is indexed under and the model capa receives come
+    from the same view of the line.
+    """
+    if data.get("Plugin") == "libmon":
+        _relabel_libmon_for_capa(data)
+    if data.get("Plugin") == "apimon" and data.get("Event") == "api_called":
+        if "Arguments" not in data:
+            data["Arguments"] = []
+        else:
+            # After the relabel above, so libmon's arguments are normalised
+            # too -- both plugins emit the same shape.
+            normalise_string_arguments(data)
+    if data.get("Plugin") == "syscall":
+        # capa's SystemCall folds every key it does not name into the call's
+        # arguments (models.py, `build_extra`), so these would become String
+        # features of a module name on every call.
+        data.pop("FromParentModule", None)
+        data.pop("FromModule", None)
 
 
 def decode_json_lines(
     fd: TextIO, pids: Optional[Iterable[int]] = None
 ) -> Iterator[Dict]:
-    # read and decode json lines into a list of dictionaries.
-    #
-    # `pids` drops every other process's lines HERE, before anything is
-    # materialised. capa's ProcessFilter does the same thing after the whole
-    # log has become pydantic models, and a Windows syscall.log runs to
-    # millions of lines: measured 1.7 KiB per decoded line, ~3.7 GiB for the
-    # 2.27M-line trace of 2026-09-18, on a Dom0 with 8 GiB. Lines without a
-    # PID are kept, so nothing capa might need is filtered on a guess.
+    """Records of one log as capa sees them; `pids` drops other processes.
+
+    The reader the extractor replaced (streaming.py) and kept for tests and
+    tools that want the records as dicts. Measured on it, 2026-09-18: capa's
+    models cost 1.7 KiB per decoded line, ~3.7 GiB for a 2.27M-line Windows
+    trace -- the number behind the streaming extractor.
+    """
     wanted = set(pids) if pids is not None else None
     for line in fd:
         try:
             # we use orjson for a small performance improvement
             data = orjson.loads(line.strip())
-            if wanted is not None and "PID" in data and data["PID"] not in wanted:
-                continue
-            if data.get("Plugin") == "libmon":
-                _relabel_libmon_for_capa(data)
-            if (
-                data.get("Plugin") == "apimon"
-                and data.get("Event") == "api_called"
-            ):
-                if "Arguments" not in data:
-                    data["Arguments"] = []
-                else:
-                    # After the relabel above, so libmon's arguments are
-                    # normalised too -- both plugins emit the same shape.
-                    normalise_string_arguments(data)
-            if data.get("Plugin") == "syscall" and "FromParentModule" in data:
-                del data["FromParentModule"]
-            if data.get("Plugin") == "syscall" and "FromModule" in data:
-                del data["FromModule"]
-            yield data
         except orjson.JSONDecodeError:
             # sometimes Drakvuf reports bad method names and/or malformed JSON
             logger.debug("bad drakvuf log line: %s", line)
+            continue
+        if wanted is not None and "PID" in data and data["PID"] not in wanted:
+            continue
+        normalise_record(data)
+        yield data
 
 
 # DRAKVUF's string-argument format and escaping, shared with `falco`.
@@ -259,23 +281,11 @@ def _relabel_libmon_for_capa(data: Dict) -> None:
 CALL_LOGS = ("libmon.log", "apimon.log", "syscall.log")
 
 
-def iter_calls(
-    analysis_dir: Path, malware_pids: Optional[List[int]]
-) -> Iterator[Dict]:
-    # api calls first, then syscalls, one line at a time; capa sorts them.
-    for name in CALL_LOGS:
-        path = analysis_dir / name
-        if not path.exists():
-            logger.debug("missing %s file", name)
-            continue
-        with path.open("r", errors="ignore") as fd:
-            yield from decode_json_lines(fd, malware_pids)
-
-
 def dynamic_capa_analysis(
     analysis_dir: Path,
     rules: RuleSet,
     malware_pids: Optional[List[int]] = None,
+    stats: Optional[Dict] = None,
 ) -> Tuple[Path, ResultDocumentMatchResults]:
     # No log at all is a configuration problem (neither apimon nor syscalls
     # was enabled) and is reported as one. A log with nothing from the
@@ -285,12 +295,14 @@ def dynamic_capa_analysis(
             "both syscall.log and apimon.log are either empty or non-existent"
         )
 
-    # initialize the Drakvuf capa feature extractor with the captured calls.
-    # `from_raw_report` consumes an iterator, so the log is never held as a
-    # list of dicts; only the retained lines exist, as capa's own models.
-    extractor = get_drakvuf_feature_extractor(
-        iter_calls(analysis_dir, malware_pids)
-    )
+    # Every retained record is read -- the operator's decision (2026-11-03):
+    # a TTP that only the last calls of a long trace would show must not be
+    # lost to a cap. What is NOT kept is the records: the extractor indexes
+    # them and builds each call when capa asks (streaming.py).
+    extractor = get_drakvuf_feature_extractor(analysis_dir, malware_pids)
+    if stats is not None:
+        stats["records"] = extractor.records
+        stats["rejected"] = extractor.rejected
 
     # apply a filter to the extractor if we wish to only analyze a specific set of processes
     if malware_pids:
@@ -472,9 +484,12 @@ def capa_analysis(context: PostprocessContext) -> None:
 
     # extract capabilities from the Drakvuf report
     if config.analyze_drakvuf_log:
+        stats: Dict = {}
+        started = time.monotonic()
         dynamic_capabilities = dynamic_capa_analysis(
-            analysis_dir, rules, malware_pids=malware_pids
+            analysis_dir, rules, malware_pids=malware_pids, stats=stats,
         )
+        stats["seconds"] = round(time.monotonic() - started, 3)
 
         # write the extracted TTPs to the analysis dir
         with (analysis_dir / "ttps.json").open("wb") as f:
@@ -485,6 +500,17 @@ def capa_analysis(context: PostprocessContext) -> None:
             ):
                 f.write(orjson.dumps(ttp))
                 f.write(b"\n")
+        # How much of the trace the TTPs describe: the calls of the sample's
+        # processes that capa read. A reader comparing "no TTP matched" with
+        # a count in the millions knows the pass saw the trace; against a
+        # count of zero, that the sample never ran. `rejected` counts lines
+        # that were JSON but not a call capa's models accept.
+        # `seconds` is the pass's wall clock, index and matching together:
+        # the number that decides whether this pass needs native code
+        # (falco-rules.json carries falco's as `seconds` for the same reason).
+        context.update_report({"capa": {"records": stats.get("records", 0),
+                                        "rejected": stats.get("rejected", 0),
+                                        "seconds": stats.get("seconds")}})
 
     # extract capabilities from the memory dumps
     if config.analyze_memdumps:

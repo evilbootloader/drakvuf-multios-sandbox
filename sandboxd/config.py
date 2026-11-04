@@ -18,6 +18,15 @@ at all — there is no safe guess for how much memory a Dom0 may hand to malware
 `Settings.from_env` in `daemon.py` reads those and refuses to start without
 them.
 
+**Not here either, since 2026-11-03: the five values that belong to ONE
+Dom0** — where the checkout is, which user the analysis guests run as, and the
+PID each guest's injection anchors on. Those come from the same environment
+file (`SANDBOXD_REPO_ROOT`, `SANDBOXD_ANALYSIS_USERNAME`,
+`SANDBOXD_INJECTION_PID_*`); the assignments below are the defaults a fresh
+checkout has. Until then `make sandboxd` and `make setup_hooks_*` wrote them
+into this tracked file with `sed -i`, which dirtied Dom0's checkout on every
+deploy and could leave `INJECTION_PID_WINDOWS = ` with nothing after it.
+
 ## This file feeds two things that are not Python
 
 `automation/platform.env` is sourced by `network-setup.sh`, and `misc/*.cfg`
@@ -38,7 +47,27 @@ bridge carrying no isolation rules, which looks exactly like a working analysis.
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
+
+
+def _env_int(name: str, default: int) -> int:
+    """An integer host value from the environment, or the default.
+
+    Empty counts as unset, so a rendered `NAME=` line is the default rather
+    than a crash; anything else that is not an integer stops the daemon at
+    import with the variable named, which is where a typo in
+    /etc/sandboxd/sandboxd.env should surface -- not in the first job.
+    """
+    raw = os.environ.get(name)
+    if raw is None or not raw.strip():
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        raise SystemExit(
+            f"sandboxd: {name}={raw!r} is not an integer "
+            f"(/etc/sandboxd/sandboxd.env)") from None
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -135,8 +164,10 @@ PLATFORM_PCPUS = "28-31"
 # ===========================================================================
 
 #: Where the repository is checked out on Dom0. Scripts resolve their own
-#: location at runtime, so this only matters to paths built from it.
-DOM0_REPO_ROOT = Path("/root/drakvuf-multios-sandbox")
+#: location at runtime, so this only matters to paths built from it: the
+#: LibVMI profiles, the guest configs and the saved states. From
+#: `SANDBOXD_REPO_ROOT` when set (see the module docstring).
+DOM0_REPO_ROOT = Path(os.environ.get("SANDBOXD_REPO_ROOT") or "/root/drakvuf-multios-sandbox")
 
 #: Samples are staged here before injection, and results collected here after.
 #: Both are Dom0-side; nothing under them is ever visible to a guest.
@@ -205,6 +236,14 @@ KEEP_RESULTS = False
 #: interval is real time (sandboxd/screenshots.py).
 SCREENSHOT_INTERVAL = 2.0
 
+#: Seconds a lease may ask the trace to run, inclusive: the platform's
+#: `catalogue.MAX_TRACE_TIMEOUT`, which it enforces on submission, enforced
+#: again on this side because the lease is only the platform's word. A
+#: platform bug or compromise that said 10000000 would hold a VLAN and the
+#: clone's memory until the reaper noticed (review L-3, 2026-11-04). 0 means
+#: the measured default (`stages._trace_options`).
+TRACE_TIMEOUT_MAX = 1200
+
 #: Ticks before capture stops: 25 minutes at 2 s. The trace timeout is at most
 #: 1200 s (the platform's `catalogue.MAX_TRACE_TIMEOUT`, 600 until 2026-11-02,
 #: when this was 450) and preconfig adds minutes at most, so a run reaching this
@@ -214,8 +253,32 @@ SCREENSHOT_MAX_FRAMES = 750
 
 #: Bytes of PNG per job before capture stops. A desktop frame is tens to
 #: hundreds of KiB; this bounds a guest drawing noise so frames can never be
-#: what pushes a job over its 4 GiB result budget, where a 413 would fail it.
+#: what pushes a job over its 8 GiB result budget, where a 413 would fail it.
 SCREENSHOT_MAX_BYTES = 256 * 2**20
+
+#: MiB the postprocessing child may allocate -- `RLIMIT_DATA`, set by
+#: `sandboxd/postprocessing/__main__.py` before it imports a plugin. 0 removes
+#: the limit. Overridable with `SANDBOXD_POSTPROCESS_MAX_MIB`.
+#:
+#: **Why there is a limit at all** (Dom0, 2026-11-02 19:55). After a
+#: 20-minute trace the daemon itself reached 6.7 GiB of anonymous memory on a
+#: Dom0 with 7.9 GiB and was killed by the kernel's OOM killer, with every
+#: clone's bookkeeping: capa and falco each build the whole in-scope log in
+#: memory, and until 2026-11-03 they did so inside the daemon's own process.
+#: The job's lease had lapsed half an hour earlier -- the process spent that
+#: time swapping, and a thread that is faulting pages does not get to send a
+#: heartbeat -- so the platform reaped the job at 19:26 and the kill came at
+#: 19:55. TROUBLESHOOTING, "`sandboxd` disappears after a long trace".
+#:
+#: So the heavy passes run in a child with a hard allocation limit, and an
+#: overrun becomes a `MemoryError` inside ONE plugin -- caught, logged, the
+#: next plugin runs -- instead of a dead daemon. The number: Dom0 has 8192 M
+#: (`dom0_mem`), two clone slots means two children can run at once, and
+#: DRAKVUF, tcpdump, the page cache and the daemon need the rest, so 2 x 3072
+#: leaves about 2 GiB. A host with more slots or less memory lowers it. The
+#: cost of a limit that is too low is a job without `ttps.json` or
+#: `falco.json`, named in its manifest notes -- never a lost trace.
+POSTPROCESS_MAX_MIB = 3072
 
 
 # ===========================================================================
@@ -417,8 +480,19 @@ MAX_EGRESS_RATE_BURST = "6291824b"
 #: shows up as hundreds of simultaneous half-open SYNs.
 MAX_PARALLEL_CONNS = "50"
 
-INJECTION_PID_UBUNTU = 1
-INJECTION_PID_WINDOWS = 1
-INJECTION_PID_ANDROID = 1
+#: The PID each guest's injection anchors on -- valid only for the saved state
+#: it was read from, and a stale one fails SILENTLY (`injector` attaches to
+#: whatever it is handed; stages.Config has the full case). Ubuntu anchors on
+#: PID 1 by design. `make setup_hooks_windows` reads the Windows one from the
+#: running template and writes it to /etc/sandboxd/sandboxd.env as
+#: `SANDBOXD_INJECTION_PID_WINDOWS`; Android's is re-derived after every
+#: re-save of its state. The 1s here are the defaults of a checkout that has
+#: not been set up, which `daemon._pipelines` treats as "offered".
+INJECTION_PID_UBUNTU = _env_int("SANDBOXD_INJECTION_PID_UBUNTU", 1)
+INJECTION_PID_WINDOWS = _env_int("SANDBOXD_INJECTION_PID_WINDOWS", 1)
+INJECTION_PID_ANDROID = _env_int("SANDBOXD_INJECTION_PID_ANDROID", 1)
 
-ANALYSIS_USERNAME = "user"
+#: The user the analysis guests run as; the staging path is its Desktop
+#: (guests.PATHS). `SANDBOXD_ANALYSIS_USERNAME` when set, rendered by
+#: `make sandboxd` from the Makefile's ANALYSIS_VM_USER.
+ANALYSIS_USERNAME = os.environ.get("SANDBOXD_ANALYSIS_USERNAME") or "user"

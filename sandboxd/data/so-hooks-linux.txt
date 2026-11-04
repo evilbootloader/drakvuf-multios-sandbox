@@ -138,7 +138,7 @@ libssl.so,SSL_read,no-retval,log,Ssl:lpvoid,Buf:lpvoid,Num:int
 libssl.so,SSL_connect,log,Ssl:lpvoid
 
 # BEGIN GENERATED -- scripts/gen-hook-lists.py
-# capa-rules v9.4.0, verified against /lib/x86_64-linux-gnu/libc.so.6. Regenerate with
+# capa-rules v10.0.0-2-g42cbfd4d, verified against /lib/x86_64-linux-gnu/libc.so.6. Regenerate with
 # scripts/gen-hook-lists.py; hand-curated lines above are preserved.
 #
 # 182 lowercase names in capa-rules; 143 are real glibc

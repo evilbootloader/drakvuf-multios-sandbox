@@ -128,6 +128,10 @@ def job_id_admissible(job_id: str) -> str:
     return job_id
 
 
+#: Bytes, as the platform counts them (`routers/jobs.py`, `_MAX_SAMPLE_NAME`).
+MAX_SAMPLE_NAME = 512
+
+
 def sample_name_admissible(name: str) -> str:
     """One safe path component, or raise.
 
@@ -147,6 +151,11 @@ def sample_name_admissible(name: str) -> str:
     """
     if not isinstance(name, str) or not name:
         raise ValueError(f"sample name must be a non-empty string, got {name!r}")
+    if len(name.encode()) > MAX_SAMPLE_NAME:
+        # The platform's own bound (`_MAX_SAMPLE_NAME`, bytes), repeated here
+        # since 2026-11-03 so the three copies of the rule agree on it too: a
+        # name the platform refuses must not be one this side would stage.
+        raise ValueError(f"sample name exceeds {MAX_SAMPLE_NAME} bytes")
     if "/" in name or "\\" in name:
         raise ValueError(f"sample name contains a path separator: {name!r}")
     if name in (".", ".."):

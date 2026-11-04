@@ -329,6 +329,22 @@ def test_reserved_is_not_treated_as_a_failure(tmp_path):
     assert d._workers == []
 
 
+def test_an_unusable_lease_fails_that_job_and_frees_the_queue(tmp_path):
+    """A sample name the platform admitted and Dom0 refuses is the JOB's
+    failure (2026-11-03). As a ProtocolError it left the job `cloning` at the
+    head of the queue, leased again on every claim until the reaper took it:
+    one submission parked the host. Reported like a capacity refusal, so the
+    next claim gets the next job."""
+    api = FakeApi(queue=[D.Unusable(job_id="j-bad", reason="unusable lease: separator")])
+    d = daemon(tmp_path, api)
+    table = d.start()
+
+    assert d._claim_once(table) is None
+    assert api.states == [("j-bad", "cleaning"), ("j-bad", "failed")]
+    assert table.free() == table.total
+    assert d._workers == []
+
+
 def test_the_loop_does_not_claim_with_no_free_vlan(tmp_path):
     """Asking for work this host cannot place wastes a lease: the platform
     hands it over and it sits until the TTL lapses."""
@@ -595,6 +611,66 @@ def test_the_vlan_range_comes_from_max_clones(tmp_path):
         "SANDBOXD_TOTAL_MIB": "16384", "SANDBOXD_MAX_CLONES": "6"})
 
     assert list(s.vlans) == [1, 2, 3, 4, 5, 6]
+
+
+def test_the_postprocessing_memory_limit_comes_from_the_environment(tmp_path):
+    """RLIMIT_DATA of the postprocessing child (2026-11-03). The default is
+    sized for this Dom0 -- 8192 M, two clone slots -- and a host with a
+    different shape sets its own; 0 removes the limit and the daemon warns."""
+    base = {"SANDBOXD_API": "https://p:8443", "WORKER_TOKEN": "t",
+            "SANDBOXD_TOTAL_MIB": "8192"}
+
+    assert D.Settings.from_env(base).postprocess_max_mib == 3072
+    assert D.Settings.from_env(
+        {**base, "SANDBOXD_POSTPROCESS_MAX_MIB": "2048"}).postprocess_max_mib == 2048
+    with pytest.raises(ValueError):
+        D.Settings.from_env({**base, "SANDBOXD_POSTPROCESS_MAX_MIB": "lots"})
+
+    d = daemon(tmp_path, postprocess_max_mib=2048)
+    assert d._cfg.postprocess_max_mib == 2048
+
+
+# --- the RDTSC compensation is checked at startup (2026-11-03, review M-13) --
+
+def _xen(r, boot_line: str, dmesg: str):
+    r.script(("xl", "info"), rc=0, stdout=f"xen_commandline        : {boot_line}\n")
+    r.script(("xl", "dmesg"), rc=0, stdout=dmesg)
+    return r
+
+
+def test_a_boot_line_asking_for_the_compensation_with_no_report_from_xen_warns(tmp_path, caplog):
+    """`xl debug-keys d` exits 0 whatever Xen did with it, so the unit read
+    "active (exited)" on a boot where the compensation never came on and every
+    analysis ran in the mode a sample can see. The daemon now looks."""
+    import logging
+    r = _xen(runner(), "dom0_mem=8192M rdtsc-poc=1 altp2m=1", "(XEN) Xen version 4.20.1\n")
+    with caplog.at_level(logging.WARNING):
+        daemon(tmp_path, r=r).start()
+
+    assert any("compensation is OFF" in rec.message for rec in caplog.records)
+
+
+def test_the_compensation_reported_by_xen_is_logged_and_not_warned(tmp_path, caplog):
+    import logging
+    r = _xen(runner(), "dom0_mem=8192M rdtsc-poc=1",
+             "(XEN) Xen version 4.20.1\n(XEN) RDTSC_POC: compensation enabled\n")
+    with caplog.at_level(logging.INFO):
+        daemon(tmp_path, r=r).start()
+
+    assert not any("compensation is OFF" in rec.message for rec in caplog.records)
+    assert any("RDTSC compensation is on" in rec.message for rec in caplog.records)
+
+
+def test_a_boot_line_without_the_option_is_not_checked(tmp_path, caplog):
+    """A Xen without rdtsc-poc=1 has nothing to report; the check is about a
+    switch the operator asked for and did not get."""
+    import logging
+    r = _xen(runner(), "dom0_mem=8192M altp2m=1", "")
+    with caplog.at_level(logging.WARNING):
+        daemon(tmp_path, r=r).start()
+
+    assert not any("compensation" in rec.message for rec in caplog.records)
+    assert not r.ran(("xl", "dmesg"))
 
 # --- F11: the console must dial the listener the browser reaches -----------
 

@@ -77,7 +77,10 @@ go higher. Here they are configuration, so a guest that legitimately needs
 longer can have it without rebuilding the orchestrator.
 
 Two waits are new, because the old launcher did neither: fetching the sample
-from the object store, and uploading artifacts to it.
+from the object store (FETCH_BUDGET, 300s), and uploading artifacts to it
+(COLLECT_BUDGET, 900s since 2026-11-03; 300s before). A third guard,
+POSTPROCESS_BUDGET (1800s), covers the postprocessing child from the same
+date; see the constants for what sized each.
 """
 
 from __future__ import annotations
@@ -147,9 +150,27 @@ DESTROY_SETTLE = 10.0
 # in clone.py. A phase that overruns means the clone is torn down.
 
 CLONE_BUDGET = 180.0        # lvcreate + xl restore, generous: a busy VG is slow
-COLLECT_BUDGET = 300.0      # NEW: artifact upload, which the old launcher never did
+
+# Artifact upload, which the old launcher never did. 300 s until 2026-11-03,
+# a guess from before sandboxd had run. Raised for 20-minute traces: the
+# operator asked for at least ten minutes of push after the trace ends, and
+# the largest result set to that date was 1.74 GB, so 900 s is margin over the
+# ten rather than the ten itself. Past it `_collect` stops and marks the
+# manifest truncated, frames first (stages._collect). The platform's artifact
+# ticket TTL (`artifact_upload_ttl`, 1800 s) must stay above this, or a ticket
+# minted at the start of a slow batch expires inside the window.
+COLLECT_BUDGET = 900.0
 FETCH_BUDGET = 300.0        # NEW: sample download from the object store
 CLEANUP_BUDGET = 60.0
+
+# The postprocessing child (sandboxd/postprocessing/child.py): one wall-clock
+# guard over every plugin together, where before 2026-11-03 there was none --
+# a pass that never ends held the worker slot and the lease for ever. Sized
+# for a 20-minute Windows trace, whose capa and falco passes each read the
+# whole in-scope log, and generous because overrunning it throws derived data
+# away, never the trace: the child gets SIGINT then SIGKILL, what it wrote is
+# uploaded, and the manifest's `notes` say the pass was cut short.
+POSTPROCESS_BUDGET = 1800.0
 
 
 @dataclass(frozen=True)

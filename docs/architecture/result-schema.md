@@ -136,6 +136,21 @@ ported from drakvuf-sandbox) started running between the trace and the
 upload. The names are defined once, in `sandboxd/postprocessing/paths.py`,
 and `argv_trace`, `stages.py` and the plugins all import them.
 
+Since 2026-11-03 the phase runs in a **child process with a memory limit**
+(`sandboxd/postprocessing/child.py`, `RLIMIT_DATA` from
+`SANDBOXD_POSTPROCESS_MAX_MIB`) and under its own wall-clock budget
+(`timing.POSTPROCESS_BUDGET`), after a 20-minute trace had the daemon itself
+OOM-killed (TROUBLESHOOTING, "`sandboxd` disappears after a long trace"). A
+plugin that raises -- `MemoryError` included -- leaves its outputs absent;
+the manifest's `notes` name it, and `report.json` lists it under
+`postprocessing_failures`. Every line of the trace is still parsed -- the
+operator's decision, 2026-11-03: no pass caps its input -- and `report.json`
+records under `capa.records` how many calls the capa pass read. The passes
+keep less instead: capa reads calls back from the per-plugin logs by offset
+(`capa_plugin/streaming.py`), falco merges the logs as streams
+(`falco/events.py`), and the per-plugin logs themselves are written compact,
+one JSON object per line with no padding (`split_drakvuf_log`).
+
 ```text
 results/<job_id>/
   <plugin>.log         DRAKVUF's JSONL event stream, one   reserved namespace
@@ -144,7 +159,8 @@ results/<job_id>/
   parse_errors.log     lines of the stream that were not   reserved
                        JSON, verbatim
   syscall.log.gz       syscall.log, gzipped by             reserved
-  sysret.log.gz        postprocessing (the .log is gone)
+  sysret.log.gz        postprocessing (the .log is gone);
+  apimon.log.gz        apimon.log too since 2026-11-03
   trace.stderr         DRAKVUF's stderr                    reserved
   preconfig.log        injector output                     reserved
   capture.pcap         tcpdump                             reserved, may be 0 bytes
