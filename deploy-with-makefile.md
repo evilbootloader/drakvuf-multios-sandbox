@@ -9,10 +9,13 @@
 > (clean)`, and **§6b complete**: the Windows golden image reinstalled by the
 > Makefile after the Chrome pin was refused and re-pinned, the installers
 > mirrored on the platform, the sandbox state saved, and **a Windows job
-> `completed (clean)` with a transcript, the first ever** (EVIDENCE 6b-hooks).
-> **§6c, §7 and §8 are NOT YET EXECUTED**: every command there is
-> **Candidate**, and every `EVIDENCE` block there is empty until an operator
-> pastes real output into it.
+> `completed (clean)` with a transcript, the first ever** (EVIDENCE 6b-hooks);
+> **§6c complete** the same evening: the Ubuntu image rebuilt with the
+> identity, the hooks target's false `Error 32` found and fixed, the state
+> saved, and an Ubuntu job `completed (clean)` on it (EVIDENCE 6c-hooks).
+> **§7 and §8 are NOT YET EXECUTED**: every command there is **Candidate**,
+> and every `EVIDENCE` block there is empty until an operator pastes real
+> output into it.
 >
 > **Parked at the repository root**, and it belongs at
 > `docs/runbooks/18-deploy-with-makefile.md`. `scripts/gen-current-state.py`
@@ -2489,8 +2492,124 @@ did its work on every exit, which is why the false code was the only harm.
 > because 6a keeps a copy and the save overwrites the file.
 
 ```
-EVIDENCE 6c-hooks, the save and the job
+EVIDENCE 6c-hooks, the re-run, the save and the job               2026-11-04
+root@dom0:~/drakvuf-multios-sandbox# cd /root/drakvuf-multios-sandbox && git pull --ff-only && git log --oneline -1 && git status --short
+[... fast-forward 20fed35..8b3f9f4, Makefile 7+/1- ...]
+8b3f9f4 (HEAD -> master, origin/master, origin/HEAD) setup_hooks_ubuntu: let the EXIT trap finish, so make reports the recipe's status
+ m drakvuf
+ M misc/xen-vms/ubuntu.cfg
+ M misc/xen-vms/ubuntu_sandbox.cfg
+ M misc/xen-vms/windows.cfg
+ M misc/xen-vms/windows_sandbox.cfg
+root@dom0:~/drakvuf-multios-sandbox# xl list ubuntu_analysis 2>/dev/null && echo "STOP: shut the guest down first" || { cd /root/drakvuf-multios-sandbox && make setup_hooks_ubuntu 2>&1 | tee /root/make-setup_hooks_ubuntu-$(date +%Y%m%d-%H%M).log | tail -12; echo "make exit ${PIPESTATUS[0]}"; ls -la profiles/linux.json; vgs --noheadings -o vg_name | grep -c ubuntu-vg; dmsetup ls | grep -cE 'vg--root-ubuntu[0-9]|ubuntu--vg'; xl uptime ubuntu_analysis_sandbox; }
+  1 logical volume(s) in volume group "ubuntu-vg" now active
+  0 logical volume(s) in volume group "ubuntu-vg" now active
+  WARNING: Sum of all thin volume sizes (5.62 TiB) exceeds the size of thin pool vg-root/thinpool and the size of whole volume group (<1.82 TiB).
+  Consider pruning vg-root VG archive with more then 120 MiB in 15030 files (check archiving is needed in lvm.conf).
+  Consider pruning vg-root VG archive with more then 120 MiB in 15031 files (check archiving is needed in lvm.conf).
+  Logical volume "ubuntu_sandbox" created.
+Wrote /root/drakvuf-multios-sandbox/state/firmware/smbios.bin and /root/drakvuf-multios-sandbox/state/firmware/ssdt.aml
+Parsing config from /root/drakvuf-multios-sandbox/misc/xen-vms/ubuntu_sandbox.cfg
+ubuntu_analysis_sandbox is running.
+Leave it running for AT LEAST 20 MINUTES before saving: every clone restores with this uptime, and a two-minute uptime is a sandbox tell samples check. Then, by hand:
+  xl save ubuntu_analysis_sandbox /root/drakvuf-multios-sandbox/state/ubuntu_sandbox.bak /root/drakvuf-multios-sandbox/misc/xen-vms/ubuntu_sandbox.cfg
+failed to stat() /dev/mapper/vg--root-ubuntu3
+make exit 0
+-rw-r--r-- 1 root root 45387399 Nov  4 16:18 profiles/linux.json
+0
+0
+Name                                ID Uptime
+ubuntu_analysis_sandbox             17  0:00:00
+root@dom0:~/drakvuf-multios-sandbox# date
+Wed Nov  4 16:34:13 UTC 2026
+root@dom0:~/drakvuf-multios-sandbox# cd /root/drakvuf-multios-sandbox && xl uptime ubuntu_analysis_sandbox && xl save ubuntu_analysis_sandbox state/ubuntu_sandbox.bak misc/xen-vms/ubuntu_sandbox.cfg && ls -la state/ubuntu_sandbox.bak && xl list
+Name                                ID Uptime
+ubuntu_analysis_sandbox             17  0:22:33
+Saving to state/ubuntu_sandbox.bak new xl format (info 0x3/0x0/4246)
+xc: info: Saving domain 17, type x86 HVM
+xc: Frames: 2162816/2162816  100%
+xc: End of stream: 0/0    0%
+-rw-r--r-- 1 root root 8591041214 Nov  4 16:40 state/ubuntu_sandbox.bak
+Name                                        ID   Mem VCPUs    State    Time(s)
+Domain-0                                     0  8192     6     r-----    3574.7
+platform                                     1  4096     4     -b----     269.1
+root@dom0:~/drakvuf-multios-sandbox# cd /root/drakvuf-multios-sandbox && set -a && . /etc/sandboxd/sandboxd.env && set +a && .venv-sandboxd/bin/python -m sandboxd.daemon 2>&1 | tee -a /var/log/sandboxd/$(date +%Y%m%d-%H%M).log
+2026-11-04 16:41:06,151 INFO    sandboxd: host values: SANDBOXD_REPO_ROOT=/root/drakvuf-multios-sandbox, SANDBOXD_ANALYSIS_USERNAME=carlos, SANDBOXD_INJECTION_PID_UBUNTU=1, SANDBOXD_INJECTION_PID_WINDOWS=4724, SANDBOXD_INJECTION_PID_ANDROID=<default>
+2026-11-04 16:41:06,151 INFO    sandboxd: provisioning the analysis network for 1 clone slot(s)
+2026-11-04 16:41:06,274 INFO    sandboxd: egress exits offered: offline (offline), tor-default (tor), sim-local (simulated)
+2026-11-04 16:41:06,390 INFO    sandboxd: sweep: nothing to reclaim, Dom0 was already clean
+2026-11-04 16:41:06,395 INFO    sandboxd: RDTSC compensation is on (RDTSC_POC: compensation enabled)
+2026-11-04 16:41:06,395 INFO    sandboxd: capacity: 1 vlan(s) usable, 18317 MiB, 1 slot(s)
+2026-11-04 16:41:06,407 INFO    httpx: HTTP Request: POST https://192.168.1.12:8000/api/v1/worker/register "HTTP/1.1 204 No Content"
+2026-11-04 16:41:06,409 INFO    httpx: HTTP Request: POST https://192.168.1.12:8000/api/v1/worker/reconcile "HTTP/1.1 200 OK"
+2026-11-04 16:41:18,455 INFO    httpx: HTTP Request: POST https://192.168.1.12:8000/api/v1/worker/claim "HTTP/1.1 200 OK"
+2026-11-04 16:41:18,461 INFO    httpx: HTTP Request: GET https://192.168.1.12:9000/analysis/u/ecf3da57-8c29-4fa1-a910-bb6ae4b8372e/98e/samples/98e60edf-932a-4cc5-bfea-35e75c4c87fc/57ebdc5425c44579c7a0b4bbdca3cbe75682d4990c52890406794369d5a8f0c7.sh?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=REDACTED&X-Amz-Date=20261104T164117Z&X-Amz-Expires=120&X-Amz-SignedHeaders=host&X-Amz-Signature=REDACTED "HTTP/1.1 200 OK"
+2026-11-04 16:41:25,239 INFO    sandboxd.stages: job 98e60edf-932a-4cc5-bfea-35e75c4c87fc: egress tor via no interface (nothing is forwarded)
+2026-11-04 16:41:25,245 INFO    sandboxd.vnc: console dialled out for job 98e60edf-932a-4cc5-bfea-35e75c4c87fc
+2026-11-04 16:41:25,246 INFO    sandboxd.vnc: console bridged to 127.0.0.1:5900
+[... state changes, the console re-bridged twice, three heartbeats ...]
+2026-11-04 16:43:34,637 INFO    sandboxd.vnc: console session for 127.0.0.1:5900 ended
+2026-11-04 16:43:37,095 INFO    httpx: HTTP Request: POST https://192.168.1.12:8000/api/v1/worker/jobs/98e60edf-932a-4cc5-bfea-35e75c4c87fc/state "HTTP/1.1 204 No Content"
+2026-11-04 16:43:59,108 INFO    sandboxd.postprocessing: postprocessing of 98e60edf-932a-4cc5-bfea-35e75c4c87fc: peak RSS 150 MiB of the 3072 MiB limit
+2026-11-04 16:43:39,668 ERROR sandboxd.postprocessing.plugins.parse_utils: Failed to parse line 137 of /var/lib/sandboxd/results/98e60edf-932a-4cc5-bfea-35e75c4c87fc/memdump.log
+Traceback (most recent call last):
+  File "/root/drakvuf-multios-sandbox/sandboxd/postprocessing/plugins/parse_utils.py", line 20, in parse_log
+    if result := filter_cb(data):
+                 ^^^^^^^^^^^^^^^
+  File "/root/drakvuf-multios-sandbox/sandboxd/postprocessing/plugins/process_dumps.py", line 31, in parse_memdump
+    "index": data["DumpsCount"],
+             ~~~~^^^^^^^^^^^^^^
+KeyError: 'DumpsCount'
+[... the same for lines 138 and 139 ...]
+2026-11-04 16:43:39,668 INFO sandboxd.postprocessing.plugins.process_dumps: Filtered out 0 dumps.
+2026-11-04 16:43:55,971 WARNING sandboxd.postprocessing.postprocess: compress_ipt won't be run because ipt does not exist
+2026-11-04 16:43:56,511 INFO sandboxd.postprocessing.plugins.falco_analysis: falco: 2965 events, 1 alerts, 60 rules active, 0.5s
+2026-11-04 16:43:56,657 WARNING sandboxd.postprocessing.postprocess: get_registry_info won't be run because regmon.log does not exist
+2026-11-04 16:43:59,066 WARNING sandboxd.postprocessing.indexer: cpuidmon.log: 9046 events from 136 PIDs absent from the process tree were not indexed (PIDs: 1861, 1866, 1867, 1868, 1869, 1870, 1871, 1872, 1873, 1874, 1875, 1877, 1878, 1879, 1880, 1881, 1882, 1883, 1884, 1885)
+2026-11-04 16:43:59,066 ERROR sandboxd.postprocessing.indexer: Failed to process entry in preconfig.log
+[... the JSONDecodeError traceback, three times, as on every job ...]
+2026-11-04 16:43:59,071 WARNING sandboxd.postprocessing.indexer: procmon.log: 14 events from 11 PIDs absent from the process tree were not indexed (PIDs: 1839, 1877, 1878, 1882, 1886, 1889, 1898, 1914, 1924, 1931, 1986)
+2026-11-04 16:43:59,173 INFO    httpx: HTTP Request: POST https://192.168.1.12:8000/api/v1/worker/jobs/98e60edf-932a-4cc5-bfea-35e75c4c87fc/artifacts "HTTP/1.1 200 OK"
+[... about a hundred artifact POSTs to /analysis, all 204, a heartbeat and a second /artifacts 200 among them ...]
+2026-11-04 16:43:59,775 INFO    httpx: HTTP Request: POST https://192.168.1.12:8000/api/v1/worker/jobs/98e60edf-932a-4cc5-bfea-35e75c4c87fc/state "HTTP/1.1 204 No Content"
+2026-11-04 16:43:59,784 INFO    httpx: HTTP Request: POST https://192.168.1.12:8000/api/v1/worker/jobs/98e60edf-932a-4cc5-bfea-35e75c4c87fc/complete "HTTP/1.1 204 No Content"
+2026-11-04 16:43:59,792 INFO    sandboxd: job 98e60edf-932a-4cc5-bfea-35e75c4c87fc -> completed (clean)
 ```
+
+Elided and said so: the pull's file list, the console and heartbeat lines,
+two of three identical tracebacks each time, about a hundred identical
+uploads; the presigned URL's credential and signature are REDACTED. The
+operator had destroyed the third run's domain and its snapshot by hand before
+this re-run, so it started clean.
+
+**§6c is complete, and the fix held**: `make exit 0` after the same steps
+that read `Error 32` before. One new line in the output,
+`failed to stat() /dev/mapper/vg--root-ubuntu3`, is the trap's second
+`kpartx -d` finding its mapping already gone and saying so on stdout,
+which `2>/dev/null` does not cover; harmless, and the price of a trap that
+now runs to its end. The state was saved after 22:33 of uptime (8.59 GB),
+the daemon came up on it at 16:41 with `SANDBOXD_INJECTION_PID_UBUNTU=1`,
+and job `98e60edf`, a `.sh` sample, was claimed at 16:41:18 and
+`completed (clean)` at 16:43:59: **the evidenced Ubuntu path, on the image
+rebuilt today with the identity, under today's Xen and DRAKVUF.** Falco ran
+over the trace (2,965 events, 1 alert, 60 rules).
+
+> **FINDING (2026-11-04), shared, pre-existing.** Three
+> `KeyError: 'DumpsCount'` at ERROR from `process_dumps.parse_memdump`, on
+> lines 137–139 of `memdump.log`; the §5b job had the same three, on the
+> image before the rebuild. DRAKVUF's memdump plugin writes two kinds of
+> `memdump` record: a dump, with `DumpsCount`, `DumpAddr`, `DumpFilename`,
+> and an event with none of those — `RWX mmap detected` with
+> `Address`/`Length`/`Protection`, `Remote process memory write` with
+> `TargetPID` (`drakvuf/src/plugins/memdump/memdump.cpp`, lines 294, 413 and
+> 435 against 315). The parser treats every line as a dump. Candidate fix:
+> return `None` for a record without `DumpsCount`, or index it as an event.
+> Shared code on the Ubuntu path, not touched here; TROUBLESHOOTING has the
+> symptom. **`cpuidmon` on Ubuntu**: 9,046 events from 136 PIDs absent from
+> the process tree were not indexed — far more than Windows's 3 — which says
+> the Ubuntu guest's boot-time processes outnumber what procmon sees after
+> the restore; informational, and a question for the per-plugin look that
+> is still to be done on both guests.
 
 ---
 

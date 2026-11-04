@@ -1942,6 +1942,37 @@ before doing anything, and do not re-run the target over a running
 snapshot exists, and the third, after an `lvremove`, makes a new snapshot
 and a new domain, so the twenty minutes of uptime start again.
 
+### `sandboxd` logs `KeyError: 'DumpsCount'` from `parse_memdump`, and the job completes
+
+**Symptom.** During a job's postprocessing, at ERROR, a few times per job:
+
+```
+ERROR sandboxd.postprocessing.plugins.parse_utils: Failed to parse line 137 of .../memdump.log
+  File ".../sandboxd/postprocessing/plugins/process_dumps.py", line 31, in parse_memdump
+    "index": data["DumpsCount"],
+KeyError: 'DumpsCount'
+```
+
+then `Filtered out 0 dumps.` and the job ends `completed (clean)`. Seen on
+both Ubuntu jobs of 2026-11-04 (`deploy-with-makefile.md` EVIDENCE 5 and
+6c-hooks), three lines each.
+
+**Cause.** DRAKVUF's memdump plugin writes two shapes of `memdump` record.
+A dump carries `DumpsCount`, `DumpAddr`, `DumpSize`, `DumpFilename`
+(`drakvuf/src/plugins/memdump/memdump.cpp`, `keyval("DumpsCount", ...)`). An
+event carries none of them: `RWX mmap detected` with `Address`, `Length`
+and `Protection`, `Remote process memory write` with `TargetPID`, and the
+record after it. `process_dumps.parse_memdump` reads `DumpsCount` from
+every line, so each event record raises, is logged, and is dropped; the
+dumps themselves are parsed. Nothing is lost but the events, which no
+other consumer indexes either.
+
+**Fix.** None applied yet: shared code on the evidenced Ubuntu path.
+Candidate: in `parse_memdump`, return `None` for a record without
+`DumpsCount` (the dump filter's contract for "not a dump"), or carry those
+records into the index as memdump events with their own fields. Until then
+the lines are noise at ERROR, and a `KeyError` on any other key is not.
+
 ### `sandboxd` stopped claiming after the mTLS listener was disabled
 
 **Symptom.** Every queued job stays `queued`. The platform is healthy, the UI
