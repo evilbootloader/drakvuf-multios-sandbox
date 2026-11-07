@@ -24,21 +24,10 @@
 </header>
 {% if report.processes %}
 {#
-  Two pictures of the same forest. The first is the sample's lineage -- its
-  ancestors and everything it spawned -- because that is the question the
-  page is opened to answer, and 146 boxes of idle services would bury five.
-  The second is everything, collapsed until asked for.
+  Only samples lineage, as full process tree was giving performance issues.
 #}
 {% set lineage = report.diagram() %}
-{% if lineage.shown < lineage.total %}
-{{ diagram(lineage, "the sample's lineage") }}
-<details class="advanced">
-  <summary>All {{ lineage.total }} processes as a diagram</summary>
-  {{ diagram(report.diagram(everything=true), "every process in the trace") }}
-</details>
-{% else %}
 {{ diagram(lineage, "every process in the trace") }}
-{% endif %}
 
 {#
   The tree and the panel a node's "logs" link fills, side by side on a wide

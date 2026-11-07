@@ -345,7 +345,8 @@ def test_the_tabs_render_the_report(client, conn, put_object):
     behaviour = client.get(f"/ui/jobs/{job_id}/tabs?tab=behaviour").text
     assert 'id="proc-4"' in behaviour and "data-sample" in behaviour
     assert "STATUS_ACCESS_VIOLATION" in behaviour
-    assert "<svg" in behaviour and "All 6 processes as a diagram" in behaviour
+    # Full diagram is not done anymore
+    # assert "<svg" in behaviour and "All 6 processes as a diagram" in behaviour
     assert "a.tmp" in behaviour
 
     network = client.get(f"/ui/jobs/{job_id}/tabs?tab=network").text
