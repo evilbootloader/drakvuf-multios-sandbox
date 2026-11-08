@@ -222,28 +222,29 @@ def apimon_type(param: dict) -> str:
     the names metadata states outright are mapped to a string printer.
     """
     t = param.get("Type", {})
+    arg_name = param.get("Name", "")
     kind = t.get("Kind")
     if kind == "ApiRef":
         name = t.get("Name", "")
         if name in _METADATA_TO_APIMON:
             return _METADATA_TO_APIMON[name]
-        return "dword"
+        return f"{arg_name}:dword"
     if kind == "PointerTo":
         child = t.get("Child", {})
         if child.get("Kind") == "ApiRef":
             mapped = _POINTER_TO_APIMON.get(child.get("Name", ""))
             if mapped:
-                return mapped
+                return f"{arg_name}:{mapped}"
             # A pointer to a string type is a string-out parameter; reading it
             # as a string is right, and is where output paths come from.
             if child.get("Name") in _METADATA_TO_APIMON:
-                return _METADATA_TO_APIMON[child["Name"]]
+                return f"{arg_name}:{_METADATA_TO_APIMON[child["Name"]]}"
         if child.get("Kind") == "PointerTo":
-            return "lpvoid*"
-        return "lpvoid"
+            return f"{arg_name}:lpvoid*"
+        return f"{arg_name}:lpvoid"
     if kind == "Native":
-        return "dword"
-    return "lpvoid" if kind else "dword"
+        return f"{arg_name}:dword"
+    return f"{arg_name}:lpvoid" if kind else f"{arg_name}:dword"
 
 
 def arg_list(fn: dict) -> str:

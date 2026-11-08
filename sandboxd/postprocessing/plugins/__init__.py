@@ -89,6 +89,11 @@ POSTPROCESS_PLUGINS = [
     # sample_scope). Requires nothing for the same reason get_http_info
     # requires no log: what it reads is per-OS (falco_analysis.FALCO_PROFILES).
     PostprocessPlugin(function=falco_analysis, requires=[], generates=[FALCO_ALERTS]),
+    #PostprocessPlugin(
+    #    function=cape_signatures,
+    #    requires=[],
+    #    generates=[],
+    #),
     # **`apimon.log` is deliberately NOT required.** The log this reads is
     # per-OS (apimon on Windows, libmon on Linux -- get_http_info.HTTP_SOURCES),
     # and `requires` is one static list for every guest, so naming either one

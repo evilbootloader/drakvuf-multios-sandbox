@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""Feed the lab from MalwareBazaar: x86 and x86-64 samples, one analysis at a time.
+"""Feed the lab from MalwareBazaar: x86 and x86-64 samples, two analyses at a time.
 
 Runs on a workstation that reaches both abuse.ch and the platform's web API. It
 asks for the abuse.ch Auth-Key and the platform login, pulls candidate samples
 from MalwareBazaar, keeps the ones whose headers say x86 or x86-64, hands each
 to the platform the way the submit page does (create, upload to the object
-store, mark uploaded), and waits for that job to reach a terminal state before
-it touches the next one.
+store, mark uploaded), and keeps `--concurrent` jobs in flight: with that many
+running, it touches the next sample only once one has reached a terminal state.
 
     scripts/bazaar-submit.py --platform https://sandbox.example.com --count 5 --seconds 120-1200
 
@@ -182,7 +182,7 @@ def default_plugins(target_os: str) -> list[str]:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "platform"))
     from sandbox_platform.catalogue import defaults_for  # noqa: E402
     from sandbox_platform.enums import TargetOs  # noqa: E402
-    return sorted(defaults_for(TargetOs(target_os)))
+    return sorted(defaults_for(TargetOs(target_os)) | {"hidsim"})
 
 
 # --- MalwareBazaar -----------------------------------------------------------
@@ -392,6 +392,39 @@ def save_state(path: Path, state: dict) -> None:
     tmp.replace(path)
 
 
+def finish(platform, job_id: str, entry: dict, private: bool) -> None:
+    """Publish a job that has ended, unless the run is `--private`."""
+    if private:
+        return
+    entry["visibility"] = platform.publish(job_id)
+    if entry["visibility"]:
+        log(f"job {job_id} {entry['visibility']}")
+
+
+def wait_for_room(platform, in_flight: dict[str, dict], limit: int, poll: int,
+                  private: bool, save) -> None:
+    """Poll until fewer than `limit` jobs are in flight, finishing each that ends.
+
+    `in_flight` maps a job id to its entry in the state file, so what is written
+    here is what `save` persists. `limit=1` waits for all of them.
+    """
+    while len(in_flight) >= limit:
+        time.sleep(poll)
+        for job_id, entry in list(in_flight.items()):
+            d = platform.job(job_id)
+            last = d.get("state")
+            if last != entry["state"]:
+                entry["state"] = last
+                log(f"job {job_id} {last}")
+            if last in TERMINAL_STATES:
+                if d.get("failure_reason"):
+                    entry["failure"] = f"{d.get('failure_stage')}: {d.get('failure_reason')}"
+                    log(f"job {job_id} {last}: {entry['failure']}")
+                finish(platform, job_id, entry, private)
+                del in_flight[job_id]
+                save()
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n", 1)[0],
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -399,6 +432,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--cacert", help="CA file for a platform reached by its LAN address")
     ap.add_argument("--email", help="platform account; asked for if absent")
     ap.add_argument("--count", type=int, default=5, help="new submissions to make (default 5)")
+    ap.add_argument("--concurrent", type=int, default=2,
+                    help="jobs in flight at once (default 2); the next sample waits for one to end")
     ap.add_argument("--seconds", default="120-1200",
                     help=f"trace length per job: a number, or MIN-MAX for a random value drawn per sample, "
                          f"within {SECONDS_MIN}-{SECONDS_MAX}; the default draws between 120 and 1200")
@@ -430,6 +465,8 @@ def main(argv: list[str] | None = None) -> int:
         ap.error(str(exc))
     if args.max_bytes <= 0:
         ap.error("--max-bytes must be positive")
+    if args.concurrent < 1:
+        ap.error("--concurrent must be at least 1")
     rng = random.Random(args.seed)
 
     workdir = Path(args.workdir)
@@ -456,7 +493,11 @@ def main(argv: list[str] | None = None) -> int:
     rows = candidates(mb, key, args.query, args.limit)
     log(f"{len(rows)} candidates, {sum(1 for r in rows if r['sha256_hash'] in state)} seen before")
 
+    def save() -> None:
+        save_state(state_path, state)
+
     submitted = 0
+    in_flight: dict[str, dict] = {}
     for row in rows:
         if submitted >= args.count:
             break
@@ -478,6 +519,8 @@ def main(argv: list[str] | None = None) -> int:
         if too_big(row, args.max_bytes):
             skip(f"{row.get('file_size')} bytes, over --max-bytes {args.max_bytes}")
             continue
+        # Before the download, so no live sample sits in the workdir waiting for a slot.
+        wait_for_room(platform, in_flight, args.concurrent, args.poll, args.private, save)
         sample_dir = Path(tempfile.mkdtemp(prefix=sha[:12] + "-", dir=workdir))
         try:
             zip_path = sample_dir / f"{sha}.zip"
@@ -518,32 +561,26 @@ def main(argv: list[str] | None = None) -> int:
                           "submitted_at": datetime.now(timezone.utc).isoformat(timespec="seconds")})
             state[sha] = entry
             save_state(state_path, state)
-            last = detail.get("state")
+            last = entry["state"]
             if last in TERMINAL_STATES:
                 log(f"job {job_id} {last} at admission: {detail.get('failure_reason')}")
+                finish(platform, job_id, entry, args.private)
+                save()
             else:
                 submitted += 1
                 log(f"job {job_id} {last}; {args.platform}/ui/jobs/{job_id}")
-                while True:
-                    time.sleep(args.poll)
-                    d = platform.job(job_id)
-                    if d.get("state") != last:
-                        last = d.get("state")
-                        log(f"job {job_id} {last}")
-                    if last in TERMINAL_STATES:
-                        if d.get("failure_reason"):
-                            entry["failure"] = f"{d.get('failure_stage')}: {d.get('failure_reason')}"
-                            log(f"job {job_id} {last}: {entry['failure']}")
-                        break
-            entry["state"] = last
-            if not args.private:
-                entry["visibility"] = platform.publish(job_id)
-                if entry["visibility"]:
-                    log(f"job {job_id} {entry['visibility']}")
-            save_state(state_path, state)
+                in_flight[job_id] = entry
+        except (Exception, SystemExit) as exc:
+            # A refusal or a failed download ends the run, as it always did, but
+            # a job already running still gets its result recorded and published.
+            # Not KeyboardInterrupt: that one asks to leave now.
+            log(f"stopping: {exc}")
+            wait_for_room(platform, in_flight, 1, args.poll, args.private, save)
+            raise
         finally:
             if not args.keep:
                 shutil.rmtree(sample_dir, ignore_errors=True)
+    wait_for_room(platform, in_flight, 1, args.poll, args.private, save)
     log(f"{submitted} submission(s) this run; state in {state_path}")
     return 0
 

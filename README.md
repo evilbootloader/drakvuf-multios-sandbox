@@ -134,9 +134,10 @@ Feeding it from MalwareBazaar, from a workstation that reaches both abuse.ch
 and the platform: `scripts/bazaar-submit.py` asks for the abuse.ch Auth-Key
 and the platform login, pulls recent `exe` and `elf` samples, keeps the ones
 whose headers say x86 or x86-64, submits each to the matching guest with a
-trace length drawn at random between 120 and 1200 seconds, waits for the job
-to end, and publishes it, readable by every account on the platform, before
-the next; `--private` leaves each analysis to the submitting account. Samples
+trace length drawn at random between 120 and 1200 seconds, keeps two jobs in
+flight (`--concurrent`), and publishes each as it ends, readable by every
+account on the platform; `--private` leaves each analysis to the submitting
+account. Samples
 over `--max-bytes` are skipped, by default
 just under 100 MB: the upload crosses the Cloudflare tunnel, whose free plan
 stops a request body there, well before the platform's own 1 GiB cap. Samples

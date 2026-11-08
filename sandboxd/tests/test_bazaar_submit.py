@@ -1,5 +1,6 @@
 """The pure parts of scripts/bazaar-submit.py: what a header is read as, which
-guest it goes to, what it is called, and the trace-length bounds.
+guest it goes to, what it is called, and the trace-length bounds; and how many
+jobs its loop keeps in flight, against a fake platform.
 
 The script's name has a hyphen, so it is loaded by path, as test_xen_identity
 does for its script. Nothing here touches the network or a sample.
@@ -7,6 +8,7 @@ does for its script. Nothing here touches the network or a sample.
 from __future__ import annotations
 
 import importlib.util
+import json
 import random
 import struct
 import sys
@@ -137,3 +139,110 @@ def test_terminal_states_match_the_platforms():
     sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "platform"))
     from sandbox_platform.enums import TERMINAL_STATES
     assert bz.TERMINAL_STATES == frozenset(s.value for s in TERMINAL_STATES)
+
+
+class FakeLab:
+    """A platform whose nth job ends after `polls[n]` polls (default one)."""
+
+    def __init__(self, polls=(), refuse_submission=None, final=None):
+        self.polls = iter(polls)
+        self.refuse_submission = refuse_submission
+        self.final = final or {"state": "completed"}
+        self.left: dict[str, int] = {}
+        self.submitted = 0
+        self.most_running = 0
+        self.published: list[str] = []
+
+    def balance(self):
+        return 100000
+
+    def submit(self, path, filename, target_os, seconds, plugins, egress):
+        self.submitted += 1
+        if self.submitted == self.refuse_submission:
+            raise SystemExit("create refused: 503")
+        job_id = f"job-{self.submitted}"
+        self.left[job_id] = next(self.polls, 1)
+        self.most_running = max(self.most_running, sum(n > 0 for n in self.left.values()))
+        return {"id": job_id, "state": "queued"}
+
+    def job(self, job_id):
+        self.left[job_id] -= 1
+        return {"state": "executing"} if self.left[job_id] else self.final
+
+    def publish(self, job_id):
+        self.published.append(job_id)
+        return "public"
+
+
+def feed(monkeypatch, tmp_path, lab, *flags, rows=3):
+    monkeypatch.setenv("ABUSECH_AUTH_KEY", "key")
+    monkeypatch.setenv("SANDBOX_PASSWORD", "password")
+    monkeypatch.setattr(bz, "Platform", lambda *a: lab)
+    monkeypatch.setattr(bz, "candidates", lambda *a: [
+        {"sha256_hash": f"{i:064x}", "file_type": "exe", "file_size": 4096} for i in range(rows)])
+    monkeypatch.setattr(bz, "mb_download", lambda *a: b"PK")
+    monkeypatch.setattr(bz, "default_plugins", lambda os_: ["syscalls"])
+
+    def extract(zip_path, out_dir):
+        sample = out_dir / "sample"
+        sample.write_bytes(pe(0x8664))
+        return sample
+
+    monkeypatch.setattr(bz, "extract_sample", extract)
+    return bz.main(["--platform", "https://lab.invalid", "--email", "a@lab.invalid",
+                    "--count", str(rows), "--seconds", "120", "--poll", "0",
+                    "--workdir", str(tmp_path), *flags])
+
+
+def saved(tmp_path) -> dict:
+    return {e["job_id"]: e for e in json.loads((tmp_path / "state.json").read_text()).values()}
+
+
+def test_two_jobs_in_flight_by_default_and_the_next_takes_the_first_free_slot(monkeypatch, tmp_path):
+    # job-2 ends first and job-3 starts while job-1 is still running: a rolling
+    # window, not pairs that wait for each other.
+    lab = FakeLab(polls=[3, 1, 1])
+    assert feed(monkeypatch, tmp_path, lab) == 0
+    assert lab.most_running == 2
+    assert lab.published == ["job-2", "job-3", "job-1"]
+    assert {e["state"] for e in saved(tmp_path).values()} == {"completed"}
+    assert [p for p in tmp_path.iterdir() if p.is_dir()] == []
+
+
+def test_concurrent_one_is_one_at_a_time(monkeypatch, tmp_path):
+    lab = FakeLab(polls=[2, 2, 2])
+    assert feed(monkeypatch, tmp_path, lab, "--concurrent", "1") == 0
+    assert lab.most_running == 1
+    assert lab.published == ["job-1", "job-2", "job-3"]
+
+
+def test_a_refusal_still_finishes_the_job_in_flight(monkeypatch, tmp_path):
+    lab = FakeLab(polls=[2], refuse_submission=2)
+    with pytest.raises(SystemExit, match="create refused"):
+        feed(monkeypatch, tmp_path, lab)
+    assert lab.published == ["job-1"]
+    assert saved(tmp_path)["job-1"]["state"] == "completed"
+
+
+def test_a_failed_job_is_recorded_and_still_published(monkeypatch, tmp_path):
+    lab = FakeLab(final={"state": "failed", "failure_stage": "trace", "failure_reason": "boom"})
+    assert feed(monkeypatch, tmp_path, lab, rows=1) == 0
+    assert saved(tmp_path)["job-1"]["failure"] == "trace: boom"
+    assert lab.published == ["job-1"]
+
+
+def test_private_publishes_nothing(monkeypatch, tmp_path):
+    lab = FakeLab()
+    assert feed(monkeypatch, tmp_path, lab, "--private") == 0
+    assert lab.submitted == 3 and lab.published == []
+
+
+def test_dry_run_submits_and_polls_nothing(monkeypatch, tmp_path):
+    lab = FakeLab()
+    assert feed(monkeypatch, tmp_path, lab, "--dry-run") == 0
+    assert lab.submitted == 0
+
+
+def test_concurrent_must_be_positive(monkeypatch, tmp_path):
+    with pytest.raises(SystemExit):
+        feed(monkeypatch, tmp_path, FakeLab(), "--concurrent", "0")

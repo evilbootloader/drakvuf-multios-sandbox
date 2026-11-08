@@ -292,7 +292,7 @@ def dynamic_capa_analysis(
     # sample's processes is a result, and produces an empty ttps.json.
     if not any((analysis_dir / name).exists() for name in CALL_LOGS):
         raise RuntimeError(
-            "both syscall.log and apimon.log are either empty or non-existent"
+            "both syscall.log, libmon.log and apimon.log are either empty or non-existent"
         )
 
     # Every retained record is read -- the operator's decision (2026-11-03):
