@@ -3,6 +3,12 @@
 # This file is part of Cuckoo Sandbox - http://www.cuckoosandbox.org
 # See the file 'docs/LICENSE' for copying permission.
 
+# Machinery's annotations name CAPE's Machine and Task, whose imports are
+# commented out below. Python 3.14 evaluates annotations only when asked, so
+# the development container never noticed; Dom0's 3.12 evaluates them while
+# defining the class and raised NameError on every job (2026-11-12).
+from __future__ import annotations
+
 import datetime
 import io
 import logging
