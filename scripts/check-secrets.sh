@@ -75,6 +75,12 @@ else
     # naming the `ag-github` remote, and its first 20 hex digits read as a GitHub
     # OAuth client id -- 14 unverified GitHubOauth2 hits on 2026-10-21, every one
     # line 226. The history scan does not flag it.
+    #
+    # sandboxd/data/cape-community/data/mitre/enterprise_attck_json.json is
+    # MITRE's public ATT&CK bundle inside the community submodule, one 31 MB
+    # line. The Enigma detector reads something in it as a key (2026-11-12,
+    # unverified, line 1). The file is the submodule's, so git here takes only
+    # its gitlink and the history scan never sees it.
     cat > "$EXCLUDES" <<'EOF'
 ^\.git/
 ^platform/\.venv/
@@ -90,6 +96,7 @@ __pycache__/
 # take them however carefully they are scanned.
 \.iso$
 ^misc/Artifacts/source-manifest\.xml$
+^sandboxd/data/cape-community/data/mitre/enterprise_attck_json\.json$
 EOF
 
     # What was found, as detector and file:line -- never the value. CI runs this
