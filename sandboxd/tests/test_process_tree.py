@@ -65,6 +65,28 @@ def test_a_signal_from_an_idle_cpu_leaves_swapper_0_the_root():
     assert root["procname"] == "swapper/0"
 
 
+def test_an_orphan_on_linux_stays_under_the_process_that_forked_it():
+    """A daemon's fork-and-exit (job of 2026-11-11, a Mirai-family bot): the
+    child's later lines name init as its parent, which is the kernel adopting
+    an orphan, not a rebind -- moved under systemd it left the sample."""
+    elf = "/home/carlos/Desktop/ee57ea3a.elf"
+    tree = tree_from_log(procmon(
+        running(1, 0, "/usr/lib/systemd/systemd"),
+        running(2028, 1, "/usr/bin/dash"),
+        {"TimeStamp": "1794344327.034124", "PID": 2028, "PPID": 1, "TID": 2028, "ProcessName": "/usr/bin/dash",
+         "Method": "do_execveat_common", "EventUID": "0x207e", "CommandLine": elf, "ImagePathName": elf, "FileName": elf},
+        {"TimeStamp": "1794344327.044238", "PID": 2028, "PPID": 1, "TID": 2028, "ProcessName": elf,
+         "Method": "kernel_clone", "EventUID": "0x2147", "Flags": "(null)", "NewPid": 2033},
+        {"TimeStamp": "1794344327.045404", "PID": 2028, "PPID": 1, "TID": 2028, "ProcessName": elf,
+         "Method": "do_exit", "EventUID": "0x2154", "ExitStatus": 0, "ExitStatusStr": "EXIT_SUCCESS"},
+        {"TimeStamp": "1794344340.027166", "PID": 2033, "PPID": 1, "TID": 2033, "ProcessName": elf,
+         "Method": "send_signal", "EventUID": "0xdbed", "TargetPID": 1468, "Signal": 14},
+    ), TargetOs.UBUNTU)
+    systemd, sample, daemon = tree.processes
+    assert daemon.pid == 2033 and daemon.parent is sample and daemon.ppid == 2028
+    assert sample.children == [daemon] and systemd.children == [sample]
+
+
 def test_a_rebind_takes_the_new_parents_pid_and_happens_once():
     """The rebind itself still happens. Its PPID is the new parent's PID, not
     the new parent's own PPID, with which the next line for the same process

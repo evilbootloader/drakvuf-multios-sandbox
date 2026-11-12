@@ -438,9 +438,24 @@ METHOD_PARSERS: Dict[TargetOs, Dict[str, Callable[[ProcessTree, Dict[str, Any]],
     TargetOs.ANDROID: _LINUX_METHOD_PARSERS,
 }
 
+# Whether a line naming another PPID for a live process moves it under that
+# parent. On Windows a process's PPID does not change by itself, so a new one
+# is a rebind to show. On Linux it changes when the parent exits and init (or
+# a subreaper) adopts the orphan -- the fork-and-exit every daemonizing bot and
+# miner starts with -- or for a CLONE_PARENT child. There the tree keeps the
+# process under the one kernel_clone saw create it, so the sample's daemon
+# stays in the sample (job of 2026-11-11: the Mirai-family bot's PID 2033
+# moved under systemd, and nothing it did was analysed).
+REBIND_ON_PPID_CHANGE: Dict[TargetOs, bool] = {
+    TargetOs.WINDOWS: True,
+    TargetOs.UBUNTU: False,
+    TargetOs.ANDROID: False,
+}
+
 
 def tree_from_log(file: TextIO, os_: TargetOs) -> ProcessTree:
     parsers = METHOD_PARSERS[os_]
+    rebind = REBIND_ON_PPID_CHANGE[os_]
     pstree = ProcessTree()
     prev_line = None
     for line in file:
@@ -468,13 +483,14 @@ def tree_from_log(file: TextIO, os_: TargetOs) -> ProcessTree:
                             f"Found log for process not yet in process tree: {entry}"
                         )
                         parse_unknown_process_entry(pstree, entry)
-                    elif process.ts_to is None and process.ppid != ppid:
-                        # Found elevated process: rebind to another parent.
-                        # Not always that: on Linux every CPU's idle task is
-                        # PID 0, and swapper/1 and up have PPID 1, so a signal
-                        # sent from an idle CPU's interrupt reads as swapper/0
-                        # moving under systemd. change_parent refuses a move
-                        # under a descendant, which that one is.
+                    elif rebind and process.ts_to is None and process.ppid != ppid:
+                        # Found elevated process: rebind to another parent
+                        # (Windows only, REBIND_ON_PPID_CHANGE). change_parent
+                        # refuses a move under a descendant: on Linux, before
+                        # that table, every CPU's idle task is PID 0 and
+                        # swapper/1 and up have PPID 1, so a signal sent from
+                        # an idle CPU's interrupt read as swapper/0 moving
+                        # under systemd.
                         new_parent = pstree.get_process(ppid)
                         if new_parent is not None:
                             process.change_parent(new_parent)
