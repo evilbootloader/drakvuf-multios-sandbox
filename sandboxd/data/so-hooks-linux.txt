@@ -27,8 +27,14 @@
 # keep out anything firing thousands of times per second -- `strcmp`,
 # `memcpy`, `poll`, `getc` -- because one Dom0 core saturated per concurrent
 # trace at 415-856 syscalls/s (`12-baremetal-trial.md` Part H). Parallel
-# event processing changed that budget; `poll`, `ppoll`, `read` and `write`
-# are hooked now, and a trace that saturates is the signal to revisit.
+# event processing changed that budget, and a trace that saturates is the
+# signal to revisit.
+#
+# **`read`, `write`, `poll`, `ppoll`: removed 2026-11-12.** Each is a thin
+# wrapper over the syscall of the same name, which the syscalls plugin (and
+# filetracer, for read/write) already records; the lines printed pointers
+# only, and no signature, Falco rule or Behaviour bucket reads the libmon
+# record. They were 57% of libmon's calls on an idle desktop, two traps each.
 #
 # **Kernel symbols are not hookable here.** capa-rules names `commit_creds`,
 # `prepare_kernel_cred` and `nf_register_hook` for rootkit detection. libmon
@@ -79,9 +85,7 @@ libc.so.6,mkdir,log,Path:lpcstr,Mode:int
 libc.so.6,rmdir,log,Path:lpcstr
 libc.so.6,readlink,log,Path:lpcstr,Buf:lpvoid,Size:ulong
 libc.so.6,opendir,log,Path:lpcstr
-libc.so.6,read,log,fd:int,buf:lpvoid,:ulong
 libc.so.6,pread,log,fd:int,buf:lpvoid,:ulong,offset:ulong
-libc.so.6,write,log,fd:int,buf:lpvoid,count:ulong
 
 # --- network ---------------------------------------------------------------
 libc.so.6,socket,log,Domain:int,Type:int,Protocol:int
@@ -105,8 +109,6 @@ libc.so.6,sendmsg,log,Fd:int,Msg:lpvoid,Flags:int
 libc.so.6,sendmmsg,log,Fd:int,MsgVec:lpvoid,VLen:uint,Flags:int
 libc.so.6,recvmmsg,log,Fd:int,MsgVec:lpvoid,VLen:uint,Flags:int,Timeout:lpvoid
 libc.so.6,sendfile,log,OutFd:int,InFd:int,Offset:lpvoid,Count:ulong
-libc.so.6,poll,log,Fds:lpvoid,Nfds:ulong,Timeout:int
-libc.so.6,ppoll,log,Fds:lpvoid,Nfds:ulong,Timeout:lpvoid,SigMask:lpvoid
 
 # --- credentials and host identity -----------------------------------------
 libc.so.6,getpwnam,log,Name:lpcstr
