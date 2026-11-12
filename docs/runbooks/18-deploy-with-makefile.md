@@ -2324,7 +2324,10 @@ Expect `ubuntu-22.04.5-live-server-amd64.iso: OK`, `lvcreate`, the domain in
 `xl list`, and **`0`** installer lines left in the cfg. Watch the install over
 VNC until the domain disappears from `xl list` (it powered itself off). Boot
 it once with `make modify_ubuntu` to check the desktop logs in as
-`ANALYSIS_VM_USER`, and shut it down from inside.
+`ANALYSIS_VM_USER`, and shut it down from inside. If the install stops at
+`ubuntu-desktop` with `exit status 100`, leave the domain running and read
+[TROUBLESHOOTING](../TROUBLESHOOTING.md#the-ubuntu-autoinstall-stops-at-ubuntu-desktop-returned-non-zero-exit-status-100)
+(2026-11-12).
 
 ```
 EVIDENCE 6c-install                                               2026-11-04

@@ -2029,6 +2029,89 @@ before doing anything, and do not re-run the target over a running
 snapshot exists, and the third, after an `lvremove`, makes a new snapshot
 and a new domain, so the twenty minutes of uptime start again.
 
+### The Ubuntu autoinstall stops at `ubuntu-desktop`: `returned non-zero exit status 100`
+
+**Symptom.** Over VNC, `make ubuntu_analysis_vm`'s install gets through
+partitioning and the base system, `retrieving ubuntu-desktop` succeeds, and
+`install_ubuntu-desktop/unpacking` ends in
+`… 'system-install', '-t', '/target', '--assume-downloaded', '--', 'ubuntu-desktop']' returned non-zero exit status 100`,
+a crash file in `/var/crash/` and `An error occurred. Press enter to start a
+shell`. Hit 2026-11-12 with the same ISO, and the same user-data up to that
+step, that built the 2026-11-04 image. The thin pool was not the cause
+(`lvs`: 14.61 % data, 0.60 % metadata).
+
+**Where the real error is.** Not in `/var/log/installer/subiquity-server-debug.log.*`,
+which holds only subiquity's traceback, and not in
+`/target/var/log/apt/term.log`, which is empty because apt could not open a
+pty (`Can not write log (Is /dev/pts mounted?)`, a warning). It is in the
+installer's journal, which lives in the guest's RAM, so **do not `xl destroy`
+the domain before reading it**:
+
+```sh
+# INSTALLER SHELL (ubuntu_analysis VNC console, after pressing Enter)
+journalctl -b -o cat | grep -B 30 'dpkg: error processing archive' | grep -v 'Can not write log'
+```
+
+With a Spanish keyboard over VNC, `loadkeys es` first made the keys type what
+they say (2026-11-12).
+
+**Cause.** On 22.04 `firefox` is a transitional deb whose preinst installs the
+Firefox snap, and it does so through the **live installer's** snapd, not the
+target's: the denials are in the installer's journal and the failed change in
+its `snap warnings`. Firefox revision 9181, and the `mesa-2604` snap it pulls
+in, run their hooks with Rust coreutils' `mkdir`, and AppArmor in the installer
+does not allow the exec:
+
+```
+AVC apparmor="DENIED" operation="exec" profile="snap.firefox.hook.configure" name="/usr/lib/cargo/bin/coreutils/mkdir" pid=19465 comm="hooks-configure" requested_mask="x" denied_mask="x" fsuid=0 ouid=0
+taskrunner.go:299: Change 4 task (Run configure hook of "firefox" snap if present) failed: run hook "configure": /snap/firefox/9181/gnome-platform/command-chain/hooks-configure-fonts: line 5: /usr/bin/mkdir: Permission denied
+/snap/mesa-2604/123/meta/hooks/install: 4: mkdir: Permission denied
+dpkg: error processing archive /tmp/apt-dpkg-install-wFYUKs/032-firefox_1%3a1snap1-0ubuntu2_amd64.deb (--unpack):
+```
+
+`snap warnings` in the same shell adds `snap "firefox" has bad plugs or slots:
+kerberos-tickets (unknown interface "kerberos-tickets")`. **That Firefox's
+stable channel moved onto the 26.04 runtime between 2026-11-04 and 2026-11-12
+is inferred**: nothing in the repository changed before that step, and the
+snap comes from the store at install time, unpinned.
+
+**Refreshing snapd is not the fix.** The installer already had the current
+stable snapd, and Firefox failed the same way under it (2026-11-12, by hand in
+the failed installer):
+
+```
+ubuntu-server@ubuntu-server:~$ sudo snap refresh snapd
+snap "snapd" has no updates available
+ubuntu-server@ubuntu-server:~$ snap list snapd
+Name   Version  Rev    Tracking       Publisher   Notes
+snapd  2.78     28332  latest/stable  canonical✓  snapd
+ubuntu-server@ubuntu-server:~$ sudo snap install firefox
+...
+- Run configure hook of "firefox" snap if present (run hook "configure": /snap/firefox/9181/gnome-platform/command-chain/hooks-configure-fonts: line 5: /usr/bin/mkdir: Permission denied)
+...
+/snap/mesa-2604/123/meta/hooks/install: 4: mkdir: Permission denied
+...
+- Connect firefox:gpu-2604 to mesa-2604:gpu-2604 (snap "mesa-2604" has no slot named "gpu-2604")
+```
+
+A bare `snap refresh` there refreshed `lxd`, `core20`, `subiquity` and `core22`
+and changed nothing either.
+
+**Fix — Candidate.** Firefox is kept out of the image (the operator's
+decision, 2026-11-12): the autoinstall's `apt: preferences` pins `firefox` to
+`-1`. In jammy-updates `ubuntu-desktop` and `ubuntu-desktop-minimal` only
+*Recommend* it, and nothing in `main` *Depends* on it, so apt leaves it out and
+installs the rest; `apt-get -s install ubuntu-desktop git curl python3`
+against the jammy, jammy-updates and jammy-security indexes, with the same
+preferences file, resolves 1562 packages with no `firefox` and no error. The
+pin is written to the target as `/etc/apt/preferences.d/90curtin.pref` and
+stays in the golden image. **The image has no browser.** Whether the
+2026-11-04 image had a working one is unknown: the preinst installs the snap
+into the installer's environment, so it may never have reached the target
+(inferred, not checked; that image is gone). **Unproven until an image is
+built by that target.** Rebuilding means the teardown in runbook 18 §6c first:
+the target's `lvcreate` fails on the failed install's `vg-root/ubuntu`.
+
 ### `sandboxd` logs `KeyError: 'DumpsCount'` from `parse_memdump`, and the job completes
 
 **Symptom.** During a job's postprocessing, at ERROR, a few times per job:

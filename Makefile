@@ -593,10 +593,29 @@ ubuntu_analysis_vm:
 	# eth0 alone; NetworkManager already does (10-globally-managed-devices). \
 	# The golden then has no network when booted on its own; configure it by \
 	# hand for maintenance. UNPROVEN until the next image built by this target. \
+	\
+	# Firefox is kept out of the image (2026-11-12, the operator's decision). \
+	# On 22.04 the firefox deb is a placeholder whose preinst installs the \
+	# Firefox snap through the LIVE INSTALLER's snapd, not the target's. \
+	# Firefox 9181 and the mesa-2604 snap it pulls run their hooks with Rust \
+	# coreutils' mkdir, /usr/lib/cargo/bin/coreutils/mkdir, which AppArmor \
+	# denies there, with snapd 2.78, the current stable, installed as well: \
+	# the deb fails to unpack and the install dies with apt's exit status 100 \
+	# on ubuntu-desktop (TROUBLESHOOTING). jammy-updates' ubuntu-desktop and \
+	# ubuntu-desktop-minimal only Recommend firefox, so a pin of -1 leaves it \
+	# out and nothing else fails (apt-get -s against the jammy indexes). The \
+	# pin lands in the target as /etc/apt/preferences.d/90curtin.pref and \
+	# stays, so no later apt run in the golden pulls firefox back. The image \
+	# has no browser. UNPROVEN until the next image built by this target. \
 	printf "%s\n" \
 	"#cloud-config" \
 	"autoinstall:" \
 	"  version: 1" \
+	"  apt:" \
+	"    preferences:" \
+	"      - package: firefox" \
+	"        pin: release o=Ubuntu" \
+	"        pin-priority: -1" \
 	"  identity:" \
 	"    hostname: ubuntu" \
 	"    password: \"$$HASH\"" \
