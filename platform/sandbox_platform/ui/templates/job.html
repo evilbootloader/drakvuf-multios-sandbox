@@ -22,9 +22,12 @@
    tab's fragment: it is swapped on every tab click, and a script that ships
    with the fragment would register its listeners again each time. #}
 <script src="/ui/static/pan.js?v={{ asset_version }}" defer></script>
-{# Expand/collapse-all for the per-process groups, and opening the groups a
-   `#proc-N` link lands inside. Here for the same reason as pan.js. #}
+{# Expand/collapse-all for the Artifacts tab's groups, and opening the groups
+   a `#proc-N` link lands inside. Here for the same reason as pan.js. #}
 <script src="/ui/static/disclose.js?v={{ asset_version }}" defer></script>
+{# Every inline panel of the report tabs: open in place below its row,
+   close, fetch on first open. Here for the same reason as pan.js. #}
+<script src="/ui/static/expand.js?v={{ asset_version }}" defer></script>
 {# The Screenshots tab's player. Here for the same reason as the two above:
    the tab body is swapped on every click. #}
 <script src="/ui/static/filmstrip.js?v={{ asset_version }}" defer></script>

@@ -1,0 +1,21 @@
+{#
+  One call, opened in place under a signature's mark: what the signature
+  pointed at, whole.
+#}
+{% from "tabs/_macros.html" import proc, hexview with context %}
+<div class="onecall">
+  <div class="pp-head"><span class="api">{{ call.api }}</span>
+    <span class="chip" data-kind="cat">{{ call.category or 'other' }}</span>
+    {{ proc(seqid=process.seqid) }} <span class="dim mono">thread {{ call.tid }} · {{ report.t(call.ts) | secs }} · #{{ call.cid }}</span>
+    {%- if call.status is true %} <span class="ok">✓</span>{% elif call.status is false %} <span class="fail">✗</span>{% endif %}
+    <span class="mono small">{{ call.ret }}</span></div>
+  <table class="grid compact args-full">
+    <tbody>
+    {% for a in call.arguments %}
+    <tr><td class="mono nowrap an">{{ a.name }}</td>
+        <td class="fill"><pre class="value">{{ a.value | printable(false) }}</pre>{% if a.pretty %}<div class="dim small">{{ a.pretty }}</div>{% endif %}
+          {%- if a.value | length > 8 and a.value | select('lt', ' ') | list | length > 2 %}{{ hexview(a.value) }}{% endif %}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>

@@ -1,94 +1,90 @@
-{% from "tabs/_report_macros.html" import proc with context %}
 {#
-  One process: the Behaviour tab's panel, fetched into #process-panel by
-  htmx from a "logs" link on a tree node, or served as a page of its own.
-
-  Two sources. The facts at the top are the report's (report.json). The
-  lines below are read out of `<plugin>.log` in the store through the byte
-  ranges `log_index` names for this process -- see logview.py -- so a click
-  costs one page of lines, not the log.
-
-  Every line is the sample's text and is rendered inside <pre> through
-  autoescape. Long lines wrap; nothing is a link.
+  One of the sample's processes, opened in place under its tree node (or a
+  page of its own without script). Four parts, top to bottom: its facts, its
+  calls per category (each one a filter for the table), its own share of the
+  report, and its calls, parsed -- read a page at a time out of the run's
+  calls log (calls.py), never whole.
 #}
-<section class="process" id="process-{{ seqid }}">
-<h2>{{ proc(seqid) }}
-  <a class="dim small" href="#proc-{{ seqid }}" title="back to the tree">↑ tree</a></h2>
-<dl class="dl">
-  <dt>Image</dt><dd class="filename">{{ process.name }}</dd>
-  {% if process.command_line %}<dt>Command line</dt><dd><span class="filename">{{ process.command_line }}</span>
-    <a class="dim small" href="/ui/jobs/{{ job.id }}/process/{{ seqid }}/cmdline" target="_blank"
-       rel="noopener" title="argv element by element, in a new tab">↗ argv</a></dd>{% endif %}
-  <dt>PID</dt><dd class="mono">{{ process.pid }}
-    {% if process.parent_seqid is not none %}<span class="dim">child of</span> {{ proc(process.parent_seqid) }}{% endif %}</dd>
+{% from "tabs/_macros.html" import proc, chips, nothing with context %}
+<div class="pp">
+<div class="pp-head">
+  <h3><span class="pname">{{ process.basename }}</span> <span class="pid">{{ process.process_id }}</span></h3>
+  {%- if process.seqid in report.roots %}<span class="chip" data-kind="sample">injected</span>{% endif %}
+  {%- if process.seqid in report.followed_seqids %}<span class="chip" data-kind="followed">taken over</span>{% endif %}
+</div>
+
+<dl class="kv">
+  <dt>Image</dt><dd class="filename">{{ process.module_path or process.process_name }}</dd>
+  {% if process.command_line %}<dt>Command line</dt><dd><pre class="cmdline">{{ process.command_line }}</pre></dd>{% endif %}
+  <dt>Parent</dt>
+  <dd>{% if process.parent_seqid in report.by_seqid %}{{ proc(seqid=process.parent_seqid) }}
+      {% else %}<span class="mono">pid {{ process.parent_id }}</span> <span class="dim">— not one of the sample's</span>{% endif %}</dd>
   <dt>Lifetime</dt>
   <dd>
-    {% if process.started_at %}started at t+{{ '%.3f' | format(process.started_at) }}s{% else %}already running when the trace began{% endif %}
-    {%- if process.exited_at is not none %}, exited at t+{{ '%.3f' | format(process.exited_at) }}s{% elif process.exit_code is none %}, still running when it ended{% endif %}
+    {% if process.started_ts and report.t(process.started_ts) is not none %}started at {{ report.t(process.started_ts) | secs }}{% else %}running when the trace began{% endif %}
+    {%- if process.exited_ts is not none %}, exited at {{ report.t(process.exited_ts) | secs }}{% elif not process.ended %}, still running when it ended{% endif %}
     {%- if process.exit_code_str %} · <span class="exit{% if process.exited_with_error %} error{% endif %}">{{ process.exit_code_str }}</span>
       <span class="dim mono">0x{{ '%08x' | format(process.exit_code) }}</span>{% endif %}
-    {%- if process.killed_by is not none %} · killed by {{ proc(process.killed_by) }}{% endif %}
+    {%- if process.killed_by is not none %} · killed by {{ proc(pid=process.killed_by) }}{% endif %}
   </dd>
+  {% if process.threads %}<dt>Threads</dt><dd class="mono">{{ process.threads | join(' ') }}</dd>{% endif %}
+  {% for k, v in process.environ | dictsort if k != 'CommandLine' %}
+  <dt>{{ k }}</dt><dd class="mono break">{{ v }}</dd>
+  {% endfor %}
 </dl>
 
-{% if not plugins %}
-<div class="empty spaced-top">
-  <strong>No log lines indexed for this process.</strong>
-  Either no plugin recorded an event from it, or this run has no
-  <code>log_index</code> (runs before postprocessing shipped).
+{% if calls %}
+<h4>Calls by category <span class="count">{{ '{:,}'.format(calls.count) }}</span></h4>
+{% set base = '/ui/jobs/' ~ job.id ~ '/process/' ~ seqid ~ '/calls' %}
+<div class="catbar" role="list">
+  {% for cat, n in calls.categories.items() %}
+  <a role="listitem" class="seg" data-cat="{{ loop.index0 % 8 }}" style="flex-grow: {{ n }}"
+     href="{{ base }}?category={{ cat | urlencode }}" hx-get="{{ base }}?category={{ cat | urlencode }}"
+     hx-target="#calls-{{ seqid }}" hx-swap="outerHTML" title="{{ cat }}: {{ '{:,}'.format(n) }}"></a>
+  {% endfor %}
 </div>
+<ul class="catlegend">
+  {% for cat, n in calls.categories.items() %}
+  <li><a href="{{ base }}?category={{ cat | urlencode }}" hx-get="{{ base }}?category={{ cat | urlencode }}"
+         hx-target="#calls-{{ seqid }}" hx-swap="outerHTML"><i data-cat="{{ loop.index0 % 8 }}"></i>{{ cat or 'other' }} <b>{{ '{:,}'.format(n) }}</b></a></li>
+  {% endfor %}
+</ul>
 {% endif %}
 
-<nav class="plugins spaced-top">
-  {% for p in plugins %}
-  <a href="/ui/jobs/{{ job.id }}/process/{{ seqid }}?plugin={{ p }}"
-     hx-get="/ui/jobs/{{ job.id }}/process/{{ seqid }}?plugin={{ p }}"
-     hx-target="#process-panel" hx-swap="innerHTML"
-     {% if p == selected %}aria-selected="true"{% endif %}>{{ p }}</a>
-  {% endfor %}
-  {% for p in compressed %}
-  {# Gzipped by postprocessing to fit the result budget, before the indexer
-     ran, so there is no per-process view of it: a download of the whole
-     log, every process's lines together. #}
-  <a class="dim" href="{{ job.artifacts.get(p ~ '.log.gz', '#') }}" rel="noopener nofollow"
-     title="{{ p }}.log is stored compressed and unindexed; download the whole of it">{{ p }} ↓</a>
-  {% endfor %}
-</nav>
-{% if plugins %}
-
-{% if selected %}
-<form class="filters logfilter"
-      hx-get="/ui/jobs/{{ job.id }}/process/{{ seqid }}"
-      hx-target="#process-panel" hx-swap="innerHTML" hx-trigger="change">
-  <input type="hidden" name="plugin" value="{{ selected }}">
-  <label><span>Method</span>
-    <select name="method">
-      <option value="">all{% if methods %} ({{ methods | length }}){% endif %}</option>
-      {% for m in methods %}
-      <option value="{{ m }}"{% if m == method %} selected{% endif %}>{{ m }}</option>
+<h4>Its own activity</h4>
+{% set a = activity %}
+{% if a.signatures or a.events or a.endpoints or a.listeners or a.dns or a.http or a.encrypted %}
+<dl class="kv activity">
+  {% if a.signatures %}<dt>Signatures</dt><dd>{% for s in a.signatures %}<span class="sev" data-level="{{ s.level }}">{{ s.name }}</span>{% endfor %}</dd>{% endif %}
+  {% if a.endpoints %}<dt>Endpoints</dt><dd>{% for e in a.endpoints %}<span class="mono">{{ e.ip_port }}</span>{% if not loop.last %} · {% endif %}{% endfor %}</dd>{% endif %}
+  {% if a.listeners %}<dt>Listening</dt><dd>{% for e in a.listeners %}<span class="mono">{{ e.ip_port }}</span>{% if not loop.last %} · {% endif %}{% endfor %}</dd>{% endif %}
+  {% if a.dns %}<dt>DNS</dt><dd>{% for d in a.dns %}<span class="mono break">{{ d }}</span>{% if not loop.last %} · {% endif %}{% endfor %}</dd>{% endif %}
+  {% if a.http %}<dt>HTTP</dt><dd>{% for r in a.http %}<div class="mono break"><b>{{ r.method }}</b> {{ r.url }}</div>{% endfor %}</dd>{% endif %}
+  {% if a.encrypted %}<dt>Crypto</dt><dd>{{ a.encrypted | length }} buffer{{ 's' if a.encrypted | length != 1 }} through {{ a.encrypted | map(attribute='api_call') | unique | join(', ') }}</dd>{% endif %}
+  {% if a.events %}
+  <dt>Timeline</dt>
+  <dd>
+    <div class="scroll-x"><table class="grid compact">
+      <tbody>
+      {% for e in a.events[:20] %}
+      <tr><td class="mono nowrap dim">{{ report.t(e.timestamp) | secs }}</td><td class="nowrap"><span class="chip" data-kind="ev">{{ e.event }}</span> {{ e.object }}</td>
+          <td class="mono break">{{ e.target }}</td></tr>
       {% endfor %}
-    </select>
-  </label>
-  {% if page %}
-  <span class="dim small">{{ '{:,}'.format(page.total_bytes) }} bytes of {{ selected }}.log
-    {% if method %}for {{ method }}{% endif %}</span>
+      </tbody>
+    </table></div>
+    {% if a.events | length > 20 %}<a class="more" href="/ui/jobs/{{ job.id }}?tab=timeline"
+       hx-get="/ui/jobs/{{ job.id }}/timeline?seqid={{ seqid }}" hx-target="next .xslot" hx-swap="innerHTML">All {{ a.events | length }} of its events</a><div class="xslot"></div>{% endif %}
+  </dd>
   {% endif %}
-  <noscript><button type="submit">Apply</button></noscript>
-</form>
+</dl>
+{% else %}
+{{ nothing('Nothing of the report is credited to this process alone beyond its calls.') }}
+{% endif %}
 
-{#
-  THIS is the box the reader sees, not each <pre> inside it. "more" swaps
-  itself for the next page's <pre> plus a fresh button, so a log that has
-  been paged three times is three <pre> elements in a row -- and when each
-  one was its own bordered, scrolling box, the second page looked like a
-  second, separate log. The border and the scrollbar live here, where they
-  survive every swap, and the pages inside are borderless so they read as
-  one continuous log. `log-box` only when there is something to box: an
-  empty state carries its own dashed border.
-#}
-<div class="loglines{% if page and page.lines %} log-box{% endif %}" id="loglines-{{ seqid }}">
-{% include "tabs/_process_lines.html" %}
+<h4>Calls</h4>
+{% if calls %}
+{% include "tabs/_calls.html" %}
+{% else %}
+{{ nothing('No calls recorded for this process: no plugin saw it make one, or this run has no calls log.') }}
+{% endif %}
 </div>
-{% endif %}
-{% endif %}
-</section>

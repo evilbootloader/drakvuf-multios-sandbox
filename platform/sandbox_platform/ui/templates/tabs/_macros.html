@@ -1,0 +1,116 @@
+{#
+  Pieces shared by the report tabs. Imported `with context` so they can read
+  `job` and `report` without every call site passing both.
+
+  Everything they render is the sample's text -- process names, command
+  lines, paths, arguments -- and relies on autoescape. Nothing here or under
+  tabs/ is marked safe; tests/test_ui.py counts the marks.
+
+  **Inline panels.** Whatever opens does so in place: a hidden row directly
+  after the row that opens it (`xrow`), shown and hidden by static/expand.js,
+  with its own close button. Nothing else on the page moves out of sight, and
+  any number can be open at once. `toggle` is the control: a link to the
+  fragment (`src`) where the content is fetched, which is also its fallback
+  without script; a button where the content is already in the row.
+#}
+
+{#- A process of the sample, `Notepad.exe (7208)`, linking to its node in the
+    tree. By seqid where the report has one, by PID otherwise. -#}
+{% macro proc(pid=none, seqid=none) -%}
+  {%- set p = report.by_seqid.get(seqid) if seqid is not none else report.process_for(pid) -%}
+  {%- if p -%}
+    <a class="proc" href="/ui/jobs/{{ job.id }}?tab=behaviour#proc-{{ p.seqid }}" title="{{ p.process_name }}">{{ p.basename }} <span class="pid">{{ p.process_id }}</span></a>
+  {%- elif pid is not none -%}
+    <span class="proc dim" title="not one of the sample's processes">pid {{ pid }}</span>
+  {%- else -%}
+    <span class="proc dim">unattributed</span>
+  {%- endif -%}
+{%- endmacro %}
+
+{#- A section's title row: the heading, its count, a line of context. -#}
+{% macro head(title, count=none, sub='', id='') -%}
+<header class="section-head"{% if id %} id="{{ id }}"{% endif %}>
+  <h2>{{ title }}{% if count is not none %} <span class="count">{{ '{:,}'.format(count) }}</span>{% endif %}</h2>
+  {%- if sub %}<p class="sub">{{ sub }}</p>{% endif %}
+</header>
+{%- endmacro %}
+
+{#- The control that opens a row's panel. -#}
+{% macro toggle(id, label='details', src=none) -%}
+{%- if src -%}
+<a class="xbtn" href="{{ src }}" data-x="{{ id }}" data-x-src="{{ src }}" aria-expanded="false" aria-controls="x-{{ id }}">{{ label }}</a>
+{%- else -%}
+<button type="button" class="xbtn" data-x="{{ id }}" aria-expanded="false" aria-controls="x-{{ id }}">{{ label }}</button>
+{%- endif -%}
+{%- endmacro %}
+
+{#- The panel itself, as a table row (`colspan` columns) or, without one, a
+    block. Its content is what the macro is called with, or what `toggle`'s
+    src fetches into it on first open. -#}
+{% macro xrow(id, colspan=none, title='') -%}
+{%- if colspan -%}
+<tr class="xrow" id="x-{{ id }}" hidden><td colspan="{{ colspan }}">
+{%- else -%}
+<div class="xrow" id="x-{{ id }}" hidden>
+{%- endif %}
+  <div class="xpanel" role="region"{% if title %} aria-label="{{ title }}"{% endif %}>
+    <button type="button" class="xclose" data-x-close aria-label="Close">×</button>
+    <div class="xbody">{% if caller is defined %}{{ caller() }}{% endif %}</div>
+  </div>
+{%- if colspan %}</td></tr>{% else %}</div>{% endif %}
+{%- endmacro %}
+
+{#- CAPE's severity, as a word in a pill. Only `high` is red. -#}
+{% macro sev(signature) -%}
+<span class="sev" data-level="{{ signature.level }}" title="severity {{ signature.severity }}">{{ signature.level }}</span>
+{%- endmacro %}
+
+{% macro chips(items, kind='') -%}
+{%- for i in items %}<span class="chip"{% if kind %} data-kind="{{ kind }}"{% endif %}>{{ i }}</span>{% endfor -%}
+{%- endmacro %}
+
+{#- YARA hits as rule names, the namespace on hover. -#}
+{% macro hits(list) -%}
+{%- for h in list %}<span class="chip" data-kind="yara" title="{{ h.namespace }}">{{ h.name }}</span>{% endfor -%}
+{%- endmacro %}
+
+{#- A buffer as offset, hex and text. -#}
+{% macro hexview(text) -%}
+<pre class="hex">{% for off, hx, tx in text | hexdump %}<span class="off">{{ off }}</span>  {{ '%-47s' | format(hx) }}  <span class="txt">{{ tx }}</span>
+{% endfor %}</pre>
+{%- endmacro %}
+
+{#- "Show more": a row that replaces itself with the next rows. -#}
+{% macro more(url, colspan, left) -%}
+<tr class="more-row"><td colspan="{{ colspan }}">
+  <a class="more" href="{{ url }}" hx-get="{{ url }}" hx-target="closest tr" hx-swap="outerHTML">Show more <span class="dim">· {{ '{:,}'.format(left) }} left</span></a>
+</td></tr>
+{%- endmacro %}
+
+{% macro nothing(text) -%}
+<p class="none">{{ text }}</p>
+{%- endmacro %}
+
+{#- Times are seconds into the trace. -#}
+{% macro at(ts) -%}<span class="at">{{ report.t(ts) | secs }}</span>{%- endmacro %}
+
+{% macro no_report() -%}
+{% if report_error %}
+<div class="empty"><strong>This run's report could not be read.</strong>
+  <span class="mono">{{ report_error }}</span></div>
+{% else %}
+<div class="empty"><strong>No CAPE report for this run.</strong>
+  The report tabs are drawn from <code>cape_results.json</code>, which every run
+  writes since the CAPE chain (2026-11-10). This one predates it, or its
+  postprocessing failed; its screenshots and artifacts are still here.</div>
+{% endif %}
+{%- endmacro %}
+
+{#- Expand/collapse every group in the enclosing `[data-disclose-scope]`
+    (static/disclose.js): the Artifacts tab's directories. -#}
+{% macro disclose_tools() -%}
+<span class="tools">
+  <button type="button" class="ghost" data-disclose="open">expand all</button>
+  <button type="button" class="ghost" data-disclose="close">collapse all</button>
+</span>
+{%- endmacro %}

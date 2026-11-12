@@ -1,0 +1,24 @@
+{#
+  A page of events. Each opens its whole data in place.
+#}
+{% from "tabs/_macros.html" import proc, toggle, xrow with context %}
+{% for e in events %}
+{% set id = 'ev-' ~ (offset + loop.index0) %}
+<tr class="xr" data-x="{{ id }}">
+  <td class="mono nowrap dim">{{ report.t(e.timestamp) | secs }}</td>
+  <td>{{ proc(pid=e.pid, seqid=e.seqid) }}</td>
+  <td class="nowrap"><span class="chip" data-kind="ev-{{ e.event }}">{{ e.event }}</span> <span class="dim">{{ e.object }}</span></td>
+  <td class="mono break">{{ e.target | printable }}</td>
+  <td>{{ toggle(id, '▾') }}</td>
+</tr>
+{% call xrow(id, 5, e.event ~ ' ' ~ e.object) %}
+<dl class="kv">
+  {% for k, v in e.data | dictsort %}<dt>{{ k }}</dt><dd class="mono break">{{ v | printable(false) }}</dd>{% endfor %}
+  <dt>process</dt><dd>{{ proc(pid=e.pid, seqid=e.seqid) }}</dd>
+</dl>
+{% endcall %}
+{% endfor %}
+{% if next_offset %}
+{% set url = '/ui/jobs/' ~ job.id ~ '/timeline?part=rows&offset=' ~ next_offset ~ ('&' ~ (filters | urlencode) if filters else '') %}
+<tr class="more-row"><td colspan="5"><a class="more" href="{{ url }}" hx-get="{{ url }}" hx-target="closest tr" hx-swap="outerHTML">Show more <span class="dim">· {{ '{:,}'.format(matching - next_offset) }} left</span></a></td></tr>
+{% endif %}

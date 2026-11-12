@@ -306,10 +306,10 @@ def _chunks(key: str, chunk_size: int = 1 << 20) -> Iterator[bytes]:
 def range_bytes(key: str, start: int, end: int) -> bytes:
     """Bytes [start, end) of one object, or b"" when start is past its end.
 
-    For the per-process log viewer, which reads the slices `log_index` names
-    out of a per-plugin log that can be over a gigabyte -- so it never reads
-    the object whole. An HTTP range is inclusive at both ends; the caller's
-    is half-open, like every offset the indexer wrote. S3 answers a start
+    For the job page's call viewer (calls.py), which reads one gzip member
+    at a time out of a run's calls log at the offset its index names -- so it
+    never reads the object whole. An HTTP range is inclusive at both ends; the
+    caller's is half-open, like every offset in the index. S3 answers a start
     past the object with 416, which is "nothing there" rather than a fault.
     """
     if end <= start:

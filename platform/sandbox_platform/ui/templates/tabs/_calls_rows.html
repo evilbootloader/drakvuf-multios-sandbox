@@ -1,0 +1,34 @@
+{#
+  One page of calls. Every row opens the whole call in place -- every
+  argument at full length, binary values as hex and text, the caller and
+  where it came from -- fetched when opened, so a page of calls carries only
+  the line each one needs.
+#}
+{% from "tabs/_macros.html" import toggle, xrow with context %}
+{% for c in page.calls %}
+{% set id = 'call-' ~ seqid ~ '-' ~ c.cid %}
+<tr class="call xr" data-x="{{ id }}"{% if c.failed %} data-failed="1"{% endif %}>
+  <td class="mono nowrap dim">{{ report.t(c.ts) | secs }}</td>
+  <td class="mono nowrap dim">{{ c.tid }}</td>
+  <td class="nowrap"><span class="api">{{ c.api }}</span>
+    <div class="api-meta"><span class="chip" data-kind="cat">{{ c.category or 'other' }}</span>{% if c.kernel %}<span class="chip" title="seen in the kernel ({{ c.plugin }})">kernel</span>{% endif %}{% if c.repeated %}<span class="chip" title="repeated identically">×{{ c.repeated + 1 }}</span>{% endif %}</div></td>
+  <td class="args">
+    {%- for a in c.arguments[:6] %}<span class="arg"><span class="an">{{ a.name }}</span><span class="av">{{ a.value[:120] | printable }}{% if a.value | length > 120 %}…{% endif %}</span></span>{% endfor %}
+    {%- if c.arguments | length > 6 %}<span class="dim small">+{{ c.arguments | length - 6 }} more</span>{% endif %}
+  </td>
+  <td class="nowrap">
+    {%- if c.status is true %}<span class="ok" title="succeeded">✓</span>{% elif c.status is false %}<span class="fail" title="failed">✗</span>{% else %}<span class="dim" title="did not return in the trace">·</span>{% endif %}
+    <span class="mono small">{{ c.ret }}</span>
+    {{ toggle(id, '▾', '/ui/jobs/' ~ job.id ~ '/call?seqid=' ~ seqid ~ '&cid=' ~ c.cid) }}
+  </td>
+</tr>
+{{ xrow(id, 5, c.api) }}
+{% else %}
+{% if not page.next %}<tr><td colspan="5"><p class="none">No call matches.</p></td></tr>{% endif %}
+{% endfor %}
+{% if page.next %}
+{% set url = '/ui/jobs/' ~ job.id ~ '/process/' ~ seqid ~ '/calls?part=rows&cursor=' ~ page.next ~ ('&' ~ (filters | urlencode) if filters else '') %}
+<tr class="more-row"><td colspan="5">
+  <a class="more" href="{{ url }}" hx-get="{{ url }}" hx-target="closest tr" hx-swap="outerHTML">Show more calls{% if page.stopped %} <span class="dim">· searched as far as one request may; more may match further on</span>{% endif %}</a>
+</td></tr>
+{% endif %}

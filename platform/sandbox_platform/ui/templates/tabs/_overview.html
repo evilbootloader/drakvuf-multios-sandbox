@@ -1,306 +1,154 @@
 {#
-  Facts, no verdict. Deliberate: a threat score is a claim about detection
-  quality this project cannot back, and experience says the number gets
-  quoted while the caveat does not. When capa lands (DRAFT-019) its ATT&CK
-  and MBC rule metadata fills the technique list below -- still observations,
-  not a judgement.
+  The run at a glance, top to bottom: the sample, how it ran, how it was
+  started, then what every other tab holds as a count. Facts, no verdict:
+  CAPE's malscore is not shown (operator, 2026-11-11) -- each signature
+  carries its own severity on its tab.
 #}
-{% from "tabs/_report_macros.html" import proc, procs, tags, unreadable with context %}
+{% from "tabs/_macros.html" import head, proc, hits, no_report, chips with context %}
 
-{#
-  At a glance: what each of the other tabs holds, as a count, and a way
-  there. Counts are observations like everything else here -- the opening
-  comment's rule against a score is not relaxed by putting numbers in boxes.
-  One tile per tab this guest HAS (catalogue.tabs_for), so an Ubuntu job is
-  not offered a Registry tile it has no tab for.
-
-  Each tile switches tabs the way the tab bar does: the same htmx swap of
-  #job-tabs and the same pushed URL, and a plain link without htmx.
-#}
-{% macro tile(slug, n, label, sub='', alert=false) -%}
-<a class="tile" href="/ui/jobs/{{ job.id }}?tab={{ slug }}"
-   hx-get="/ui/jobs/{{ job.id }}/tabs?tab={{ slug }}" hx-target="#job-tabs"
-   hx-push-url="/ui/jobs/{{ job.id }}?tab={{ slug }}"
-   {%- if not n %} data-zero="1"{% endif %}{% if alert %} data-alert="1"{% endif %}>
-  <span class="k">{{ label }}</span>
-  <span class="n">{{ n }}</span>
-  {%- if sub %}<span class="sub">{{ sub }}</span>{% endif %}
-</a>
-{%- endmacro %}
-
-{% if report %}
-{% set slugs = tabs | map(attribute='slug') | list %}
-<nav class="tiles" aria-label="At a glance">
-  {% if 'behaviour' in slugs %}
-  {% set started = report.processes | selectattr('started_at') | list | length %}
-  {{ tile('behaviour', report.processes | length, 'Processes',
-          (started ~ ' started in the trace') if report.processes else '') }}
-  {{ tile('behaviour', report.modified_files | length, 'Files written',
-          (report.deleted_files | length ~ ' deleted') if report.deleted_files else '') }}
+{% set f = report.target.file if report else none %}
+<section class="section">
+{{ head('Sample') }}
+<dl class="kv">
+  <dt>File</dt><dd class="filename">{{ job.submitted_filename }}</dd>
+  {% if f and f.type %}<dt>Type</dt><dd>{{ f.type }}</dd>{% endif %}
+  {% if f and f.size %}<dt>Size</dt><dd class="mono">{{ f.size | size }} <span class="dim">({{ '{:,}'.format(f.size) }} bytes)</span></dd>{% endif %}
+  {% set sha256 = (f.sha256 if f and f.sha256 else job.sha256) %}
+  {% if sha256 %}<dt>SHA-256</dt><dd class="mono hash">{{ sha256 }}</dd>{% endif %}
+  {% if f and f.sha1 %}<dt>SHA-1</dt><dd class="mono hash">{{ f.sha1 }}</dd>{% endif %}
+  {% if f and f.md5 %}<dt>MD5</dt><dd class="mono hash">{{ f.md5 }}</dd>{% endif %}
+  {% if f and f.sha512 %}<dt>SHA-512</dt><dd class="mono hash">{{ f.sha512 }}</dd>{% endif %}
+  {% if f and f.pe %}
+  <dt>PE</dt>
+  <dd><span class="mono">{{ f.pe.machine_type }}</span>
+    · compiled <span class="mono">{{ f.pe.timestamp }}</span>
+    · entry <span class="mono">{{ f.pe.entrypoint }}</span>
+    · imphash <span class="mono">{{ f.pe.imphash }}</span>
+    · <a href="/ui/jobs/{{ job.id }}?tab=static" hx-get="/ui/jobs/{{ job.id }}/tabs?tab=static"
+         hx-target="#job-tabs" hx-push-url="/ui/jobs/{{ job.id }}?tab=static">static analysis</a></dd>
   {% endif %}
-  {% if 'registry' in slugs %}
-  {% set autostart = report.registry_autostart | length %}
-  {{ tile('registry', report.registry_count, 'Registry writes',
-          (autostart ~ ' under autostart keys') if autostart else '', autostart > 0) }}
-  {% endif %}
-  {% if 'network' in slugs %}
-  {{ tile('network', report.connections | length, 'Connections',
-          (report.dns_queries | length ~ ' DNS names') if report.dns_queries else '') }}
-  {% if report.http_requests %}{{ tile('network', report.http_requests | length, 'HTTP requests') }}{% endif %}
-  {% endif %}
-  {% if 'memory' in slugs %}
-  {{ tile('memory', report.dump_count, 'Memory dumps',
-          ('from ' ~ report.memdumps | length ~ ' process' ~ ('es' if report.memdumps | length != 1 else '')) if report.memdumps else '') }}
-  {% endif %}
-</nav>
-{% endif %}
+  {% if f and f.hits %}<dt>YARA</dt><dd>{{ hits(f.hits) }}</dd>{% endif %}
+</dl>
+</section>
 
-<div class="cols wide-right">
-<div class="stack">
-<section class="card">
-<h2>Run</h2>
-<dl class="dl">
-  <dt>Plugins</dt>
-  <dd class="mono">{{ job.plugins | join(' ') if job.plugins else 'pipeline defaults' }}</dd>
-
-  {# As submitted, and the guest's defaults when nothing was chosen. The
-     arguments are the submitter's text; autoescaped like the filename. #}
-  <dt>Dropped in</dt>
-  <dd class="mono filename">{{ drop_dir }}</dd>
+<section class="section">
+{{ head('Run') }}
+<dl class="kv">
+  <dt>Guest</dt><dd class="mono">{{ job.target_os.value }}</dd>
+  <dt>Plugins</dt><dd class="mono">{{ job.plugins | join(' ') if job.plugins else 'pipeline defaults' }}</dd>
+  {# As submitted; the arguments are the submitter's text, autoescaped. #}
+  <dt>Dropped in</dt><dd class="mono filename">{{ drop_dir }}</dd>
   <dt>Arguments</dt>
   <dd>{% if job.arguments %}<span class="mono">{{ job.arguments }}</span>{% else %}<span class="dim">none</span>{% endif %}</dd>
-
+  {% if report %}
+  <dt>Traced</dt>
+  <dd><span class="mono">{{ report.info.started }}</span> → <span class="mono">{{ report.info.ended }}</span>
+    <span class="dim">({{ report.info.duration }} s)</span></dd>
+  {% endif %}
   {#
-    Network egress (DRAFT-057), and it belongs on Overview rather than only on
-    the Network tab: it is the fact that decides how every OTHER fact here
-    should be read. A run that observed no traffic means nothing until you know
-    whether traffic was possible.
-
-    REQUESTED and APPLIED are both shown whenever they differ. They can: a host
-    whose responder was down runs `offline` and says so, and an empty Network
-    tab means something completely different in those two cases.
+    Network egress (DRAFT-057): the fact that decides how every other fact
+    here reads. A run that saw no traffic means nothing until you know
+    whether traffic was possible. Requested and applied both show when they
+    differ: a host whose responder was down runs `offline` and says so.
   #}
   <dt>Network</dt>
   <dd>
     <span class="mono">{{ job.egress_mode }}</span>
     {%- if job.egress_exit %} via <span class="mono">{{ job.egress_exit }}</span>{% endif %}
-
     {% if job.egress_applied %}
       {% if job.egress_applied.get('mode') != job.egress_mode %}
-      <span class="state" data-state="failed">applied:
-        {{ job.egress_applied.get('mode') }}</span>
+      <span class="state" data-state="failed">applied: {{ job.egress_applied.get('mode') }}</span>
       {% endif %}
-      {% if job.egress_applied.get('country') %}
-      <span class="mono">({{ job.egress_applied.get('country') }})</span>
-      {% endif %}
+      {% if job.egress_applied.get('country') %}<span class="mono">({{ job.egress_applied.get('country') }})</span>{% endif %}
     {% elif job.state not in ('received', 'admitted', 'queued', 'rejected') %}
-      {# Past the point where the host would have reported it. Not silence to
-         gloss over: it means the run happened and nothing recorded what its
-         network actually was. #}
       <span class="note">no host report — what actually applied is unknown</span>
     {% endif %}
   </dd>
-
   {% if job.egress_applied and job.egress_applied.get('caveats') %}
-  {#
-    The acceptance criterion this whole feature turns on: an exit that blocks a
-    port must make the report distinguish "no SMTP traffic" from "SMTP was
-    blocked upstream". Without this line an upstream policy silently becomes a
-    finding about the sample.
-  #}
+  {# An exit that blocks a port must make the report tell "no SMTP traffic"
+     from "SMTP was blocked upstream". #}
   <dt>Network limits</dt>
-  <dd>
-    {% for caveat in job.egress_applied.get('caveats') %}
-    <span class="mono">{{ caveat }}</span>{% if not loop.last %}, {% endif %}
-    {% endfor %}
-    <span class="note">
-      Absence of matching traffic in this report may be caused by these limits
-      rather than by the sample.
-    </span>
-  </dd>
+  <dd>{% for caveat in job.egress_applied.get('caveats') %}<span class="mono">{{ caveat }}</span>{% if not loop.last %}, {% endif %}{% endfor %}
+    <span class="note">Absence of matching traffic may be caused by these limits rather than by the sample.</span></dd>
   {% endif %}
 </dl>
 </section>
-{% if report and not report_error %}
-<section class="card">
-<h2>Startup</h2>
+
+{% if report %}
+<section class="section">
+{{ head('Injection') }}
+{% set root = report.root_process %}
+{% if root %}
+<dl class="kv">
+  <dt>Process</dt><dd>{{ proc(seqid=root.seqid) }}</dd>
+  {% if root.command_line %}<dt>Command line</dt><dd class="filename">{{ root.command_line }}</dd>{% endif %}
+  <dt>Lifetime</dt>
+  <dd>
+    {% if root.exit_code_str %}<span class="exit{% if root.exited_with_error %} error{% endif %}">{{ root.exit_code_str }}</span>
+      <span class="dim mono">0x{{ '%08x' | format(root.exit_code) }}</span>
+    {% elif root.ended %}exited at {{ report.t(root.exited_ts) | secs }}
+    {% else %}<span class="dim">still running when the trace ended</span>{% endif %}
+    {% if root.killed_by is not none %} · killed by {{ proc(pid=root.killed_by) }}{% endif %}
+  </dd>
+  <dt>Sample processes</dt>
+  <dd>{{ report.processes | length }}{% if report.trace_split.followed %} · <span class="chip" data-kind="followed">{{ report.trace_split.followed | length }} taken over</span>{% endif %}</dd>
+</dl>
+{% else %}
+<p class="none">The trace has no record of the injected process: nothing below is attributed to the sample.</p>
+{% endif %}
+</section>
+
 {#
-  How the sample was started, and how that process ended. `startup.process`
-  is a seqid into the tree; `startup.pid` is DRAKVUF's own record of what it
-  injected, kept even when the tree never saw that PID.
+  At a glance: what the other tabs hold, one row of numbers, each a way
+  there. Observations like everything here -- a count is not a score.
 #}
-<dl class="dl">
-  <dt>Injection</dt>
-  <dd>
-    {% if report.startup.status == 'Success' %}
-      <span class="state" data-state="completed">success</span>
-    {% elif report.startup.status == 'Error' %}
-      <span class="state" data-state="failed">error</span>
-      <span class="filename">{{ report.startup.error or '' }}</span>
-      {% if report.startup.error_code is not none %}<span class="dim mono">({{ report.startup.error_code }})</span>{% endif %}
-    {% else %}
-      <span class="dim">not recorded</span>
-    {% endif %}
-  </dd>
-  {% if report.startup.process_name %}
-  <dt>Launched</dt>
-  <dd class="filename">{{ report.startup.process_name }}
-    {% if report.startup.arguments %} {{ report.startup.arguments }}{% endif %}</dd>
+{% set slugs = tabs | map(attribute='slug') | list %}
+{% macro stat(slug, n, label, sub='') -%}
+{%- if slug in slugs -%}
+<a class="stat" href="/ui/jobs/{{ job.id }}?tab={{ slug }}"
+   hx-get="/ui/jobs/{{ job.id }}/tabs?tab={{ slug }}" hx-target="#job-tabs"
+   hx-push-url="/ui/jobs/{{ job.id }}?tab={{ slug }}"{% if not n %} data-zero="1"{% endif %}>
+  <span class="n">{{ '{:,}'.format(n) }}</span><span class="k">{{ label }}</span>{% if sub %}<span class="sub">{{ sub }}</span>{% endif %}
+</a>
+{%- endif -%}
+{%- endmacro %}
+<section class="section">
+{{ head('At a glance') }}
+{% set high = report.signatures | selectattr('severity', 'ge', 3) | list | length %}
+<nav class="stats" aria-label="At a glance">
+  {{ stat('signatures', report.signatures | length, 'signatures', (high ~ ' high') if high else '') }}
+  {{ stat('signatures', report.techniques | length, 'ATT&CK techniques') }}
+  {{ stat('behaviour', report.processes | length, 'processes') }}
+  {{ stat('timeline', report.events | length, 'events') }}
+  {{ stat('summary', report.summary.get('write_files', []) | length, 'files written') }}
+  {% if job.target_os.value == 'windows' %}{{ stat('summary', report.summary.get('write_keys', []) | length, 'registry writes', (report.autostart_writes | length ~ ' autostart') if report.autostart_writes else '') }}{% endif %}
+  {{ stat('network', report.network_map.endpoint_map | length, 'endpoints', (report.network_map.dns_intents | length ~ ' DNS names') if report.network_map.dns_intents else '') }}
+  {{ stat('dropped', report.dropped | length, 'dropped files') }}
+  {{ stat('memory', report.dump_count, 'dumps') }}
+</nav>
+</section>
+
+<section class="section">
+{{ head('Analysis') }}
+{% set ts = report.trace_split %}
+<dl class="kv">
+  <dt>Trace</dt>
+  <dd>{{ '{:,}'.format(ts.records.values() | sum) }} records
+    {%- for plugin, n in ts.records | dictsort(by='value', reverse=true) %}{% if loop.first %} <span class="dim">—{% endif %} {{ plugin }} {{ '{:,}'.format(n) }}{% if not loop.last %} ·{% else %}</span>{% endif %}{% endfor %}</dd>
+  <dt>Processes</dt>
+  <dd>{{ ts.sample_processes }} of the sample's{% if ts.processes > ts.sample_processes %} <span class="dim">({{ ts.processes }} split; the others are not shown)</span>{% endif %}</dd>
+  <dt>Syscalls</dt>
+  <dd>{{ '{:,}'.format(ts.syscalls_paired) }} paired with their return · {{ '{:,}'.format(ts.syscalls_unpaired) }} without
+    {%- if ts.kernel_syscalls_dropped %} · {{ '{:,}'.format(ts.kernel_syscalls_dropped) }} kernel-mode left out{% endif %}</dd>
+  {% if ts.bad_utf8 or ts.bad_json %}
+  <dt>Unreadable lines</dt><dd>{{ ts.bad_utf8 }} not UTF-8 (kept, replaced) · {{ ts.bad_json }} not JSON (dropped)</dd>
   {% endif %}
-  {% if report.startup.pid is not none %}
-  <dt>Process</dt>
-  <dd>
-    {% if report.startup.process is not none %}{{ proc(report.startup.process) }}
-    {% else %}<span class="mono">PID {{ report.startup.pid }}</span>
-      <span class="dim">— not in the process tree</span>{% endif %}
-    {% set sp = report.startup_process %}
-    {% if sp %}
-      {% if sp.exit_code_str %}
-        · <span class="exit{% if sp.exited_with_error %} error{% endif %}">{{ sp.exit_code_str }}</span>
-        <span class="dim mono">0x{{ '%08x' | format(sp.exit_code) }}</span>
-      {% elif sp.exited_at is not none %}
-        · <span class="exit">exited</span>
-      {% else %}
-        · <span class="dim">still running when the trace ended</span>
-      {% endif %}
-      {% if sp.killed_by is not none %}· killed by {{ proc(sp.killed_by) }}{% endif %}
-    {% endif %}
-  </dd>
+  {% if report.section_errors %}
+  <dt>Not shown</dt>
+  <dd>{% for name, why in report.section_errors | dictsort %}<div><span class="mono">{{ name }}</span> <span class="dim">{{ why }}</span></div>{% endfor %}</dd>
   {% endif %}
 </dl>
 </section>
-{% endif %}
-</div>
-
-<div class="stack">
-{% if report_error %}
-{{ unreadable() }}
-{% elif report %}
-
-{#
-  Observations, not a score -- the comment at the top of this file still
-  holds. Each technique names the processes it was seen in; the mapping is
-  capa's rule metadata over apimon and syscall events of the sample's own
-  process subtree (analyze_only_malware_pids), so a technique here is
-  something the SAMPLE did, not something the guest did around it.
-#}
-<section class="block">
-<header class="block-head"><h2>Techniques <span class="count">{{ report.ttps | length }}</span></h2></header>
-{% if report.ttps %}
-<ul class="ttps">
-  {% for t in report.ttps %}
-  <li>
-    <div><strong>{{ t.name }}</strong> {{ procs(t.process_seqids) }}</div>
-    <div>{{ tags(t.attck, 'attck') }}{{ tags(t.mbc, 'mbc') }}</div>
-  </li>
-  {% endfor %}
-</ul>
 {% else %}
-<p class="dim">capa matched no ATT&amp;CK-tagged rule against the sample's
-  processes. That is an observation about this trace, not a verdict.</p>
+<section class="section">{{ no_report() }}</section>
 {% endif %}
-</section>
-
-
-
-{#
-  Falco's rules (falcosecurity/rules, stable and incubating, plus the
-  sandbox's own over libmon) evaluated against the trace of the sample's
-  process subtree by sandboxd's postprocessing. One line per rule and process.
-  The output is the rule's own format filled from the trace -- paths and
-  command lines the sample chose, so escaped like everything else.
-
-  Undetermined is the part to read before "nothing matched": a rule the trace
-  could not answer (no return values, a process older than the trace) is
-  counted there, never reported as a match.
-#}
-{% if report.falco or report.falco_coverage %}
-<section class="block">
-<header class="block-head"><h2>Falco rules <span class="count">{{ report.falco | length }}</span></h2></header>
-{% if report.falco %}
-<ul class="falco">
-  {% for f in report.falco %}
-  <li>
-    <div>
-      <span class="tag" data-kind="priority" data-priority="{{ f.priority | lower }}">{{ f.priority }}</span>
-      <strong>{{ f.rule }}</strong>
-      {{ procs(f.process_seqids) }}
-      {% if f.count > 1 %}<span class="count">×{{ f.count }}</span>{% endif %}
-    </div>
-    <div class="mono dim falco-output">{{ f.output }}</div>
-    <div>{{ tags(f.attck, 'attck') }}</div>
-  </li>
-  {% endfor %}
-</ul>
-{% else %}
-<p class="dim">No Falco rule matched the sample's processes. That is an
-  observation about this trace, not a verdict.</p>
-{% endif %}
-{% set cov = report.falco_coverage %}
-{% if cov %}
-<details class="falco-coverage">
-  <summary class="dim">
-    {{ cov.rules_evaluated }} rules evaluated{% if cov.undetermined %},
-    {{ cov.undetermined | length }} undetermined for lack of data{% endif %}
-    {%- if cov.sysret is false %} · this run had no syscall return values{% endif %}
-    {%- if cov.procmon is false %} · procmon did not run, so no exec rule could match{% endif %}
-  </summary>
-  {% if cov.undetermined %}
-  <table class="rows">
-    <thead><tr><th>Rule</th><th>Times</th><th>Missing</th></tr></thead>
-    <tbody>
-    {% for u in cov.undetermined %}
-      <tr><td>{{ u.rule }}</td><td class="mono">{{ u.count }}</td>
-          <td class="mono dim">{{ u.missing | join(' ') }}</td></tr>
-    {% endfor %}
-    </tbody>
-  </table>
-  {% endif %}
-</details>
-{% endif %}
-</section>
-{% endif %}
-
-{#
-  Below Falco, as the operator asked on 2026-10-23. Falco is Linux-only --
-  the evaluator has no Windows profile, so a Windows report carries neither
-  `falco` nor `falco_coverage` -- and on a Windows run this follows
-  Techniques directly.
-#}
-<section class="block">
-<header class="block-head"><h2>YARA matches <span class="count">{{ report.yara | length }}</span></h2></header>
-{% if report.yara %}
-<ul class="yara">
-  {% for t in report.yara %}
-  <li>
-    <div>
-      <strong>{{ t.identifier }} ({{ t.namespace }})</strong>
-
-      {% if t.process_seqids %}
-        {{ procs(t.process_seqids) }}
-      {% endif %}
-    </div>
-    <div class="filename dim small">{{ t.filename }}</div>
-  </li>
-  {% endfor %}
-</ul>
-{% else %}
-<p class="dim">
-  YARA matched no rules against the staged samples,
-  extracted files or memory dumps.
-  This is an observation, not a verdict.
-</p>
-{% endif %}
-</section>
-
-{% else %}
-<div class="empty">
-  <strong>No report for this run.</strong>
-  Startup, techniques, the process tree, files, network and memory tabs are
-  filled from <code>report.json</code>, which postprocessing writes for Windows
-  runs after the trace. Runs before it shipped, and Ubuntu and Android runs
-  today, have the artifacts and no report.
-</div>
-{% endif %}
-</div>
-</div>

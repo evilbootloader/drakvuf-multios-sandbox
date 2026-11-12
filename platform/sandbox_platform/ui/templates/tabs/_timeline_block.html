@@ -1,0 +1,28 @@
+{#
+  The events table with its filter, swapped whole when the filter changes.
+#}
+{% set base = '/ui/jobs/' ~ job.id ~ '/timeline' %}
+<div class="timeline" id="timeline">
+<form class="callfilter" action="{{ base }}" hx-get="{{ base }}" hx-target="#timeline" hx-swap="outerHTML" hx-trigger="change">
+  <label><span>Object</span>
+    <select name="object">
+      <option value="">all</option>
+      {% for o in report.events | map(attribute='object') | unique | sort %}<option value="{{ o }}"{% if filters.get('object') == o %} selected{% endif %}>{{ o }}</option>{% endfor %}
+    </select></label>
+  <label><span>Process</span>
+    <select name="seqid">
+      <option value="">all</option>
+      {% for p in report.processes %}<option value="{{ p.seqid }}"{% if filters.get('seqid') == p.seqid %} selected{% endif %}>{{ p.basename }} ({{ p.process_id }})</option>{% endfor %}
+    </select></label>
+  <span class="dim small">{{ '{:,}'.format(matching) }} event{{ 's' if matching != 1 }}</span>
+  <noscript><button type="submit">Apply</button></noscript>
+</form>
+<div class="table-wrap">
+<table class="grid events">
+  <thead><tr><th>At</th><th>Process</th><th>Event</th><th class="fill">Target</th><th></th></tr></thead>
+  <tbody>
+  {% include "tabs/_timeline_rows.html" %}
+  </tbody>
+</table>
+</div>
+</div>

@@ -1,0 +1,39 @@
+{#
+  What the sample's processes did, in order: CAPE's enhanced events -- files,
+  registry, processes, libraries, services, from the API calls and from what
+  the kernel saw, each the first time per process and object where an API
+  call does not say it already -- then the anomalies DRAKVUF's detection
+  plugins raised.
+#}
+{% from "tabs/_macros.html" import head, proc, nothing, no_report with context %}
+{% if not report %}{{ no_report() }}{% else %}
+<section class="section">
+{{ head('Events', report.events | length, 'Each row opens its details in place. Filter by kind of object or by process.') }}
+{% if report.events %}
+{% with t = timeline(report, '', none, 0) %}
+{% with events=t.events, matching=t.matching, offset=t.offset, next_offset=t.next_offset, filters=t.filters %}
+{% include "tabs/_timeline_block.html" %}
+{% endwith %}
+{% endwith %}
+{% else %}{{ nothing('No events.') }}{% endif %}
+</section>
+
+<section class="section">
+{{ head('Anomalies', report.anomalies | length, 'What DRAKVUF\'s detection plugins saw: a hypervisor query, a debug exception, a ptrace, an eBPF program, a kernel structure changed.') }}
+{% if report.anomalies %}
+<div class="table-wrap">
+<table class="grid">
+  <thead><tr><th>Category</th><th>What</th><th>Process</th><th class="fill">Detail</th></tr></thead>
+  <tbody>
+  {% for a in report.anomalies %}
+  <tr><td class="nowrap"><span class="chip" data-kind="anomaly-{{ a.category }}">{{ a.category }}</span></td>
+      <td class="mono nowrap">{{ a.funcname }}</td>
+      <td>{% if a.name == 'kernel' %}<span class="proc dim">kernel</span>{% else %}{{ proc(pid=a.pid) }}{% endif %}</td>
+      <td class="break">{{ a.message }}</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+{% else %}{{ nothing('No anomaly.') }}{% endif %}
+</section>
+{% endif %}

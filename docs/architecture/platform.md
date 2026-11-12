@@ -333,7 +333,10 @@ results/<job_id>/trace.stderr
 results/<job_id>/preconfig.log
 results/<job_id>/capture.pcap
 results/<job_id>/<capability>.json
-results/<job_id>/report.json           postprocessing; what the job page renders
+results/<job_id>/cape_results.json     postprocessing (CAPE); what the job page renders
+results/<job_id>/calls.jsonl.gz        the sample's calls, parsed, read a member at a time
+results/<job_id>/calls_index.json      where each process's calls are in calls.jsonl.gz
+results/<job_id>/trace.log.gz          the raw stream, once processed
 results/<job_id>/process_tree.json     postprocessing, Windows
 results/<job_id>/ttps.json             postprocessing, Windows
 results/<job_id>/dumps.zip             memdump output, packed -- or dumps/… raw

@@ -1,0 +1,140 @@
+{#
+  What matched, top to bottom: CAPE's signatures by severity (each opening
+  its matched data in place, a call among it opening the call), ATT&CK and
+  MBC, capa's capabilities, Falco's rules, YARA. The signatures, capa and
+  Falco ran over the sample's processes; YARA over its own bytes and every
+  file and dump of it.
+#}
+{% from "tabs/_macros.html" import head, proc, toggle, xrow, sev, chips, hits, nothing, no_report with context %}
+{% if not report %}{{ no_report() }}{% else %}
+
+<section class="section">
+{{ head('Signatures', report.signatures | length,
+        'CAPE community signatures over the behaviour. Severity is each signature\'s own; there is no total score.') }}
+{% if report.signatures %}
+<div class="table-wrap">
+<table class="grid sigs">
+  <thead><tr><th>Severity</th><th class="fill">Signature</th><th>Categories</th><th>ATT&amp;CK</th><th class="num">Data</th></tr></thead>
+  <tbody>
+  {% for s in report.signatures %}
+  {% set id = 'sig-' ~ loop.index0 %}
+  <tr class="xr" data-x="{{ id }}" data-level="{{ s.level }}">
+    <td>{{ sev(s) }}</td>
+    <td><div class="sig-name">{{ s.name }}</div><div class="sig-desc">{{ s.description }}</div>
+      {%- if s.families %}<div>{{ chips(s.families, 'family') }}</div>{% endif %}</td>
+    <td>{{ chips(s.categories) }}</td>
+    <td>{% for t in s.ttps %}<span class="chip" data-kind="attck">{{ t }}</span>{% endfor %}</td>
+    <td class="num">{% if s.data %}{{ toggle(id, s.data | length ~ ' ▾', '/ui/jobs/' ~ job.id ~ '/signature/' ~ loop.index0) }}{% else %}<span class="dim">–</span>{% endif %}</td>
+  </tr>
+  {% if s.data %}{{ xrow(id, 5, 'what ' ~ s.name ~ ' matched') }}{% endif %}
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+{% else %}
+{{ nothing('No signature matched the sample\'s behaviour. An observation about this trace, not a verdict.') }}
+{% endif %}
+</section>
+
+<section class="section">
+{{ head('ATT&CK', report.techniques | length, 'From capa\'s rules over the behaviour, and from the signatures that carry a technique.') }}
+{% if report.techniques %}
+<div class="table-wrap">
+<table class="grid">
+  <thead><tr><th>Tactic</th><th>Technique</th><th class="fill">Name</th><th>Seen by</th></tr></thead>
+  <tbody>
+  {% for t in report.techniques %}
+  <tr>
+    <td class="nowrap">{{ t.tactic or '–' }}</td>
+    <td class="mono nowrap"><span class="chip" data-kind="attck">{{ t.id }}</span></td>
+    <td>{{ t.name or '' }}</td>
+    <td>{% if t.capa %}<span class="chip">capa</span>{% endif %}{{ chips(t.signatures, 'sig') }}</td>
+  </tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+{% else %}{{ nothing('No technique.') }}{% endif %}
+</section>
+
+{% if report.behaviors %}
+<section class="section">
+{{ head('Malware Behavior Catalog', report.behaviors | length) }}
+<div class="table-wrap">
+<table class="grid">
+  <thead><tr><th>Objective</th><th class="fill">Behaviour</th><th>Id</th></tr></thead>
+  <tbody>
+  {% for objective, behaviour, id in report.behaviors %}
+  <tr><td class="nowrap">{{ objective }}</td><td>{{ behaviour }}</td><td class="mono">{{ id }}</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+</section>
+{% endif %}
+
+<section class="section">
+{% set caps = report.capa.CAPABILITY %}
+{{ head('Capabilities', caps.values() | map('length') | sum, 'capa\'s rules matched over the sample\'s calls, by namespace.') }}
+{% if caps %}
+<div class="table-wrap">
+<table class="grid">
+  <thead><tr><th>Namespace</th><th class="fill">Capability</th></tr></thead>
+  <tbody>
+  {% for namespace, rules in caps | dictsort %}
+  <tr><td class="mono nowrap">{{ namespace }}</td>
+      <td><ul class="plain">{% for r in rules %}<li>{{ r }}</li>{% endfor %}</ul></td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+{% else %}{{ nothing('capa matched no rule, or did not run.') }}{% endif %}
+</section>
+
+{% if report.falco.alerts or report.falco.coverage %}
+<section class="section">
+{{ head('Falco', report.falco.alerts | length, 'Falco\'s rules over the trace of the sample\'s processes, once per rule and process.') }}
+{% if report.falco.alerts %}
+<div class="table-wrap">
+<table class="grid">
+  <thead><tr><th>Priority</th><th>Rule</th><th>Process</th><th class="num">Times</th><th class="fill">Output</th></tr></thead>
+  <tbody>
+  {% for a in report.falco.alerts %}
+  <tr>
+    <td><span class="chip" data-kind="priority" data-priority="{{ a.priority | lower }}">{{ a.priority }}</span></td>
+    <td>{{ a.rule }}<div>{% for t in a.tags if t[:1] == 'T' and t[1:2].isdigit() %}<span class="chip" data-kind="attck">{{ t }}</span>{% endfor %}</div></td>
+    <td>{{ proc(pid=a.pid) }}</td>
+    <td class="num">{{ a.count }}</td>
+    <td class="mono break small">{{ a.output }}</td>
+  </tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+{% else %}{{ nothing('No Falco rule matched. An observation, not a verdict.') }}{% endif %}
+{% set cov = report.falco.coverage %}
+{% if cov %}
+<p class="sub">{{ cov.get('rules_matched', {}) | length }} rules matched · {{ '{:,}'.format(cov.get('alerts_written', 0)) }} alerts
+  {%- if cov.get('alerts_dropped') %} · {{ cov.get('alerts_dropped') }} over the cap{% endif %}
+  {%- if cov.get('seconds') is not none %} · {{ cov.get('seconds') }} s{% endif %}</p>
+{% endif %}
+</section>
+{% endif %}
+
+<section class="section">
+{{ head('YARA', report.yara_hits | length, 'Rules matched on the sample, the files it dropped, and its dumps.') }}
+{% if report.yara_hits %}
+<div class="table-wrap">
+<table class="grid">
+  <thead><tr><th>Rule</th><th>Namespace</th><th>On</th><th class="fill">File</th><th>Strings</th></tr></thead>
+  <tbody>
+  {% for where, name, h in report.yara_hits %}
+  <tr><td class="mono">{{ h.name }}</td><td class="mono dim">{{ h.namespace }}</td><td class="nowrap">{{ where }}</td>
+      <td class="filename">{{ name }}</td><td class="mono small dim">{{ h.strings | join(' ') }}</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+{% else %}{{ nothing('No YARA rule matched.') }}{% endif %}
+</section>
+{% endif %}

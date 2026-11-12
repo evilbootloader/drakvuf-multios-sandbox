@@ -1,0 +1,107 @@
+{#
+  CAPE's summary of what the sample touched, split by process (operator,
+  2026-11-12): one section per process of the sample, in the tree's order,
+  each with only the lists that process has -- files, registry (Windows),
+  commands, services, mutexes, resolved APIs -- and the buffers it
+  enciphered or deciphered. A long list shows its first page and the rest a
+  page at a time, in place. The processes with nothing are named in one line
+  at the end.
+
+  A report from before sandboxd kept the lists per process gets them whole,
+  under one heading.
+#}
+{% from "tabs/_macros.html" import head, proc, toggle, xrow, hexview, nothing, no_report with context %}
+{% if not report %}{{ no_report() }}{% else %}
+{% set kinds = [
+    ('write_files', 'Files written'), ('delete_files', 'Files deleted'), ('read_files', 'Files read'),
+    ('write_keys', 'Registry written'), ('delete_keys', 'Registry deleted'), ('read_keys', 'Registry read'),
+    ('executed_commands', 'Commands executed'), ('created_services', 'Services created'),
+    ('started_services', 'Services started'), ('mutexes', 'Mutexes'), ('resolved_apis', 'Resolved APIs')] %}
+
+{#- One list of one process (or of all of them): its first page, the rest in place. -#}
+{% macro listing(name, title, items, seqid=none) -%}
+{%- set autostart = items | select('is_autostart') | list if name == 'write_keys' else [] -%}
+<div class="sub-block">
+  <h3>{{ title }} <span class="count">{{ '{:,}'.format(items | length) }}</span>
+    {%- if autostart %} <span class="chip" data-kind="autostart">{{ autostart | length }} autostart</span>{% endif %}</h3>
+  {#- autostart first, already: cape.py orders the key lists so every page agrees #}
+  <div class="table-wrap"><table class="grid list"><tbody>
+  {#- 25 at first, so every process's section is in sight before one long
+      list fills the screen; "show more" brings 100 at a time -#}
+  {% set first = 25 %}
+  {% with items=items[:first], next_offset=first if items | length > first else none,
+          total=items | length, name=name, seqid=seqid %}
+  {% include "tabs/_list_rows.html" %}
+  {% endwith %}
+  </tbody></table></div>
+</div>
+{%- endmacro %}
+
+{#- A process's encrypted buffers, each opening the buffer in place. -#}
+{% macro buffers(list, key) -%}
+<div class="sub-block">
+  <h3>Encrypted buffers <span class="count">{{ list | length }}</span></h3>
+  <div class="table-wrap">
+  <table class="grid">
+    <thead><tr><th>Direction</th><th>API</th><th>Algorithm</th><th class="num">Size</th><th class="fill">Start</th><th></th></tr></thead>
+    <tbody>
+    {% for b in list %}
+    {% set id = 'buf-' ~ key ~ '-' ~ loop.index0 %}
+    <tr class="xr" data-x="{{ id }}">
+      <td><span class="chip" data-kind="{{ b.direction }}">{{ b.direction }}</span></td>
+      <td class="mono nowrap">{{ b.api_call }}</td>
+      <td class="mono nowrap">{{ b.algorithm or '' }}{% if b.key %} <span class="chip" data-kind="key" title="the key was passed in the clear">key</span>{% endif %}</td>
+      <td class="num mono">{{ b.buffer_size if b.buffer_size is not none else b.buffer | length }}</td>
+      <td class="mono break dim">{{ b.buffer[:80] | printable }}</td>
+      <td>{{ toggle(id, '▾') }}</td>
+    </tr>
+    {% call xrow(id, 6, b.api_call ~ ' buffer') %}
+    <dl class="kv">
+      {% if b.crypt_key is not none %}<dt>Key handle</dt><dd class="mono">{{ b.crypt_key }}</dd>{% endif %}
+      {% if b.key %}<dt>Key</dt><dd class="mono hash">{{ b.key }}</dd>{% endif %}
+    </dl>
+    {{ hexview(b.buffer) }}
+    {% endcall %}
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+</div>
+{%- endmacro %}
+
+{% set groups = report.summary_groups() %}
+{% if groups is not none %}
+{% set idle = [] %}
+{% for p, lists, encrypted in groups %}
+{% set shown = kinds | selectattr(0, 'in', lists) | list %}
+{% if shown or encrypted %}
+<section class="section" id="summary-{{ p.seqid }}">
+<header class="section-head proc-head">
+  <h2><span class="pname{% if p.seqid in report.roots %} root{% endif %}" title="{{ p.process_name }}">{{ p.basename }}</span>
+    <span class="pid">{{ p.process_id }}</span>
+    {%- if p.seqid in report.roots %}<span class="chip" data-kind="sample">injected</span>{% endif %}
+    {%- if p.seqid in report.followed_seqids %}<span class="chip" data-kind="followed">taken over</span>{% endif %}
+    <a class="jump" href="/ui/jobs/{{ job.id }}?tab=behaviour#proc-{{ p.seqid }}" title="its node in the process tree">tree ↗</a></h2>
+  {%- if p.command_line %}<p class="sub mono break">{{ p.command_line[:300] }}{% if p.command_line | length > 300 %}…{% endif %}</p>{% endif %}
+</header>
+{% for name, title in shown %}{{ listing(name, title, lists[name], p.seqid) }}{% endfor %}
+{% if encrypted %}{{ buffers(encrypted, p.seqid) }}{% endif %}
+</section>
+{% else %}{% set _ = idle.append(p) %}{% endif %}
+{% endfor %}
+{% if idle %}
+<section class="section">
+{{ head('Nothing summarised', idle | length, 'No file, key, command, service, mutex or API of these processes is in the summary; their calls are on Behaviour.') }}
+<p>{% for p in idle %}{{ proc(seqid=p.seqid) }}{% endfor %}</p>
+</section>
+{% endif %}
+
+{% else %}
+<section class="section">
+{{ head('All of the sample\'s processes', none, 'This run\'s report predates the per-process lists: everything the sample touched, together.') }}
+{% for name, title in kinds if report.summary.get(name) %}{{ listing(name, title, report.summary[name]) }}{% endfor %}
+{% if report.encrypted %}{{ buffers(report.encrypted, 'all') }}{% endif %}
+{% if not (kinds | selectattr(0, 'in', report.summary) | list) and not report.encrypted %}{{ nothing('Nothing summarised.') }}{% endif %}
+</section>
+{% endif %}
+{% endif %}

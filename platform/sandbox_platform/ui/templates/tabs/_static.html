@@ -1,0 +1,88 @@
+{#
+  The sample's own bytes, parsed on Dom0 (cape_plugin/static.py): a PE's
+  headers, sections, imports, exports and version information. Each DLL in
+  the imports opens its functions in place.
+#}
+{% from "tabs/_macros.html" import head, toggle, xrow, hits, nothing, no_report with context %}
+{% if not report %}{{ no_report() }}{% else %}
+{% set f = report.target.file %}
+{% set pe = f.pe %}
+{% if not pe %}
+<section class="section">
+{{ head('Static analysis') }}
+{{ nothing('No PE to parse: the sample is not a Windows executable, or its bytes did not reach postprocessing. Its hashes and type are on Overview.') }}
+</section>
+{% else %}
+<section class="section">
+{{ head('PE header') }}
+<dl class="kv">
+  <dt>Machine</dt><dd class="mono">{{ pe.machine_type }}</dd>
+  <dt>Compiled</dt><dd class="mono">{{ pe.timestamp }}</dd>
+  <dt>Image base</dt><dd class="mono">{{ pe.imagebase }}</dd>
+  <dt>Entry point</dt><dd class="mono">{{ pe.entrypoint }}</dd>
+  <dt>Imphash</dt><dd class="mono hash">{{ pe.imphash }}</dd>
+  {% if pe.pdbpath %}<dt>PDB</dt><dd class="filename">{{ pe.pdbpath }}</dd>{% endif %}
+  {% if pe.overlay %}<dt>Overlay</dt><dd class="mono">{{ pe.overlay.get('size') }} bytes at {{ pe.overlay.get('offset') }}</dd>{% endif %}
+  {% if f.hits %}<dt>YARA</dt><dd>{{ hits(f.hits) }}</dd>{% endif %}
+</dl>
+</section>
+
+<section class="section">
+{{ head('Sections', pe.sections | length) }}
+<div class="table-wrap">
+<table class="grid">
+  <thead><tr><th>Name</th><th>Virtual address</th><th class="num">Virtual size</th><th class="num">Raw size</th><th>Entropy</th><th class="fill">Characteristics</th></tr></thead>
+  <tbody>
+  {% for s in pe.sections %}
+  {% set e = s.entropy | float(0) %}
+  <tr><td class="mono">{{ s.name }}</td><td class="mono">{{ s.virtual_address }}</td>
+      <td class="num mono">{{ s.virtual_size }}</td><td class="num mono">{{ s.size_of_data }}</td>
+      <td class="mono nowrap"><span class="entropy"><i style="width: {{ (e / 8 * 100) | round(0) }}%"{% if e > 7.2 %} data-high="1"{% endif %}></i></span> {{ s.entropy }}</td>
+      <td class="mono small dim break">{{ s.characteristics }}</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+<p class="sub">Entropy over 7.2 of 8 is marked: packed or encrypted content.</p>
+</section>
+
+<section class="section">
+{{ head('Imports', pe.imports | length) }}
+{% if pe.imports %}
+<div class="table-wrap">
+<table class="grid">
+  <thead><tr><th class="fill">DLL</th><th class="num">Functions</th><th></th></tr></thead>
+  <tbody>
+  {% for key, dll in pe.imports | dictsort %}
+  {% set id = 'imp-' ~ loop.index0 %}
+  <tr class="xr" data-x="{{ id }}"><td class="mono">{{ dll.dll or key }}</td><td class="num">{{ dll.imports | length }}</td><td>{{ toggle(id, '▾') }}</td></tr>
+  {% call xrow(id, 3, dll.dll) %}
+  <ul class="cols-list mono">{% for i in dll.imports %}<li>{{ i.name }} <span class="dim">{{ i.address }}</span></li>{% endfor %}</ul>
+  {% endcall %}
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+{% else %}{{ nothing('No import table.') }}{% endif %}
+</section>
+
+{% if pe.exports %}
+<section class="section">
+{{ head('Exports', pe.exports | length) }}
+<div class="table-wrap">
+<table class="grid">
+  <thead><tr><th>Ordinal</th><th>Address</th><th class="fill">Name</th></tr></thead>
+  <tbody>{% for x in pe.exports %}<tr><td class="mono">{{ x.ordinal }}</td><td class="mono">{{ x.address }}</td><td class="mono">{{ x.name }}</td></tr>{% endfor %}</tbody>
+</table>
+</div>
+</section>
+{% endif %}
+
+{% if pe.versioninfo %}
+<section class="section">
+{{ head('Version information') }}
+<dl class="kv">{% for v in pe.versioninfo %}<dt>{{ v.name }}</dt><dd>{{ v.value }}</dd>{% endfor %}</dl>
+</section>
+{% endif %}
+{% endif %}
+{% endif %}

@@ -848,22 +848,24 @@ def test_the_history_poll_stops_when_the_last_job_finishes(
     assert len(seen) == settled, seen[settled:]
 
 
-# --- the report tabs: sample-chosen text inside inline SVG -------------------
+# --- the report tabs: sample-chosen text, and panels that open in place ------
 
 def _seed_report(job_id: uuid.UUID, doc: dict) -> None:
-    """Put a report.json behind an existing job: manifest row plus object."""
+    """Put a CAPE report and its calls log behind an existing job: manifest
+    row plus objects."""
     import hashlib
     import json
 
     import boto3
+    import cape_fixture as F
     from botocore.config import Config
 
-    from sandbox_platform import report as report_store
-
-    raw = json.dumps(doc).encode()
+    index, log = F.calls_log(F.CALL_COUNTS)
+    objects = {"cape_results.json": json.dumps(doc).encode(),
+               "calls_index.json": index, "calls.jsonl.gz": log}
     manifest = {"schema_version": 1, "truncated": False, "documents": [],
-                "artifacts": [{"name": "report.json", "size_bytes": len(raw),
-                               "sha256": hashlib.sha256(raw).hexdigest()}]}
+                "artifacts": [{"name": n, "size_bytes": len(b),
+                               "sha256": hashlib.sha256(b).hexdigest()} for n, b in objects.items()]}
     with psycopg.connect(DSN, autocommit=True) as c:
         c.execute("UPDATE jobs SET manifest = %s WHERE id = %s",
                   (json.dumps(manifest), job_id))
@@ -874,60 +876,112 @@ def _seed_report(job_id: uuid.UUID, doc: dict) -> None:
         aws_secret_access_key=os.environ.get("S3_SECRET_KEY", "devrootpassphrase"),
         region_name=os.environ.get("S3_REGION", "eu-central-1"),
         config=Config(signature_version="s3v4", s3={"addressing_style": "path"}))
-    s3.put_object(Bucket=os.environ.get("S3_BUCKET", "analysis"),
-                  Key=f"results/{job_id}/report.json", Body=raw)
-    # The server is another process with its own cache, keyed by digest, so
-    # a fresh document is a fresh entry; this clears ours for symmetry.
-    report_store._load.cache_clear()
+    for name, body in objects.items():
+        s3.put_object(Bucket=os.environ.get("S3_BUCKET", "analysis"),
+                      Key=f"results/{job_id}/{name}", Body=body)
+
+
+REPORT_TABS = ("overview", "signatures", "behaviour", "timeline", "summary", "network",
+               "dropped", "memory", "static")
 
 
 @pytest.mark.parametrize("name", HOSTILE)
 def test_hostile_report_text_does_not_execute(strict_page, server, seed, name):
-    """The report's process names, command lines and paths are the sample's,
-    and the Behaviour tab draws them inside inline SVG as well as HTML --
-    `<svg/onload=...>` inside an `<svg>` is the case a source-level grep for
-    `| safe` cannot speak to. Rendered by a real parser, nothing runs, and the
-    text is still visible as text."""
+    """The report's names, command lines, paths, signature text, URLs and
+    buffers are the sample's, and the Behaviour tab draws them inside inline
+    SVG as well as HTML -- `<svg/onload=...>` inside an `<svg>` is the case a
+    source-level grep for `| safe` cannot speak to. Rendered by a real parser,
+    on every tab and in every panel a row opens, nothing runs."""
+    import cape_fixture as F
     job_id = seed("x.exe", target_os="windows")
-    from test_report import sample_report
-    doc = sample_report()
-    doc["processes"][4]["name"] = name
-    doc["processes"][4]["args"] = [name]
-    doc["modified_files"][0]["filename"] = name
-    doc["ttps"][0]["name"] = name
+    doc = F.document()
+    root = next(p for p in doc["behavior"]["processes"] if p["seqid"] == 10)
+    root["process_name"] = name
+    root["environ"]["CommandLine"] = name
+    doc["behavior"]["summary"]["write_files"].append(name)
+    doc["behavior"]["enhanced"][0]["data"]["file"] = name
+    doc["signatures"][0]["description"] = name
+    doc["signatures"][0]["data"].append({"file": name})
+    doc["behavior"]["network_map"]["http_requests"][0]["url"] = name
     _seed_report(job_id, doc)
 
-    for tab in ("overview", "behaviour", "network", "memory"):
-        strict_page.goto(f"{server}/ui/jobs/{job_id}?tab={tab}")
-        assert strict_page.fired == [], (tab, strict_page.fired)
-        assert strict_page.evaluate("window.__xss") is False
-        assert strict_page.locator("script:not([src])").count() == 0
-        assert strict_page.locator("img[onerror], svg[onload]").count() == 0
+    def clean(where):
+        assert strict_page.fired == [], (where, strict_page.fired)
+        assert strict_page.evaluate("window.__xss") is False, where
+        assert strict_page.locator("script:not([src])").count() == 0, where
+        assert strict_page.locator("img[onerror], svg[onload]").count() == 0, where
 
+    for tab in REPORT_TABS:
+        strict_page.goto(f"{server}/ui/jobs/{job_id}?tab={tab}")
+        clean(tab)
+
+    # Every panel the sample's text reaches: the process, a call, a
+    # signature's data, a timeline row
     strict_page.goto(f"{server}/ui/jobs/{job_id}?tab=behaviour")
-    # The tree shows the basename (a `/` in the payload splits it, as it
-    # would any path) and carries the full name on the title, byte-exact.
-    pname = strict_page.locator("li#proc-4 .pname").first
-    assert pname.get_attribute("title") == name
-    assert pname.inner_text() == name.replace("\\", "/").rsplit("/", 1)[-1]
-    # The command line is cut to fit and shown whole on hover, as text in a
-    # box of its own rather than in a `title` -- byte-exact either way.
-    assert name in strict_page.locator("li#proc-4 .cmd .cmd-full").first.text_content()
-    # Clicked, it opens the whole of it on a page of its own: escaped there
-    # too, and nothing on that page runs.
-    href = strict_page.locator("li#proc-4 .cmd").first.get_attribute("href")
-    assert strict_page.locator("li#proc-4 .cmd").first.get_attribute("target") == "_blank"
-    strict_page.goto(f"{server}{href}")
-    assert strict_page.fired == [], strict_page.fired
-    assert strict_page.evaluate("window.__xss") is False
-    assert strict_page.locator("script:not([src])").count() == 0
-    assert strict_page.locator("pre.cmdline").inner_text() == name
-    strict_page.goto(f"{server}/ui/jobs/{job_id}?tab=behaviour")
-    # The diagram's box for the sample carries the same name as SVG text and
-    # links to the tree node, never to anything the sample named.
-    box = strict_page.locator("svg.pdiagram a[href='#proc-4']").first
-    assert box.locator("g.pnode[data-sample]").count() == 1
+    strict_page.locator("li#proc-10 > .pline .xbtn").click()
+    strict_page.locator("#x-proc-10 .pp").wait_for()
+    strict_page.locator("#x-proc-10 .calls-table .xbtn").nth(3).click()
+    strict_page.locator("#x-proc-10 .onecall").wait_for()
+    clean("process panel")
+    assert strict_page.locator("li#proc-10 > .pline .pname").get_attribute("title") == name
+    assert strict_page.locator("#x-proc-10 pre.cmdline").inner_text() == name
+    box = strict_page.locator("svg.pdiagram a[href='#proc-10']").first
+    assert box.locator("g.pnode[data-root]").count() == 1
     assert name in box.locator("title").first.text_content()
+
+    strict_page.goto(f"{server}/ui/jobs/{job_id}?tab=signatures")
+    strict_page.locator("tr[data-x='sig-0'] .xbtn").click()
+    strict_page.locator("#x-sig-0 .marks").wait_for()
+    clean("signature data")
+    assert name in strict_page.locator("#x-sig-0 .marks").inner_text()
+
+
+def test_panels_open_below_their_row_close_and_hide_nothing(strict_page, server, seed):
+    """The operator's rule (2026-11-11): whatever a row opens, it opens
+    directly below that row, with a close button, and every other row stays
+    where a reader can see it -- several panels open at once included."""
+    import cape_fixture as F
+    job_id = seed("x.exe", target_os="windows")
+    _seed_report(job_id, F.document())
+    page = strict_page
+    page.goto(f"{server}/ui/jobs/{job_id}?tab=timeline")
+    rows = page.locator("table.events tr.xr")
+    total = rows.count()
+    assert total == 5
+
+    def below(row_sel, panel_sel):
+        row = page.locator(row_sel).bounding_box()
+        panel = page.locator(panel_sel).bounding_box()
+        # directly below: it starts where the row ends (a few pixels of
+        # margin at most), nothing in between
+        gap = panel["y"] - (row["y"] + row["height"])
+        assert -1 < gap < 10, (row, panel)
+
+    page.locator("tr[data-x='ev-0'] .xbtn").click()
+    page.locator("tr[data-x='ev-2'] .xbtn").click()
+    assert page.locator("#x-ev-0").is_visible() and page.locator("#x-ev-2").is_visible()
+    below("tr[data-x='ev-0']", "#x-ev-0")
+    below("tr[data-x='ev-2']", "#x-ev-2")
+    # every event row is still on the page and visible
+    assert all(rows.nth(i).is_visible() for i in range(total))
+    assert page.locator("tr[data-x='ev-0'] .xbtn").get_attribute("aria-expanded") == "true"
+
+    page.locator("#x-ev-0 .xclose").click()
+    assert not page.locator("#x-ev-0").is_visible()
+    assert page.locator("#x-ev-2").is_visible()
+    assert page.locator("tr[data-x='ev-0'] .xbtn").get_attribute("aria-expanded") == "false"
+
+    # A tree node's panel sits between the node and its children, which
+    # stay visible below it
+    page.goto(f"{server}/ui/jobs/{job_id}?tab=behaviour")
+    page.locator("li#proc-10 > .pline .xbtn").click()
+    page.locator("#x-proc-10 .pp").wait_for()
+    below("li#proc-10 > .pline", "#x-proc-10")
+    assert page.locator("li#proc-11 > .pline").is_visible()
+    panel = page.locator("#x-proc-10").bounding_box()
+    child = page.locator("li#proc-11 > .pline").bounding_box()
+    assert child["y"] >= panel["y"] + panel["height"]
+    assert page.fired == []
 
 
 # --- the Screenshots tab (DRAFT-054) -----------------------------------------

@@ -1,0 +1,45 @@
+{#
+  Files the sample wrote that fileextractor kept: each row opens its hashes,
+  its YARA hits and its download in place. The download is the extracted
+  copy in the job's artifacts -- a file the sample made, so live content.
+#}
+{% from "tabs/_macros.html" import head, proc, toggle, xrow, hits, nothing, no_report with context %}
+{% if not report %}{{ no_report() }}{% else %}
+<section class="section">
+{{ head('Dropped files', report.dropped | length, 'Written by the sample\'s processes and extracted from the guest.') }}
+{% if report.dropped %}
+{% if 'extracted.zip' in job.artifacts %}<p class="downloads"><a class="button danger" href="{{ job.artifacts['extracted.zip'] }}" rel="noopener nofollow">extracted.zip</a>
+  <span class="note danger">Live files the sample wrote. Handle as malware.</span></p>{% endif %}
+<div class="table-wrap">
+<table class="grid">
+  <thead><tr><th class="fill">Guest path</th><th>Process</th><th class="num">Size</th><th>Type</th><th>YARA</th><th></th></tr></thead>
+  <tbody>
+  {% for d in report.dropped %}
+  {% set id = 'drop-' ~ loop.index0 %}
+  <tr class="xr" data-x="{{ id }}">
+    <td class="filename">{{ d.guest_path or d.display_name }}</td>
+    <td>{{ proc(pid=d.pid) }}</td>
+    <td class="num mono nowrap">{{ d.size | size }}</td>
+    <td class="small break">{{ d.type }}</td>
+    <td>{{ hits(d.hits) }}</td>
+    <td>{{ toggle(id, '▾') }}</td>
+  </tr>
+  {% call xrow(id, 6, d.display_name) %}
+  <dl class="kv">
+    <dt>SHA-256</dt><dd class="mono hash">{{ d.sha256 }}</dd>
+    <dt>SHA-1</dt><dd class="mono hash">{{ d.sha1 }}</dd>
+    <dt>MD5</dt><dd class="mono hash">{{ d.md5 }}</dd>
+    {% if d.crc32 %}<dt>CRC32</dt><dd class="mono">{{ d.crc32 }}</dd>{% endif %}
+    {% if d.reason %}<dt>Kept because</dt><dd>{{ d.reason }}</dd>{% endif %}
+    {% for h in d.hits %}<dt>YARA</dt><dd><span class="mono">{{ h.name }}</span> <span class="dim">{{ h.namespace }}</span> <span class="mono small dim">{{ h.strings | join(' ') }}</span></dd>{% endfor %}
+    {% set link = job.artifacts.get('extracted/' ~ d.stored_name) %}
+    {% if link %}<dt>Download</dt><dd><a class="button danger" href="{{ link }}" rel="noopener nofollow">{{ d.stored_name }}</a></dd>{% endif %}
+  </dl>
+  {% endcall %}
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+{% else %}{{ nothing('The sample dropped no file fileextractor kept.') }}{% endif %}
+</section>
+{% endif %}

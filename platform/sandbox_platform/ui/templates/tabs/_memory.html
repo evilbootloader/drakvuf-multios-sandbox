@@ -1,80 +1,78 @@
-{% from "tabs/_report_macros.html" import proc, unreadable,
-     group_summary, group_attrs, disclose_tools with context %}
 {#
-  memdump's output, as report.json describes it: one group per process, each
-  dump with the reason DRAKVUF took it, the region and its size. The bytes are
-  in dumps.zip on the Artifacts tab (process_dumps packs the directory after
-  dropping System's dumps and anything outside the configured size band).
-
-  `filename` is the dump's name INSIDE the zip. It is shown, never linked or
-  joined into a path here -- one download per run, not one per dump.
+  The sample's memory, top to bottom: whole-process dumps (procdump2), then
+  the regions memdump took and why. The sample's processes only; the dumps
+  themselves are in the job's artifacts.
 #}
-{% if report_error %}
-  {{ unreadable() }}
-{% elif not report %}
-  {% include "tabs/_pending.html" %}
-{% elif not report.memdumps %}
-<div class="empty">
-  <strong>No memory dumps in the report.</strong>
-  <code>memdump</code> was not among this run's plugins, or every dump it took
-  was filtered out — System's are, and so is anything under 512 bytes or over
-  the configured single-dump size.
-</div>
-{% else %}
+{% from "tabs/_macros.html" import head, proc, toggle, xrow, hits, nothing, no_report with context %}
+{% if not report %}{{ no_report() }}{% else %}
+{% set dumps_zip = job.artifacts.get('dumps.zip') %}
+{% if dumps_zip %}<section class="section"><p class="downloads"><a class="button danger" href="{{ dumps_zip }}" rel="noopener nofollow">dumps.zip</a>
+  <span class="note danger">Memory of the running sample. Handle as malware.</span></p></section>{% endif %}
 
-{#
-  The report already groups dumps by process; each group is a <details>,
-  ordered and opened like the Behaviour and Registry tabs' -- the sample's
-  subtree first and open, the rest one line each with its count and total
-  size. See Report.memdump_groups.
-#}
-{% set groups = report.memdump_groups() %}
-<section class="block" data-disclose-scope>
-<header class="block-head">
-  <h2>Dumps <span class="count">{{ report.dump_count }}</span></h2>
-  <span class="summary">across {{ report.memdumps | length }} process{{ 'es' if report.memdumps | length != 1 }}</span>
-  {{ disclose_tools() }}
-</header>
-<p class="note">
-  {% if 'dumps.zip' in job.artifacts %}
-  The bytes are in <a href="{{ job.artifacts['dumps.zip'] }}" rel="noopener nofollow">dumps.zip</a>
-  (password <code>infected</code>, like every artifact here).
-  {% else %}
-  <code>dumps.zip</code> is not among this run's artifacts.
-  {% endif %}
-  Static capa results per dump, where a dump was a recognisable executable, are
-  under <code>dumps_ttp/</code> on the Artifacts tab.
-</p>
-
-<div class="groups">
-{% for group, in_sample in groups %}
-{% set sizes = group.dumps | map(attribute='size') | select('number') | list %}
-<details class="group"{{ group_attrs(in_sample, groups | length) }}>
-  {{ group_summary(group.process_seqid, in_sample, {'dumps': group.dumps | length},
-                   (sizes | sum | filesizeformat(binary=True)) if sizes else '') }}
-  <div class="group-body">
-  <table class="rows compact">
-    <thead><tr><th>#</th>{% if group.process_seqid is none %}<th>PID</th>{% endif %}<th>Reason</th><th>Method</th><th>Address</th><th>Size</th><th>Written into</th><th class="fill">File in dumps.zip</th></tr></thead>
-    <tbody>
-    {% for d in group.dumps %}
-      <tr>
-        <td class="dim">{{ d.index if d.index is not none else '' }}</td>
-        {# The tree never saw this process; its PID is all the report has. #}
-        {% if group.process_seqid is none %}<td class="mono">{{ d.pid if d.pid is not none else '' }}</td>{% endif %}
-        <td class="nowrap">{{ d.dump_reason }}</td>
-        <td class="mono">{{ d.method }}</td>
-        <td class="mono">{{ d.address }}</td>
-        <td class="mono" title="{{ d.size if d.size is not none else '' }} bytes">{{ d.size | filesizeformat(binary=True) if d.size is not none else '' }}</td>
-        <td>{% if d.target_pid is not none %}{{ proc(d.target_process) }} <span class="dim mono">@ {{ d.target_addr }}</span>{% endif %}</td>
-        <td class="filename">{{ d.filename }}</td>
-      </tr>
-    {% endfor %}
-    </tbody>
-  </table>
-  </div>
-</details>
-{% endfor %}
+<section class="section">
+{{ head('Process dumps', report.procdump | length, 'Whole processes, dumped as they exited or were terminated.') }}
+{% if report.procdump %}
+<div class="table-wrap">
+<table class="grid">
+  <thead><tr><th>Process</th><th>Of</th><th class="num">Size</th><th>Status</th><th class="fill">YARA</th><th></th></tr></thead>
+  <tbody>
+  {% for d in report.procdump %}
+  {% set id = 'pd-' ~ loop.index0 %}
+  <tr class="xr" data-x="{{ id }}">
+    <td>{{ proc(pid=d.pid) }}</td>
+    <td>{% if d.target_pid is not none and d.target_pid != d.pid %}{{ proc(pid=d.target_pid) }}{% endif %}</td>
+    <td class="num mono nowrap">{{ (d.dump_size or d.size) | size }}</td>
+    <td class="mono small">{{ d.status or '' }}{% if d.compression and d.compression != 'none' %} · {{ d.compression }}{% endif %}</td>
+    <td>{{ hits(d.hits) }}</td>
+    <td>{{ toggle(id, '▾') }}</td>
+  </tr>
+  {% call xrow(id, 6, d.display_name) %}
+  <dl class="kv">
+    <dt>File</dt><dd class="mono">{{ d.display_name }}</dd>
+    <dt>SHA-256</dt><dd class="mono hash">{{ d.sha256 }}</dd>
+    <dt>Type</dt><dd class="small">{{ d.type }}</dd>
+  </dl>
+  {% endcall %}
+  {% endfor %}
+  </tbody>
+</table>
 </div>
+{% else %}{{ nothing('No process dump.') }}{% endif %}
 </section>
 
+<section class="section">
+{{ head('Memory regions', report.procmemory | map(attribute='address_space') | map('length') | sum,
+        'Regions memdump took: written into, executed from, or left behind.') }}
+{% if report.procmemory %}
+<div class="table-wrap">
+<table class="grid">
+  <thead><tr><th>Process</th><th>Address</th><th class="num">Size</th><th class="fill">Why</th><th>Into</th><th></th></tr></thead>
+  <tbody>
+  {% for m in report.procmemory %}{% set mi = loop.index0 %}
+  {% for r in m.address_space %}
+  {% set id = 'mr-' ~ mi ~ '-' ~ loop.index0 %}
+  <tr class="xr" data-x="{{ id }}">
+    <td>{{ proc(pid=m.pid) }}</td>
+    <td class="mono nowrap">{{ r.start }}</td>
+    <td class="num mono nowrap">{{ r.size | size }}</td>
+    <td>{{ r.reason or '' }}{% if r.method %} <span class="dim mono small">{{ r.method }}</span>{% endif %}</td>
+    <td>{% if r.target_pid is not none and r.target_pid != m.pid %}{{ proc(pid=r.target_pid) }}{% endif %}</td>
+    <td>{{ toggle(id, '▾') }}</td>
+  </tr>
+  {% call xrow(id, 6, r.start) %}
+  <dl class="kv">
+    <dt>Range</dt><dd class="mono">{{ r.start }} – {{ r.end }}</dd>
+    <dt>SHA-256</dt><dd class="mono hash">{{ r.sha256 }}</dd>
+    <dt>Type</dt><dd class="small">{{ r.type }}</dd>
+    <dt>File</dt><dd class="mono">{{ r.stored_name }}</dd>
+  </dl>
+  {% endcall %}
+  {% endfor %}
+  {% if m.yara %}<tr><td></td><td colspan="5">{{ hits(m.yara) }}</td></tr>{% endif %}
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+{% else %}{{ nothing('No memory region dumped.') }}{% endif %}
+</section>
 {% endif %}

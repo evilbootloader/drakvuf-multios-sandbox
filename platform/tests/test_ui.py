@@ -138,12 +138,18 @@ def test_ubuntu_has_no_registry_tab(client, conn):
     assert ">Behaviour<" in page
 
 
-def test_windows_does_have_a_registry_tab(client, conn):
+def test_windows_has_capes_tabs_and_the_registry_inside_summary(client, conn):
+    """CAPE's own layout (operator, 2026-11-11). The registry is a section of
+    Summary now, not a tab: a Registry tab would be one more place to look
+    for what Summary already lists beside the files."""
     job_id = _job(conn, "x.exe", target_os="windows")
 
     page = client.get(f"/ui/jobs/{job_id}").text
 
-    assert ">Registry<" in page
+    for label in ("Overview", "Signatures", "Behaviour", "Timeline", "Summary", "Network",
+                  "Dropped", "Memory", "Static", "Screenshots", "Artifacts"):
+        assert f">{label}<" in page, label
+    assert ">Registry<" not in page
 
 
 def test_a_tab_that_cannot_apply_falls_back_rather_than_404s(client, conn):

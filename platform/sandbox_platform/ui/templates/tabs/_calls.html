@@ -1,0 +1,38 @@
+{#
+  A process's calls: the filter and the table, swapped whole when a filter
+  changes. Rows are tabs/_calls_rows.html; "show more" appends the next.
+#}
+{% set base = '/ui/jobs/' ~ job.id ~ '/process/' ~ seqid ~ '/calls' %}
+<div class="calls" id="calls-{{ seqid }}">
+<form class="callfilter" action="{{ base }}" hx-get="{{ base }}" hx-target="#calls-{{ seqid }}"
+      hx-swap="outerHTML" hx-trigger="change">
+  <label><span>Category</span>
+    <select name="category">
+      <option value="">all ({{ '{:,}'.format(calls.count) }})</option>
+      {% for cat, n in calls.categories.items() %}<option value="{{ cat }}"{% if filters.get('category') == cat %} selected{% endif %}>{{ cat or 'other' }} ({{ '{:,}'.format(n) }})</option>{% endfor %}
+    </select></label>
+  <label><span>API</span>
+    <select name="api">
+      <option value="">all</option>
+      {% for api, n in calls.apis.items() %}<option value="{{ api }}"{% if filters.get('api') == api %} selected{% endif %}>{{ api }} ({{ '{:,}'.format(n) }})</option>{% endfor %}
+    </select></label>
+  {% if calls.threads | length > 1 %}
+  <label><span>Thread</span>
+    <select name="tid">
+      <option value="">all</option>
+      {% for t in calls.threads %}<option value="{{ t }}"{% if filters.get('tid') == t %} selected{% endif %}>{{ t }}</option>{% endfor %}
+    </select></label>
+  {% endif %}
+  <label class="check"><input type="checkbox" name="failed" value="true"{% if filters.get('failed') %} checked{% endif %}> failed only</label>
+  {% if filters %}<a class="clear" href="{{ base }}" hx-get="{{ base }}" hx-target="#calls-{{ seqid }}" hx-swap="outerHTML">clear</a>{% endif %}
+  <noscript><button type="submit">Apply</button></noscript>
+</form>
+<div class="table-wrap">
+<table class="grid calls-table">
+  <thead><tr><th>At</th><th>Thread</th><th>Call</th><th class="fill">Arguments</th><th>Result</th></tr></thead>
+  <tbody>
+  {% include "tabs/_calls_rows.html" %}
+  </tbody>
+</table>
+</div>
+</div>

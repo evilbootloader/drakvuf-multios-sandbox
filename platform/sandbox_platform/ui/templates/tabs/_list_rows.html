@@ -1,0 +1,11 @@
+{#
+  A page of one of the summary's lists: a process's (seqid) or, for a report
+  from before the per-process lists, the whole sample's.
+#}
+{% for item in items %}
+<tr{% if name == 'write_keys' and is_autostart(item) %} data-alert="1"{% endif %}><td class="mono break">{{ item }}{% if name.endswith('keys') and is_autostart(item) %} <span class="chip" data-kind="autostart">autostart</span>{% endif %}</td></tr>
+{% endfor %}
+{% if next_offset %}
+{% set url = '/ui/jobs/' ~ job.id ~ '/list/' ~ name ~ '?offset=' ~ next_offset ~ ('&seqid=' ~ seqid if seqid is not none else '') %}
+<tr class="more-row"><td><a class="more" href="{{ url }}" hx-get="{{ url }}" hx-target="closest tr" hx-swap="outerHTML">Show more <span class="dim">· {{ '{:,}'.format(total - next_offset) }} left</span></a></td></tr>
+{% endif %}

@@ -266,7 +266,7 @@ the filename was never renamed with the rest of the `linux` → `ubuntu` pass.
 | LibVMI profile | `profiles/linux.json` | `profiles/android.json` | — |
 | Saved state | `state/ubuntu_sandbox.bak` | `state/android_sandbox.bak` | — |
 | Guest staging | `/home/carlos/Desktop/` | `/data/local/tmp/` | — |
-| Injection PID | **1** — anchor `systemd`; samples run as root, 2026-08-29 | **3251** — anchor is a backgrounded `ping` to loopback. Reverted from PID 1 on 2026-08-31: Android's `init` gives `app_process64` no runtime environment, which the APK path needs. **Re-derive after every re-save** | **4696** — read from the `.bak`'s running template by `make setup_hooks_windows` and written to **`/etc/sandboxd/sandboxd.env`** as `SANDBOXD_INJECTION_PID_WINDOWS` (since 2026-11-03; the tracked `sandboxd/config.py` holds only the default **1**, which is no PID on Windows — the daemon logs the effective value at every start); same re-save cost as Android |
+| Injection PID | **1** — anchor `systemd`; samples run as root, 2026-08-29 | **3251** — anchor is a backgrounded `ping` to loopback. Reverted from PID 1 on 2026-08-31: Android's `init` gives `app_process64` no runtime environment, which the APK path needs. **Re-derive after every re-save** | **4724**, `explorer.exe` in the state saved 2026-11-04 (4696 before that rebuild; Dom0's env file read 2026-11-11) — read from the `.bak`'s running template by `make setup_hooks_windows` and written to **`/etc/sandboxd/sandboxd.env`** as `SANDBOXD_INJECTION_PID_WINDOWS` (since 2026-11-03; the tracked `sandboxd/config.py` holds only the default **1**, which is no PID on Windows — the daemon logs the effective value at every start); same re-save cost as Android. **The network step has its own anchor since 2026-11-11: `services.exe`, 816 in the same state**, as `SANDBOXD_INJECTION_PID_WINDOWS_NETCFG` — explorer.exe has no administrator token for `netsh` (TROUBLESHOOTING, "A Windows clone has no network in any egress mode"). **Implemented and measured on clones; not yet in Dom0's env file or deployed checkout** |
 | Clone LV size | inherited: **1 T** | inherited: **128 G** | — |
 | Sample dirs | `/malware_{incoming,processing,finished}/ubuntu` | `…/android` | `…/windows` |
 
@@ -433,14 +433,14 @@ accurate as dated evidence.
 
 ### Environment read by `sandboxd.daemon`
 
-`SANDBOXD_ALLOW_DIRECT`, `SANDBOXD_ANALYSIS_USERNAME`, `SANDBOXD_API`, `SANDBOXD_CACERT`, `SANDBOXD_CLIENT_CERT`, `SANDBOXD_CLIENT_KEY`, `SANDBOXD_CONSOLE_API`, `SANDBOXD_CONSOLE_ENABLED`, `SANDBOXD_INJECTION_PID_ANDROID`, `SANDBOXD_INJECTION_PID_UBUNTU`, `SANDBOXD_INJECTION_PID_WINDOWS`, `SANDBOXD_KEEP_RESULTS`, `SANDBOXD_LOG_LEVEL`, `SANDBOXD_MAX_CLONES`, `SANDBOXD_MAX_SLOTS`, `SANDBOXD_PLUGINS`, `SANDBOXD_POSTPROCESS_MAX_MIB`, `SANDBOXD_REPO_ROOT`, `SANDBOXD_SCREENSHOTS_ENABLED`, `SANDBOXD_TOTAL_MIB`, `SANDBOXD_WORKER_ID`, `WORKER_TOKEN`
+`SANDBOXD_ALLOW_DIRECT`, `SANDBOXD_ANALYSIS_USERNAME`, `SANDBOXD_API`, `SANDBOXD_CACERT`, `SANDBOXD_CLIENT_CERT`, `SANDBOXD_CLIENT_KEY`, `SANDBOXD_CONSOLE_API`, `SANDBOXD_CONSOLE_ENABLED`, `SANDBOXD_INJECTION_PID_ANDROID`, `SANDBOXD_INJECTION_PID_UBUNTU`, `SANDBOXD_INJECTION_PID_WINDOWS`, `SANDBOXD_INJECTION_PID_WINDOWS_NETCFG`, `SANDBOXD_KEEP_RESULTS`, `SANDBOXD_LOG_LEVEL`, `SANDBOXD_MAX_CLONES`, `SANDBOXD_MAX_SLOTS`, `SANDBOXD_PLUGINS`, `SANDBOXD_POSTPROCESS_MAX_MIB`, `SANDBOXD_REPO_ROOT`, `SANDBOXD_SCREENSHOTS_ENABLED`, `SANDBOXD_TOTAL_MIB`, `SANDBOXD_WORKER_ID`, `WORKER_TOKEN`
 
 ### Repository size
 
 | | |
 |---|---|
 | sandboxd modules | 17 |
-| test files | 24 sandboxd, 30 platform |
+| test files | 26 sandboxd, 31 platform |
 | documents under `docs/` | 46 |
 
 <!-- END GENERATED -->

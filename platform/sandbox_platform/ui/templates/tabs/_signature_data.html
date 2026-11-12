@@ -1,0 +1,28 @@
+{#
+  What one signature matched, opened in place under its row. A call it
+  marked opens in place again, under its own line.
+#}
+{% from "tabs/_macros.html" import proc, toggle, xrow with context %}
+<div class="marks">
+{% if signature.references %}<p class="sub">References: {% for r in signature.references %}<span class="mono break">{{ r }}</span>{% if not loop.last %} · {% endif %}{% endfor %}</p>{% endif %}
+<table class="grid compact">
+  <tbody>
+  {% for m in marks %}
+  {% if m.kind == 'call' %}
+  {% set id = 'sig-' ~ index ~ '-call-' ~ loop.index0 %}
+  <tr class="xr" data-x="{{ id }}">
+    <td class="nowrap"><span class="chip">call</span></td>
+    <td class="fill">{{ proc(pid=m.pid) }} <span class="mono dim">#{{ m.cid }}</span></td>
+    <td>{{ toggle(id, 'open ▾', '/ui/jobs/' ~ job.id ~ '/call?pid=' ~ m.pid ~ '&cid=' ~ m.cid) }}</td>
+  </tr>
+  {{ xrow(id, 3, 'call ' ~ m.cid) }}
+  {% elif m.kind == 'process' %}
+  <tr><td class="nowrap"><span class="chip">process</span></td><td colspan="2">{{ proc(pid=m.pid) if m.pid is not none else m.value }}</td></tr>
+  {% else %}
+  <tr><td class="nowrap">{% if m.label %}<span class="chip">{{ m.label }}</span>{% endif %}</td>
+      <td colspan="2" class="mono break">{{ m.value | printable }}</td></tr>
+  {% endif %}
+  {% endfor %}
+  </tbody>
+</table>
+</div>

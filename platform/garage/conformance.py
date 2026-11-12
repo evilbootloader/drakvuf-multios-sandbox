@@ -278,11 +278,17 @@ def grants(w: Walk, front, bucket: str, key: str, ca: str | None) -> bool:
     w.check("GetObject", "allowed", outcome(front.get_object, Bucket=bucket, Key=key))
     w.check("HeadObject", "allowed", outcome(front.head_object, Bucket=bucket, Key=key))
 
-    # The per-process log viewer reads slices out of logs that can exceed a
-    # gigabyte, so ranges are load-bearing rather than incidental.
+    # The job page's call viewer reads one gzip member at a time out of
+    # calls.jsonl.gz (sandbox_platform/calls.py), at whatever offset the
+    # index names, so ranges are load-bearing rather than incidental -- from
+    # the middle of an object as much as from its start.
     rng = front.get_object(Bucket=bucket, Key=key, Range="bytes=0-9")
     w.check("a range GET", (10, f"bytes 0-9/{len(body)}"),
             (rng["ContentLength"], rng["ContentRange"]))
+    mid = front.get_object(Bucket=bucket, Key=key, Range="bytes=100-199")
+    w.check("  ...from the middle, those bytes exactly",
+            (100, f"bytes 100-199/{len(body)}", True),
+            (mid["ContentLength"], mid["ContentRange"], mid["Body"].read() == body[100:200]))
     # `objects.range_bytes` catches exactly this code and returns b"".
     w.check("a range past the end", "416 InvalidRange",
             outcome(front.get_object, Bucket=bucket, Key=key,

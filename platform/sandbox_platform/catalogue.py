@@ -232,34 +232,34 @@ class Tab:
     owner: str = ""
 
 
+# CAPE's own layout (operator, 2026-11-11), from `cape_results.json`. Every
+# tab is one column of sections, and shows the sample's processes only.
+_TRACE = ("syscalls", "procmon", "apimon", "libmon", "filetracer", "regmon")
 TABS: tuple[Tab, ...] = (
     Tab("overview", "Overview"),
-    # Second, because it is often the first thing an analyst wants: an error
-    # dialog or a ransom note says in one look what a trace takes minutes to.
+    # Signatures and capa read the behaviour; YARA the sample's own bytes
+    # and every file and dump. Something to show for any guest.
+    Tab("signatures", "Signatures"),
+    Tab("behaviour", "Behaviour", _TRACE),
+    Tab("timeline", "Timeline", _TRACE + ("cpuidmon", "debugmon", "ptracemon", "ebpfmon", "rootkitmon")),
+    Tab("summary", "Summary", _TRACE),
+    # Always present: a pcap is captured on every run, outside DRAKVUF entirely
+    # (`sandboxd/guests.py::argv_tcpdump`); the plugins only attribute it.
+    Tab("network", "Network", ("socketmon", "tlsmon", "unixsocketmon")),
+    Tab("dropped", "Dropped", ("fileextractor",)),
+    Tab("memory", "Memory", ("memdump", "procdump2")),
+    # The sample's own bytes, parsed on Dom0 (cape_plugin/static.py).
+    Tab("static", "Static"),
     # No plugin: sandboxd reads the clone's console from Dom0 on every guest.
     Tab("screenshots", "Screenshots", (), "DRAFT-054"),
-    Tab("behaviour", "Behaviour",
-        ("syscalls", "procmon", "apimon"), "DRAFT-050 + DRAFT-019"),
-    # Always present: a pcap is captured on every run, outside DRAKVUF entirely
-    # (`sandboxd/guests.py::argv_tcpdump`, spawned for the trace's lifetime by
-    # `sandboxd/stages.py`), so network data does not depend on any plugin. The
-    # plugins listed only ENRICH it -- socketmon attributes connections to
-    # processes, tlsmon supplies keys to decrypt what was captured.
-    Tab("network", "Network",
-        ("socketmon", "tlsmon", "unixsocketmon"), "DRAFT-049"),
-    Tab("static", "Static", (), "DRAFT-048 + DRAFT-019"),
-    Tab("memory", "Memory",
-        ("memdump", "procdump2", "fileextractor"), "DRAFT-051"),
-    Tab("registry", "Registry", ("regmon",), "DRAFT-050"),
     Tab("artifacts", "Artifacts"),
 )
 
 # Tabs that exist for every guest, because nothing about them depends on a
 # plugin: Overview and Artifacts come from the job row and the manifest;
-# Static is driven by the uploaded bytes rather than the trace; Network rests
-# on the pcap sandboxd captures on every run, outside DRAKVUF; Screenshots on
-# the console every guest has, read from Dom0 (DRAFT-054).
-_ALWAYS = {"overview", "screenshots", "artifacts", "static", "network"}
+# Signatures and Static from the report's analysis of what every run has;
+# Network rests on the pcap; Screenshots on the console, read from Dom0.
+_ALWAYS = {"overview", "signatures", "network", "static", "screenshots", "artifacts"}
 
 
 def tabs_for(os_: TargetOs) -> list[Tab]:

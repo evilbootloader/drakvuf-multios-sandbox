@@ -44,8 +44,8 @@ from starlette.requests import Request
 
 from .. import auth, catalogue, egress, launch
 from .. import jobs as dal
-from .. import logview
-from .. import report as report_store
+from .. import calls as calls_store
+from .. import cape
 from .. import screenshots as screenshot_store
 from ..config import settings
 from ..db import connection
@@ -395,19 +395,36 @@ def jobs_view(request: Request,
                    **_jobs_context(q, state, target_os, page, identity))
 
 
+# --- the job page ----------------------------------------------------------------
+#
+# Every tab is one column of sections, top to bottom, and everything that
+# opens does so in place: directly below the row that opened it, with its own
+# close button, moving nothing else and hiding nothing (operator, 2026-11-11).
+# The fragments below are what those rows fetch; each is also a plain page
+# without htmx, as a link's fallback.
+
+_TAB_BODIES = {
+    "overview": "tabs/_overview.html",
+    "signatures": "tabs/_signatures.html",
+    "behaviour": "tabs/_behaviour.html",
+    "timeline": "tabs/_timeline.html",
+    "summary": "tabs/_summary.html",
+    "network": "tabs/_network.html",
+    "dropped": "tabs/_dropped.html",
+    "memory": "tabs/_memory.html",
+    "static": "tabs/_static.html",
+    "screenshots": "tabs/_screenshots.html",
+    "artifacts": "tabs/_artifacts.html",
+}
+
+# Rows of a long list drawn before "show more": enough to scan, few enough
+# that a sample touching ten thousand files does not send ten thousand rows.
+LIST_PAGE = 100
+TIMELINE_PAGE = 300
+
+
 def _tab_body(slug: str) -> str:
-    # The report-driven tabs render their own pending state when there is no
-    # report, so they are always their own template; Static still has no
-    # source and falls through.
-    return {
-        "overview": "tabs/_overview.html",
-        "screenshots": "tabs/_screenshots.html",
-        "artifacts": "tabs/_artifacts.html",
-        "behaviour": "tabs/_behaviour.html",
-        "network": "tabs/_network.html",
-        "memory": "tabs/_memory.html",
-        "registry": "tabs/_registry.html",
-    }.get(slug, "tabs/_pending.html")
+    return _TAB_BODIES.get(slug, "tabs/_pending.html")
 
 
 def _job_context(job_id: UUID, tab: str, identity) -> dict:
@@ -415,21 +432,18 @@ def _job_context(job_id: UUID, tab: str, identity) -> dict:
         job = _detail(conn, job_id, identity)
         key_prefix = _key_prefix(conn, job_id)
 
-    # The behavioural report, when the run uploaded one. Read here, once per
-    # request, for whichever tab is rendering: Overview needs it for startup
-    # and techniques, the tab bar needs it to know which tabs are filled.
-    loaded = report_store.for_job(job.id, job.manifest, key_prefix,
-                                  expired=job.artifacts_expired)
+    # The CAPE report, when the run uploaded one: read once per request for
+    # whichever tab is drawing, and for the tab bar's counts.
+    loaded = cape.for_job(job.id, job.manifest, key_prefix, expired=job.artifacts_expired)
 
     tabs = catalogue.tabs_for(job.target_os)
     slugs = {t.slug for t in tabs}
     # An unknown or OS-inapplicable tab falls back rather than 404s: a
-    # bookmarked Registry tab on an Ubuntu job is a stale link, not an error.
+    # bookmarked tab from the old layout is a stale link, not an error.
     active = tab if tab in slugs else "overview"
 
     # The filmstrip only when it is the tab being drawn: it reads the index
-    # from the store, and every other tab -- and every SSE refresh of one --
-    # would pay for a strip nobody is looking at. The badge needs only names.
+    # from the store, and every other tab would pay for a strip nobody sees.
     strip = None
     if active == "screenshots":
         strip = screenshot_store.for_job(job.id, job.manifest, key_prefix,
@@ -447,16 +461,14 @@ def _job_context(job_id: UUID, tab: str, identity) -> dict:
         "active": active,
         "tab": next(t for t in tabs if t.slug == active),
         "body_template": _tab_body(active),
-        # Which tabs actually hold something. Rendered in the tab bar so a
-        # scaffold is legible AS a scaffold: an empty tab you only discover by
-        # clicking reads as a broken page, and #38 ships with most of them
-        # empty by design.
         "filled": _filled(job, loaded),
         # The report itself, or the sentence for why there is none. Both are
-        # read by every tab template; `report` is None for the ordinary case
-        # of a run that uploaded no report.json.
+        # read by every tab template; `report` is None for a run from before
+        # the CAPE chain, which shows Screenshots and Artifacts only.
         "report": loaded.report,
         "report_error": loaded.error,
+        "list_page": LIST_PAGE,
+        "timeline_page": TIMELINE_PAGE,
         "strip": strip,
         "frame_count": screenshot_store.count(job.artifacts),
         # Rendered into data-terminal for job.js, which must know when to stop
@@ -469,10 +481,7 @@ def _job_context(job_id: UUID, tab: str, identity) -> dict:
         # is switched off.
         "console_enabled": settings.console_enabled,
         # The states in which a clone exists, and therefore the states in which
-        # a console can exist. Passed from here rather than written as a
-        # literal in the template, for the same reason `terminal_states` is:
-        # two definitions of the window would be free to drift, and the symptom
-        # is a panel offering a session the API then refuses.
+        # a console can exist; see `terminal_states` for why it is passed.
         "console_states": sorted(s.value for s in CONSOLE_STATES),
     }
 
@@ -487,22 +496,18 @@ def _key_prefix(conn, job_id: UUID) -> str:
     ).fetchone()[0]
 
 
-def _filled(job, loaded: report_store.Loaded) -> set[str]:
-    """Tabs with content today. Everything else is waiting on its own issue."""
+def _filled(job, loaded: cape.Loaded) -> set[str]:
+    """Tabs with something to show."""
     filled = {"overview"}
     if job.artifacts or job.manifest:
         filled.add("artifacts")
     if loaded.report is not None:
-        # Behaviour, Network and Memory, as the report's own contents decide:
-        # a Windows run without socketmon has a report and no Network data
-        # from inside the guest.
         filled |= loaded.report.filled_tabs()
     # The capture is network data whether or not the guest attributed any:
     # tcpdump runs on every trace, outside DRAKVUF, and the tab links to it.
     if "capture.pcap" in job.artifacts or "wireshark_key_file.txt" in job.artifacts:
         filled.add("network")
-    # Frames, not the index: an index alone is a capture that took nothing,
-    # which the tab explains but which is not data.
+    # Frames, not the index: an index alone is a capture that took nothing.
     if screenshot_store.count(job.artifacts):
         filled.add("screenshots")
     return filled
@@ -522,17 +527,8 @@ def job_live(request: Request,
              job_id: UUID = PathParam(),
              tab: str = Query("overview"),
              identity: auth.Identity = None) -> HTMLResponse:
-    """The job's live region, for htmx tab clicks and job.js's SSE refresh.
-
-    Renders the same partial the full page includes, so there is one
-    definition of what a job page shows rather than one per entry point.
-
-    **Replaced `/jobs/<id>/tab/<slug>`, which returned only the tab body.**
-    That was too small a unit twice over: the tab bar is a sibling of the
-    body, so swapping the body alone could never move `aria-selected` -- the
-    underline stayed on whichever tab the server first rendered -- and an SSE
-    refresh needs the state block and the tab bar, not just the body.
-    """
+    """The job's live region, for job.js's SSE refresh. The same partial the
+    full page includes, so there is one definition of what a job page shows."""
     ctx = _job_context(job_id, tab, identity)
     return _render(request, "_job_live.html", **ctx)
 
@@ -542,90 +538,235 @@ def job_tabs(request: Request,
              job_id: UUID = PathParam(),
              tab: str = Query("overview"),
              identity: auth.Identity = None) -> HTMLResponse:
-    """Just the tab bar and its body, for a tab click.
-
-    Narrower than `/live` deliberately. `/live` also carries the live console
-    (DRAFT-056), and swapping that on a tab click would destroy the console
-    element -- killing the WebSocket and the canvas mid-session, which is the
-    fault putting the console above the tabs was supposed to avoid.
-
-    The nav is INSIDE this fragment, which is what lets `aria-selected` move:
-    swapping only the tab body left the underline wherever the server first
-    put it.
-    """
+    """Just the tab bar and its body, for a tab click. Narrower than `/live`
+    deliberately: that also carries the live console (DRAFT-056), and swapping
+    it on a tab click would kill an open session. The nav is inside this
+    fragment, which is what lets `aria-selected` move."""
     ctx = _job_context(job_id, tab, identity)
     return _render(request, "_job_tabs.html", **ctx)
 
 
-def _report_process(job_id: UUID, seqid: int, identity):
-    """The job, its report and one process of it, or a 404. Tenancy first:
+def _report_for(job_id: UUID, identity):
+    """The job, its key prefix and its report, or a 404. Tenancy first:
     `_detail` refuses a job the caller may not read before anything here
     touches the store."""
     with connection() as conn:
         job = _detail(conn, job_id, identity)
         key_prefix = _key_prefix(conn, job_id)
-    loaded = report_store.for_job(job.id, job.manifest, key_prefix,
-                                  expired=job.artifacts_expired)
-    process = loaded.report.by_seqid.get(seqid) if loaded.report else None
-    if process is None:
-        raise HTTPException(404, "no such process in this run's report")
-    return job, key_prefix, loaded.report, process
+    loaded = cape.for_job(job.id, job.manifest, key_prefix, expired=job.artifacts_expired)
+    if loaded.report is None:
+        raise HTTPException(404, "this run has no CAPE report")
+    return job, key_prefix, loaded.report
 
 
-@router.get("/jobs/{job_id}/process/{seqid}/cmdline", response_class=HTMLResponse)
-def cmdline_view(request: Request,
-                 job_id: UUID = PathParam(),
-                 seqid: int = PathParam(ge=0, le=10_000_000),
-                 identity: auth.Identity = None) -> HTMLResponse:
-    """One process's whole command line, on a page of its own.
-
-    What a command line in the Behaviour tab's tree opens, in a new tab: the
-    tree cuts each one to fit a line, and a command line is read, selected
-    and copied -- none of which a tooltip allows. A whole page rather than a
-    fragment so it stands alone in that tab, and argv element by element as
-    well as joined, because the joined line cannot show where one argument
-    ends and the next begins. Text from the report, autoescaped like the
-    tree it came from.
-    """
-    job, _, report, process = _report_process(job_id, seqid, identity)
-    return _render(request, "cmdline.html", view="jobs",
-                   job=job, report=report, process=process, seqid=seqid)
+def _calls_for(job, key_prefix: str) -> calls_store.Available:
+    return calls_store.for_job(job.id, job.manifest, key_prefix, expired=job.artifacts_expired)
 
 
 @router.get("/jobs/{job_id}/process/{seqid}", response_class=HTMLResponse)
 def process_view(request: Request,
                  job_id: UUID = PathParam(),
                  seqid: int = PathParam(ge=0, le=10_000_000),
-                 plugin: str = Query("", max_length=64, pattern=r"^[a-z0-9_]*$"),
-                 method: str = Query("", max_length=256),
-                 skip: int = Query(0, ge=0, le=1 << 40),
-                 part: str = Query("panel", pattern=r"^(panel|lines)$"),
                  identity: auth.Identity = None) -> HTMLResponse:
-    """One process of one run: its facts from the report, and its lines from
-    the per-plugin logs, a page at a time -- the Behaviour tab's panel.
+    """One of the sample's processes: the panel a tree node opens in place.
+    Its facts, its calls per category, its own share of the report, and the
+    first page of its calls, parsed. `seqid`, not PID: the report's own
+    process identity, which a reused PID cannot confuse."""
+    job, key_prefix, report = _report_for(job_id, identity)
+    process = report.by_seqid.get(seqid)
+    if process is None:
+        raise HTTPException(404, "no such process among the sample's")
+    available = _calls_for(job, key_prefix)
+    summary = available.process(seqid)
+    page = calls_store.page(available, seqid) if summary else None
+    return _render(request, "tabs/_process.html", job=job, report=report, process=process,
+                   seqid=seqid, activity=report.activity(process), calls=summary, page=page,
+                   filters={}, list_page=LIST_PAGE)
 
-    `seqid`, not PID: the report's own process identity, which a reused PID
-    cannot confuse (see report.py). `part=lines` returns only the next page
-    of lines, for the "more" button to append; everything else returns the
-    whole panel. Nothing here is a tab: the URL is fetched into the panel by
-    htmx and works as a plain page without it.
-    """
-    job, key_prefix, report, process = _report_process(job_id, seqid, identity)
 
-    available = logview.for_job(job.id, job.manifest, key_prefix,
-                                expired=job.artifacts_expired)
-    plugins = available.plugins_for(seqid)
-    selected = plugin if plugin in plugins else (plugins[0] if plugins else "")
-    entry = available.index.entry(seqid, selected) if selected else None
-    methods = list(entry.values) if entry else []
-    if method and method not in methods:
-        method = ""
-    page = logview.page(available, seqid, selected, method or None, skip) \
-        if selected else None
+@router.get("/jobs/{job_id}/process/{seqid}/calls", response_class=HTMLResponse)
+def calls_view(request: Request,
+               job_id: UUID = PathParam(),
+               seqid: int = PathParam(ge=0, le=10_000_000),
+               cursor: str = Query("", max_length=32, pattern=r"^(\d+\.\d+)?$"),
+               category: str = Query("", max_length=64),
+               api: str = Query("", max_length=256),
+               tid: str = Query("", max_length=32),
+               failed: bool = Query(False),
+               part: str = Query("block", pattern=r"^(block|rows)$"),
+               identity: auth.Identity = None) -> HTMLResponse:
+    """A process's calls, filtered: the whole block (filter change) or the
+    next rows (`part=rows`, which "more" appends in place of itself)."""
+    job, key_prefix, report = _report_for(job_id, identity)
+    if seqid not in report.by_seqid:
+        raise HTTPException(404, "no such process among the sample's")
+    available = _calls_for(job, key_prefix)
+    summary = available.process(seqid)
+    if summary is None:
+        raise HTTPException(404, "no calls recorded for this process")
+    filters = {k: v for k, v in (("category", category), ("api", api), ("tid", tid)) if v}
+    if failed:
+        filters["failed"] = "1"
+    page = calls_store.page(available, seqid, cursor, category, api, tid, failed)
+    template = "tabs/_calls_rows.html" if part == "rows" else "tabs/_calls.html"
+    return _render(request, template, job=job, report=report, seqid=seqid, calls=summary,
+                   page=page, filters=filters)
 
-    ctx = dict(job=job, report=report, process=process, seqid=seqid,
-               plugins=plugins, compressed=available.compressed_for(seqid),
-               selected=selected, methods=sorted(methods), method=method,
-               page=page, page_bytes=logview.PAGE_BYTES)
-    template = "tabs/_process_lines.html" if part == "lines" else "tabs/_process.html"
-    return _render(request, template, **ctx)
+
+@router.get("/jobs/{job_id}/call", response_class=HTMLResponse)
+def call_view(request: Request,
+              job_id: UUID = PathParam(),
+              cid: int = Query(ge=0, le=1 << 40),
+              seqid: int | None = Query(None, ge=0, le=10_000_000),
+              pid: int | None = Query(None, ge=0, le=1 << 31),
+              identity: auth.Identity = None) -> HTMLResponse:
+    """One call, whole, opened in place: under its row in a process's calls
+    (by seqid), or under a signature's mark (by PID and cid, as mark_call
+    names it)."""
+    job, key_prefix, report = _report_for(job_id, identity)
+    process = report.by_seqid.get(seqid) if seqid is not None else report.process_for(pid)
+    if process is None or process.seqid is None:
+        raise HTTPException(404, "no such process among the sample's")
+    found = calls_store.call(_calls_for(job, key_prefix), process.seqid, cid)
+    if found is None:
+        raise HTTPException(404, "no such call")
+    return _render(request, "tabs/_call.html", job=job, report=report, process=process, call=found)
+
+
+@router.get("/jobs/{job_id}/signature/{index}", response_class=HTMLResponse)
+def signature_view(request: Request,
+                   job_id: UUID = PathParam(),
+                   index: int = PathParam(ge=0, le=100_000),
+                   identity: auth.Identity = None) -> HTMLResponse:
+    """What a signature matched, classified: opened in place under its row."""
+    job, _, report = _report_for(job_id, identity)
+    if index >= len(report.signatures):
+        raise HTTPException(404, "no such signature")
+    signature = report.signatures[index]
+    return _render(request, "tabs/_signature_data.html", job=job, report=report,
+                   signature=signature, index=index, marks=report.signature_marks(signature))
+
+
+@router.get("/jobs/{job_id}/timeline", response_class=HTMLResponse)
+def timeline_view(request: Request,
+                  job_id: UUID = PathParam(),
+                  object: str = Query("", max_length=32),
+                  seqid: int | None = Query(None, ge=0, le=10_000_000),
+                  offset: int = Query(0, ge=0, le=1 << 30),
+                  part: str = Query("block", pattern=r"^(block|rows)$"),
+                  identity: auth.Identity = None) -> HTMLResponse:
+    """The timeline, filtered by object kind and process: the block (filter
+    change) or the next rows (`part=rows`)."""
+    job, _, report = _report_for(job_id, identity)
+    template = "tabs/_timeline_rows.html" if part == "rows" else "tabs/_timeline_block.html"
+    return _render(request, template, job=job, report=report,
+                   **_timeline(report, object, seqid, offset))
+
+
+def _timeline(report: cape.Report, object_: str, seqid: int | None, offset: int) -> dict:
+    events = [e for e in report.events
+              if (not object_ or e.object == object_) and (seqid is None or e.seqid == seqid)]
+    return {"events": events[offset:offset + TIMELINE_PAGE], "matching": len(events),
+            "offset": offset, "next_offset": offset + TIMELINE_PAGE
+            if offset + TIMELINE_PAGE < len(events) else None,
+            "filters": {k: v for k, v in (("object", object_), ("seqid", seqid)) if v not in ("", None)}}
+
+
+templates.env.globals["timeline"] = _timeline
+
+
+# The summary's lists, and the other lists a tab draws a page of.
+_LISTS = cape.SUMMARY_KEYS
+
+
+@router.get("/jobs/{job_id}/list/{name}", response_class=HTMLResponse)
+def list_view(request: Request,
+              job_id: UUID = PathParam(),
+              name: str = PathParam(max_length=32),
+              offset: int = Query(0, ge=0, le=1 << 30),
+              seqid: int | None = Query(None, ge=0, le=10_000_000),
+              identity: auth.Identity = None) -> HTMLResponse:
+    """The rest of one of the summary's lists, after its first page: one
+    process's (`seqid`), or the whole sample's for a report from before the
+    per-process lists."""
+    job, _, report = _report_for(job_id, identity)
+    if name not in _LISTS:
+        raise HTTPException(404, "no such list")
+    if seqid is not None:
+        if report.summary_by_process is None or seqid not in report.summary_by_process:
+            raise HTTPException(404, "no such process among the sample's")
+        items = report.summary_by_process[seqid].get(name, [])
+    else:
+        items = report.summary.get(name, [])
+    return _render(request, "tabs/_list_rows.html", job=job, report=report, name=name, seqid=seqid,
+                   items=items[offset:offset + LIST_PAGE], offset=offset,
+                   next_offset=offset + LIST_PAGE if offset + LIST_PAGE < len(items) else None,
+                   total=len(items))
+
+
+# --- template helpers -------------------------------------------------------------
+
+def _hexdump(text: str, width: int = 16, limit: int = 4096) -> list[tuple[str, str, str]]:
+    """A buffer as (offset, hex, text) lines. The parser decoded DRAKVUF's
+    \\xHH escapes to one character per byte; a character past 0xFF (a value
+    that was never bytes) shows as `?`."""
+    data = bytes(ord(c) if ord(c) < 256 else 0x3F for c in (text or "")[:limit])
+    out = []
+    for i in range(0, len(data), width):
+        chunk = data[i:i + width]
+        out.append((f"{i:04x}", " ".join(f"{b:02x}" for b in chunk),
+                    "".join(chr(b) if 0x20 <= b < 0x7F else "·" for b in chunk)))
+    return out
+
+
+def _size(n) -> str:
+    try:
+        n = int(n, 0) if isinstance(n, str) else int(n)
+    except (TypeError, ValueError):
+        return ""
+    for unit in ("B", "KiB", "MiB", "GiB"):
+        if n < 1024 or unit == "GiB":
+            return f"{n} {unit}" if unit == "B" else f"{n:.1f} {unit}"
+        n /= 1024
+    return ""
+
+
+def _secs(value) -> str:
+    """Seconds into the trace as `12.345 s`, or an en dash when unknown."""
+    if value is None:
+        return "–"
+    return f"{value:,.3f} s"
+
+
+_CONTROL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f]")
+
+
+def _printable(text, oneline: bool = True) -> str:
+    """A value with its control characters as `\\xHH`, as DRAKVUF printed
+    them before the parser decoded them: a NUL or an escape sequence in a
+    buffer must reach the page as something a reader can see, not as a
+    character the browser drops or a terminal interprets. One line: newlines
+    and tabs too."""
+    text = "" if text is None else str(text)
+    if oneline:
+        text = text.replace("\n", "\\n").replace("\r", "\\r").replace("\t", "\\t")
+    return _CONTROL.sub(lambda m: f"\\x{ord(m.group(0)):02x}", text)
+
+
+templates.env.filters["printable"] = _printable
+templates.env.filters["hexdump"] = _hexdump
+templates.env.filters["size"] = _size
+templates.env.filters["secs"] = _secs
+templates.env.globals["is_autostart"] = cape.is_autostart
+templates.env.tests["is_autostart"] = cape.is_autostart
+templates.env.globals["port_name"] = lambda port: PORT_NAMES.get(port, "")
+
+# A label beside a remote port, as CAPE's UI shows one. A hint for the eye,
+# not a classification: 443 says nothing about what went over it.
+PORT_NAMES = {
+    21: "ftp", 22: "ssh", 23: "telnet", 25: "smtp", 53: "dns", 80: "http",
+    110: "pop3", 123: "ntp", 135: "rpc", 137: "netbios", 139: "smb",
+    143: "imap", 389: "ldap", 443: "https", 445: "smb", 465: "smtps",
+    587: "submission", 993: "imaps", 995: "pop3s", 1433: "mssql",
+    3306: "mysql", 3389: "rdp", 5900: "vnc", 8080: "http-alt", 8443: "https-alt",
+}

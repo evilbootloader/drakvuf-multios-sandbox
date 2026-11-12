@@ -1,176 +1,155 @@
-{% from "tabs/_report_macros.html" import procs, unreadable with context %}
 {#
-  Two sources, deliberately kept apart on the page. The pcap is captured on
-  every run outside the guest (tcpdump on the clone's VLAN) and is the ground
-  truth; the sections below it come from report.json and are what the guest
-  saw from the inside -- socketmon for connections and DNS, apimon for
-  WinINet/WinHTTP calls -- attributed to processes. Either can exist without
-  the other.
-
-  Nothing here is a link. A URL the sample asked for is evidence, and an
-  analyst's browser following it is the last thing this page should invite.
+  The sample's network, top to bottom: the capture's downloads, the
+  endpoints its processes talked to (each opening who, how and from which
+  plugin in place), what it listened on, its DNS and HTTP, then what the
+  capture itself shows of the same hosts. From CAPE's network map, which
+  reads every plugin with network data; the capture rows are kept where they
+  meet an address or name the sample used.
 #}
+{% from "tabs/_macros.html" import head, proc, toggle, xrow, chips, nothing, no_report with context %}
 
+<section class="section">
+{{ head('Capture') }}
 {% if 'capture.pcap' in job.artifacts or 'wireshark_key_file.txt' in job.artifacts %}
-<p class="note">
-  {% if 'capture.pcap' in job.artifacts %}
-  <a href="{{ job.artifacts['capture.pcap'] }}" rel="noopener nofollow">capture.pcap</a>
-  is the traffic on the clone's VLAN for the whole trace.
-  {% endif %}
-  {% if 'wireshark_key_file.txt' in job.artifacts %}
-  <a href="{{ job.artifacts['wireshark_key_file.txt'] }}" rel="noopener nofollow">wireshark_key_file.txt</a>
-  holds the TLS session keys <code>tlsmon</code> captured — load it as Wireshark's
-  (Pre)-Master-Secret log to read the HTTPS inside it.
-  {% endif %}
+<p class="downloads">
+  {% if 'capture.pcap' in job.artifacts %}<a class="button" href="{{ job.artifacts['capture.pcap'] }}" rel="noopener nofollow">capture.pcap</a>{% endif %}
+  {% if 'wireshark_key_file.txt' in job.artifacts %}<a class="button" href="{{ job.artifacts['wireshark_key_file.txt'] }}" rel="noopener nofollow">TLS keys</a>
+    <span class="dim small">Wireshark: Preferences → TLS → (Pre)-Master-Secret log</span>{% endif %}
 </p>
-{% endif %}
-
-{% if report_error %}
-  {{ unreadable() }}
-{% elif not report %}
-  {% include "tabs/_pending.html" %}
-{% elif not (report.dns_queries or report.connections or report.http_requests or report.cracked_urls
-             or report.unix_sockets or report.falco_network) %}
-<div class="empty">
-  <strong>The report attributes no network activity to any process.</strong>
-  Connections and DNS come from <code>socketmon</code> on Windows and
-  <code>unixsocketmon</code> on Linux, HTTP requests from <code>apimon</code>
-  or <code>libmon</code>; none was among this run's plugins, or the sample made
-  no such call. The capture above is unaffected.
-</div>
-{% else %}
-
-{#
-  Names and connections side by side when there are both: a DNS table is two
-  narrow columns, and at full width it was a strip of names along the left
-  edge of an empty screen. Each block is written once, as a macro, and placed
-  in the grid or on its own.
-#}
-{% macro dns_block() -%}
-<section class="block">
-<header class="block-head"><h2>DNS queries <span class="count">{{ report.dns_queries | length }}</span></h2></header>
-<div class="table-card"><table class="rows compact">
-  <thead><tr><th class="fill">Name</th><th>By</th></tr></thead>
-  <tbody>
-  {% for q in report.dns_queries %}
-    <tr><td class="filename">{{ q.domain }}</td><td>{{ procs(q.process_seqids) }}</td></tr>
-  {% endfor %}
-  </tbody>
-</table></div>
+<p class="sub">The whole capture, every process's traffic. Everything below is the sample's.</p>
+{% else %}{{ nothing('No capture was uploaded for this run.') }}{% endif %}
 </section>
+
+{% if not report %}{{ no_report() }}{% else %}
+{% set nm = report.network_map %}
+
+{% macro pinfo_cells(item) -%}
+<td>{% for p in item.pinfo %}{{ proc(pid=p.process_id) }}{% endfor %}</td>
+<td>{% set evs = [] %}{% for p in item.pinfo %}{% for e in p.events %}{% if e not in evs %}{% set _ = evs.append(e) %}{% endif %}{% endfor %}{% endfor %}{{ chips(evs, 'netev') }}</td>
 {%- endmacro %}
 
-{% macro connections_block() -%}
-<section class="block">
-<header class="block-head"><h2>Connections <span class="count">{{ report.connections | length }}</span></h2></header>
-<div class="table-card"><table class="rows compact">
-  <thead><tr><th>Proto</th><th>Remote</th><th>Service</th><th>Local</th><th>By</th></tr></thead>
+<section class="section">
+{{ head('Endpoints', nm.endpoint_map | length, 'Remote addresses the sample connected to, sent to or received from.') }}
+{% if nm.endpoint_map %}
+<div class="table-wrap">
+<table class="grid">
+  <thead><tr><th>Address</th><th>Service</th><th>Process</th><th class="fill">Seen as</th><th></th></tr></thead>
   <tbody>
-  {% for c in report.connections %}
-    <tr>
-      <td class="mono">{{ c.protocol }}</td>
-      <td class="mono">{{ c.remote_ip }}{% if c.remote_port is not none %}:{{ c.remote_port }}{% endif %}</td>
-      <td class="dim">{{ c.service or '' }}</td>
-      <td class="mono dim">{{ c.local_ip }}{% if c.local_port is not none %}:{{ c.local_port }}{% endif %}</td>
-      <td>{{ procs(c.process_seqids) }}</td>
-    </tr>
+  {% for e in nm.endpoint_map %}
+  {% set id = 'ep-' ~ loop.index0 %}
+  <tr class="xr" data-x="{{ id }}">
+    <td class="mono nowrap">{{ e.ip_port }}</td>
+    <td class="dim">{{ port_name(e.port) }}</td>
+    {{ pinfo_cells(e) }}
+    <td>{{ toggle(id, '▾') }}</td>
+  </tr>
+  {% call xrow(id, 5, e.ip_port) %}
+  <table class="grid compact">
+    <thead><tr><th>Process</th><th>Events</th><th class="fill">Sources</th></tr></thead>
+    <tbody>
+    {% for p in e.pinfo %}<tr><td>{{ proc(pid=p.process_id) }}</td><td>{{ chips(p.events, 'netev') }}</td><td>{{ chips(p.sources) }}</td></tr>{% endfor %}
+    </tbody>
+  </table>
+  {% endcall %}
   {% endfor %}
   </tbody>
-</table></div>
-</section>
-{%- endmacro %}
-
-{% if report.dns_queries and report.connections %}
-<div class="cols wide-right block">
-  {{ dns_block() }}
-  {{ connections_block() }}
+</table>
 </div>
-{% elif report.dns_queries %}
-  {{ dns_block() }}
-{% elif report.connections %}
-  {{ connections_block() }}
-{% endif %}
+{% else %}{{ nothing('No remote endpoint.') }}{% endif %}
+</section>
 
-{% if report.falco_network %}
-<section class="block">
-<header class="block-head"><h2>Falco network findings <span class="count">{{ report.falco_network | length }}</span></h2></header>
-<ul class="falco">
-  {% for f in report.falco_network %}
-  <li>
-    <div>
-      <span class="tag" data-kind="priority" data-priority="{{ f.priority | lower }}">{{ f.priority }}</span>
-      <strong>{{ f.rule }}</strong> {{ procs(f.process_seqids) }}
-      {% if f.count > 1 %}<span class="count">×{{ f.count }}</span>{% endif %}
-    </div>
-    <div class="mono dim falco-output">{{ f.output }}</div>
-  </li>
-  {% endfor %}
-</ul>
+{% if nm.listeners %}
+<section class="section">
+{{ head('Listening', nm.listeners | length, 'Addresses the sample bound or listened on: a server, a backdoor.') }}
+<div class="table-wrap">
+<table class="grid">
+  <thead><tr><th>Address</th><th>Process</th><th class="fill">Seen as</th></tr></thead>
+  <tbody>{% for e in nm.listeners %}<tr><td class="mono nowrap">{{ e.ip_port }}</td>{{ pinfo_cells(e) }}</tr>{% endfor %}</tbody>
+</table>
+</div>
 </section>
 {% endif %}
 
-{#
-  Until 2026-10-23 this block sat inside the Connections table's Remote
-  cell -- a paste that landed inside an open <td> -- so it rendered once per
-  connection row, and not at all on a run with sockets and no connections.
-#}
-{% if report.unix_sockets %}
-<section class="block">
-<header class="block-head"><h2>Unix sockets <span class="count">{{ report.unix_sockets | length }}</span></h2></header>
-<div class="table-card"><table class="rows compact">
-  <thead><tr><th class="wide">Peer</th><th>Own</th><th>Messages</th><th>Bytes</th><th>By</th></tr></thead>
+<section class="section">
+{{ head('DNS', nm.dns_intents | length, 'Names the sample asked a resolver for, and the answers it got.') }}
+{% if nm.dns_intents %}
+{% set answers = {} %}{% for a in nm.dns_answers %}{% set _ = answers.update({a.domain: a.answers}) %}{% endfor %}
+<div class="table-wrap">
+<table class="grid">
+  <thead><tr><th>Name</th><th class="fill">Answers</th><th>Process</th><th>Through</th></tr></thead>
   <tbody>
-  {% for u in report.unix_sockets %}
-    <tr>
-      <td class="mono filename">{{ u.peer_path or 'unnamed' }}</td>
-      <td class="mono dim">{{ u.path or 'unnamed' }}</td>
-      <td class="mono">{{ u.messages }}</td>
-      <td class="mono">{{ u.bytes }}</td>
-      <td>{{ procs(u.process_seqids) }}</td>
-    </tr>
+  {% for d in nm.dns_intents %}
+  <tr><td class="mono break">{{ d.domain }}</td>
+      <td class="mono break">{{ answers.get(d.domain, []) | join(', ') }}</td>
+      <td>{% for i in d.intents %}{{ proc(pid=i.process.process_id) }}{% endfor %}</td>
+      <td>{% set apis = [] %}{% for i in d.intents %}{% if i.api not in apis %}{% set _ = apis.append(i.api) %}{% endif %}{% endfor %}{{ chips(apis) }}</td></tr>
   {% endfor %}
   </tbody>
-</table></div>
+</table>
+</div>
+{% else %}{{ nothing('No name resolved.') }}{% endif %}
 </section>
-{% endif %}
 
-{% if report.http_requests %}
-<section class="block">
-<header class="block-head"><h2>HTTP requests <span class="count">{{ report.http_requests | length }}</span></h2></header>
-<ul class="requests">
-  {% for r in report.http_requests %}
-  <li>
-    <div>
-      <span class="tag" data-kind="verb">{{ r.verb or 'unknown' }}</span>
-      <span class="filename">{% if r.server_name %}{{ r.server_name }}{% if r.server_port %}:{{ r.server_port }}{% endif %}{% endif %}{{ r.path or '' }}</span>
-      {% if r.process_seqid is not none %}{{ procs([r.process_seqid]) }}{% endif %}
-    </div>
-    <dl class="dl small">
-      {% if r.user_agent %}<dt>User-Agent</dt><dd class="filename">{{ r.user_agent }}</dd>{% endif %}
-      {% if r.referer %}<dt>Referer</dt><dd class="filename">{{ r.referer }}</dd>{% endif %}
-      {% if r.proxy %}<dt>Proxy</dt><dd class="filename">{{ r.proxy }}</dd>{% endif %}
-      {% if r.username or r.password %}<dt>Credentials</dt><dd class="filename">{{ r.username or '' }}{% if r.password %}:{{ r.password }}{% endif %}</dd>{% endif %}
-      {% for h in r.extra_headers %}<dt>Header</dt><dd class="filename">{{ h }}</dd>{% endfor %}
-    </dl>
-  </li>
-  {% endfor %}
-</ul>
-</section>
-{% endif %}
-
-{% if report.cracked_urls %}
-<section class="block">
-<header class="block-head"><h2>URLs parsed <span class="count">{{ report.cracked_urls | length }}</span></h2>
-  <span class="summary">Passed to <code>InternetCrackUrl</code> / <code>InternetCreateUrl</code>: what the sample handled, not necessarily what it fetched.</span></header>
-<div class="table-card"><table class="rows compact">
-  <thead><tr><th class="fill">URL</th><th>By</th></tr></thead>
+<section class="section">
+{{ head('HTTP', nm.http_requests | length, 'Requests the sample made, from the library calls and the bytes it sent.') }}
+{% if nm.http_requests %}
+<div class="table-wrap">
+<table class="grid">
+  <thead><tr><th>Method</th><th class="fill">URL</th><th>Process</th><th>User agent</th><th>From</th></tr></thead>
   <tbody>
-  {% for u in report.cracked_urls %}
-    <tr><td class="filename">{{ u.url }}</td><td>{{ procs(u.process_seqids) }}</td></tr>
+  {% for r in nm.http_requests %}
+  <tr><td class="mono"><b>{{ r.method or '' }}</b></td><td class="mono break">{{ r.url or r.host }}</td>
+      <td>{{ proc(pid=r.process_id) }}</td><td class="mono small break dim">{{ r.user_agent or '' }}</td>
+      <td class="nowrap"><span class="chip">{{ r.api or r.source }}</span></td></tr>
   {% endfor %}
   </tbody>
-</table></div>
+</table>
+</div>
+{% else %}{{ nothing('No HTTP request.') }}{% endif %}
+</section>
+
+{% if nm.http_host_map or nm.user_agents %}
+<section class="section">
+{{ head('Hosts and user agents') }}
+<dl class="kv">
+  {% if nm.http_host_map %}<dt>Hosts</dt><dd>{% for h in nm.http_host_map %}<span class="mono">{{ h.host }}</span>{% if not loop.last %} · {% endif %}{% endfor %}</dd>{% endif %}
+  {% if nm.user_agents %}<dt>User agents</dt><dd>{% for u in nm.user_agents %}<div class="mono break">{{ u.user_agent }}</div>{% endfor %}</dd>{% endif %}
+</dl>
 </section>
 {% endif %}
 
+{% if nm.unix_sockets %}
+<section class="section">
+{{ head('Unix sockets', nm.unix_sockets | length) }}
+<div class="table-wrap">
+<table class="grid">
+  <thead><tr><th class="fill">Path</th><th>Process</th><th>Seen as</th></tr></thead>
+  <tbody>{% for u in nm.unix_sockets %}<tr><td class="mono break">{{ u.path or '(unnamed)' }}</td>{{ pinfo_cells(u) }}</tr>{% endfor %}</tbody>
+</table>
+</div>
+</section>
+{% endif %}
+
+{% set net = report.network %}
+{% if net.tcp or net.udp or net.dns or net.http %}
+<section class="section">
+{{ head('In the capture', (net.tcp | length) + (net.udp | length), 'Flows to the hosts above, as the capture and the kernel saw them.') }}
+<div class="table-wrap">
+<table class="grid">
+  <thead><tr><th>Proto</th><th>From</th><th class="fill">To</th><th>Process</th><th>Source</th></tr></thead>
+  <tbody>
+  {% for proto, flows in (('TCP', net.tcp), ('UDP', net.udp)) %}{% for f in flows %}
+  <tr><td class="mono">{{ proto }}</td><td class="mono nowrap dim">{{ f.src }}:{{ f.sport }}</td>
+      <td class="mono">{{ f.dst }}:{{ f.dport }} <span class="dim">{{ port_name(f.dport) }}</span></td>
+      <td>{% if f.process_id is not none %}{{ proc(pid=f.process_id) }}{% endif %}</td><td><span class="chip">{{ f.source or 'pcap' }}</span></td></tr>
+  {% endfor %}{% endfor %}
+  </tbody>
+</table>
+</div>
+</section>
+{% endif %}
+
+{% if nm.filtered %}
+<p class="sub">Left out as the guest's own or as noise: {% for k, n in nm.filtered | dictsort %}{{ k }} {{ n }}{% if not loop.last %} · {% endif %}{% endfor %}.</p>
+{% endif %}
 {% endif %}

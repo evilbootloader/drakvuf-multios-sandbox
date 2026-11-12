@@ -165,13 +165,24 @@ results/<job_id>/
   preconfig.log        injector output                     reserved
   capture.pcap         tcpdump                             reserved, may be 0 bytes
   manifest.json        the document below                  reserved
-  report.json          the behavioural report the UI      reserved
-                       renders (generate_report.py)
+  cape_results.json    CAPE's processing and signatures    reserved
+                       over the trace: what the job page
+                       renders (cape_analysis.py)
+  calls.jsonl.gz       the sample's calls, parsed: one     reserved
+                       gzip member per 200 calls of a
+                       process (cape_analysis._CallsLog)
+  calls_index.json     where each sample process's calls   reserved
+                       are in calls.jsonl.gz, with counts
+  trace.log.gz         the raw stream, gzipped once        reserved
+                       CAPE has processed it
+  report.json          the behavioural report the UI      reserved -- written
+                       rendered (generate_report.py)       until 2026-11-10
   process_tree.json    from procmon.log (Windows)          reserved
   ttps.json            capa, ATT&CK/MBC per process        reserved
   dumps_ttp/…          capa, per memory dump               prefix
   wireshark_key_file.txt  from tlsmon.log                  reserved
-  log_index            per-process offsets into the logs   reserved
+  log_index            per-process offsets into the logs   reserved -- written
+                                                           until 2026-11-10
   <capability>.json    one per capability                  reserved namespace
   dumps.zip            memdump's output, packed            reserved
   dumps/…              memdump's output, raw -- present    prefix
@@ -201,11 +212,29 @@ keeping both copies would double a trace that on its own exceeds the per-job
 result budget (a Windows trace measured 1.2 GB, of which `syscall.log` was
 1.22 GB before gzip and 50 MB after).
 
-**`report.json` is what the job page renders.** `platform/sandbox_platform/report.py`
-reads it back — bounded, lenient about unknown keys, never raising into a
-page — and the Overview, Behaviour, Network and Memory tabs are drawn from
-it. Its writer is `sandboxd/postprocessing/plugins/generate_report.py`;
-`schema_version` is the contract between the two.
+**`cape_results.json` is what the job page renders** since 2026-11-11
+(`report.json` before, which the CAPE chain no longer writes; a job from
+before it shows its screenshots and artifacts and says so).
+`platform/sandbox_platform/cape.py` reads it back -- bounded, lenient about
+unknown keys, one section at a time so a section it cannot read is named
+rather than blanking the page -- and cuts every section to the sample's
+processes (`trace_split.sample`: the injected ones, their descendants, the
+ones they took over), the operator's rule for the page. Its writer is
+`sandboxd/postprocessing/plugins/cape_analysis.py`, which adds to CAPE's
+shape what the page needs: each process's `seqid` and `parent_seqid`, its
+times and exit; `pid`/`seqid` on each enhanced event; `summary.by_process`,
+each process's own summary lists, which the Summary tab shows one process at
+a time (since 2026-11-12); `trace_split.sample` and `roots`;
+`info.started_ts`.
+
+**The calls are beside it, not in it.** `calls.jsonl.gz` holds the sample's
+calls as CAPE parsed them, one gzip member per 200 calls of one process, and
+`calls_index.json` names each member's offset, length, first call and
+categories. The page reads one member per page of calls with a ranged GET
+(`platform/sandbox_platform/calls.py`), so a process with a million calls
+costs the bytes of the page shown. A call's position is CAPE's `cid`, which
+is what a signature's `mark_call` names. The guest's other processes'
+calls are not written, whatever the postprocessing scope.
 
 **`dumps/` and `dumps.zip` are the same evidence in two states.**
 `process_dumps` packs the directory into the zip and removes the directory; it
