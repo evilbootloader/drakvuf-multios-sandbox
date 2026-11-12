@@ -933,7 +933,16 @@ def argv_make_drop_dir(job: Job) -> list[str]:
 
 def _ubuntu_netcfg(job: Job, subnet: str) -> str:
     paths = PATHS[TargetOs.UBUNTU]
+    # `link set up` FIRST. Since the 2026-11-12 image nothing in the guest
+    # manages eth0 (no netplan file, so no networkd DHCP undoing this step),
+    # and the template can be saved with the link down. `ip addr add` succeeds
+    # on a down link; `ip route replace default via` then fails because the
+    # gateway is not on any connected route, the chain stops, and the clone has
+    # its address, no route and the stub resolver -- nothing leaves, in any
+    # egress mode (TROUBLESHOOTING, "An Ubuntu clone has its address but
+    # nothing leaves"). A no-op on a template whose link is already up.
     return (
+        f"sudo ip link set eth0 up && "
         f"sudo ip addr flush dev eth0 && "
         f"sudo ip addr add {subnet}.{job.vlan}.2/24 dev eth0 && "
         f"sudo ip route replace default via {subnet}.{job.vlan}.1 dev eth0 && "

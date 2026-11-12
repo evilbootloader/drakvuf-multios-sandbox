@@ -703,7 +703,10 @@ stop, not `iptables -S`.
 
 **If the pcap has no SYN and no DNS query at all** — only `BOOTP/DHCP, Request`
 from `0.0.0.0` — the clone never had an address, and neither tor nor the rules
-are involved. The next two entries.
+are involved. The next two entries. If the pcap is silent even though the
+guest has its address, see "An Ubuntu clone has its address but nothing
+leaves". If connections are accepted but stay empty for the first minutes,
+see "A `tor` clone's first connections hang for about two minutes".
 
 ### A Windows clone has no network in any egress mode
 
@@ -737,7 +740,10 @@ Ten clones in a row on 2026-11-11: 10/10 took their address and fetched
 `https://example.com` through `tor`, with `createproc` taking 19.0 s each time.
 **Not `winlogon.exe`**: it never scheduled the hijacked thread, and `injector`
 timed out at 60 s. `sandboxd/stages.py` `Config.netcfg_pids` has the rest of
-the measurement.
+the measurement. In production on the state saved 2026-11-12 (services.exe
+772): job `47fdf99f` took `172.16.1.2` and reached the internet through `tor`,
+after the wait in "A `tor` clone's first connections hang for about two
+minutes".
 
 ### An Ubuntu clone's address vanishes seconds after restore
 
@@ -760,15 +766,68 @@ removes the address is inferred** from the pcap and the journal. At its
 default log level networkd does not log removing an address it did not
 configure.
 
-**Fix — Candidate.** `make ubuntu_analysis_vm` now ends its late-commands by
-disabling cloud-init's network configuration and removing the netplan files,
-leaving networkd nothing to manage on `eth0`. DHCP stays on for the install
-itself, which downloads packages over `xenbr0`. **Unproven until an image is
-built by that target.** The image saved 2026-11-07 still has the DHCP config.
-It needs that rebuild, or the same two changes made by hand in the running
-`ubuntu_analysis_sandbox` before its `xl save`, followed by `sudo netplan apply`
-so the saved memory no longer holds a DHCP client either. That by-hand route
-has not been run either.
+**Fix.** DHCP stays on for the install itself, which downloads packages over
+`xenbr0`, and `make ubuntu_analysis_vm` switches it off in its last two
+late-commands. The first version disabled cloud-init's network configuration
+and removed the netplan files. The image built that way and saved 2026-11-12
+sent no DHCP at all (job `df81d898`), but it had a different failure: no
+`eth0`. See the next entry. The late-commands now have cloud-init render a
+netplan file with `eth0` under networkd and `dhcp4: false`, so networkd brings
+the link up and runs no DHCP client. **Unproven until an image is built that
+way**, including whether networkd leaves sandboxd's address and route alone
+across the carrier loss and gain of a restore.
+
+### An Ubuntu clone has its address but nothing leaves
+
+**Symptom.** In the clone, `curl google.com` and `ping 1.1.1.1` fail, and the
+pcap shows nothing from them — no DNS query, no SYN, no ICMP. The pcap may be
+empty until someone runs `ip link set eth0 up` in the guest, and then holds
+only mDNS and MLD from `172.16.<vlan>.2`. Even after that, nothing leaves.
+`ip a` shows the address on `eth0`; `ip route` has no default route, and
+`/etc/resolv.conf` still points at `127.0.0.53`.
+
+**Cause.** `eth0` was administratively DOWN in the saved state: the
+2026-11-12 image had no netplan file, so nothing brought the link up at boot.
+sandboxd's network step ran `ip addr add`, which works on a down link, then
+`ip route replace default via 172.16.<vlan>.1`, which is refused there because
+the gateway is on no connected route. The `&&` chain stopped, so neither the
+default route nor `nameserver 1.1.1.1` was ever set. `execproc` returns at
+process start, so Dom0 saw a successful injection. Diagnosed 2026-11-12 from
+job `df81d898`: its trace records the console commands above, and the pcap's
+first packet is the MLD report the link sent when it was brought up by hand.
+
+**Fix.** sandboxd's Ubuntu network step now starts with
+`sudo ip link set eth0 up`, which does nothing when the link is already up,
+so the 2026-11-12 image works without a rebuild. The next image brings the
+link up itself (previous entry).
+
+### A `tor` clone's first connections hang for about two minutes
+
+**Symptom.** A clone in `tor` resolves names, and every SYN gets a SYN-ACK
+within microseconds, but no data comes back for the first minute or two. Then
+it starts working. `journalctl -u tor@default` has:
+
+```
+Tried for 120 seconds to get a connection to [scrubbed]:443. Giving up. (waiting for circuit)
+```
+
+Under Windows the guest reports no internet, and anything the sample tries
+early fails.
+
+**Cause.** The SYN-ACK is tor's own `TransPort` on Dom0 accepting the
+redirected connection, so it says nothing about the internet. tor then needs a
+circuit for the stream, and an idle tor stops keeping one ready ("Tor has been
+idle for 3600 seconds; assuming established circuits no longer work"). On
+2026-11-12, tor had been restarted 2.5 h earlier with no traffic since. Job
+`47fdf99f`'s first streams waited from 14:47:15, one gave up after 120 s, and
+data came back from 14:49:31.
+
+**Fix — Candidate.** `automation/torrc` sets `CircuitsAvailableTimeout 24 hours`
+so that an unused circuit is kept open between analyses. `make sandboxd`
+installs it and restarts tor. `tor --verify-config` accepts it (Dom0,
+2026-11-12). **Unmeasured**: whether it removes the wait, especially after a
+restart with no activity. If it does not, the next option is a warm-up through
+`DNSPort` before the sample launches.
 
 ### tor logs `Possible loop in your NAT rules?` once per job
 

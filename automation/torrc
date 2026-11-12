@@ -71,6 +71,23 @@ SOCKSPort 0
 ORPort 0
 ExitRelay 0
 
+# Keep a circuit ready between analyses.
+#
+# Clones arrive hours apart, and an idle tor stops keeping circuits
+# ("Tor has been idle for 3600 seconds; assuming established circuits no
+# longer work"). The next clone's connections then wait for one to be built.
+# On 2026-11-12, 2.5 h after a restart with no traffic, a Windows clone's
+# first streams waited from 14:47:15, one gave up after 120 s ("waiting for
+# circuit"), and data only came back from 14:49:31. The guest looked offline
+# for the first two minutes of its run, which is when a sample checks in.
+#
+# This asks tor to keep an unused circuit open for 24 hours after activity.
+# **UNMEASURED**: that it removes the wait, and what it does after a restart
+# with no activity at all, have not been observed yet. If a clone's first
+# connection still waits after a long idle, this did not cover it, and a
+# warm-up probe through DNSPort before launch is the next option.
+CircuitsAvailableTimeout 24 hours
+
 # Log to syslog at notice. Enough to see circuits built and exits chosen --
 # which is what makes "the sample could not connect" distinguishable from
 # "Tor could not build a circuit" -- without recording per-connection detail

@@ -584,15 +584,24 @@ ubuntu_analysis_vm:
 	\
 	# DHCP stays on for the INSTALL, which fetches ubuntu-desktop and the \
 	# updates over xenbr0, and is switched off in the installed system by the \
-	# last two late-commands (2026-11-11). Left on, systemd-networkd DHCPs eth0 \
-	# from the netplan file cloud-init renders out of the installer network \
-	# config, restarts DHCP when a restored clone regains carrier, and can drop \
-	# the static address sandboxd gave it a moment earlier: the clone then \
-	# reaches nothing in any egress mode, on some runs and not others. With \
-	# cloud-init network config disabled and no netplan file, networkd leaves \
-	# eth0 alone; NetworkManager already does (10-globally-managed-devices). \
-	# The golden then has no network when booted on its own; configure it by \
-	# hand for maintenance. UNPROVEN until the next image built by this target. \
+	# last two late-commands. Left on, systemd-networkd DHCPs eth0 from the \
+	# netplan file cloud-init renders out of the installer network config, \
+	# restarts DHCP when a restored clone regains carrier, and can drop the \
+	# static address sandboxd gave it a moment earlier: the clone then reaches \
+	# nothing in any egress mode, on some runs and not others (2026-11-11). \
+	# The first fix disabled cloud-init network config and left no netplan \
+	# file. The 2026-11-12 image built that way sent no DHCP, but NOTHING \
+	# brought eth0 up: it was saved with the link down, sandboxd's default \
+	# route was refused, and nothing left the clone (TROUBLESHOOTING). \
+	# So cloud-init now renders a netplan file with eth0 under networkd and \
+	# dhcp4 false: networkd brings the link up and runs no DHCP client. \
+	# UNPROVEN until the next image built by this target, including whether \
+	# networkd leaves sandboxd's address and route alone across the carrier \
+	# loss and gain a restore causes. sandboxd sets the link up itself as \
+	# well, so the 2026-11-12 image works without a rebuild. NetworkManager \
+	# leaves eth0 alone either way (10-globally-managed-devices). The golden \
+	# has no address when booted on its own; configure it by hand for \
+	# maintenance. \
 	\
 	# Firefox is kept out of the image (2026-11-12, the operator's decision). \
 	# On 22.04 the firefox deb is a placeholder whose preinst installs the \
@@ -644,9 +653,9 @@ ubuntu_analysis_vm:
 	"    - curtin in-target --target=/target -- sh -c 'printf \"[daemon]\nAutomaticLoginEnable=true\nAutomaticLogin=$(ANALYSIS_VM_USER)\n\" > /etc/gdm3/custom.conf'" \
 	"    - curtin in-target --target=/target -- sed -i 's/^GRUB_CMDLINE_LINUX=\"/&net.ifnames=0 /' /etc/default/grub" \
 	"    - curtin in-target --target=/target -- update-grub" \
-	"    - curtin in-target --target=/target -- sh -c 'printf \"network\072\n  config\072 disabled\n\" > /etc/cloud/cloud.cfg.d/99-sandbox-no-network.cfg'" \
+	"    - curtin in-target --target=/target -- sh -c 'printf \"network\072\n    version\072 2\n    renderer\072 networkd\n    ethernets\072\n        eth0\072\n            dhcp4\072 false\n\" > /etc/cloud/cloud.cfg.d/99-no-dhcp.cfg'" \
 	"    - curtin in-target --target=/target -- sh -c 'rm -f /etc/netplan/*.yaml'" \
-	"  keyboard:" \
+		"  keyboard:" \
 	"    layout: \"es\"" > user-data; \
 	touch meta-data; \
 	cloud-localds \

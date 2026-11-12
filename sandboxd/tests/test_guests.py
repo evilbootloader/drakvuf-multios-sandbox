@@ -195,6 +195,11 @@ def test_ubuntu_configures_with_the_ip_chain(tmp_path):
 
     assert "ip addr add 172.16.3.2/24 dev eth0" in script
     assert "ip route replace default via 172.16.3.1" in script
+    # The link comes up before anything else: on a down link the default
+    # route is refused, the `&&` chain stops, and the clone keeps its address
+    # with no route and no resolver (the 2026-11-12 image, saved link-down).
+    assert script.startswith("sudo ip link set eth0 up && ")
+    assert script.index("link set eth0 up") < script.index("route replace default")
     # The resolver is NOT the gateway: nothing has ever listened on port 53
     # there, so guest name resolution failed on every run before 2026-08-09.
     assert "nameserver 1.1.1.1" in script
