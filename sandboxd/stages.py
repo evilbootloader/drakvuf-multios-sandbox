@@ -58,6 +58,8 @@ from .postprocessing.paths import (DUMPS_DIR, DUMPS_ZIP, EXTRACTED_DIR,
 # The child-process runner, not the plugins: since 2026-11-03 the daemon does
 # not import capa or vivisect at all (sandboxd/postprocessing/child.py).
 from .postprocessing.child import postprocess_in_child
+# Standard library only: which procdumps are the sample's, by the report
+from .postprocessing import procdumps
 
 # Well inside LEASE_SECONDS=120: twelve beats per lease, so a run of failures
 # on a busy platform is survivable where a single missed beat used to eat a
@@ -1155,6 +1157,21 @@ class Analysis:
         # keeps the job directory on Dom0 after the upload (`_remove_results`),
         # and the split's own log line says what went wrong.
         skipped = packed | {TRACE_LOG}
+        # procdump2's dumps upload for the sample's processes only, as
+        # cape_results.json names the sample (operator, 2026-11-12): it dumps
+        # every process that exits, the guest's services included, and those
+        # are tens of megabytes each of the result budget. Left on Dom0, not
+        # deleted. Without a readable report every dump uploads, as before --
+        # they are most of what is left of a run whose postprocessing failed.
+        not_sample = procdumps.outside_sample(job_dir)
+        left_out = not_sample or set()
+        procdump_note = ""
+        if left_out:
+            n = sum(1 for name in left_out if not name.endswith(".metadata"))
+            procdump_note = (f"procdumps: {n} dump{'s' if n != 1 else ''} of processes "
+                             "not the sample's left out")
+        elif not_sample is None and any((job_dir / PROCDUMPS_DIR).glob("*")):
+            procdump_note = "procdumps: no CAPE report to name the sample; every dump uploaded"
         # **Screenshots last.** Sorted by path alone, `screenshots/` would come
         # before `syscall.log.gz`, `trace.stderr` and `ttps.json` -- so the
         # MAX_ARTIFACTS cap, or COLLECT_BUDGET running out mid-upload, would
@@ -1162,7 +1179,8 @@ class Analysis:
         # the order it had before frames existed.
         found = sorted((p for p in job_dir.rglob("*")
                         if p.is_file()
-                        and p.relative_to(job_dir).parts[0] not in skipped),
+                        and p.relative_to(job_dir).parts[0] not in skipped
+                        and str(p.relative_to(job_dir)) not in left_out),
                        key=lambda p: (p.relative_to(job_dir).parts[0]
                                       == SCREENSHOTS_DIR, p))
         truncated = len(found) > MAX_ARTIFACTS
@@ -1222,9 +1240,9 @@ class Analysis:
         manifest = {"schema_version": 1, "artifacts": entries,
                     "documents": documents, "truncated": truncated}
         # The platform bounds `notes` at 4096 characters (result-schema.md
-        # 4.2); both parts are short sentences, the postprocessing one at
+        # 4.2); every part is a short sentence, the postprocessing one at
         # most a list of plugin names.
-        notes = [n for n in (self._trace_note, self._postprocess_note) if n]
+        notes = [n for n in (self._trace_note, self._postprocess_note, procdump_note) if n]
         if notes:
             manifest["notes"] = "; ".join(notes)[:4096]
         return Outcome(

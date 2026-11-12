@@ -309,6 +309,74 @@ def test_raw_dumps_upload_unless_process_dumps_packed_them(tmp_path):
     assert api.uploaded == [DUMPS_ZIP]
 
 
+def _procdumps(job_dir, *dumps):
+    """procdump2's output: a gzipped dump and its sidecar per (name, pid)."""
+    import json
+    from sandboxd.postprocessing.paths import PROCDUMPS_DIR
+    (job_dir / PROCDUMPS_DIR).mkdir(parents=True)
+    for name, pid in dumps:
+        (job_dir / PROCDUMPS_DIR / name).write_bytes(b"\x1f\x8b")
+        (job_dir / PROCDUMPS_DIR / f"{name}.metadata").write_text(json.dumps(
+            {"DataFileName": name, "PID": pid, "ProcessName": "x.exe", "Compression": "gzip"}))
+
+
+def _report(job_dir, processes, sample=None):
+    """A cape_results.json naming (seqid, pid) processes, `sample` the seqids."""
+    import json
+    from sandboxd.postprocessing.paths import CAPE_RESULTS
+    doc = {"behavior": {"processes": [{"process_id": pid, "seqid": seqid} for seqid, pid in processes]},
+           "trace_split": {} if sample is None else {"sample": sample}}
+    (job_dir / CAPE_RESULTS).write_text(json.dumps(doc))
+
+
+def test_only_the_samples_procdumps_upload(tmp_path):
+    """procdump2 dumps every process that exits; only the sample's upload,
+    as cape_results.json names the sample (operator, 2026-11-12). The rest
+    stay on Dom0, and the manifest says how many were left out."""
+    cfg = config(tmp_path)
+    job_dir = tmp_path / "results" / "job"
+    _procdumps(job_dir, ("procdump.0", 4100), ("procdump.1", 900), ("procdump.2", 4188))
+    # A dump no sidecar names cannot be shown to be the sample's
+    (job_dir / "procdumps" / "procdump.9").write_bytes(b"\x1f\x8b")
+    # Under scope "all" the report has the guest's 900 too; trace_split's
+    # sample says which are the sample's
+    _report(job_dir, [(10, 4100), (11, 4188), (20, 900)], sample=[10, 11])
+
+    api = FakeApi()
+    outcome = S.Analysis(api, runner_ready(), cfg)._collect(FakeLease(), job_dir)
+    assert sorted(n for n in api.uploaded if n.startswith("procdumps/")) == [
+        "procdumps/procdump.0", "procdumps/procdump.0.metadata",
+        "procdumps/procdump.2", "procdumps/procdump.2.metadata"]
+    assert "2 dumps of processes not the sample's left out" in outcome.manifest["notes"]
+    assert (job_dir / "procdumps" / "procdump.1").exists(), "left out of the upload, not deleted"
+
+
+def test_without_a_report_every_procdump_uploads(tmp_path):
+    """No cape_results.json -- postprocessing failed -- and the dumps are
+    most of what is left of the run: all of them upload, and the manifest
+    says why."""
+    cfg = config(tmp_path)
+    job_dir = tmp_path / "results" / "job"
+    _procdumps(job_dir, ("procdump.0", 4100), ("procdump.1", 900))
+
+    api = FakeApi()
+    outcome = S.Analysis(api, runner_ready(), cfg)._collect(FakeLease(), job_dir)
+    assert len([n for n in api.uploaded if n.startswith("procdumps/")]) == 4
+    assert "no CAPE report to name the sample" in outcome.manifest["notes"]
+
+
+def test_a_report_from_before_trace_split_named_the_sample_is_all_sample(tmp_path):
+    cfg = config(tmp_path)
+    job_dir = tmp_path / "results" / "job"
+    _procdumps(job_dir, ("procdump.0", 4100), ("procdump.1", 900))
+    _report(job_dir, [(10, 4100)])
+
+    api = FakeApi()
+    S.Analysis(api, runner_ready(), cfg)._collect(FakeLease(), job_dir)
+    assert sorted(n for n in api.uploaded if n.startswith("procdumps/")) == [
+        "procdumps/procdump.0", "procdumps/procdump.0.metadata"]
+
+
 def test_the_raw_trace_never_uploads_even_when_the_split_left_it(tmp_path):
     """The per-plugin logs are the stream; `trace.log` is what they were
     split from. `split_drakvuf_log` removes it on success, and `_collect`

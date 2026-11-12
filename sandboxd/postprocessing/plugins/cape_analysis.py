@@ -25,6 +25,7 @@ from typing import Optional
 import orjson
 
 from ...guests import TargetOs
+from ..paths import CAPE_RESULTS
 from .cape_plugin import (
     CapeOptions, RunProcessing, RunSignatures, load_signatures, split_by_process,
 )
@@ -34,7 +35,6 @@ from .plugin_base import CapeConfigSection, PostprocessContext
 
 log = logging.getLogger(__name__)
 
-CAPE_RESULTS = "cape_results.json"
 
 # `target.file.type` is the output of `file` in CAPE, and capa's CAPE
 # extractor reads format, OS and arch out of it -- nothing else. There is no

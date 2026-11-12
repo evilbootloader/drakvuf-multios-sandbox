@@ -187,6 +187,11 @@ results/<job_id>/
   dumps.zip            memdump's output, packed            reserved
   dumps/…              memdump's output, raw -- present    prefix
                        only when nothing packed it
+  procdumps/…          procdump2's whole-process dumps,    prefix -- only for a
+                       gzipped, with a .metadata sidecar   job that chose
+                       each: the sample's processes only,  `procdump2`
+                       by cape_results.json (the others
+                       stay on Dom0; `notes` counts them)
   ipt.zip              the ipt plugin's output, packed     reserved
   ipt/…                (compress_ipt); the same pair as    prefix -- only for a
                        dumps.zip and dumps/                job that chose `ipt`

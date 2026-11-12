@@ -32,8 +32,14 @@ IPT_ZIP = "ipt.zip"
 # procdump2's output directory: `--procdump-dir`, which `argv_trace` passes
 # only when `procdump2` is among the job's plugins, and `stages._trace`
 # creates on the same condition. Not packed: DRAKVUF already gzips each dump
-# (`--compress-procdumps`), so `stages._collect` uploads them as they are.
+# (`--compress-procdumps`), so `stages._collect` uploads them as they are --
+# the sample's only, by cape_results.json (procdumps.py).
 PROCDUMPS_DIR = "procdumps"
+
+# CAPE's processing of the trace (plugins/cape_analysis.py). Named here
+# because the daemon reads it too, without importing CAPE: the sample's PIDs,
+# for which of procdump2's dumps upload (procdumps.py).
+CAPE_RESULTS = "cape_results.json"
 
 # fileextractor's output directory: DRAKVUF's `-D`. Upstream never passes -D
 # and has no plugin for it; the name is result-schema.md's, chosen there
