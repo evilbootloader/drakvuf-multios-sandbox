@@ -941,11 +941,23 @@ def _ubuntu_netcfg(job: Job, subnet: str) -> str:
     # its address, no route and the stub resolver -- nothing leaves, in any
     # egress mode (TROUBLESHOOTING, "An Ubuntu clone has its address but
     # nothing leaves"). A no-op on a template whose link is already up.
+    #
+    # `rm` before the write, so /etc/resolv.conf becomes a FILE. On Ubuntu it
+    # is a symlink to systemd-resolved's /run/systemd/resolve/stub-resolv.conf,
+    # and resolved rewrites that file whenever a link changes state -- traced
+    # 2026-11-12 (job df81d898), three rewrites within 2 s of eth0 coming up.
+    # Written through the symlink, the nameserver lasted until the link-up
+    # above settled, then read 127.0.0.53 again: a resolver with no upstream,
+    # so every name failed inside the guest with no DNS packet on the wire,
+    # while connections by address worked (TROUBLESHOOTING, "An Ubuntu clone
+    # reaches addresses but resolves no names"). resolved never touches a
+    # plain /etc/resolv.conf.
     return (
         f"sudo ip link set eth0 up && "
         f"sudo ip addr flush dev eth0 && "
         f"sudo ip addr add {subnet}.{job.vlan}.2/24 dev eth0 && "
         f"sudo ip route replace default via {subnet}.{job.vlan}.1 dev eth0 && "
+        f"sudo rm -f /etc/resolv.conf && "
         f"echo 'nameserver {paths.nameserver}' | sudo tee /etc/resolv.conf"
     )
 

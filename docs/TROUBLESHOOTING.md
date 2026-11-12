@@ -799,7 +799,33 @@ first packet is the MLD report the link sent when it was brought up by hand.
 **Fix.** sandboxd's Ubuntu network step now starts with
 `sudo ip link set eth0 up`, which does nothing when the link is already up,
 so the 2026-11-12 image works without a rebuild. The next image brings the
-link up itself (previous entry).
+link up itself (previous entry). With the link up, the next failure was name
+resolution: next entry.
+
+### An Ubuntu clone reaches addresses but resolves no names
+
+**Symptom.** In the clone, `wget 1.1.1.1` works through `tor`, but
+`curl google.com` prints `curl: (6) Could not resolve host`, and the pcap has
+no DNS query at all, to any server. `ip a` and `ip route` look right:
+`172.16.<vlan>.2/24` on `eth0` and a default route via `172.16.<vlan>.1`.
+`ping 1.1.1.1` and `ping 172.16.<other vlan>.1` getting no reply is expected in
+`tor`, which carries TCP only, and is not this.
+
+**Cause.** `/etc/resolv.conf` on Ubuntu is a symlink to systemd-resolved's
+`/run/systemd/resolve/stub-resolv.conf`. sandboxd wrote `nameserver 1.1.1.1`
+through it, and resolved rewrote the file whenever a link changed state. The
+trace of job `df81d898` (2026-11-12) has three rewrites within 2 s of `eth0`
+coming up. Since sandboxd brings the link up itself, one lands just after its
+write. The file reads `nameserver 127.0.0.53` again, and resolved has no
+upstream server: nothing manages `eth0`, so nothing gave it one. Every lookup
+fails inside the guest, so no packet ever leaves. Seen on job `97ba17a5`,
+whose trace was deleted after upload, so the mechanism rests on `df81d898`.
+
+**Fix.** The network step now runs `sudo rm -f /etc/resolv.conf` before
+writing it, so it becomes a plain file that resolved never touches. glibc
+reads it directly, and Ubuntu's `hosts:` line uses `dns`, not `resolve`. The
+query goes to `1.1.1.1:53` and the `tor` rules redirect it to tor's
+`DNSPort`. **Not yet run on a clone.**
 
 ### A `tor` clone's first connections hang for about two minutes
 

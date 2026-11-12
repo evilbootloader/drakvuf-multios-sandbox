@@ -200,6 +200,11 @@ def test_ubuntu_configures_with_the_ip_chain(tmp_path):
     # with no route and no resolver (the 2026-11-12 image, saved link-down).
     assert script.startswith("sudo ip link set eth0 up && ")
     assert script.index("link set eth0 up") < script.index("route replace default")
+    # The symlink to systemd-resolved's stub file goes before the write, or
+    # resolved's next rewrite (on any link change) puts 127.0.0.53 back and
+    # no name resolves (job df81d898, 2026-11-12).
+    assert "sudo rm -f /etc/resolv.conf && " in script
+    assert script.index("rm -f /etc/resolv.conf") < script.index("tee /etc/resolv.conf")
     # The resolver is NOT the gateway: nothing has ever listened on port 53
     # there, so guest name resolution failed on every run before 2026-08-09.
     assert "nameserver 1.1.1.1" in script
