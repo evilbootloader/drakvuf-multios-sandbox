@@ -254,8 +254,13 @@ def test_the_clone_domain_and_vlan_are_reported(tmp_path):
 
 
 def test_the_manifest_is_the_draft_018_shape(tmp_path):
-    """The trace is uploaded SPLIT, one `<plugin>.log` per DRAKVUF plugin,
-    and `trace.log` itself is not in the manifest.
+    """The trace is uploaded WHOLE and compressed, `trace.log.gz`, beside
+    CAPE's `cape_results.json`; `trace.log` itself is not in the manifest.
+
+    Amended 2026-11-10: until then the trace was uploaded split, one
+    `<plugin>.log` per DRAKVUF plugin, and this asserted `inject.log` and
+    `filetracer.log`. Nothing splits it now (postprocessing/plugins/
+    __init__.py).
 
     Amended 2026-09-19 (result-schema.md 4.1): until then this asserted
     `trace.log` was present, and passed only because the split read a
@@ -274,7 +279,7 @@ def test_the_manifest_is_the_draft_018_shape(tmp_path):
     assert manifest["schema_version"] == 1
     names = {a["name"] for a in manifest["artifacts"]}
     assert S.TRACE_LOG not in names
-    assert {"inject.log", "filetracer.log", S.TRACE_STDERR} <= names
+    assert {"trace.log.gz", "cape_results.json", S.TRACE_STDERR} <= names
     for entry in manifest["artifacts"]:
         assert len(entry["sha256"]) == 64
         assert entry["size_bytes"] >= 0
@@ -1039,7 +1044,7 @@ def test_the_sample_is_still_staged_for_postprocessing(tmp_path, monkeypatch):
     goes only once collection is done."""
     seen = {}
 
-    def postprocess(runner, job_dir, os_name, vlan, *, max_mib, timeout):
+    def postprocess(runner, job_dir, os_name, vlan, *, max_mib, timeout, sample=None):
         seen["sample"] = (tmp_path / "staging" / FakeLease().job_id
                           / FakeLease().submitted_filename).exists()
         return None
@@ -1422,6 +1427,34 @@ def test_a_healthy_dependency_applies_the_mode_that_was_asked_for(tmp_path,
     assert "reason" not in applied
 
 
+# --- the network step's anchor (2026-11-11) ---------------------------------
+
+def test_only_windows_jobs_carry_a_separate_network_anchor(tmp_path):
+    """Windows configures its network from services.exe because explorer.exe
+    has no administrator token for `netsh`; the sample still starts from
+    explorer.exe. Ubuntu and Android are untouched: no network anchor, so
+    `argv_configure_network` keeps using `injection_pid` for them."""
+    from types import SimpleNamespace
+
+    from sandboxd.guests import SampleKind
+
+    cfg = config(tmp_path)
+    cfg.netcfg_pids = {TargetOs.WINDOWS: 816}
+    cfg.injection_pids = {TargetOs.UBUNTU: 1, TargetOs.WINDOWS: 4724}
+    analysis = S.Analysis(FakeApi(), runner_ready(), cfg)
+    clone = SimpleNamespace(domid=42, name="clone")
+    sample = tmp_path / "sample.bin"
+    sample.write_bytes(_ELF)
+
+    win = analysis._job(FakeLease(target_os="windows"), TargetOs.WINDOWS,
+                        SampleKind.PE, clone, 3, tmp_path / "w", sample)
+    ubuntu = analysis._job(FakeLease(), TargetOs.UBUNTU, SampleKind.ELF,
+                           clone, 3, tmp_path / "u", sample)
+
+    assert (win.injection_pid, win.netcfg_pid) == (4724, 816)
+    assert (ubuntu.injection_pid, ubuntu.netcfg_pid) == (1, None)
+
+
 # --- drop location, subfolder and command line (2026-11-01) -----------------
 
 def _launch_run(tmp_path, lease, runner=None, cfg=None, **waits):
@@ -1587,7 +1620,9 @@ def test_postprocessing_runs_in_a_child_with_the_memory_limit_and_budget(tmp_pat
     assert call.argv[4:6] == ("--os", "ubuntu")
     limit = call.argv[call.argv.index("--max-mib") + 1]
     assert limit == str(S.config.POSTPROCESS_MAX_MIB)
-    assert call.argv[-2:] == ("--vlan", "3")
+    assert call.argv[call.argv.index("--vlan") + 1] == "3"
+    # The staged sample, for CAPE's `target`.
+    assert call.argv[-2] == "--sample" and call.argv[-1].endswith("/sample.bin")
     assert call.timeout == T.POSTPROCESS_BUDGET
     assert "notes" not in api.completed[0]
 

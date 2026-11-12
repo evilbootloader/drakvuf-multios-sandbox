@@ -41,6 +41,8 @@ def job(tmp_path, os_=TargetOs.UBUNTU, kind=SampleKind.ELF,
         # and made every test in this file describe a configuration the daemon
         # had stopped producing.
         options=G.default_trace_options(os_, kind), kind=kind,
+        # services.exe in the state saved 2026-11-04; only Windows has one.
+        netcfg_pid=816 if os_ is TargetOs.WINDOWS else None,
     )
     defaults.update(kw)
     return G.Job(**defaults)
@@ -650,15 +652,11 @@ def test_the_defaults_are_the_submit_forms_on_every_guest():
         assert not {"ipt", "hidsim"} & set(got)
     assert "libmon" not in G._ANDROID_PLUGINS
 
-"""
-procdump dump size is too big
-
 def test_procdump2_is_given_its_directory(tmp_path):
-    \"""Without --procdump-dir procdump2 writes nothing at all.\"""
+    """Without --procdump-dir procdump2 writes nothing at all."""
     argv = G.argv_trace(job(tmp_path))
     assert argv[argv.index("--procdump-dir") + 1].endswith("/procdumps")
     assert "--compress-procdumps" in argv
-"""
 
 def test_android_does_not_get_libmon(tmp_path):
     """BlissOS links bionic, and libmon v1 finds `r_debug` through ld.so's
@@ -802,7 +800,7 @@ def test_every_builder_passes_a_real_mode(tmp_path):
     error text -- and the analysis does not run.
 
     Parameterised over all three guests because the bug was in the branch, not
-    in the value: Windows takes `shellexec` and the others `execproc`, so a
+    in the value: Windows takes `createproc` and the others `execproc`, so a
     test pinned to one OS proves nothing about the other.
     """
     for os_ in (TargetOs.UBUNTU, TargetOs.ANDROID, TargetOs.WINDOWS):
@@ -825,21 +823,47 @@ def test_every_builder_passes_a_real_mode(tmp_path):
                 f"done nothing and the analysis does not run")
 
 
-def test_windows_is_the_only_guest_that_shellexecs(tmp_path):
-    """The branch itself, so a future edit cannot flip it silently.
-
-    `shellexec` is what a Windows guest needs because the command is a
-    PowerShell line rather than an executable plus argv; the Linux-family
-    guests exec directly.
-    """
+def test_the_linux_guests_configure_their_network_from_the_sample_anchor(tmp_path):
+    """Unchanged by the Windows fix of 2026-11-11: `execproc` from
+    `injection_pid`, the same anchor the sample starts from."""
     for os_ in (TargetOs.UBUNTU, TargetOs.ANDROID):
         kind = SampleKind.APK if os_ is TargetOs.ANDROID else SampleKind.ELF
         argv = G.argv_configure_network(job(tmp_path, os_=os_, kind=kind))
         assert argv[argv.index("-m") + 1] == "execproc"
+        assert argv[argv.index("-i") + 1] == "1415"
 
+
+def test_windows_configures_its_network_from_services_not_explorer(tmp_path):
+    """`netsh` needs an administrator token, and explorer.exe -- the sample's
+    anchor -- runs at Medium integrity without one. From it `netsh` printed
+    "requires elevation", the injection still reported success, and every
+    clone kept DHCP and a 169.254 address (2026-11-11). From services.exe,
+    SYSTEM, ten clones out of ten took their address and reached HTTPS through
+    `tor`.
+
+    `createproc` carries the whole command line in `-e`; it has no `-f`.
+    """
     argv = G.argv_configure_network(
         job(tmp_path, os_=TargetOs.WINDOWS, kind=SampleKind.PE))
-    assert argv[argv.index("-m") + 1] == "shellexec"
+
+    assert argv[argv.index("-m") + 1] == "createproc"
+    assert argv[argv.index("-i") + 1] == "816"
+    assert "1415" not in argv, "the network step must not anchor on explorer.exe"
+    assert "-f" not in argv
+    assert argv[argv.index("-e") + 1] == (
+        "C:\\Windows\\System32\\cmd.exe /c netsh interface ip set address "
+        "name=Ethernet static 172.16.3.2 255.255.255.0 172.16.3.1 && netsh "
+        "interface ip set dns name=Ethernet static 1.1.1.1 validate=no")
+
+
+def test_windows_without_a_network_anchor_refuses_rather_than_using_explorer(tmp_path):
+    """Falling back to `injection_pid` would be the failure this replaced:
+    an injection that reports success and a clone that reaches nothing. Refuse,
+    and name the variable that fixes it."""
+    j = job(tmp_path, os_=TargetOs.WINDOWS, kind=SampleKind.PE, netcfg_pid=None)
+
+    with pytest.raises(ValueError, match="SANDBOXD_INJECTION_PID_WINDOWS_NETCFG"):
+        G.argv_configure_network(j)
 
 
 def test_no_builder_hardcodes_an_unevidenced_mode():

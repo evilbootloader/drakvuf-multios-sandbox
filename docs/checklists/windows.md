@@ -11,6 +11,12 @@
 > `shellexec` is the working injection mode; `createproc` was tried in
 > `25e5fc6` and reverted six minutes later in `48ee57d`.
 >
+> **2026-11-11: the network step is the exception.** It runs `createproc` from
+> `services.exe` (`SANDBOXD_INJECTION_PID_WINDOWS_NETCFG`), because from
+> explorer.exe `netsh` needed elevation, failed silently, and no Windows clone
+> had an address. The sample still `shellexec`s from explorer.exe.
+> TROUBLESHOOTING, "A Windows clone has no network in any egress mode".
+>
 > **Every box below nevertheless stays unchecked, and that is not an
 > oversight.** This file's standard is `android.md`'s — a box is ticked by a
 > transcript, not by a report — and what closed DRAFT-034 was a report. The

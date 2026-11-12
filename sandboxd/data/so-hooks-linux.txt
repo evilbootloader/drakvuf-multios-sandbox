@@ -10,20 +10,25 @@
 # "libc.so.6" matches /lib/x86_64-linux-gnu/libc.so.6 and "libssl.so" also
 # matches a versioned libssl.so.3. Matching is case-sensitive.
 #
-# Each <arg> is [Name:]type. Only some types change formatting -- lpcstr
-# reads a NUL-terminated string, pulong/pulonglong dereference a pointer --
-# and any other name documents the signature while the raw value is printed.
+# Each <arg> is [Name:]type. Only some types change formatting (the drakvuf
+# submodule's libusermode/utils.cpp, make_arg_printer) -- lpcstr reads a
+# NUL-terminated string; pulong/pulonglong dereference a pointer; int and
+# uint print 32 bits; lpsockaddr the address a sockaddr holds;
+# buffer[Len] the bytes, as many as argument Len says, and obuffer[Len] the
+# same read at the return, Len `return` for the return value (a pulong Len
+# is what it points to); argv a NULL-terminated string array, joined;
+# ppaddrinfo a resolver's answer, its addresses -- and any other name
+# documents the signature while the raw value is printed.
 #
 # ---------------------------------------------------------------------------
 # WHAT IS DELIBERATELY ABSENT, AND WHY
 #
-# **Hot functions are not hooked.** One Dom0 core saturates per concurrent
-# trace and measured syscall throughput is 415-856/s (CURRENT-STATE.md, and
-# `12-baremetal-trial.md` Part H). A breakpoint on `strcmp`, `memcpy`, `read`,
-# `write`, `getc` or `putc` fires thousands of times per second in ordinary
-# library code and would cost far more than the trace is worth. capa's rule
-# set names several of them; they are dropped here on purpose, and a future
-# generator over capa-rules must keep dropping them.
+# **Hot functions: no longer excluded** (operator, 2026-11-11). This used to
+# keep out anything firing thousands of times per second -- `strcmp`,
+# `memcpy`, `poll`, `getc` -- because one Dom0 core saturated per concurrent
+# trace at 415-856 syscalls/s (`12-baremetal-trial.md` Part H). Parallel
+# event processing changed that budget; `poll`, `ppoll`, `read` and `write`
+# are hooked now, and a trace that saturates is the signal to revisit.
 #
 # **Kernel symbols are not hookable here.** capa-rules names `commit_creds`,
 # `prepare_kernel_cred` and `nf_register_hook` for rootkit detection. libmon
@@ -44,10 +49,10 @@
 # ---------------------------------------------------------------------------
 
 # --- process and library loading -------------------------------------------
-libc.so.6,execve,log,Path:lpcstr,argv:lpvoid,envp:lpvoid
-libc.so.6,execvp,log,File:lpcstr,argv:lpvoid
+libc.so.6,execve,log,Path:lpcstr,argv:argv,envp:lpvoid
+libc.so.6,execvp,log,File:lpcstr,argv:argv
 libc.so.6,fork,log
-libc.so.6,posix_spawn,log,Pid:lpvoid,Path:lpcstr,Actions:lpvoid,Attr:lpvoid,argv:lpvoid,envp:lpvoid
+libc.so.6,posix_spawn,log,Pid:lpvoid,Path:lpcstr,Actions:lpvoid,Attr:lpvoid,argv:argv,envp:lpvoid
 libc.so.6,system,log,Command:lpcstr
 libc.so.6,popen,log,Command:lpcstr,Mode:lpcstr
 libc.so.6,kill,log,Pid:int,Signal:int
@@ -80,20 +85,35 @@ libc.so.6,write,log,fd:int,buf:lpvoid,count:ulong
 
 # --- network ---------------------------------------------------------------
 libc.so.6,socket,log,Domain:int,Type:int,Protocol:int
-libc.so.6,connect,log,Fd:int,SockAddr:lpvoid,AddrLen:int
-libc.so.6,bind,log,Fd:int,SockAddr:lpvoid,AddrLen:int
+# lpsockaddr: the address the sockaddr holds, "203.0.113.7:443" or a unix
+# socket's path (libusermode SockaddrPrinter); accept's is read at the return,
+# where libmon prints every argument.
+libc.so.6,connect,log,Fd:int,SockAddr:lpsockaddr,AddrLen:int
+libc.so.6,bind,log,Fd:int,SockAddr:lpsockaddr,AddrLen:int
 libc.so.6,listen,log,Fd:int,Backlog:int
-libc.so.6,accept,log,Fd:int,SockAddr:lpvoid,AddrLen:lpvoid
-libc.so.6,getaddrinfo,log,Node:lpcstr,Service:lpcstr,Hints:lpvoid,Result:lpvoid
+libc.so.6,accept,log,Fd:int,SockAddr:lpsockaddr,AddrLen:lpvoid
+libc.so.6,accept4,log,Fd:int,SockAddr:lpsockaddr,AddrLen:lpvoid,Flags:int
+libc.so.6,shutdown,log,Fd:int,How:int
+libc.so.6,getpeername,log,Fd:int,SockAddr:lpsockaddr,AddrLen:lpvoid
+libc.so.6,getaddrinfo,log,Node:lpcstr,Service:lpcstr,Hints:lpvoid,Result:ppaddrinfo
 libc.so.6,gethostbyname,log,Name:lpcstr
+libc.so.6,gethostbyaddr,log,Addr:lpvoid,Len:uint,Type:int
+libc.so.6,inet_ntop,log,Af:int,Src:lpvoid,Dst:lpcstr,Size:uint
 libc.so.6,setsockopt,log,Fd:int,Level:int,Option:int,Value:lpvoid,Len:int
+libc.so.6,getsockopt,log,Fd:int,Level:int,Option:int,Value:lpvoid,Len:lpvoid
+libc.so.6,sendmsg,log,Fd:int,Msg:lpvoid,Flags:int
+libc.so.6,sendmmsg,log,Fd:int,MsgVec:lpvoid,VLen:uint,Flags:int
+libc.so.6,recvmmsg,log,Fd:int,MsgVec:lpvoid,VLen:uint,Flags:int,Timeout:lpvoid
+libc.so.6,sendfile,log,OutFd:int,InFd:int,Offset:lpvoid,Count:ulong
+libc.so.6,poll,log,Fds:lpvoid,Nfds:ulong,Timeout:int
+libc.so.6,ppoll,log,Fds:lpvoid,Nfds:ulong,Timeout:lpvoid,SigMask:lpvoid
 
 # --- credentials and host identity -----------------------------------------
 libc.so.6,getpwnam,log,Name:lpcstr
 libc.so.6,getpwuid,log,Uid:int
 libc.so.6,getlogin,log
 libc.so.6,uname,log,Buf:lpvoid
-libc.so.6,gethostname,log,Buf:lpvoid,Len:ulong
+libc.so.6,gethostname,log,Buf:lpcstr,Len:ulong
 libc.so.6,getenv,log,Name:lpcstr
 
 # --- memory ----------------------------------------------------------------
@@ -122,6 +142,13 @@ libcurl.so.4,curl_easy_init,log
 libcurl.so.4,curl_easy_setopt,log,Handle:lpvoid,Option:int,Value:lpcstr
 libcurl.so.4,curl_easy_perform,log,Handle:lpvoid
 libcurl.so.4,curl_easy_cleanup,log,Handle:lpvoid
+libcurl.so.4,curl_easy_getinfo,log,Handle:lpvoid,Info:int,Value:lpvoid
+libcurl.so.4,curl_multi_init,log
+libcurl.so.4,curl_multi_add_handle,log,Multi:lpvoid,Handle:lpvoid
+libcurl.so.4,curl_multi_perform,log,Multi:lpvoid,Running:pulong
+libcurl.so.4,curl_multi_socket_action,log,Multi:lpvoid,Socket:int,EvBitmask:int,Running:pulong
+libcurl.so.4,curl_multi_remove_handle,log,Multi:lpvoid,Handle:lpvoid
+libcurl.so.4,curl_multi_cleanup,log,Multi:lpvoid
 
 # --- TLS payloads via OpenSSL ----------------------------------------------
 # Plaintext at the library boundary, before encryption -- the only place an
@@ -133,9 +160,23 @@ libcurl.so.4,curl_easy_cleanup,log,Handle:lpvoid
 # A sample that uses OpenSSL directly rather than through libcurl is the case
 # this covers; one that uses libcurl is already covered above, and will also
 # appear here because libcurl calls OpenSSL underneath.
-libssl.so,SSL_write,log,Ssl:lpvoid,Buf:lpcstr,Num:int
-libssl.so,SSL_read,no-retval,log,Ssl:lpvoid,Buf:lpvoid,Num:int
+libssl.so,SSL_write,log,Ssl:lpvoid,Buf:buffer[Num],Num:int
+libssl.so,SSL_write_ex,log,Ssl:lpvoid,Buf:buffer[Num],Num:ulong,Written:pulonglong
+libssl.so,SSL_read,log,Ssl:lpvoid,Buf:obuffer[return],Num:int
+libssl.so,SSL_read_ex,log,Ssl:lpvoid,Buf:obuffer[ReadBytes],Num:ulong,ReadBytes:pulonglong
 libssl.so,SSL_connect,log,Ssl:lpvoid
+libssl.so,SSL_accept,log,Ssl:lpvoid
+libssl.so,SSL_do_handshake,log,Ssl:lpvoid
+
+# Data encrypted or decrypted below TLS, for CAPE's encryptedbuffers: what
+# a sample enciphers with libcrypto itself (a config, a payload, its own C2
+# framing), and GnuTLS's records, its TLS the way SSL_write is OpenSSL's.
+# The plaintext: EncryptUpdate's input at the call, DecryptUpdate's output
+# at the return, as many bytes as *outl says.
+libcrypto.so,EVP_EncryptUpdate,log,Ctx:lpvoid,Out:lpvoid,OutLen:lpvoid,In:buffer[InLen],InLen:int
+libcrypto.so,EVP_DecryptUpdate,log,Ctx:lpvoid,Out:obuffer[OutLen],OutLen:pulong,In:lpvoid,InLen:int
+libgnutls.so,gnutls_record_send,log,Session:lpvoid,Data:buffer[Size],Size:ulong
+libgnutls.so,gnutls_record_recv,log,Session:lpvoid,Data:obuffer[return],Size:ulong
 
 # BEGIN GENERATED -- scripts/gen-hook-lists.py
 # capa-rules v10.0.0-2-g42cbfd4d, verified against /lib/x86_64-linux-gnu/libc.so.6. Regenerate with
@@ -148,7 +189,7 @@ libssl.so,SSL_connect,log,Ssl:lpvoid
 # here, and that check is what keeps this list free of invention.
 libc.so.6,chdir,log
 libc.so.6,cuserid,log
-libc.so.6,dlvsym,log
+libc.so.6,dlvsym,log,Handle:lpvoid,Symbol:lpcstr,Version:lpcstr
 libc.so.6,dup2,log
 libc.so.6,execl,log
 libc.so.6,execle,log
@@ -176,19 +217,19 @@ libc.so.6,ftruncate,log
 libc.so.6,getdents64,log
 libc.so.6,geteuid,log
 libc.so.6,gethostent,log
-libc.so.6,getifaddrs,log
+libc.so.6,getifaddrs,log,IfAddrs:lpvoid
 libc.so.6,getlogin_r,log
-libc.so.6,getnameinfo,log
+libc.so.6,getnameinfo,log,SockAddr:lpsockaddr,AddrLen:uint,Host:lpcstr,HostLen:uint,Serv:lpcstr,ServLen:uint,Flags:int
 libc.so.6,getpwent,log
 libc.so.6,getpwent_r,log
 libc.so.6,getpwnam_r,log
 libc.so.6,getpwuid_r,log
-libc.so.6,getsockname,log
+libc.so.6,getsockname,log,Fd:int,SockAddr:lpsockaddr,AddrLen:lpvoid
 libc.so.6,getspent,log
 libc.so.6,getspent_r,log
 libc.so.6,getspnam,log
 libc.so.6,getspnam_r,log
-libc.so.6,inet_pton,log
+libc.so.6,inet_pton,log,Af:int,Src:lpcstr,Dst:lpvoid
 libc.so.6,ioctl,log
 libc.so.6,lchown,log
 libc.so.6,mmap,log
@@ -200,17 +241,17 @@ libc.so.6,pthread_detach,log
 libc.so.6,pthread_setname_np,log
 libc.so.6,putspent,log
 libc.so.6,readdir,log
-libc.so.6,recv,log
-libc.so.6,recvfrom,log
-libc.so.6,recvmsg,log
+libc.so.6,recv,log,Fd:int,Buf:obuffer[return],Len:ulong,Flags:int
+libc.so.6,recvfrom,log,Fd:int,Buf:obuffer[return],Len:ulong,Flags:int,SrcAddr:lpsockaddr,AddrLen:lpvoid
+libc.so.6,recvmsg,log,Fd:int,Msg:lpvoid,Flags:int
 libc.so.6,remove,log
-libc.so.6,select,log
+libc.so.6,select,log,Nfds:int,ReadFds:lpvoid,WriteFds:lpvoid,ExceptFds:lpvoid,Timeout:lpvoid
 libc.so.6,sem_init,log
 libc.so.6,sem_post,log
 libc.so.6,sem_timedwait,log
 libc.so.6,sem_wait,log
-libc.so.6,send,log
-libc.so.6,sendto,log
+libc.so.6,send,log,Fd:int,Buf:buffer[Len],Len:ulong,Flags:int
+libc.so.6,sendto,log,Fd:int,Buf:buffer[Len],Len:ulong,Flags:int,DestAddr:lpsockaddr,AddrLen:int
 libc.so.6,sleep,log
 libc.so.6,statfs,log
 libc.so.6,sysinfo,log

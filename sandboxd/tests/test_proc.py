@@ -25,6 +25,14 @@ SRC = Path(__file__).resolve().parents[1]
 
 # --- the containment line, enforced rather than asserted in prose ----------
 
+# Submodules under sandboxd/data that carry Python of their own. Not ours and
+# not the daemon's: of CAPESandbox/community only `modules/signatures/` is
+# ever imported, by the postprocessing child (cape_plugin/signatures.py), and
+# the rest of that tree -- CAPE's reporting and utility scripts, which do
+# shell out -- is never loaded.
+THIRD_PARTY = {"cape-community"}
+
+
 def test_only_proc_may_import_subprocess():
     """One module may spawn processes, so there is one place to audit.
 
@@ -36,6 +44,8 @@ def test_only_proc_may_import_subprocess():
     for path in SRC.rglob("*.py"):
         if path.name in ("proc.py", "create_releases.py", "mock_ransomware.py",) or "tests" in path.parts:
             continue
+        if THIRD_PARTY & set(path.parts):
+            continue
         text = path.read_text()
         if re.search(r"^\s*(import subprocess|from subprocess)", text, re.M):
             offenders.append(path.name)
@@ -44,7 +54,7 @@ def test_only_proc_may_import_subprocess():
 
 def test_no_call_site_asks_for_a_shell():
     for path in SRC.rglob("*.py"):
-        if "tests" in path.parts:
+        if "tests" in path.parts or THIRD_PARTY & set(path.parts):
             continue
         assert "shell=True" not in path.read_text(), path
 

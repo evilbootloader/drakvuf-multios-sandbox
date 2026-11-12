@@ -1,4 +1,5 @@
-"""The five host values config.py takes from the environment (2026-11-03).
+"""The host values config.py takes from the environment (2026-11-03; the
+Windows network-step anchor joined them 2026-11-11).
 
 They were sed-edited into the tracked config.py by `make sandboxd` and
 `make setup_hooks_*` until then, which dirtied Dom0's checkout on every deploy
@@ -18,7 +19,8 @@ ROOT = Path(__file__).resolve().parents[2]
 _PROBE = (
     "import sandboxd.config as c; "
     "print(c.DOM0_REPO_ROOT, c.ANALYSIS_USERNAME, c.INJECTION_PID_UBUNTU, "
-    "c.INJECTION_PID_WINDOWS, c.INJECTION_PID_ANDROID)"
+    "c.INJECTION_PID_WINDOWS, c.INJECTION_PID_ANDROID, "
+    "c.INJECTION_PID_WINDOWS_NETCFG)"
 )
 
 
@@ -31,7 +33,7 @@ def _probe(env: dict[str, str]) -> subprocess.CompletedProcess:
 def test_the_defaults_are_a_fresh_checkouts():
     out = _probe({})
     assert out.returncode == 0, out.stderr
-    assert out.stdout.split() == ["/root/drakvuf-multios-sandbox", "user", "1", "1", "1"]
+    assert out.stdout.split() == ["/root/drakvuf-multios-sandbox", "user", "1", "1", "1", "1"]
 
 
 def test_the_environment_file_overrides_every_one_of_them():
@@ -41,9 +43,10 @@ def test_the_environment_file_overrides_every_one_of_them():
         "SANDBOXD_INJECTION_PID_UBUNTU": "1",
         "SANDBOXD_INJECTION_PID_WINDOWS": "4696",
         "SANDBOXD_INJECTION_PID_ANDROID": "3251",
+        "SANDBOXD_INJECTION_PID_WINDOWS_NETCFG": "816",
     })
     assert out.returncode == 0, out.stderr
-    assert out.stdout.split() == ["/srv/checkout", "carlos", "1", "4696", "3251"]
+    assert out.stdout.split() == ["/srv/checkout", "carlos", "1", "4696", "3251", "816"]
 
 
 def test_an_empty_value_is_the_default_not_a_crash():
@@ -69,6 +72,7 @@ def test_the_daemon_names_every_host_variable_for_the_generated_list():
     text = (ROOT / "sandboxd" / "daemon.py").read_text()
     for var in ("SANDBOXD_REPO_ROOT", "SANDBOXD_ANALYSIS_USERNAME",
                 "SANDBOXD_INJECTION_PID_UBUNTU", "SANDBOXD_INJECTION_PID_WINDOWS",
-                "SANDBOXD_INJECTION_PID_ANDROID"):
+                "SANDBOXD_INJECTION_PID_ANDROID",
+                "SANDBOXD_INJECTION_PID_WINDOWS_NETCFG"):
         assert var in D.HOST_VALUE_VARS
         assert f'"{var}"' in text

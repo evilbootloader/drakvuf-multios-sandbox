@@ -556,6 +556,7 @@ sandboxd:
 		$(REPO_ROOT)/automation/sandboxd.env.example > /etc/sandboxd/sandboxd.env.new); \
 	# The injection PIDs survive a re-run: setup_hooks_* wrote them, and a \
 	# daemon without them injects into PID 1 on Windows, which does not exist. \
+	# The prefix also carries SANDBOXD_INJECTION_PID_WINDOWS_NETCFG. \
 	grep -E '^SANDBOXD_INJECTION_PID_' /etc/sandboxd/sandboxd.env >> /etc/sandboxd/sandboxd.env.new 2>/dev/null || true; \
 	if grep -n '@[A-Z_]*@' /etc/sandboxd/sandboxd.env.new; then \
 		echo 'sandboxd.env: unrendered placeholder' >&2; exit 1; \
@@ -581,6 +582,17 @@ ubuntu_analysis_vm:
 	mkdir -p $(REPO_ROOT)/misc/iso/cidata; \
 	cd $(REPO_ROOT)/misc/iso/cidata; \
 	\
+	# DHCP stays on for the INSTALL, which fetches ubuntu-desktop and the \
+	# updates over xenbr0, and is switched off in the installed system by the \
+	# last two late-commands (2026-11-11). Left on, systemd-networkd DHCPs eth0 \
+	# from the netplan file cloud-init renders out of the installer network \
+	# config, restarts DHCP when a restored clone regains carrier, and can drop \
+	# the static address sandboxd gave it a moment earlier: the clone then \
+	# reaches nothing in any egress mode, on some runs and not others. With \
+	# cloud-init network config disabled and no netplan file, networkd leaves \
+	# eth0 alone; NetworkManager already does (10-globally-managed-devices). \
+	# The golden then has no network when booted on its own; configure it by \
+	# hand for maintenance. UNPROVEN until the next image built by this target. \
 	printf "%s\n" \
 	"#cloud-config" \
 	"autoinstall:" \
@@ -613,6 +625,8 @@ ubuntu_analysis_vm:
 	"    - curtin in-target --target=/target -- sh -c 'printf \"[daemon]\nAutomaticLoginEnable=true\nAutomaticLogin=$(ANALYSIS_VM_USER)\n\" > /etc/gdm3/custom.conf'" \
 	"    - curtin in-target --target=/target -- sed -i 's/^GRUB_CMDLINE_LINUX=\"/&net.ifnames=0 /' /etc/default/grub" \
 	"    - curtin in-target --target=/target -- update-grub" \
+	"    - curtin in-target --target=/target -- sh -c 'printf \"network\072\n  config\072 disabled\n\" > /etc/cloud/cloud.cfg.d/99-sandbox-no-network.cfg'" \
+	"    - curtin in-target --target=/target -- sh -c 'rm -f /etc/netplan/*.yaml'" \
 	"  keyboard:" \
 	"    layout: \"es\"" > user-data; \
 	touch meta-data; \
@@ -866,6 +880,16 @@ setup_hooks_windows:
 	# env file since 2026-11-03, not in the tracked config. \
 	case "$$INJECTION_PID" in ''|*[!0-9]*) echo "explorer.exe not found exactly once in the process list (got '$$INJECTION_PID'); the anchor PID was NOT recorded" >&2; exit 1;; esac; \
 	if grep -q '^SANDBOXD_INJECTION_PID_WINDOWS=' /etc/sandboxd/sandboxd.env; then sed -i "s/^SANDBOXD_INJECTION_PID_WINDOWS=.*/SANDBOXD_INJECTION_PID_WINDOWS=$$INJECTION_PID/" /etc/sandboxd/sandboxd.env; else echo "SANDBOXD_INJECTION_PID_WINDOWS=$$INJECTION_PID" >> /etc/sandboxd/sandboxd.env; fi; \
+	# The network step's anchor, services.exe (2026-11-11): netsh needs an \
+	# administrator token and explorer.exe, the sample's anchor, runs without \
+	# one, so from it every clone kept DHCP and reached nothing. SYSTEM, and \
+	# one per boot, so the same exactly-once check holds \
+	# (stages.Config.netcfg_pids has the measurement). \
+	NETCFG_PID=$$(vmi-process-list -d $$(xl domid windows_analysis_sandbox) -j $(REPO_ROOT)/profiles/windows.json \
+	    | grep -Eo "\[\s*[0-9]+\]\s*services\.exe" | cut -d']' -f1 | grep -Eo "[0-9]+"); \
+	echo "NETCFG_PID=$$NETCFG_PID"; \
+	case "$$NETCFG_PID" in ''|*[!0-9]*) echo "services.exe not found exactly once in the process list (got '$$NETCFG_PID'); the network anchor PID was NOT recorded" >&2; exit 1;; esac; \
+	if grep -q '^SANDBOXD_INJECTION_PID_WINDOWS_NETCFG=' /etc/sandboxd/sandboxd.env; then sed -i "s/^SANDBOXD_INJECTION_PID_WINDOWS_NETCFG=.*/SANDBOXD_INJECTION_PID_WINDOWS_NETCFG=$$NETCFG_PID/" /etc/sandboxd/sandboxd.env; else echo "SANDBOXD_INJECTION_PID_WINDOWS_NETCFG=$$NETCFG_PID" >> /etc/sandboxd/sandboxd.env; fi; \
 	# The save is the operator's, by hand (decision 2026-11-03): this target \
 	# used to run it here, two minutes after the domain came up, whether or \
 	# not the desktop was settled. Let the guest run at least 20 minutes \
@@ -873,7 +897,7 @@ setup_hooks_windows:
 	# machine that has been up for two minutes is one of the first things a \
 	# sample checks. The PID above is the running explorer.exe, so the guest \
 	# must not be restarted between now and the save. \
-	echo "windows_analysis_sandbox is running with INJECTION_PID=$$INJECTION_PID recorded."; \
+	echo "windows_analysis_sandbox is running with INJECTION_PID=$$INJECTION_PID and NETCFG_PID=$$NETCFG_PID recorded."; \
 	echo "Leave it running for AT LEAST 20 MINUTES before saving: every clone restores with this uptime, and a two-minute uptime is a sandbox tell samples check. Do not restart the guest. Then, by hand:"; \
 	echo "  xl save windows_analysis_sandbox $(REPO_ROOT)/state/windows_sandbox.bak $(REPO_ROOT)/misc/xen-vms/windows_sandbox.cfg"
 

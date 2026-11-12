@@ -881,4 +881,6 @@ _COMMON_KEYS = frozenset({
     "Plugin", "TimeStamp", "PID", "PPID", "TID", "UserId", "ProcessName",
     "Method", "EventUID", "ThreadName", "Module", "vCPU", "CR3", "Syscall",
     "NArgs", "Type", "FromModule", "FromParentModule",
+    # Where the syscall was made from (cape_plugin/syscall_origin.py)
+    "Caller", "Bitness",
 })

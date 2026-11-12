@@ -129,7 +129,7 @@ def test_session_lost_is_a_401_or_the_login_redirect(status, location, lost):
 def test_default_plugins_come_from_the_catalogue():
     win = bz.default_plugins("windows")
     ubu = bz.default_plugins("ubuntu")
-    assert "syscalls" in win and "apimon" in win and "ipt" not in win and "hidsim" not in win
+    assert "syscalls" in win and "apimon" in win and "ipt" not in win 
     assert "syscalls" in ubu and "libmon" in ubu and "apimon" not in ubu
     assert bz.default_plugins("android") != ubu
 

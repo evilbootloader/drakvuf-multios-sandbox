@@ -1,0 +1,1220 @@
+{
+ "_generated": "scripts/gen-api-categories.py -- do not edit by hand; re-run it",
+ "sources": {
+  "capemon": "0803997"
+ },
+ "arguments": {
+  "AmsiScanBuffer": {
+   "contentName": "ContentName",
+   "length": "Length"
+  },
+  "AmsiScanString": {
+   "contentName": "ContentName",
+   "string": "String"
+  },
+  "BCryptCloseAlgorithmProvider": {
+   "hAlgorithm": "Algorithm"
+  },
+  "BCryptCreateHash": {
+   "phHash": "HashHandle"
+  },
+  "BCryptDecrypt": {
+   "pbOutput": "Output",
+   "pbIV": "IV",
+   "dwFlags": "Flags",
+   "hKey": "CryptKey",
+   "cbOutput": "Length"
+  },
+  "BCryptDestroyHash": {
+   "hHash": "HashHandle"
+  },
+  "BCryptEncrypt": {
+   "pbInput": "Input",
+   "pbIV": "IV",
+   "dwFlags": "Flags",
+   "hKey": "CryptKey",
+   "cbInput": "Length"
+  },
+  "BCryptGenRandom": {
+   "pbBuffer": "Buffer"
+  },
+  "BCryptImportKey": {
+   "pbInput": "KeyBlob",
+   "dwFlags": "Flags",
+   "cbInput": "Length"
+  },
+  "BCryptImportKeyPair": {
+   "pbInput": "KeyBlob",
+   "dwFlags": "Flags",
+   "cbInput": "Length"
+  },
+  "BCryptOpenAlgorithmProvider": {
+   "pszAlgId": "AlgId",
+   "pszImplementation": "Implementation"
+  },
+  "CLSIDFromProgID": {
+   "lpszProgID": "ProgID"
+  },
+  "CLSIDFromProgIDEx": {
+   "lpszProgID": "ProgID"
+  },
+  "COleScript_ParseScriptText": {
+   "ScriptBuf": "Script"
+  },
+  "CoCreateInstance": {
+   "dwClsContext": "ClsContext"
+  },
+  "CoCreateInstanceEx": {
+   "dwClsContext": "ClsContext"
+  },
+  "CoGetClassObject": {
+   "dwClsContext": "ClsContext"
+  },
+  "CoGetObject": {
+   "pszName": "Name"
+  },
+  "CoInternetSetFeatureEnabled": {
+   "dwFlags": "Flags",
+   "fEnable": "Enable"
+  },
+  "CommandLineToArgv": {
+   "lpCmdLine": "CommandLine",
+   "pNumArgs": "NumArgs"
+  },
+  "ConnectEx": {
+   "s": "socket",
+   "lpSendBuffer": "SendBuffer"
+  },
+  "ControlService": {
+   "hService": "ServiceHandle",
+   "dwControl": "ControlCode"
+  },
+  "CopyFile": {
+   "lpExistingFileName": "ExistingFileName",
+   "lpNewFileName": "NewFileName"
+  },
+  "CopyFileEx": {
+   "lpExistingFileName": "ExistingFileName",
+   "lpNewFileName": "NewFileName",
+   "dwCopyFlags": "CopyFlags"
+  },
+  "CreateDirectory": {
+   "lpPathName": "DirectoryName"
+  },
+  "CreateDirectoryEx": {
+   "lpNewDirectory": "DirectoryName"
+  },
+  "CreateProcess": {
+   "lpApplicationName": "ApplicationName",
+   "lpCommandLine": "CommandLine",
+   "dwCreationFlags": "CreationFlags"
+  },
+  "CreateProcessInternal": {
+   "lpApplicationName": "ApplicationName",
+   "lpCommandLine": "CommandLine",
+   "dwCreationFlags": "CreationFlags"
+  },
+  "CreateProcessWithLogon": {
+   "lpUsername": "Username",
+   "lpDomain": "Domain",
+   "lpPassword": "Password",
+   "dwLogonFlags": "LogonFlags",
+   "lpApplicationName": "ApplicationName",
+   "dwCreationFlags": "CreationFlags"
+  },
+  "CreateProcessWithToken": {
+   "dwLogonFlags": "LogonFlags",
+   "lpApplicationName": "ApplicationName",
+   "dwCreationFlags": "CreationFlags"
+  },
+  "CreateRemoteThread": {
+   "hProcess": "ProcessHandle",
+   "lpStartAddress": "StartRoutine",
+   "lpParameter": "Parameter",
+   "dwCreationFlags": "CreationFlags",
+   "lpThreadId": "ThreadId"
+  },
+  "CreateRemoteThreadEx": {
+   "hProcess": "ProcessHandle",
+   "lpStartAddress": "StartRoutine",
+   "lpParameter": "Parameter",
+   "dwCreationFlags": "CreationFlags",
+   "lpThreadId": "ThreadId"
+  },
+  "CreateService": {
+   "hSCManager": "ServiceControlHandle",
+   "lpServiceName": "ServiceName",
+   "lpDisplayName": "DisplayName",
+   "dwDesiredAccess": "DesiredAccess",
+   "dwServiceType": "ServiceType",
+   "dwStartType": "StartType",
+   "dwErrorControl": "ErrorControl",
+   "lpBinaryPathName": "BinaryPathName"
+  },
+  "CreateThread": {
+   "lpStartAddress": "StartRoutine",
+   "lpParameter": "Parameter",
+   "dwCreationFlags": "CreationFlags",
+   "lpThreadId": "ThreadId"
+  },
+  "CreateToolhelp32Snapshot": {
+   "dwFlags": "Flags",
+   "th32ProcessID": "ProcessId"
+  },
+  "CreateWindowEx": {
+   "lpClassName": "ClassName",
+   "lpWindowName": "WindowName",
+   "nWidth": "Width",
+   "nHeight": "Height",
+   "dwStyle": "Style"
+  },
+  "CryptAcquireContext": {
+   "pszContainer": "Container",
+   "pszProvider": "Provider",
+   "dwFlags": "Flags"
+  },
+  "CryptCreateHash": {
+   "hKey": "CryptKey",
+   "phHash": "Hash object"
+  },
+  "CryptDecodeMessage": {
+   "pbDecoded": "Buffer"
+  },
+  "CryptDecodeObjectEx": {
+   "dwCertEncodingType": "CertEncodingType",
+   "pbEncoded": "Encoded",
+   "dwFlags": "Flags"
+  },
+  "CryptDecrypt": {
+   "hKey": "CryptKey",
+   "hHash": "CryptHash",
+   "pbData": "Buffer",
+   "pdwDataLen": "Length"
+  },
+  "CryptDecryptMessage": {
+   "pbDecrypted": "Buffer"
+  },
+  "CryptDeriveKey": {
+   "hBaseData": "BaseData",
+   "phKey": "CryptKey"
+  },
+  "CryptDestroyHash": {
+   "hHash": "CryptHash"
+  },
+  "CryptDestroyKey": {
+   "hKey": "CryptKey"
+  },
+  "CryptDuplicateKey": {
+   "hKey": "OldCryptKey",
+   "phKey": "NewCryptKey",
+   "dwFlags": "Flags"
+  },
+  "CryptEncrypt": {
+   "hKey": "CryptKey",
+   "hHash": "CryptHash",
+   "pbData": "Buffer",
+   "pdwDataLen": "Length"
+  },
+  "CryptEncryptMessage": {
+   "pbToBeEncrypted": "Buffer"
+  },
+  "CryptEnumProviders": {
+   "dwIndex": "Index",
+   "pszProvName": "ProviderName"
+  },
+  "CryptExportKey": {
+   "hKey": "CryptKey",
+   "pbData": "Buffer",
+   "dwBlobType": "BlobType",
+   "dwFlags": "Flags",
+   "pdwDataLen": "Length"
+  },
+  "CryptGenRandom": {
+   "pbBuffer": "Buffer"
+  },
+  "CryptHashData": {
+   "hHash": "CryptHash",
+   "pbData": "Buffer",
+   "dwDataLen": "Length"
+  },
+  "CryptHashSessionKey": {
+   "hHash": "CryptHash",
+   "hKey": "CryptKey",
+   "dwFlags": "Flags"
+  },
+  "CryptImportKey": {
+   "pbData": "KeyBlob",
+   "dwFlags": "Flags",
+   "dwDataLen": "Length"
+  },
+  "CryptImportPublicKeyInfo": {
+   "dwCertEncodingType": "CertEncodingType"
+  },
+  "CryptProtectMemory": {
+   "pData": "Buffer",
+   "dwFlags": "Flags"
+  },
+  "CryptRetrieveObjectByUrl": {
+   "pszUrl": "URL"
+  },
+  "CryptSignMessage": {
+   "pbSignedBlob": "SignedBlob"
+  },
+  "CryptUnprotectMemory": {
+   "pData": "Buffer",
+   "dwFlags": "Flags"
+  },
+  "CryptVerifyMessageSignature": {
+   "pbDecodedMsg": "DecodedMsg"
+  },
+  "CveEventWrite": {
+   "CveId": "CVE"
+  },
+  "DeleteFile": {
+   "lpFileName": "FileName"
+  },
+  "DeleteService": {
+   "hService": "ServiceHandle"
+  },
+  "DeviceIoControl": {
+   "hDevice": "DeviceHandle",
+   "dwIoControlCode": "IoControlCode",
+   "lpInBuffer": "InBuffer",
+   "lpOutBuffer": "OutBuffer"
+  },
+  "DisableThreadLibraryCalls": {
+   "hLibModule": "Module"
+  },
+  "DnsQuery_A": {
+   "lpstrName": "Name",
+   "wType": "Type"
+  },
+  "DnsQuery_UTF8": {
+   "lpstrName": "Name",
+   "wType": "Type"
+  },
+  "DnsQuery_W": {
+   "lpstrName": "Name",
+   "wType": "Type"
+  },
+  "DownloadFile": {
+   "url": "URL",
+   "path": "Path",
+   "flag": "Flag"
+  },
+  "EnableTrace": {
+   "SessionHandle": "TraceHandle"
+  },
+  "EnableTraceEx": {
+   "IsEnabled": "Enabled"
+  },
+  "EnumCalendarInfo": {
+   "lpCalInfoEnumProc": "CalInfoEnumProc"
+  },
+  "EnumDisplayDevices": {
+   "lpDevice": "Device",
+   "iDevNum": "DevNum"
+  },
+  "EnumResourceTypesEx": {
+   "hModule": "ModuleHandle",
+   "lpEnumFunc": "EnumFunc",
+   "lParam": "Parameter",
+   "dwFlags": "Flags"
+  },
+  "EnumTimeFormats": {
+   "lpTimeFmtEnumProc": "TimeFmtEnumProc",
+   "dwFlags": "Flags"
+  },
+  "EventAccessControl": {
+   "AllowOrDeny": "Allow_OR_Deny"
+  },
+  "EventSetInformation": {
+   "RegHandle": "Handle"
+  },
+  "EventUnregister": {
+   "RegHandle": "Handle"
+  },
+  "ExitWindowsEx": {
+   "uFlags": "Flags",
+   "dwReason": "Reason"
+  },
+  "FindFirstChangeNotification": {
+   "lpPathName": "PathName",
+   "dwNotifyFilter": "NotifyFilter",
+   "bWatchSubtree": "WatchSubtree"
+  },
+  "FindFirstFileEx": {
+   "lpFileName": "FileName"
+  },
+  "FindResourceEx": {
+   "hModule": "Module",
+   "lpType": "Type",
+   "lpName": "Name",
+   "wLanguage": "Language"
+  },
+  "FindWindow": {
+   "lpClassName": "ClassName",
+   "lpWindowName": "WindowName"
+  },
+  "FindWindowEx": {
+   "lpszClass": "ClassName",
+   "lpszWindow": "WindowName"
+  },
+  "FlsAlloc": {
+   "lpCallback": "Callback"
+  },
+  "FlsFree": {
+   "dwFlsIndex": "Index"
+  },
+  "FlsGetValue": {
+   "dwFlsIndex": "Index"
+  },
+  "FlsSetValue": {
+   "dwFlsIndex": "Index",
+   "lpFlsData": "Data"
+  },
+  "GetAddrInfo": {
+   "pNodeName": "NodeName",
+   "pServiceName": "ServiceName"
+  },
+  "GetAddrInfoEx": {
+   "pName": "Name",
+   "pServiceName": "ServiceName"
+  },
+  "GetAsyncKeyState": {
+   "vKey": "KeyCode"
+  },
+  "GetClipboardData": {
+   "uFormat": "Format"
+  },
+  "GetComputerName": {
+   "lpBuffer": "ComputerName"
+  },
+  "GetComputerNameEx": {
+   "lpBuffer": "ComputerName"
+  },
+  "GetDiskFreeSpace": {
+   "lpRootPathName": "RootPathName"
+  },
+  "GetDiskFreeSpaceEx": {
+   "lpDirectoryName": "DirectoryName"
+  },
+  "GetFileVersionInfo": {
+   "lptstrFilename": "PathName"
+  },
+  "GetFileVersionInfoSize": {
+   "lptstrFilename": "PathName"
+  },
+  "GetSystemMetrics": {
+   "nIndex": "SystemMetricIndex"
+  },
+  "GetUserName": {
+   "lpBuffer": "Name"
+  },
+  "GetVolumeInformation": {
+   "lpRootPathName": "RootPathName"
+  },
+  "GetVolumeInformationByHandle": {
+   "hFile": "Handle",
+   "lpVolumeNameBuffer": "VolumeName",
+   "lpVolumeSerialNumber": "VolumeSerial"
+  },
+  "GetVolumeNameForVolumeMountPoint": {
+   "lpszVolumeMountPoint": "VolumeMountPoint",
+   "lpszVolumeName": "VolumeName"
+  },
+  "GetWriteWatch": {
+   "lpBaseAddress": "BaseAddress",
+   "dwRegionSize": "RegionSize",
+   "dwFlags": "Flags",
+   "lpdwCount": "Count"
+  },
+  "HeapCreate": {
+   "flOptions": "Options",
+   "dwInitialSize": "InitialSize",
+   "dwMaximumSize": "MaximumSize"
+  },
+  "HttpAddRequestHeaders": {
+   "hRequest": "RequestHandle",
+   "lpszHeaders": "Headers",
+   "dwModifiers": "Modifiers"
+  },
+  "HttpEndRequest": {
+   "hRequest": "RequestHandle"
+  },
+  "HttpOpenRequest": {
+   "hConnect": "InternetHandle",
+   "lpszObjectName": "Path",
+   "dwFlags": "Flags",
+   "lpszVerb": "Verb"
+  },
+  "HttpQueryInfo": {
+   "hRequest": "RequestHandle",
+   "dwInfoLevel": "InfoLevel",
+   "lpvBuffer": "Buffer"
+  },
+  "HttpSendRequest": {
+   "hRequest": "RequestHandle",
+   "lpszHeaders": "Headers",
+   "lpOptional": "PostData"
+  },
+  "HttpSendRequestEx": {
+   "hRequest": "RequestHandle",
+   "dwFlags": "Flags"
+  },
+  "IcmpSendEcho": {
+   "Timeout": "Milliseconds"
+  },
+  "IcmpSendEcho2": {
+   "Timeout": "Milliseconds"
+  },
+  "InitiateShutdown": {
+   "lpMachineName": "MachineName",
+   "lpMessage": "Message",
+   "dwGracePeriod": "GracePeriod",
+   "dwShutdownFlags": "ShutdownFlags",
+   "dwReason": "Reason"
+  },
+  "InitiateSystemShutdown": {
+   "lpMachineName": "MachineName",
+   "lpMessage": "Message",
+   "dwTimeout": "Timeout",
+   "bForceAppsClosed": "ForceAppsClosed",
+   "bRebootAfterShutdown": "RebootAfterShutdown"
+  },
+  "InitiateSystemShutdownEx": {
+   "lpMachineName": "MachineName",
+   "lpMessage": "Message",
+   "dwTimeout": "Timeout",
+   "bForceAppsClosed": "ForceAppsClosed",
+   "bRebootAfterShutdown": "RebootAfterShutdown",
+   "dwReason": "Reason"
+  },
+  "InternetCloseHandle": {
+   "hInternet": "InternetHandle"
+  },
+  "InternetConfirmZoneCrossing": {
+   "szUrlPrev": "UrlPrev",
+   "szUrlNew": "UrlNew"
+  },
+  "InternetConnect": {
+   "hInternet": "InternetHandle",
+   "lpszServerName": "ServerName",
+   "nServerPort": "ServerPort",
+   "lpszUsername": "Username",
+   "lpszPassword": "Password",
+   "dwService": "Service",
+   "dwFlags": "Flags"
+  },
+  "InternetCrackUrl": {
+   "lpszUrl": "Url"
+  },
+  "InternetOpen": {
+   "lpszAgent": "Agent",
+   "dwAccessType": "AccessType",
+   "lpszProxyName": "ProxyName",
+   "lpszProxyBypass": "ProxyBypass",
+   "dwFlags": "Flags"
+  },
+  "InternetOpenUrl": {
+   "hInternet": "ConnectionHandle",
+   "lpszUrl": "URL",
+   "lpszHeaders": "Headers",
+   "dwFlags": "Flags"
+  },
+  "InternetReadFile": {
+   "hFile": "InternetHandle",
+   "lpBuffer": "Buffer",
+   "lpdwNumberOfBytesRead": "BytesRead"
+  },
+  "InternetSetOption": {
+   "hInternet": "InternetHandle",
+   "dwOption": "Option",
+   "lpBuffer": "Buffer"
+  },
+  "InternetWriteFile": {
+   "hFile": "InternetHandle",
+   "lpBuffer": "Buffer"
+  },
+  "IsValidURL": {
+   "szURL": "URL"
+  },
+  "JsParseScript": {
+   "script": "Script",
+   "sourceUrl": "Source"
+  },
+  "JsRunScript": {
+   "script": "Script",
+   "sourceUrl": "Source"
+  },
+  "LdrGetDllHandle": {
+   "DllHandle": "ModuleHandle",
+   "ModuleFileName": "FileName",
+   "pHModule": "ModuleHandle"
+  },
+  "LdrLoadDll": {
+   "DllCharacteristics": "Flags",
+   "DllHandle": "BaseAddress",
+   "DllPath": "PathToFile",
+   "ModuleHandle": "BaseAddress"
+  },
+  "LdrpCallInitRoutine": {
+   "DllHandle": "BaseAddress"
+  },
+  "LoadLibrary": {
+   "lpLibFileName": "FileName"
+  },
+  "LoadLibraryEx": {
+   "dwFlags": "Flags",
+   "lpLibFileName": "FileName"
+  },
+  "LoadResource": {
+   "hModule": "Module",
+   "hResInfo": "ResourceInfo"
+  },
+  "LocalAlloc": {
+   "uFlags": "Flags",
+   "uBytes": "Bytes"
+  },
+  "LocalFree": {
+   "hMem": "SourceBuffer"
+  },
+  "LockResource": {
+   "hResData": "ResourceData"
+  },
+  "LookupPrivilegeValue": {
+   "lpSystemName": "SystemName",
+   "lpName": "PrivilegeName"
+  },
+  "MessageBoxTimeout": {
+   "lpszText": "Text",
+   "lpszCaption": "Caption",
+   "dwTimeout": "Timeout"
+  },
+  "MkParseDisplayName": {
+   "szName": "Name"
+  },
+  "MkParseDisplayNameEx": {
+   "szName": "Name"
+  },
+  "MoveFileWithProgress": {
+   "lpNewFileName": "NewFileName",
+   "dwFlags": "Flags"
+  },
+  "MoveFileWithProgressTransacted": {
+    "lpExistingFileName": "ExistingFileName",
+    "lpNewFileName": "NewFileName",
+    "lpProgressRoutine": "ProgressRoutine",
+    "lpData": "Data",
+    "dwFlags": "Flags",
+    "hTransaction": "TransactionHandle"
+  },
+  "MsgWaitForMultipleObjectsEx": {
+   "dwMilliseconds": "Milliseconds"
+  },
+  "MsiInstallProduct": {
+   "szPackagePath": "PackagePath",
+   "szCommandLine": "CommandLine"
+  },
+  "NCryptCreatePersistedKey": {
+   "pszAlgId": "AlgId",
+   "pszKeyName": "KeyName",
+   "phKey": "KeyHandle"
+  },
+  "NCryptDecrypt": {
+   "pbOutput": "Output",
+   "dwFlags": "Flags",
+   "hKey": "CryptKey",
+   "cbOutput": "Length"
+  },
+  "NCryptEncrypt": {
+   "pbInput": "Output",
+   "dwFlags": "Flags",
+   "hKey": "CryptKey",
+   "cbInput": "Length"
+  },
+  "NCryptFinalizeKey": {
+   "hKey": "KeyHandle"
+  },
+  "NCryptImportKey": {
+   "pbData": "KeyBlob",
+   "dwFlags": "Flags"
+  },
+  "NCryptOpenKey": {
+   "pszKeyName": "KeyName",
+   "phKey": "KeyHandle"
+  },
+  "NetGetJoinInformation": {
+   "lpServer": "Server",
+   "lpNameBuffer": "NetBIOSName",
+   "BufferType": "JoinStatus"
+  },
+  "NetUserGetInfo": {
+   "servername": "ServerName",
+   "username": "UserName",
+   "level": "Level"
+  },
+  "NetUserGetLocalGroups": {
+   "servername": "ServerName",
+   "username": "UserName",
+   "level": "Level"
+  },
+  "NtAllocateVirtualMemory": {
+   "Protect": "Protection"
+  },
+  "NtAllocateVirtualMemoryEx": {
+   "PageProtection": "Protection"
+  },
+  "NtCreateEvent": {
+   "EventHandle": "Handle"
+  },
+  "NtCreateFile": {
+   "ObjectAttributes": "FileName"
+  },
+  "NtCreateMutant": {
+   "MutantHandle": "Handle"
+  },
+  "NtCreateNamedPipeFile": {
+   "NamedPipeFileHandle": "NamedPipeHandle",
+   "ObjectAttributes": "PipeName"
+  },
+  "NtCreateProcess": {
+   "ParentProcess": "ParentHandle",
+   "ObjectAttributes": "FileName"
+  },
+  "NtCreateProcessEx": {
+   "ParentProcess": "ParentHandle",
+   "ObjectAttributes": "FileName"
+  },
+  "NtCreateThreadEx": {
+   "hThread": "ThreadHandle",
+   "lpStartAddress": "StartAddress",
+   "lpParameter": "Parameter"
+  },
+  "NtCreateTransaction": {
+   "Uow": "UnitOfWork"
+  },
+  "NtCreateUserProcess": {
+   "ProcessObjectAttributes": "ProcessFileName",
+   "ThreadObjectAttributes": "ThreadName"
+  },
+  "NtOpenEvent": {
+   "EventHandle": "Handle"
+  },
+  "NtOpenFile": {
+   "ObjectAttributes": "FileName"
+  },
+  "NtOpenMutant": {
+   "MutantHandle": "Handle"
+  },
+  "NtOpenTransaction": {
+   "Uow": "UnitOfWork"
+  },
+  "NtProtectVirtualMemory": {
+   "NumberOfBytesToProtect": "NumberOfBytesProtected",
+   "NewProtectWin32": "NewAccessProtection",
+   "NewProtection": "NewAccessProtection",
+   "NewProtect": "NewAccessProtection"
+  },
+  "NtQueryAttributesFile": {
+   "ObjectAttributes": "FileName"
+  },
+  "NtQueryFullAttributesFile": {
+   "ObjectAttributes": "FileName"
+  },
+  "NtRaiseHardError": {
+   "ValidResponseOptions": "ResponseOptions"
+  },
+  "NtReadVirtualMemory": {
+   "NumberOfBytesToRead": "Size"
+  },
+  "NtReleaseMutant": {
+   "MutantHandle": "Handle"
+  },
+  "NtSetValueKey": {
+   "Data": "Buffer",
+   "DataSize": "BufferLength"
+  },
+  "NtSuspendThread": {
+   "PreviousSuspendCount": "SuspendCount"
+  },
+  "NtTerminateProcess": {
+   "ExitStatus": "ExitCode"
+  },
+  "ObtainUserAgentString": {
+   "pcszUAOut": "UserAgent"
+  },
+  "OpenSCManager": {
+   "lpMachineName": "MachineName",
+   "lpDatabaseName": "DatabaseName",
+   "dwDesiredAccess": "DesiredAccess"
+  },
+  "OpenService": {
+   "hSCManager": "ServiceControlManager",
+   "lpServiceName": "ServiceName",
+   "dwDesiredAccess": "DesiredAccess"
+  },
+  "OutputDebugString": {
+   "lpOutputString": "OutputString"
+  },
+  "PostMessage": {
+   "hWnd": "WindowHandle",
+   "Msg": "Message"
+  },
+  "PostThreadMessage": {
+   "idThread": "ThreadId",
+   "Msg": "Message"
+  },
+  "QueryUsersOnEncryptedFile": {
+   "lpFileName": "FileName"
+  },
+  "RasValidateEntryName": {
+   "lpszPhonebook": "Phonebook",
+   "lpszEntry": "Entry"
+  },
+  "ReadProcessMemory": {
+   "hProcess": "ProcessHandle",
+   "lpBaseAddress": "BaseAddress",
+   "nSize": "Size",
+   "lpBuffer": "Buffer"
+  },
+  "RegCloseKey": {
+   "hKey": "Handle"
+  },
+  "RegCreateKeyEx": {
+   "hKey": "Registry",
+   "lpSubKey": "SubKey",
+   "lpClass": "Class",
+   "samDesired": "Access",
+   "phkResult": "Handle",
+   "lpdwDisposition": "Disposition"
+  },
+  "RegDeleteKey": {
+   "hKey": "Handle",
+   "lpSubKey": "SubKey"
+  },
+  "RegDeleteKeyEx": {
+   "hKey": "Handle",
+   "lpSubKey": "SubKey",
+   "samDesired": "Access"
+  },
+  "RegDeleteValue": {
+   "hKey": "Handle",
+   "lpValueName": "ValueName"
+  },
+  "RegEnumKey": {
+   "hKey": "Handle",
+   "dwIndex": "Index"
+  },
+  "RegEnumKeyEx": {
+   "hKey": "Handle",
+   "dwIndex": "Index"
+  },
+  "RegEnumValue": {
+   "hKey": "Handle",
+   "dwIndex": "Index",
+   "lpValueName": "ValueName",
+   "lpData": "Data",
+   "lpType": "Type",
+   "lpcbData": "DataLength"
+  },
+  "RegNotifyChangeKeyValue": {
+   "dwNotifyFilter": "NotifyFilter",
+   "bWatchSubtree": "WatchSubtree",
+   "fAsynchronous": "Asynchronous"
+  },
+  "RegOpenKeyEx": {
+   "hKey": "Registry",
+   "lpSubKey": "SubKey",
+   "phkResult": "Handle"
+  },
+  "RegQueryInfoKey": {
+   "hKey": "KeyHandle",
+   "lpClass": "Class",
+   "lpcSubKeys": "SubKeyCount",
+   "lpcMaxSubKeyLen": "MaxSubKeyLength"
+  },
+  "RegQueryValueEx": {
+   "hKey": "Handle",
+   "Key": "key",
+   "lpValueName": "ValueName",
+   "lpData": "Data",
+   "lpType": "Type",
+   "lpcbData": "DataLength"
+  },
+  "RegSetValueEx": {
+   "hKey": "Handle",
+   "lpValueName": "ValueName",
+   "dwType": "Type",
+   "lpData": "Buffer",
+   "cbData": "BufferLength"
+  },
+  "RmStartSession": {
+   "strSessionKey": "SessionKey"
+  },
+  "RtlCompressBuffer": {
+   "UncompressedBuffer": "UncompressedBufferAddress"
+  },
+  "RtlCreateUserProcess": {
+   "ParentProcess": "ParentHandle"
+  },
+  "RtlDecompressBuffer": {
+   "UncompressedBuffer": "UncompressedBufferAddress",
+   "FinalUncompressedSize": "UncompressedBufferLength"
+  },
+  "RtlMoveMemory": {
+   "Destination": "destination"
+  },
+  "RtlUserThreadStart": {
+   "lpStartAddress": "StartAddress",
+   "lpParameter": "Parameter"
+  },
+  "SHGetFileInfo": {
+   "uFlags": "Flags",
+   "pszPath": "Path"
+  },
+  "SHGetFolderPath": {
+   "nFolder": "Folder",
+   "pszPath": "Path"
+  },
+  "SHGetKnownFolderPath": {
+   "dwFlags": "Flags"
+  },
+  "SendMessage": {
+   "hWnd": "WindowHandle",
+   "Msg": "Message"
+  },
+  "SendNotifyMessage": {
+   "hWnd": "WindowHandle",
+   "Msg": "Message"
+  },
+  "SetClipboardData": {
+   "uFormat": "Format"
+  },
+  "SetErrorMode": {
+   "uMode": "Mode"
+  },
+  "SetThreadDescription": {
+   "hThread": "ThreadHandle",
+   "lpThreadDescription": "ThreadDescription"
+  },
+  "SetThreadStackGuarantee": {
+   "StackSizeInBytes": "OutputSize"
+  },
+  "SetUnhandledExceptionFilter": {
+   "lpTopLevelExceptionFilter": "ExceptionFilter"
+  },
+  "SetWindowLong": {
+   "hWnd": "WindowHandle",
+   "nIndex": "Index",
+   "dwNewLong": "NewLong"
+  },
+  "SetWindowLongPtr": {
+   "hWnd": "WindowHandle",
+   "nIndex": "Index",
+   "dwNewLong": "NewLong"
+  },
+  "SetWindowsHookEx": {
+   "idHook": "HookIdentifier",
+   "lpfn": "ProcedureAddress",
+   "hMod": "ModuleAddress",
+   "dwThreadId": "ThreadId"
+  },
+  "SizeofResource": {
+   "hModule": "ModuleHandle",
+   "hResInfo": "ResourceInfo"
+  },
+  "SslDecryptPacket": {
+   "pbOutput": "Buffer",
+   "pcbResult": "BufferSize"
+  },
+  "SslEncryptPacket": {
+   "pbInput": "Buffer",
+   "cbInput": "BufferSize"
+  },
+  "StartService": {
+   "hService": "ServiceHandle",
+   "lpServiceArgVectors": "Arguments"
+  },
+  "StrCmpNICW": {
+   "pszStr1": "String1",
+   "pszStr2": "String2"
+  },
+  "SysFreeString": {
+   "bstrString": "String"
+  },
+  "SystemFunction036": {
+   "RandomBuffer": "Buffer"
+  },
+  "SystemFunction040": {
+   "Memory": "Address"
+  },
+  "SystemFunction041": {
+   "Memory": "Address"
+  },
+  "SystemParametersInfo": {
+   "uiAction": "Action"
+  },
+  "TpAllocIoCompletion": {
+   "IoReturn": "IoCompletion",
+   "File": "FileHandle"
+  },
+  "TpAllocWait": {
+   "WaitReturn": "Wait"
+  },
+  "TpAllocWork": {
+   "WorkReturn": "Work"
+  },
+  "TransmitFile": {
+   "hSocket": "socket",
+   "hFile": "FileHandle",
+   "nNumberOfBytesToWrite": "NumberOfBytesToWrite",
+   "nNumberOfBytesPerSend": "NumberOfBytesPerSend"
+  },
+  "URLDownloadToCacheFile": {
+   "szURL": "URL"
+  },
+  "URLDownloadToFile": {
+   "szURL": "URL",
+   "szFileName": "FileName"
+  },
+  "UnhookWindowsHookEx": {
+   "hhk": "HookHandle"
+  },
+  "UpdateProcThreadAttribute": {
+   "lpValue": "Value"
+  },
+  "UrlCanonicalize": {
+   "pszUrl": "Url"
+  },
+  "VirtualFreeEx": {
+   "hProcess": "ProcessHandle",
+   "lpAddress": "Address",
+   "dwSize": "Size",
+   "dwFreeType": "FreeType"
+  },
+  "VirtualProtectEx": {
+   "hProcess": "ProcessHandle",
+   "lpAddress": "Address",
+   "dwSize": "Size",
+   "flNewProtect": "Protection",
+   "lpflOldProtect": "OldProtection"
+  },
+  "WMI_CreateInstanceEnum": {
+   "strFilter": "QueryClass"
+  },
+  "WMI_CreateInstanceEnumAsync": {
+   "strFilter": "QueryClass"
+  },
+  "WMI_ExecMethod": {
+   "strObjectPath": "ObjectPath",
+   "strMethodName": "MethodName"
+  },
+  "WMI_ExecMethodAsync": {
+   "strObjectPath": "ObjectPath",
+   "strMethodName": "MethodName"
+  },
+  "WMI_ExecQuery": {
+   "strQuery": "Query",
+   "strQueryLanguage": "QueryLanguage"
+  },
+  "WMI_ExecQueryAsync": {
+   "strQuery": "Query",
+   "strQueryLanguage": "QueryLanguage"
+  },
+  "WMI_Get": {
+   "wszName": "Name",
+   "pVal": "Value"
+  },
+  "WMI_GetObject": {
+   "strObjectPath": "ObjectPath"
+  },
+  "WMI_GetObjectAsync": {
+   "strObjectPath": "ObjectPath"
+  },
+  "WMI_Next": {
+   "strName": "Name",
+   "pVal": "Value"
+  },
+  "WNetGetProviderName": {
+   "dwNetType": "NetType"
+  },
+  "WNetUseConnection": {
+   "lpPassword": "Password",
+   "lpUserID": "UserID",
+   "lpAccessName": "AccessName",
+   "dwFlags": "Flags"
+  },
+  "WSAAccept": {
+   "s": "socket"
+  },
+  "WSAConnect": {
+   "s": "socket"
+  },
+  "WSAConnectByName": {
+   "nodename": "NodeName",
+   "servicename": "ServiceName"
+  },
+  "WSARecv": {
+   "lpBuffers": "Buffer",
+   "s": "socket",
+   "lpNumberOfBytesRecvd": "NumberOfBytesReceived"
+  },
+  "WSARecvFrom": {
+   "lpBuffers": "Buffer",
+   "s": "socket",
+   "lpNumberOfBytesRecvd": "NumberOfBytesReceived"
+  },
+  "WSASend": {
+   "lpBuffers": "Buffer",
+   "s": "Socket"
+  },
+  "WSASendTo": {
+   "lpBuffers": "Buffer",
+   "s": "socket"
+  },
+  "WSAStartup": {
+   "wVersionRequested": "VersionRequested"
+  },
+  "WTGetSignatureInfo": {
+   "pszFile": "FileName",
+   "sigInfoFlags": "InfoFlags"
+  },
+  "WbemLocator_ConnectServer": {
+   "strNetworkResource": "NetworkResource",
+   "strUser": "User"
+  },
+  "WinExec": {
+   "lpCmdLine": "CmdLine",
+   "uCmdShow": "CmdShow"
+  },
+  "WinHttpConnect": {
+   "hSession": "SessionHandle",
+   "pswzServerName": "ServerName",
+   "nServerPort": "ServerPort"
+  },
+  "WinHttpGetProxyForUrl": {
+   "hSession": "SessionHandle",
+   "lpcwszUrl": "Url"
+  },
+  "WinHttpOpen": {
+   "pszAgentW": "UserAgent",
+   "pszProxyBypassW": "ProxyBypass",
+   "pszProxyW": "ProxyName",
+   "pwszUserAgent": "UserAgent",
+   "pwszProxyName": "ProxyName",
+   "pwszProxyBypass": "ProxyBypass",
+   "dwAccessType": "AccessType",
+   "dwFlags": "Flags"
+  },
+  "WinHttpOpenRequest": {
+   "hConnect": "InternetHandle",
+   "pwszVerb": "Verb",
+   "pwszObjectName": "ObjectName",
+   "pwszVersion": "Version",
+   "dwFlags": "Flags"
+  },
+  "WinHttpQueryHeaders": {
+   "hRequest": "InternetHandle"
+  },
+  "WinHttpReceiveResponse": {
+   "hRequest": "InternetHandle"
+  },
+  "WinHttpSendRequest": {
+   "hRequest": "InternetHandle",
+   "lpszHeaders": "Headers",
+   "pwszHeaders": "Headers",
+   "lpOptional": "Optional"
+  },
+  "WinHttpSetOption": {
+   "hInternet": "InternetHandle",
+   "dwOption": "Option",
+   "lpBuffer": "Buffer"
+  },
+  "WinHttpSetTimeouts": {
+   "hInternet": "InternetHandle",
+   "dwResolveTimeout": "ResolveTimeout",
+   "dwConnectTimeout": "ConnectTimeout",
+   "dwSendTimeout": "SendTimeout",
+   "dwReceiveTimeout": "ReceiveTimeout"
+  },
+  "WriteConsole": {
+   "hConsoleOutput": "ConsoleHandle",
+   "lpBuffer": "Buffer"
+  },
+  "WriteProcessMemory": {
+   "hProcess": "ProcessHandle",
+   "lpBaseAddress": "BaseAddress",
+   "lpBuffer": "Buffer",
+   "lpNumberOfBytesWritten": "BufferLength"
+  },
+  "accept": {
+   "s": "socket"
+  },
+  "bind": {
+   "s": "socket"
+  },
+  "closesocket": {
+   "s": "socket"
+  },
+  "connect": {
+   "s": "socket"
+  },
+  "getaddrinfo": {
+   "pNodeName": "NodeName",
+   "pServiceName": "ServiceName"
+  },
+  "gethostbyname": {
+   "name": "Name"
+  },
+  "ioctlsocket": {
+   "s": "socket",
+   "cmd": "command"
+  },
+  "listen": {
+   "s": "socket"
+  },
+  "lstrcmpi": {
+   "lpString1": "String1",
+   "lpString2": "String2"
+  },
+  "lstrcpyn": {
+   "lpString1": "String"
+  },
+  "recv": {
+   "s": "socket",
+   "buf": "buffer"
+  },
+  "recvfrom": {
+   "s": "socket",
+   "buf": "buffer"
+  },
+  "rtcCreateObject2": {
+   "arg2": "ProgID"
+  },
+  "select": {
+   "s": "socket"
+  },
+  "send": {
+   "s": "socket",
+   "buf": "buffer"
+  },
+  "sendto": {
+   "s": "socket",
+   "buf": "buffer"
+  },
+  "setsockopt": {
+   "s": "socket"
+  },
+  "shutdown": {
+   "s": "socket"
+  },
+  "system": {
+   "command": "Command"
+  },
+  "timeSetEvent": {
+   "uDelay": "Delay",
+   "lpTimeProc": "TimeProc"
+  }
+ }
+}

@@ -84,6 +84,7 @@ HOST_VALUE_VARS = (
     "SANDBOXD_INJECTION_PID_UBUNTU",
     "SANDBOXD_INJECTION_PID_WINDOWS",
     "SANDBOXD_INJECTION_PID_ANDROID",
+    "SANDBOXD_INJECTION_PID_WINDOWS_NETCFG",
 )
 
 # What Xen prints when `xl debug-keys d` turned its RDTSC compensation on --

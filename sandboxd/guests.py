@@ -857,6 +857,11 @@ class Job:
     # is the guest's `staging_dir` and no arguments -- a job that chose
     # nothing runs exactly as every job did before.
     launch: Launch | None = None
+    # The anchor of the network step when it is not `injection_pid`: Windows'
+    # `services.exe`, because `netsh` needs an administrator token and
+    # explorer.exe does not have one (stages.Config.netcfg_pids). None for the
+    # guests that configure their network from `injection_pid`.
+    netcfg_pid: int | None = None
 
     @property
     def drop_dir(self) -> str:
@@ -1003,7 +1008,12 @@ def argv_configure_network(job: Job, subnet: str = "172.16") -> list[str]:
     The guest-side text is ONE argument to `sh -c`. It reaches the guest as a
     single `execve` element and no Dom0 shell ever sees it, which is what makes
     the mixed-expansion Android form safe -- Dom0 interpolates only the vlan
-    and the nameserver; everything else expands in the guest.
+    and the nameserver; everything else expands in the guest. On Windows it is
+    `cmd.exe`'s command line, from a different anchor (see that branch).
+
+    **Success here means the process started, not that the address took.**
+    Every method this uses returns at process start, so a guest-side failure is
+    invisible to Dom0; it shows in the pcap as DHCP requests and nothing else.
     """
     # Each branch names its own `PATHS` key. A single `PATHS[job.target_os]`
     # above the chain read fine, but it ran BEFORE any branch was chosen, so an
@@ -1025,11 +1035,27 @@ def argv_configure_network(job: Job, subnet: str = "172.16") -> list[str]:
             "-e", PATHS[TargetOs.UBUNTU].shell, "-f", "-c", "-f", script,
         ]
     elif job.target_os == TargetOs.WINDOWS:
-        script = f"/c {(_windows_netcfg(job, subnet))}"
+        # From services.exe, with `createproc`: SYSTEM, so `netsh` gets the
+        # administrator token explorer.exe does not have. Never falls back to
+        # `injection_pid` -- from explorer.exe this step reports success and
+        # leaves the clone on DHCP (stages.Config.netcfg_pids).
+        #
+        # `createproc` takes the whole command line in `-e` (libinjector
+        # `win_functions.c`: `CreateProcess(NULL, TARGETPROC, ...)`) and has
+        # no `-f`. Safe as one string for the same reason the Linux scripts
+        # are: Dom0 interpolates only the vlan, the subnet and the nameserver,
+        # never anything derived from the sample.
+        if job.netcfg_pid is None:
+            raise ValueError(
+                "no network-step anchor for windows: set "
+                "SANDBOXD_INJECTION_PID_WINDOWS_NETCFG to services.exe's PID in "
+                "the saved state (`make setup_hooks_windows` records it). From "
+                "explorer.exe `netsh` needs elevation, fails, and the clone "
+                "reaches nothing.")
         return [
             "injector", "-r", str(job.profile), "-d", str(job.domid),
-            "-i", str(job.injection_pid), "-m", "shellexec",
-            "-e", PATHS[TargetOs.WINDOWS].shell, "-f", script,
+            "-i", str(job.netcfg_pid), "-m", "createproc",
+            "-e", f"{PATHS[TargetOs.WINDOWS].shell} /c {_windows_netcfg(job, subnet)}",
         ]
 
     # Not dead code, and the same guard `default_trace_options` ends with: it
@@ -1401,8 +1427,8 @@ def argv_trace(job: Job, component: str | None = None) -> list[str]:
     # because a GUI process's memory runs to hundreds of MB against the job's
     # 4 GiB result budget. `stages._trace` creates the directory.
     #
-    #if PROCDUMP2_PLUGIN in job.options.plugins:
-    #    argv += ["--procdump-dir", str(job.result_dir / PROCDUMPS_DIR), "--compress-procdumps"]
+    if PROCDUMP2_PLUGIN in job.options.plugins:
+        argv += ["--procdump-dir", str(job.result_dir / PROCDUMPS_DIR), "--compress-procdumps"]
     for option, name in SYMBOL_PROFILES[job.target_os]:
         argv += [option, str(job.profile.parent / name)]
     return argv

@@ -49,7 +49,8 @@ MODULE = "sandboxd.postprocessing"
 
 
 def argv_postprocess(analysis_dir: Path, os_name: str, vlan: int | None,
-                     max_mib: int, python: str | None = None) -> list[str]:
+                     max_mib: int, python: str | None = None,
+                     sample: Path | None = None) -> list[str]:
     """The child's command line.
 
     `python` defaults to the daemon's own interpreter, so the child runs in the
@@ -60,12 +61,16 @@ def argv_postprocess(analysis_dir: Path, os_name: str, vlan: int | None,
             "--os", os_name, "--max-mib", str(max_mib)]
     if vlan is not None:
         argv += ["--vlan", str(vlan)]
+    # The staged sample, for CAPE's `target` (hashes, type, YARA, PE): still
+    # on disk here, `_remove_staging` runs after the child.
+    if sample is not None:
+        argv += ["--sample", str(sample)]
     return argv
 
 
 def postprocess_in_child(runner, analysis_dir: Path, os_name: str,
                          vlan: int | None, *, max_mib: int,
-                         timeout: float) -> str | None:
+                         timeout: float, sample: Path | None = None) -> str | None:
     """Run the plugins over a finished trace. Returns a note, or None.
 
     Never raises for a postprocessing failure: the trace is the result and
@@ -73,7 +78,7 @@ def postprocess_in_child(runner, analysis_dir: Path, os_name: str,
     because a job whose `ttps.json` is missing must say why in the record a
     reader sees, not only in a log line on Dom0.
     """
-    result = runner.run(argv_postprocess(analysis_dir, os_name, vlan, max_mib),
+    result = runner.run(argv_postprocess(analysis_dir, os_name, vlan, max_mib, sample=sample),
                         timeout=timeout, what="postprocess")
     tail = _tail(result.stderr)
     peak = _peak_mib(result.stdout)

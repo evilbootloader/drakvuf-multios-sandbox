@@ -36,6 +36,8 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
                    help="the guest OS, as sandboxd.guests.TargetOs names it")
     p.add_argument("--vlan", type=int, default=None,
                    help="the clone's VLAN; names its /24 for the Falco rules")
+    p.add_argument("--sample", type=Path, default=None,
+                   help="the staged sample; CAPE's `target` is read from it")
     p.add_argument("--max-mib", type=int, required=True,
                    help="RLIMIT_DATA in MiB; 0 sets no limit")
     return p.parse_args(argv)
@@ -65,7 +67,7 @@ def main(argv: list[str] | None = None) -> int:
 
     failed = postprocess_analysis_dir(
         args.analysis_dir, load_postprocessing_config(),
-        TargetOs(args.os_name), args.vlan)
+        TargetOs(args.os_name), args.vlan, sample=args.sample)
     # The pass's high-water mark, for the daemon's log: the number that
     # sizes SANDBOXD_POSTPROCESS_MAX_MIB on a real trace, read where the
     # limit applies rather than guessed from the parent.

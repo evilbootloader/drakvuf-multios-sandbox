@@ -50,7 +50,7 @@ def run_postprocessing(context: PostprocessContext) -> List[str]:
 
 def postprocess_analysis_dir(
     analysis_dir: pathlib.Path, config: PostprocessingConfig, os_: TargetOs,
-    vlan: Optional[int] = None) -> List[str]:
+    vlan: Optional[int] = None, sample: Optional[pathlib.Path] = None) -> List[str]:
     """Run every plugin whose inputs exist. Never raises.
 
     Returns the names of the plugins that failed, for the child's exit status
@@ -66,6 +66,7 @@ def postprocess_analysis_dir(
         target_os=os_,
         vlan=vlan,
     )
+    context.sample = sample
     try:
         return run_postprocessing(context)
     except Exception:  # noqa: BLE001 - the trace is the result, not this

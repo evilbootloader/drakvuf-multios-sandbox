@@ -1,0 +1,267 @@
+{
+ "_generated": "scripts/gen-api-categories.py -- do not edit by hand; re-run it",
+ "sources": {
+  "capemon": "0803997"
+ },
+ "outputs": {
+  "CreateRemoteThread": {
+   "ThreadId": "u32",
+   "lpThreadId": "u32"
+  },
+  "CreateRemoteThreadEx": {
+   "ThreadId": "u32",
+   "lpThreadId": "u32"
+  },
+  "CreateThread": {
+   "ThreadId": "u32",
+   "lpThreadId": "u32"
+  },
+  "CreateTimerQueueTimer": {
+   "phNewTimer": "ptr"
+  },
+  "GetVolumeInformationByHandle": {
+   "VolumeSerial": "u32",
+   "lpVolumeSerialNumber": "u32"
+  },
+  "GetWriteWatch": {
+   "Count": "ptr",
+   "lpdwCount": "ptr"
+  },
+  "InternetReadFile": {
+   "BytesRead": "u32",
+   "lpdwNumberOfBytesRead": "u32"
+  },
+  "InternetSetOption": {
+   "Buffer": "u32",
+   "lpBuffer": "u32"
+  },
+  "LdrGetDllHandle": {
+   "ModuleHandle": "ptr",
+   "pHModule": "ptr"
+  },
+  "LdrGetDllHandleEx": {
+   "DllHandle": "ptr"
+  },
+  "LdrGetProcedureAddress": {
+   "FunctionAddress": "ptr"
+  },
+  "LdrGetProcedureAddressForCaller": {
+   "FunctionAddress": "ptr"
+  },
+  "LdrLoadDll": {
+   "BaseAddress": "ptr",
+   "Flags": "u32",
+   "ModuleHandle": "ptr"
+  },
+  "NetGetJoinInformation": {
+   "BufferType": "u32",
+   "JoinStatus": "u32"
+  },
+  "NtAlertResumeThread": {
+   "SuspendCount": "u32"
+  },
+  "NtAllocateVirtualMemory": {
+   "BaseAddress": "ptr",
+   "RegionSize": "ptr"
+  },
+  "NtAllocateVirtualMemoryEx": {
+   "BaseAddress": "ptr",
+   "RegionSize": "ptr"
+  },
+  "NtCreateDirectoryObject": {
+   "DirectoryHandle": "ptr"
+  },
+  "NtCreateEvent": {
+   "EventHandle": "ptr",
+   "Handle": "ptr"
+  },
+  "NtCreateFile": {
+   "FileHandle": "ptr"
+  },
+  "NtCreateKey": {
+   "Disposition": "u32",
+   "KeyHandle": "ptr"
+  },
+  "NtCreateMutant": {
+   "Handle": "ptr",
+   "MutantHandle": "ptr"
+  },
+  "NtCreateNamedPipeFile": {
+   "NamedPipeFileHandle": "ptr",
+   "NamedPipeHandle": "ptr"
+  },
+  "NtCreateProcess": {
+   "ProcessHandle": "ptr"
+  },
+  "NtCreateProcessEx": {
+   "ProcessHandle": "ptr"
+  },
+  "NtCreateSection": {
+   "SectionHandle": "ptr"
+  },
+  "NtCreateThread": {
+   "ThreadHandle": "ptr"
+  },
+  "NtCreateThreadEx": {
+   "ThreadHandle": "ptr",
+   "hThread": "ptr"
+  },
+  "NtCreateTransaction": {
+   "TransactionHandle": "ptr"
+  },
+  "NtCreateUserProcess": {
+   "ProcessHandle": "ptr",
+   "ThreadHandle": "ptr"
+  },
+  "NtDuplicateObject": {
+   "TargetHandle": "ptr"
+  },
+  "NtFreeVirtualMemory": {
+   "BaseAddress": "ptr",
+   "RegionSize": "ptr"
+  },
+  "NtMapViewOfSection": {
+   "BaseAddress": "ptr",
+   "ViewSize": "ptr"
+  },
+  "NtMapViewOfSectionEx": {
+   "BaseAddress": "ptr",
+   "ViewSize": "ptr"
+  },
+  "NtOpenDirectoryObject": {
+   "DirectoryHandle": "ptr"
+  },
+  "NtOpenEvent": {
+   "EventHandle": "ptr",
+   "Handle": "ptr"
+  },
+  "NtOpenFile": {
+   "FileHandle": "ptr"
+  },
+  "NtOpenKey": {
+   "KeyHandle": "ptr"
+  },
+  "NtOpenKeyEx": {
+   "KeyHandle": "ptr"
+  },
+  "NtOpenMutant": {
+   "Handle": "ptr",
+   "MutantHandle": "ptr"
+  },
+  "NtOpenProcess": {
+   "ProcessHandle": "ptr"
+  },
+  "NtOpenProcessToken": {
+   "TokenHandle": "ptr"
+  },
+  "NtOpenSection": {
+   "SectionHandle": "ptr"
+  },
+  "NtOpenThread": {
+   "ThreadHandle": "ptr"
+  },
+  "NtOpenTransaction": {
+   "TransactionHandle": "ptr"
+  },
+  "NtProtectVirtualMemory": {
+   "BaseAddress": "ptr",
+   "NumberOfBytesProtected": "ptr",
+   "NumberOfBytesToProtect": "ptr",
+   "OldAccessProtection": "u32"
+  },
+  "NtQueryLicenseValue": {
+   "Type": "ptr"
+  },
+  "NtResumeThread": {
+   "SuspendCount": "u32"
+  },
+  "NtSuspendThread": {
+   "PreviousSuspendCount": "u32",
+   "SuspendCount": "u32"
+  },
+  "RegCreateKeyEx": {
+   "Disposition": "u32",
+   "Handle": "ptr",
+   "lpdwDisposition": "u32",
+   "phkResult": "ptr"
+  },
+  "RegEnumValue": {
+   "DataLength": "u32",
+   "Type": "u32",
+   "lpType": "u32",
+   "lpcbData": "u32"
+  },
+  "RegOpenKeyEx": {
+   "Handle": "ptr",
+   "phkResult": "ptr"
+  },
+  "RegQueryInfoKey": {
+   "MaxSubKeyLength": "u32",
+   "lpcMaxSubKeyLen": "u32"
+  },
+  "RegQueryValueEx": {
+   "DataLength": "u32",
+   "Type": "ptr",
+   "lpType": "ptr",
+   "lpcbData": "u32"
+  },
+  "RtlCreateUserThread": {
+   "ThreadHandle": "ptr"
+  },
+  "SslDecryptPacket": {
+   "BufferSize": "u32",
+   "pcbResult": "u32"
+  },
+  "SystemFunction040": {
+   "MemorySize": "u32",
+   "OptionFlags": "u32"
+  },
+  "SystemFunction041": {
+   "MemorySize": "u32",
+   "OptionFlags": "u32"
+  },
+  "TpAllocIoCompletion": {
+   "IoCompletion": "ptr",
+   "IoReturn": "ptr"
+  },
+  "TpAllocTimer": {
+   "Timer": "ptr"
+  },
+  "TpAllocWait": {
+   "Wait": "ptr",
+   "WaitReturn": "ptr"
+  },
+  "TpAllocWork": {
+   "Work": "ptr",
+   "WorkReturn": "ptr"
+  },
+  "TpSetTimer": {
+   "DueTime": "u64"
+  },
+  "TpSetTimerEx": {
+   "DueTime": "u64"
+  },
+  "TpSetWait": {
+   "Timeout": "u64"
+  },
+  "TpSetWaitEx": {
+   "Timeout": "u64"
+  },
+  "UpdateProcThreadAttribute": {
+   "Value": "ptr",
+   "lpValue": "ptr"
+  },
+  "VirtualProtectEx": {
+   "OldProtection": "u32",
+   "lpflOldProtect": "u32"
+  },
+  "WSARecv": {
+   "NumberOfBytesReceived": "u32",
+   "lpNumberOfBytesRecvd": "u32"
+  },
+  "WSARecvFrom": {
+   "NumberOfBytesReceived": "u32",
+   "lpNumberOfBytesRecvd": "u32"
+  }
+ }
+}

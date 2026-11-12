@@ -16,3 +16,10 @@
 [submodule "sandboxd/data/falco-rules"]
 	path = sandboxd/data/falco-rules
 	url = https://github.com/falcosecurity/rules.git
+[submodule "sandboxd/data/cape-community"]
+	path = sandboxd/data/cape-community
+	url = https://github.com/evilbootloader/community.git
+	# Our fork of CAPESandbox/community: stable carries the signatures made
+	# for DRAKVUF's data (modules/signatures/linux, all/evasive_syscalls.py,
+	# the Windows ones' hex arguments) on top of upstream's master.
+	branch = stable

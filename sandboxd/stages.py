@@ -313,6 +313,39 @@ class Config:
         }.items()
         if pid
     })
+    # The guests whose NETWORK step anchors on a different process from the
+    # rest of the job. A guest not listed configures its network from its
+    # `injection_pids` anchor, as every guest did until 2026-11-11.
+    #
+    # **Windows, because `netsh` needs an administrator token.** The sample's
+    # anchor is `explorer.exe`, which runs as the analysis user at Medium
+    # integrity: UAC filters the Administrators group out of its token. From it
+    # `netsh` printed "The requested operation requires elevation (Run as
+    # administrator)" and exited 1, and `shellexec` returns at process start, so
+    # Dom0 saw a successful injection while every clone kept DHCP, took a
+    # 169.254 address and reached nothing in any egress mode (2026-11-11,
+    # TROUBLESHOOTING "A Windows clone has no network in any egress mode").
+    #
+    # `services.exe` runs as SYSTEM, so the `cmd.exe` it is made to create does
+    # too. Measured on Dom0 2026-11-11 against the state saved 2026-11-04, ten
+    # clones in a row each: services.exe 10/10 with the address set and HTTPS
+    # out through `tor`, `createproc` taking 19.0 s every time; the first
+    # svchost.exe 9/10 plus one unverified at 0.2 s, but it is one of ~50
+    # svchost.exe and has no name to be found by after a re-save;
+    # winlogon.exe never scheduled and timed out at 60 s. The 19 s comes out of
+    # the 60 s preconfig budget the sample's writefile shares -- re-time it
+    # after every re-save, since it is a property of the saved state.
+    #
+    # The sample itself still starts from explorer.exe: as the user, on the
+    # desktop, the way a person would launch it. Only the network step, which
+    # runs before the trace and carries no sample-derived text, runs elevated.
+    netcfg_pids: dict = field(default_factory=lambda: {
+        os_: pid
+        for os_, pid in {
+            TargetOs.WINDOWS: config.INJECTION_PID_WINDOWS_NETCFG,
+        }.items()
+        if pid
+    })
     # `lv_sizes` was dropped 2026-08-29 with CLONE_LV_SIZE. Clones are thin
     # snapshots and inherit the golden LV's size, so there is no per-OS
     # number left to hold -- see clone.argv_lvcreate.
@@ -489,7 +522,7 @@ class Analysis:
                 self._postprocess_note = postprocess_in_child(
                     self._runner, job_dir, os_.value, vlan,
                     max_mib=self._cfg.postprocess_max_mib,
-                    timeout=timing.POSTPROCESS_BUDGET)
+                    timeout=timing.POSTPROCESS_BUDGET, sample=sample)
 
                 outcome = self._collect(lease, job_dir)
 
@@ -720,6 +753,7 @@ class Analysis:
             clone_domain=clone.name, sample_path=sample,
             profile=self._cfg.profile(os_),
             injection_pid=self._cfg.injection_pids[os_],
+            netcfg_pid=self._cfg.netcfg_pids.get(os_),
             result_dir=job_dir,
             options=self._trace_options(os_, kind, lease.plugins, lease.timeout, lease.disable_sysret),
             kind=kind,

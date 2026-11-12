@@ -492,6 +492,16 @@ INJECTION_PID_UBUNTU = _env_int("SANDBOXD_INJECTION_PID_UBUNTU", 1)
 INJECTION_PID_WINDOWS = _env_int("SANDBOXD_INJECTION_PID_WINDOWS", 1)
 INJECTION_PID_ANDROID = _env_int("SANDBOXD_INJECTION_PID_ANDROID", 1)
 
+#: The PID Windows' NETWORK step anchors on -- `services.exe`, not the
+#: `explorer.exe` above. `netsh` needs an administrator token and explorer runs
+#: as the analysis user at Medium integrity, so from it `netsh` printed "The
+#: requested operation requires elevation" and every clone kept DHCP and a
+#: 169.254 address (2026-11-11; stages.Config.netcfg_pids has the measurement).
+#: Same lifetime as the others: valid for the saved state it was read from,
+#: written by `make setup_hooks_windows`. Its name keeps the
+#: `SANDBOXD_INJECTION_PID_` prefix so `make sandboxd` carries it over with them.
+INJECTION_PID_WINDOWS_NETCFG = _env_int("SANDBOXD_INJECTION_PID_WINDOWS_NETCFG", 1)
+
 #: The user the analysis guests run as; the staging path is its Desktop
 #: (guests.PATHS). `SANDBOXD_ANALYSIS_USERNAME` when set, rendered by
 #: `make sandboxd` from the Makefile's ANALYSIS_VM_USER.

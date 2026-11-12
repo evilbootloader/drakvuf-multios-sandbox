@@ -701,6 +701,93 @@ the listener was up but not answering, which is a FakeNet or tor problem rather
 than a firewall one. `journalctl -u tor` and FakeNet's own stdout are the next
 stop, not `iptables -S`.
 
+**If the pcap has no SYN and no DNS query at all** — only `BOOTP/DHCP, Request`
+from `0.0.0.0` — the clone never had an address, and neither tor nor the rules
+are involved. The next two entries.
+
+### A Windows clone has no network in any egress mode
+
+**Symptom.** Every Windows job reads as a sample that never talked, whatever
+its egress mode. The pcap holds a RARP at restore and then only
+`BOOTP/DHCP, Request from <mac>` from `0.0.0.0.68` and `dhcp6 solicit` — never a
+packet from `172.16.<vlan>.2`. The `tor` redirect counters stay at 0. Inside
+the clone `ipconfig` shows `Autoconfiguration IPv4 Address . . : 169.254.…`
+and no gateway. Yet preconfig succeeded, and the network step's `injector`
+printed `STATUS:SUCCESS`.
+
+**Cause.** `netsh interface ip set address` needs an administrator token, and
+until 2026-11-11 the network step ran from the sample's anchor, `explorer.exe`.
+The analysis user is in Administrators, but UAC filters that group out of
+explorer's token: `whoami /groups` from it reads
+`Mandatory Label\Medium Mandatory Level`. `netsh` printed
+
+```
+The requested operation requires elevation (Run as administrator).
+```
+
+and exited 1. `shellexec` returns when the process starts, so Dom0 never saw
+it. Diagnosed on clones of the state saved 2026-11-04, by reading the output
+back with `injector -m readfile`.
+
+**Fix.** The network step runs `cmd.exe /c netsh …` with `createproc` from
+`services.exe`, which is SYSTEM, at the PID in
+`SANDBOXD_INJECTION_PID_WINDOWS_NETCFG` (`make setup_hooks_windows` records it
+beside the explorer.exe one). The sample still starts from explorer.exe.
+Ten clones in a row on 2026-11-11: 10/10 took their address and fetched
+`https://example.com` through `tor`, with `createproc` taking 19.0 s each time.
+**Not `winlogon.exe`**: it never scheduled the hijacked thread, and `injector`
+timed out at 60 s. `sandboxd/stages.py` `Config.netcfg_pids` has the rest of
+the measurement.
+
+### An Ubuntu clone's address vanishes seconds after restore
+
+**Symptom.** From the same saved state, some Ubuntu jobs reach the network and
+some reach nothing. In the pcap of one that reached nothing, `172.16.<vlan>.2`
+appears once — an IGMP report about 3 s after restore — at the same moment the
+clone starts sending `BOOTP/DHCP, Request` from `0.0.0.0`, and never again.
+`ip -br addr` in the clone 20 s later shows `eth0` with no IPv4 address.
+
+**Cause.** The template runs `systemd-networkd` on `eth0` with `dhcp4: true`,
+from `/etc/netplan/50-cloud-init.yaml`. cloud-init rendered that file at first
+boot from the installer's network config,
+`/etc/cloud/cloud.cfg.d/90-installer-network.cfg`. On restore the guest journal
+shows `eth0: Lost carrier` then `Gained carrier`, and networkd restarts DHCP on
+the link. sandboxd's `ip addr add` lands in that window, and whether the
+address survives depends on the order: on 2026-11-11 one clone kept it and
+another lost it. NetworkManager is not involved: it lists `eth0` as
+`unmanaged` (`10-globally-managed-devices.conf`). **That networkd is what
+removes the address is inferred** from the pcap and the journal. At its
+default log level networkd does not log removing an address it did not
+configure.
+
+**Fix — Candidate.** `make ubuntu_analysis_vm` now ends its late-commands by
+disabling cloud-init's network configuration and removing the netplan files,
+leaving networkd nothing to manage on `eth0`. DHCP stays on for the install
+itself, which downloads packages over `xenbr0`. **Unproven until an image is
+built by that target.** The image saved 2026-11-07 still has the DHCP config.
+It needs that rebuild, or the same two changes made by hand in the running
+`ubuntu_analysis_sandbox` before its `xl save`, followed by `sudo netplan apply`
+so the saved memory no longer holds a DHCP client either. That by-hand route
+has not been run either.
+
+### tor logs `Possible loop in your NAT rules?` once per job
+
+**Symptom.** `journalctl -u tor@default` shows, about once per analysis:
+
+```
+Rejecting request for anonymous connection to private address [scrubbed] on a TransPort or NATDPort.  Possible loop in your NAT rules?
+```
+
+**Cause.** sandboxd's own listener probe, `egress.listener_ready`. It opens a
+plain TCP connection to `127.0.0.1:9040` at startup and again at each launch
+before offering `tor`. tor asks the kernel for that connection's original
+destination, gets `127.0.0.1`, and refuses it as private. The timestamps
+matched one per job on 2026-11-10 and 11-11.
+
+**Not a NAT loop, and nothing to fix.** The probe only needs the connection
+accepted, and it was. A clone's redirected connection carries its real
+destination and is not refused this way.
+
 ### A clone drops to an initramfs shell with `UNEXPECTED INCONSISTENCY`
 
 **Symptom.**

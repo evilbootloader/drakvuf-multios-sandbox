@@ -134,6 +134,13 @@ def get_drakvuf_feature_extractor(
         set(malware_pids) if malware_pids is not None else None)
 
 
+# What a syscall record says of where it was made from, not of the call
+_SYSCALL_ORIGIN_KEYS = (
+    "FromModule", "FromParentModule", "Caller", "ParentCaller", "Bitness", "FromModuleCopy",
+    "FromParentModuleCopy", "StubSyscall", "ParentCallTarget", "ParentCallTargetModule",
+)
+
+
 def normalise_record(data: Dict) -> None:
     """One DRAKVUF record as capa must see it, in place.
 
@@ -153,9 +160,10 @@ def normalise_record(data: Dict) -> None:
     if data.get("Plugin") == "syscall":
         # capa's SystemCall folds every key it does not name into the call's
         # arguments (models.py, `build_extra`), so these would become String
-        # features of a module name on every call.
-        data.pop("FromParentModule", None)
-        data.pop("FromModule", None)
+        # features of a module name or an address on every call: where the
+        # syscall was made from (cape_plugin/syscall_origin.py).
+        for key in _SYSCALL_ORIGIN_KEYS:
+            data.pop(key, None)
 
 
 def decode_json_lines(

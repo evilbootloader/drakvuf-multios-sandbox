@@ -283,24 +283,23 @@ def test_falcos_merge_replays_logs_in_event_order_without_holding_them(tmp_path)
     assert [x[0] for x in early_large] == [1, 2, 9]
 
 
-def test_gzip_covers_apimon_and_runs_after_everything_that_reads_it(tmp_path):
-    """3.9 GB of raw apimon.log from one 20-minute Windows trace (2026-11-02)
-    is why it joined syscall and sysret; get_http_info reads it, so the step
-    has to come after that plugin and before index_logs."""
-    pytest.importorskip("capa")
-    import gzip
-    from sandboxd.guests import TargetOs
+def test_the_chain_is_cape_and_nothing_splits_the_trace():
+    """Since 2026-11-10 the chain is CAPE's processing over the raw
+    trace.log (plugins/__init__.py); the split and the per-log plugins that
+    read its output are not in it."""
     from sandboxd.postprocessing.plugins import POSTPROCESS_PLUGINS
-    from sandboxd.postprocessing.plugins.gzip_syscalls import GZIPPED_LOGS, gzip_syscalls
-    from sandboxd.postprocessing.plugins.plugin_base import PostprocessContext, PostprocessingConfig
 
     names = [p.function.__name__ for p in POSTPROCESS_PLUGINS]
-    assert names.index("gzip_syscalls") > names.index("get_http_info")
-    assert names.index("gzip_syscalls") > names.index("falco_analysis")
-    assert names.index("gzip_syscalls") < names.index("index_logs")
-    gz = next(p for p in POSTPROCESS_PLUGINS if p.function is gzip_syscalls)
-    assert gz.requires == [], "a job without syscall.log still has apimon.log to compress"
-    assert set(gz.generates) == {f"{n}.log.gz" for n in GZIPPED_LOGS}
+    assert names == ["cape_analysis", "compress_ipt"]
+    assert POSTPROCESS_PLUGINS[0].requires == ["trace.log"]
+
+
+def test_gzip_syscalls_replaces_only_the_listed_logs(tmp_path):
+    """The old chain's step, no longer run: kept while the module is."""
+    import gzip
+    from sandboxd.guests import TargetOs
+    from sandboxd.postprocessing.plugins.gzip_syscalls import gzip_syscalls
+    from sandboxd.postprocessing.plugins.plugin_base import PostprocessContext, PostprocessingConfig
 
     for name in ("syscall", "apimon", "regmon"):
         (tmp_path / f"{name}.log").write_bytes(b'{"Plugin":"%s"}\n' % name.encode())

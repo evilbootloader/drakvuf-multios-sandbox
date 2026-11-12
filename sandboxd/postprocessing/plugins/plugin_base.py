@@ -66,6 +66,60 @@ class FalcoConfigSection(BaseModel):
     procmon_env_filter: List[str] = Field(default_factory=_procmon_envs)
 
 
+class CapeConfigSection(BaseModel):
+    """CAPE's processing over trace.log (`cape_analysis`).
+
+    The whole chain since 2026-11-10 (plugins/__init__.py). A section is set
+    as JSON, as every section here is read:
+    `SANDBOXD_POSTPROCESS_CAPE='{"scope": "all"}'`.
+    """
+    enabled: bool = True
+    # "sample": the injected process and its descendants, which is what
+    # CAPE's monitor follows and its signatures assume -- and a process one
+    # of them made run code (a remote thread, a context set and resumed, a
+    # ptrace register write; trace_split.follow_transfers), with what that
+    # one starts afterwards. "all": every process on the guest.
+    scope: Literal["sample", "all"] = "sample"
+    # Windows syscalls with PreviousMode Kernel: a driver's own calls, made
+    # in whatever process was current. Never the sample's; off.
+    kernel_syscalls: bool = False
+    # Calls per process, CAPE's analysis_call_limit; 0 is no limit.
+    call_limit: int = 0
+    # capa over the behaviour (syscalls included), as CAPE's capa_summary.
+    # Always on the sample's processes only, whatever `scope` says.
+    capa: bool = True
+    capa_rules: pathlib.Path = _DATA / "capa-rules"
+    # CAPE's behavioural signatures over `results` (RunSignatures). The
+    # directory is a checkout of CAPESandbox/community: its
+    # modules/signatures and the data/ files they read. Absent, no signature
+    # runs and the log says so.
+    # Replace trace.log with trace.log.gz once it has been processed. The
+    # raw trace is the only copy of the calls now that nothing splits it,
+    # `stages._collect` never uploads a file named trace.log, and one left
+    # behind keeps the job directory on Dom0 (`_remove_results`).
+    compress_trace: bool = True
+    signatures: bool = True
+    # Signatures not run, by `name`. The default is what DRAKVUF can never
+    # feed -- capemon's own anomaly events -- and capemon's two readers of
+    # the `syscall` calls syscall_origin logs, which tell a technique by
+    # address range or a seen allocation; all/evasive_syscalls.py reads the
+    # technique syscall_origin found. (`direct_syscall` here would be that
+    # file's own signature.)
+    signatures_disabled: List[str] = ["antisandbox_unhook", "direct_syscall_evasion",
+                                      "unbacked_syscall_execution"]
+    community: pathlib.Path = _DATA / "cape-community"
+    # The behaviour's network_map (cape_plugin/network_map.py): domains and
+    # networks it leaves out, and ones it keeps whatever the exclusions say.
+    # A domain is a glob that also covers every name under it; a network a
+    # CIDR. None is network_map.py's default list -- the guest's own
+    # libraries' traffic, multicast, link-local -- and [] excludes nothing.
+    # What is left out is counted in network_map.filtered.
+    network_exclude_domains: Optional[List[str]] = None
+    network_exclude_networks: Optional[List[str]] = None
+    network_include_domains: List[str] = []
+    network_include_networks: List[str] = []
+
+
 class MemdumpConfigSection(BaseModel):
     # Upstream's values (drakrun/lib/config.py). process_dumps reads all four;
     # the port shipped this class empty, which failed on the first dump.
@@ -117,6 +171,7 @@ class PostprocessingConfig(BaseSettings):
     extracted: ExtractedConfigSection = ExtractedConfigSection()
     yara: YaraConfigSection = YaraConfigSection()
     falco: FalcoConfigSection = FalcoConfigSection()
+    cape: CapeConfigSection = CapeConfigSection()
     # Replace syscall.log / sysret.log / apimon.log with .gz copies
     # (gzip_syscalls.GZIPPED_LOGS). On by default where upstream defaults to
     # False: a Windows syscall.log is over 1 GB (trace-windows.log,
