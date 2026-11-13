@@ -81,6 +81,13 @@ else
     # line. The Enigma detector reads something in it as a key (2026-11-12,
     # unverified, line 1). The file is the submodule's, so git here takes only
     # its gitlink and the history scan never sees it.
+    #
+    # sandboxd/data/cape-community/data/yara/ is the same submodule's YARA
+    # rules. They are made of the strings malware carries, and the Box detector
+    # reads 32-character ones as tokens: an MD5 `reference` in
+    # CAPE/DTstealer.yar and two browser-extension ids in
+    # binaries/indicator_suspicious.yar (2026-11-13, unverified). Gitlink only,
+    # as above.
     cat > "$EXCLUDES" <<'EOF'
 ^\.git/
 ^platform/\.venv/
@@ -97,6 +104,7 @@ __pycache__/
 \.iso$
 ^misc/Artifacts/source-manifest\.xml$
 ^sandboxd/data/cape-community/data/mitre/enterprise_attck_json\.json$
+^sandboxd/data/cape-community/data/yara/
 EOF
 
     # What was found, as detector and file:line -- never the value. CI runs this
