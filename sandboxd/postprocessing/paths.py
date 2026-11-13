@@ -15,9 +15,10 @@ The layout these describe is docs/architecture/result-schema.md 4.1.
 """
 
 # The memdump plugin's output directory: `--memdump-dir`, as upstream passes
-# it (drakrun/analyzer/analyzer.py:90). Packed by process_dumps into DUMPS_ZIP
-# and then removed, so a job that ran process_dumps uploads the zip and a job
-# that did not uploads the directory.
+# it (drakrun/analyzer/analyzer.py:90). Packed by compress_dumps
+# (plugins/pack_dirs.py) into DUMPS_ZIP and then removed, so a job whose
+# postprocessing ran uploads the zip and one where it did not uploads the
+# directory.
 DUMPS_DIR = "dumps"
 DUMPS_ZIP = "dumps.zip"
 
@@ -44,7 +45,7 @@ CAPE_RESULTS = "cape_results.json"
 # fileextractor's output directory: DRAKVUF's `-D`. Upstream never passes -D
 # and has no plugin for it; the name is result-schema.md's, chosen there
 # because these are the files the SAMPLE wrote, with names the sample chose.
-# Packed by process_extracted into EXTRACTED_ZIP with EXTRACTED_DIR as the
+# Packed by compress_extracted into EXTRACTED_ZIP with EXTRACTED_DIR as the
 # member prefix -- the same contract DUMPS_DIR/DUMPS_ZIP have, and the same
 # pairing `stages._collect` reads to decide whether to upload the directory
 # or the archive.

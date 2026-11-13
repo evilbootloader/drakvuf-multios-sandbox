@@ -15,9 +15,11 @@ The platform's job page reads `cape_results.json` and, for the process
 panels' calls, `calls.jsonl.gz` through `calls_index.json` (since
 2026-11-11; `platform/sandbox_platform/cape.py`, `calls.py`).
 """
-from ..paths import IPT_DIR, IPT_ZIP, TRACE_LOG
+from ..paths import (DUMPS_DIR, DUMPS_ZIP, EXTRACTED_DIR, EXTRACTED_ZIP, IPT_DIR,
+                     IPT_ZIP, TRACE_LOG)
 from .cape_analysis import CAPE_RESULTS, cape_analysis
 from .compress_ipt import compress_ipt
+from .pack_dirs import compress_dumps, compress_extracted
 from .plugin_base import PostprocessPlugin
 
 POSTPROCESS_PLUGINS = [
@@ -28,4 +30,12 @@ POSTPROCESS_PLUGINS = [
     # exists only for a job that selected the `ipt` plugin, and is uploaded
     # as one archive.
     PostprocessPlugin(function=compress_ipt, requires=[IPT_DIR], generates=[IPT_ZIP]),
+    # The files the sample wrote and the memory regions memdump took, each
+    # uploaded as one archive since 2026-11-13 (operator). After
+    # cape_analysis, which reads both directories for `dropped` and
+    # `procmemory`.
+    PostprocessPlugin(
+        function=compress_extracted, requires=[EXTRACTED_DIR], generates=[EXTRACTED_ZIP]
+    ),
+    PostprocessPlugin(function=compress_dumps, requires=[DUMPS_DIR], generates=[DUMPS_ZIP]),
 ]

@@ -290,7 +290,8 @@ def test_the_chain_is_cape_and_nothing_splits_the_trace():
     from sandboxd.postprocessing.plugins import POSTPROCESS_PLUGINS
 
     names = [p.function.__name__ for p in POSTPROCESS_PLUGINS]
-    assert names == ["cape_analysis", "compress_ipt"]
+    assert names == ["cape_analysis", "compress_ipt", "compress_extracted",
+                     "compress_dumps"]
     assert POSTPROCESS_PLUGINS[0].requires == ["trace.log"]
 
 

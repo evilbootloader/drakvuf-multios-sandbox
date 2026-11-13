@@ -499,9 +499,9 @@ It maps **headings, not content**: a fact stated in the middle of a section is n
   - `docs/architecture/result-schema.md:92` — [3. What was open, and where each question went](architecture/result-schema.md#3-what-was-open-and-where-each-question-went)
   - `docs/architecture/result-schema.md:125` — [4. The specification (DRAFT-018)](architecture/result-schema.md#4-the-specification-draft-018)
     - `docs/architecture/result-schema.md:132` — [4.1 Layout](architecture/result-schema.md#41-layout)
-    - `docs/architecture/result-schema.md:312` — [4.1a `cape_results.json`: keys added 2026-11-12](architecture/result-schema.md#41a-cape_resultsjson-keys-added-2026-11-12)
-    - `docs/architecture/result-schema.md:349` — [4.2 The manifest](architecture/result-schema.md#42-the-manifest)
-    - `docs/architecture/result-schema.md:385` — [4.3 The capability envelope](architecture/result-schema.md#43-the-capability-envelope)
+    - `docs/architecture/result-schema.md:303` — [4.1a `cape_results.json`: keys added 2026-11-12](architecture/result-schema.md#41a-cape_resultsjson-keys-added-2026-11-12)
+    - `docs/architecture/result-schema.md:340` — [4.2 The manifest](architecture/result-schema.md#42-the-manifest)
+    - `docs/architecture/result-schema.md:376` — [4.3 The capability envelope](architecture/result-schema.md#43-the-capability-envelope)
 
 ## `docs/architecture/routed-egress.md`
 

@@ -242,12 +242,13 @@ is what a signature's `mark_call` names. The guest's other processes'
 calls are not written, whatever the postprocessing scope.
 
 **`dumps/` and `dumps.zip` are the same evidence in two states.**
-`process_dumps` packs the directory into the zip and removes the directory; it
-needs `process_tree.json`, which needs `procmon`, which no non-Windows job runs
-today, so for those jobs the raw directory is what uploads. `stages._collect`
-excludes the directory only when the zip is beside it — an unconditional
-exclusion would have dropped every memory dump of every Ubuntu job with nothing
-in the manifest to say so.
+`compress_dumps` (`plugins/pack_dirs.py`, since 2026-11-13) packs the
+directory into the zip and removes what it packed, on every guest, after
+`cape_analysis` has read the dumps for `procmemory`. Between 2026-11-10, when
+`process_dumps` left the chain, and that date nothing packed it and the raw
+directory uploaded a file at a time. `stages._collect` excludes the directory
+only when the zip is beside it, so a job whose postprocessing never ran still
+uploads its dumps raw. An empty directory makes no zip.
 
 **`ipt/` and `ipt.zip` follow the same rule, for a job that selected `ipt`.**
 `argv_trace` passes `--ipt-dir <result_dir>/ipt --ipt-trace-user` beside
@@ -258,24 +259,14 @@ no `ipt.zip` rather than an empty one. `compress_ipt` packs it. **Candidate**:
 no job has run with `ipt` selected on this Dom0 yet, so the layout DRAKVUF
 writes under `ipt/` is not recorded here.
 
-**`extracted/` and `extracted.zip` are the third pair, since 2026-09-26.**
-`process_extracted` packs the directory and removes it, and `stages._collect`
-reads the same DIR/ZIP rule. It is **not** a copy of `process_dumps`, because
-fileextractor is not memdump:
-
-- **Only Windows writes a `.metadata` sidecar** (`win.cpp::save_file_metadata`).
-  `process_dumps` skips any dump missing one; that guard, copied across, would
-  have dropped every extracted file on Ubuntu and Android.
-- **The on-disk name is per-OS.** Linux writes `%08d_<sanitized name>` and puts
-  the full path in `DumpFile`; Windows writes `file.%06d.mm` and names only
-  `SeqNum`. A per-OS table resolves it, the shape `process_tree.METHOD_PARSERS`
-  established.
-- **The directory is the ground truth, not the log.** A file DRAKVUF wrote but
-  did not log is still a file the sample wrote: it is packed and reported under
-  `process_seqid: null` rather than dropped — the rule the operator set for
-  memory dumps on 2026-09-18.
-- `fileextractor_fail` and `fileextractor_skip` name files that were **not**
-  written. They go to `extraction_failures`, never to `extracted_files`.
+**`extracted/` and `extracted.zip` are the third pair.** `compress_extracted`
+packs it under the same rule and on the same date. Everything in the directory
+is packed, Windows' `.metadata` sidecars included, under the name it had as a
+separate artifact (`extracted/<file>`); which file is which process's is in
+`cape_results.json`'s `dropped`, not in the archive. Both archives are bounded
+at 3.5 GiB of members (`max_total_extracted_size`, `max_total_packed_size`)
+because the platform's download path refuses an entry of 4 GiB; a file that
+does not fit stays in the directory on Dom0 and is logged, not uploaded.
 
 **Reserved means a worker may not use the name for anything else**, so a
 reader can trust that `procmon.log` is procmon's output.

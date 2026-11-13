@@ -141,6 +141,11 @@ class MemdumpConfigSection(BaseModel):
     max_single_dump_size: int = 32 * 1024 * 1024
     # Drop dumps from System process
     filter_out_system_pid: bool = True
+    # What compress_dumps packs into dumps.zip, uncompressed. ONE artifact,
+    # so the same half gigabyte under the download path's 4 GiB entry limit
+    # that max_total_extracted_size keeps (below). The four above are
+    # process_dumps's, which no longer runs.
+    max_total_packed_size: int = 3584 * 1024 * 1024
 
 
 class ExtractedConfigSection(BaseModel):

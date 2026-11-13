@@ -1148,13 +1148,14 @@ class Analysis:
     def _collect(self, lease, job_dir: Path) -> Outcome:
         """Upload what the run produced and build its manifest."""
         # `dumps/` is left out ONLY when `dumps.zip` exists beside it: that
-        # is process_dumps having packed it, and the directory is then a
-        # copy. When process_dumps did not run -- no procmon, so no process
-        # tree, which is every non-Windows job today -- the raw directory is
-        # all there is and it uploads as before. An unconditional exclusion
+        # is compress_dumps (plugins/pack_dirs.py) having packed it, and what
+        # is left in the directory did not fit the archive. When it did not
+        # run -- postprocessing failed before it, or timed out -- the raw
+        # directory is all there is and it uploads. An unconditional exclusion
         # here would drop every memory dump of such a job with nothing in the
         # manifest to say so, the exact failure `_trace`'s mkdir comment
-        # describes. `ipt/` and `ipt.zip` are the same pair (compress_ipt).
+        # describes. `ipt/` and `ipt.zip` (compress_ipt) and `extracted/` and
+        # `extracted.zip` (compress_extracted) are the same pair.
         packed = {directory for directory, archive in
                   ((DUMPS_DIR, DUMPS_ZIP), (IPT_DIR, IPT_ZIP),
                    (EXTRACTED_DIR, EXTRACTED_ZIP))
