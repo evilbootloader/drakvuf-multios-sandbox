@@ -87,7 +87,10 @@ def pe_info(path: Path) -> dict:
         stamp = pe.FILE_HEADER.TimeDateStamp
         return {
             "imagebase": f"0x{pe.OPTIONAL_HEADER.ImageBase:08x}",
-            "entrypoint": f"0x{pe.OPTIONAL_HEADER.ImageBase + pe.OPTIONAL_HEADER.AddressOfEntryPoint:08x}",
+            # An RVA, as CAPE's and as the sections' addresses above: the
+            # signatures compare the two (pe_entrypoint_outside_sections
+            # fired on every PE while this held the VA)
+            "entrypoint": f"0x{pe.OPTIONAL_HEADER.AddressOfEntryPoint:08x}",
             "machine_type": pefile.MACHINE_TYPE.get(pe.FILE_HEADER.Machine, hex(pe.FILE_HEADER.Machine)),
             "timestamp": datetime.fromtimestamp(stamp, timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
             "imphash": pe.get_imphash(),

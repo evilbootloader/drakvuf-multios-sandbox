@@ -46,7 +46,12 @@ class CapeOptions:
     # the clone's VLAN and the plugins the trace has records of.
     scope: str = "sample"
     sample_pids: Optional[Set[int]] = None
+    # Seqids of the processes of sandboxd's own launch of the sample
+    # (SplitResult.launcher): left out of the behaviour by mark_launcher.
+    launcher: Optional[Set[int]] = None
     yara_rules: Optional[str] = None
+    # CAPE's family rules (the community checkout's data/yara/CAPE): `cape_yara`
+    cape_yara_rules: Optional[str] = None
     falco: Optional[object] = None
     vlan: Optional[int] = None
     trace_plugins: Optional[Set[str]] = None
@@ -202,6 +207,14 @@ _SERVICE_HANDLE_APIS = frozenset(("StartService", "ControlService", "ControlServ
                                   "DeleteService", "ChangeServiceConfig", "ChangeServiceConfig2"))
 _SERVICE_OPEN_APIS = frozenset(("OpenService", "CreateService"))
 
+# The caller's own process as a handle: NtCurrentProcess (-1), as a 64-bit
+# and as a 32-bit process passes it.
+_OWN_PROCESS_HANDLES = frozenset((0xFFFFFFFFFFFFFFFF, 0xFFFFFFFF))
+# Calls whose `ProcessHandle` is where the new handle is written, not a
+# handle to a process: the PID they are of is their own argument.
+_PROCESS_HANDLE_OUT_APIS = frozenset(("NtOpenProcess", "NtCreateUserProcess", "NtCreateProcess",
+                                      "NtCreateProcessEx", "RtlCreateUserProcess"))
+
 # The APIs that create a process, whose `CommandLine` signatures read
 # without asking whether it is there (capemon always logs it).
 _PROCESS_CREATION_APIS = frozenset(("NtCreateUserProcess", "CreateProcessInternal",
@@ -237,6 +250,7 @@ _PATH_ARGUMENTS = ("FileName", "HandleName", "ExistingFileName", "NewFileName", 
 
 
 _REPEATED_SEPARATORS = re.compile(r"\\{2,}")
+_SYSTEM_DEVICE = re.compile(r"(\\Device\\HarddiskVolume\d+)\\Windows\\", re.I)
 
 
 def resolved_path(path: str) -> str:
@@ -284,6 +298,11 @@ def _parse_int(value):
     return None
 
 
+def _image_name(path) -> str:
+    """A module's file name, lower case, whichever way its path is written."""
+    return str(path or "").replace("\\", "/").rsplit("/", 1)[-1].lower()
+
+
 def _syscall_ok(ret, linux):
     """NT_SUCCESS on Windows; on Linux, not one of the -4095..-1 the kernel
     returns as -errno. None when the call never returned (unpaired)."""
@@ -294,6 +313,21 @@ def _syscall_ok(ret, linux):
         value &= 0xFFFFFFFFFFFFFFFF
         return not (value >= 0xFFFFFFFFFFFFF001)
     return (value & 0xFFFFFFFF) < 0x80000000
+
+
+def _api_ok(name, ret, linux):
+    """Whether an API call succeeded, where its return value says so: the
+    NTSTATUS of ntdll's Nt*, Zw* and Ldr* exports. Anything else is True, as
+    it always was -- a Win32 function's failure value is its own (0, -1,
+    INVALID_HANDLE_VALUE), and capemon knows each where this does not."""
+    if linux:
+        # libc's -1 (as an int or a long): the kernel record folded into the
+        # call says the same, and an API call's `status` is the API's
+        value = _parse_int(ret)
+        return value not in (0xFFFFFFFF, 0xFFFFFFFFFFFFFFFF, -1)
+    if not name.startswith(("Nt", "Zw", "Ldr")):
+        return True
+    return _syscall_ok(ret, False) is not False
 
 
 class JsonParser:
@@ -519,6 +553,12 @@ class ParseProcessLog(list):
         # service handle -> service name, from OpenService/CreateService
         # (_cape_names): this process's, in call order
         self._service_handles = {}
+        # process handle -> PID, from NtOpenProcess/OpenProcess and the
+        # process creations (_cape_names), until closed
+        self._process_handles = {}
+        # Linux: the working directory, for the relative paths filetracer
+        # prints as the syscall was given them (_linux_paths)
+        self._cwd = None
 
         if path_exists(log_path) and os.stat(log_path).st_size > 0:
             self.parse_first_and_reset()
@@ -640,6 +680,8 @@ class ParseProcessLog(list):
         self.call_id = 0
         self.api_pointer = 0
         self._service_handles = {}
+        self._process_handles = {}
+        self._cwd = None
 
     def compare_calls(self, a, b):
         """Compare two calls for equality. Same implementation as before netlog.
@@ -647,8 +689,13 @@ class ParseProcessLog(list):
         @param b: call b
         @return: True if a == b else False
         """
+        # An API call is never a repeat of a kernel-side one: apimon's record
+        # of ntdll's NtOpenKeyEx follows the syscall's with the same name,
+        # return and arguments, and as its repeat it had no `api` -- no
+        # signature saw it (665 calls of one process, Quasar job 2026-11-12).
         return (
-            (a.get("api") or a.get("syscall")) == (b.get("api") or b.get("syscall")) and a["return"] == b["return"] and a["arguments"] == b["arguments"]
+            ("api" in a) == ("api" in b)
+            and (a.get("api") or a.get("syscall")) == (b.get("api") or b.get("syscall")) and a["return"] == b["return"] and a["arguments"] == b["arguments"]
         )
 
     def wait_for_lastcall(self):
@@ -1075,7 +1122,7 @@ class ParseProcessLog(list):
             "plugin": mtype,
             "category": api_category(api_name, mtype, linux),
             "api": api_name,
-            "status": True,
+            "status": _api_ok(api_name, return_value, linux),
             "return": return_value,
             "arguments": cape_aliases(api_name, settle_outputs(api_name, mtype, arguments)),
             "repeated": 0,
@@ -1092,14 +1139,20 @@ class ParseProcessLog(list):
             call["pretty_return"] = prettyret
         """
 
+        # CAPE's MainExeBase: where the process's own image is mapped, which
+        # apimon reports among the modules it discovers. (`DllBase` was the
+        # first module seen, which is ntdll in every process; kept as a key,
+        # now with the image's base.)
         if (
             api_name == "DllLoadNotification"
             and len(arguments) == 3
             and arguments[-1].get("name", "") == "DllBase"
             and arguments[0].get("value", "") == "load"
-            and "DllBase" not in self.environdict
+            and "MainExeBase" not in self.environdict
+            and _image_name(arguments[1].get("value")) == _image_name(self.module_path)
+            and _image_name(self.module_path)
         ):
-            self.environdict.setdefault("DllBase", arguments[-1]["value"])
+            self.environdict["MainExeBase"] = self.environdict["DllBase"] = arguments[-1]["value"]
 
         # What the kernel saw of this same call: the key and the data behind
         # a registry handle, the file behind a file handle, the process a
@@ -1118,7 +1171,47 @@ class ParseProcessLog(list):
             if not isinstance(arg.get("value"), str):
                 arg["value"] = _cape_value(arg.get("value"))
         self._cape_names(call)
+        if self.platform != TargetOs.WINDOWS:
+            self._linux_paths(call)
         self._raw_values(call)
+
+    # A process's working directory when its log ends, by (log directory,
+    # seqid): what a fork starts in. Logs are read parent first (seqids are
+    # in creation order), and a directory holds one analysis.
+    _LAST_CWD = {}
+    _PWD = re.compile(r"(?:\A|\s)PWD=(/\S*)")
+
+    def _linux_paths(self, call):
+        """Linux filetracer prints a path as the syscall was given it, so
+        `rm sshd` in /tmp is `sshd`: make `filename`, and a rename's or a
+        link's `newname`, absolute -- against the directory the process is
+        in: its parent's when it forked, the PWD of its exec, its chdirs.
+        The arguments stay as passed."""
+        key = (os.path.dirname(self._log_path), self.identity.get("seqid"))
+        if self._cwd is None:
+            self._cwd = self._LAST_CWD.get((key[0], self.identity.get("parent_seqid")))
+        name = call.get("syscall") or call.get("api")
+        if name == "do_execveat_common":
+            found = self._PWD.search(_call_argument(call, "Environment") or "")
+            if found:
+                self._cwd = found.group(1)
+        elif name == "chdir" and call.get("status") is not False:
+            path = _call_argument(call, "path") or _call_argument(call, "filename")
+            if isinstance(path, str) and path:
+                self._cwd = self._absolute(path)
+        if self._cwd:
+            self._LAST_CWD[key] = self._cwd
+        for field in ("filename", "newname"):
+            if isinstance(call.get(field), str) and call[field]:
+                call[field] = self._absolute(call[field])
+
+    def _absolute(self, path):
+        if not path.startswith("/"):
+            if not self._cwd:
+                return path
+            path = f"{self._cwd}/{path}"
+        # normpath keeps a leading `//`, which POSIX lets mean something else
+        return os.path.normpath(path).replace("//", "/", 1)
 
     @staticmethod
     def _raw_values(call):
@@ -1290,6 +1383,9 @@ class ParseProcessLog(list):
             if service:
                 put("ServiceName", service)
 
+        if self.platform == TargetOs.WINDOWS:
+            self._process_ids(call, name, by_name, put)
+
         if name == "ShellExecuteEx":
             # apimon prints the SHELLEXECUTEINFO's nShow in decimal
             # (apimon.cpp, ShellExecuteExW_hook); every other number of a
@@ -1297,6 +1393,53 @@ class ParseProcessLog(list):
             show = by_name.get("Show")
             if show is not None and str(show["value"]).lstrip("-").isdigit():
                 show["value"] = hex(int(show["value"]) & 0xFFFFFFFF)
+
+    def _process_ids(self, call, name, by_name, put):
+        """capemon's `ProcessId` on a call given a process handle: the PID
+        the handle is open on, in decimal as capemon logs it. A call here
+        carries the handle alone, and a signature asking "is this another
+        process?" could only ask "is this a real handle?" -- a RAT that
+        opened itself and read its own memory was `reads_memory_remote_
+        process` 31 times (2026-11-12). Known: the caller's own pseudo
+        handle, and a handle this process was seen to be given, by
+        NtOpenProcess / OpenProcess or by creating the process, until it
+        closes it. A handle that was duplicated or inherited is not, and
+        the call then gets no ProcessId, as before."""
+        def number(*names):
+            for n in names:
+                value = _parse_int(by_name[n]["value"]) if n in by_name else None
+                if value is not None:
+                    return value
+            return None
+
+        if name == "NtClose":
+            self._process_handles.pop(number("Handle"), None)
+        elif name == "NtOpenProcess":
+            # ProcessId is the ClientId's, in decimal; ClientID procmon's, in hex
+            pid = by_name.get("ProcessId")
+            pid = int(pid["value"]) if pid is not None and str(pid["value"]).isdigit() else number("ClientID")
+            handle = _parse_int(call.get("opened_handle"))
+            if handle and pid is not None and call.get("status") is not False:
+                self._process_handles[handle] = pid
+        elif name == "OpenProcess":
+            handle, pid = _parse_int(call.get("return")), number("dwProcessId")
+            if handle and pid is not None:
+                self._process_handles[handle] = pid
+        elif "NewProcessHandle" in by_name:
+            # A creation procmon saw (NtCreateUserProcess, and the Win32
+            # wrappers given its record)
+            handle, pid = number("NewProcessHandle"), number("NewPid")
+            if handle and pid is not None:
+                self._process_handles[handle] = pid
+        elif "ProcessId" not in by_name and name not in _PROCESS_HANDLE_OUT_APIS:
+            handle = number("ProcessHandle", "hProcess")
+            if handle is None:
+                return
+            # NtTerminateProcess(NULL) is the caller too
+            own = handle in _OWN_PROCESS_HANDLES or (handle == 0 and name == "NtTerminateProcess")
+            pid = _parse_int(self.process_id) if own else self._process_handles.get(handle)
+            if pid is not None:
+                put("ProcessId", str(pid))
 
     def _parse_syscall(self, timestamp, thread_id, mtype, dec):
         return_value = dec.get("Ret")
@@ -1312,10 +1455,11 @@ class ParseProcessLog(list):
             self.threads.append(thread_id)
         linux = self.platform != TargetOs.WINDOWS
 
-        # Linux: a -errno return is the failure. A call that never returned
-        # (exit, a successful execve) counts as done. Windows keeps True:
-        # what signatures read there is apimon's status.
-        status = _syscall_ok(return_value, True) if linux else True
+        # Linux: a -errno return is the failure; Windows: an NTSTATUS that is
+        # not NT_SUCCESS. A call that never returned (exit, a successful
+        # execve, a trace without sysret) counts as done.
+        # win32k's services return what they like, not an NTSTATUS.
+        status = _syscall_ok(return_value, linux) if linux or dec.get("Module") == "nt" else True
         call = {
             "timestamp": timestamp,
             "thread_id": thread_id,
@@ -1367,6 +1511,17 @@ class ParseProcessLog(list):
             call.update({"operation": rec.get("Operation", ""), "service": service,
                          "filehandle": rec.get("FileHandle", ""), "filename": filename,
                          "information": rec.get("IoStatusBlock")})
+            # Linux, hooked at the syscall: a rename's or a link's FileName is
+            # the old path and `newpath` the new one. (Hooked at the VFS
+            # function it is the other way round, with `old_name` or
+            # `link_name`: _linux_files.) DRAKVUF's syscalls plugin up to
+            # 9722578 read an x64 syscall's fourth argument from rcx, so its
+            # own `newpath` of renameat2 and linkat is not the path.
+            if isinstance(rec.get("newpath"), str):
+                call["newname"] = rec["newpath"]
+                for arg in call["arguments"]:
+                    if arg["name"] == "newpath":
+                        arg["value"] = rec["newpath"]
             for arg in symbolic_to_hex(self._record_arguments(rec)):
                 if arg["name"] not in ("FileHandle", "ObjectAttributes", "Syscall"):
                     add(arg["name"], arg["value"])
@@ -1379,6 +1534,11 @@ class ParseProcessLog(list):
             call.update({"key": key, "valuename": valuename, "value": value})
             add("Key", key)
         elif plugin == "procmon":
+            # The handle NtOpenProcess gave: procmon prints it under the
+            # name of the argument it was written through, which the call
+            # already has as that pointer (_cape_names' process handles)
+            if rec.get("Method") == "NtOpenProcess":
+                call["opened_handle"] = rec.get("ProcessHandle")
             for arg in self._record_arguments(rec):
                 value = arg["value"]
                 if (arg["name"] == "CommandLine" and isinstance(value, str)
@@ -1606,6 +1766,9 @@ class ParseProcessLog(list):
 
         call.update({"operation": operation, "filehandle": filehandle, "filename": filename,
                      "information": dec.get("IoStatusBlock")})
+        # As in _fold_resolved: a Linux rename's or link's new path
+        if isinstance(dec.get("newpath"), str):
+            call["newname"] = dec["newpath"]
         return call
 
     def _parse_socketmon(self, row):
@@ -1830,7 +1993,9 @@ class Summary:
 
     key = "summary"
 
-    def __init__(self, options):
+    def __init__(self, options, linux=False):
+        # Whose file names these are: a Linux path may be relative
+        self._linux = linux
         self.keys = _UniqueList()
         self.read_keys = _UniqueList()
         self.write_keys = _UniqueList()
@@ -1927,6 +2092,30 @@ class Summary:
     # RegCreateKeyEx are writes, as the port had them: CAPE counts a create
     # only when the disposition says the key was new, and that disposition
     # is an output DRAKVUF does not print.
+    _REGISTRY_CREATES = frozenset(("NtCreateKey", "NtCreateKeyTransacted", "RegCreateKeyEx",
+                                   "RegCreateKey", "RegCreateKeyTransacted"))
+    # KEY_SET_VALUE | KEY_CREATE_SUB_KEY | KEY_CREATE_LINK | DELETE | WRITE_DAC |
+    # WRITE_OWNER | GENERIC_ALL | GENERIC_WRITE. Not MAXIMUM_ALLOWED: that is
+    # how advapi32 itself walks the keys above the one it was asked for
+    # (HKCU\Software, ...\Microsoft for WScript's Settings key), no intent.
+    _KEY_WRITE_ACCESS = 0x500D0026
+    REG_CREATED_NEW_KEY = 1
+
+    def _key_written(self, call):
+        """Whether a key-creating call wrote: RegCreateKeyEx opens a key
+        that exists, and is how most code opens one to read (KEY_READ,
+        0x20019: 7 of WScript's "written" keys, 2026-11-12). CAPE counts the
+        call when its disposition says the key was created; DRAKVUF prints
+        that out value as the address it is written to, so where no
+        disposition is known the access asked for decides -- a key opened
+        for writing counts, as the intent it is. A call with neither (the
+        16-bit RegCreateKey) asks for everything."""
+        disposition = _parse_int(self._arg(call, "Disposition", "lpdwDisposition"))
+        if disposition in (1, 2):
+            return disposition == self.REG_CREATED_NEW_KEY
+        access = _parse_int(self._arg(call, "DesiredAccess", "samDesired"))
+        return access is None or bool(access & self._KEY_WRITE_ACCESS)
+
     _REGISTRY_KINDS = {
         **dict.fromkeys(("NtSetValueKey", "RegSetValueEx", "RegSetValue", "RegSetKeyValue",
                          "SHSetValue", "NtCreateKey", "NtCreateKeyTransacted", "RegCreateKeyEx",
@@ -1949,7 +2138,10 @@ class Summary:
         if not name or not name.startswith(("HKEY_", "\\")):
             return
         self._add(self.keys, name)
-        kind = self._REGISTRY_KINDS.get(canonical(call.get("api") or call.get("syscall") or ""))
+        api = canonical(call.get("api") or call.get("syscall") or "")
+        kind = self._REGISTRY_KINDS.get(api)
+        if api in self._REGISTRY_CREATES and not self._key_written(call):
+            kind = None
         if kind:
             self._add(getattr(self, kind), name)
         if kind == "write_keys":
@@ -2126,27 +2318,50 @@ class Summary:
     _LINUX_FILE_RENAME = frozenset(("rename", "renameat", "renameat2"))
     _LINUX_FILE_LINK = frozenset(("link", "linkat"))
 
+    # The device of the volume Windows is on (`\\Device\\HarddiskVolume2`),
+    # from the processes' image paths: BehaviorAnalysis.run sets it per run.
+    system_device = None
+
     @staticmethod
     def _dos_name(path):
-        """`\\??\\C:\\x` is the NT name of `C:\\x`, which is how CAPE reports it."""
-        return path[4:] if path.startswith("\\??\\") else path
+        """`\\??\\C:\\x` is the NT name of `C:\\x`, which is how CAPE reports it.
+        So is `\\Device\\HarddiskVolume2\\x`, the name DRAKVUF gives a file it
+        resolved from a handle (after 9722578; before, that name had no volume
+        at all and the same file was listed twice): the system volume is the
+        system drive, C: on every guest image here."""
+        if path.startswith("\\??\\"):
+            return path[4:]
+        device = Summary.system_device
+        if device and path[:len(device) + 1].lower() == device.lower() + "\\":
+            return "C:" + path[len(device):]
+        return path
 
     def _deletes(self, call):
         return _file_deleted(call)
 
     def _linux_files(self, call, filename, api):
-        """[(path, kinds)] of a Linux filetracer record. A rename's FileName
-        is the new name and `old_name` the old one; a link's FileName is the
-        file linked to and `link_name` the new name."""
+        """[(path, kinds)] of a Linux filetracer record. Hooked at the
+        syscall, a rename's or a link's FileName is the old path and
+        `newname` (the record's `newpath`) the new one; hooked at the VFS
+        function, a rename's FileName is the new name and `old_name` the old
+        one, a link's FileName the file linked to and `link_name` the new
+        name. A call that failed touched the file and changed nothing."""
+        failed = call.get("status") is False
+        new = call.get("newname")
         if api in self._LINUX_FILE_RENAME:
-            out = [(filename, ("write_files",))]
             old = self.get_argument(call, "old_name")
             if isinstance(old, str) and old:
-                out.append((old, ("delete_files",)))
-            return out
+                old, new = old, filename
+            else:
+                old = filename
+            if failed or not isinstance(new, str) or not new:
+                return [(old, ())]
+            return [(new, ("write_files",)), (old, ("delete_files",))]
         if api in self._LINUX_FILE_LINK:
-            new = self.get_argument(call, "link_name")
-            return [(new, ("write_files",))] if isinstance(new, str) and new else []
+            new = self.get_argument(call, "link_name") or new
+            return [(new, ("write_files",))] if isinstance(new, str) and new and not failed else []
+        if failed and api not in self._LINUX_FILE_OPEN:
+            return [(filename, ())]
         if api in self._LINUX_FILE_DELETE:
             kinds = ("delete_files",)
         elif api in self._LINUX_FILE_WRITE:
@@ -2184,13 +2399,16 @@ class Summary:
             return
         if not isinstance(filename, str) or not filename:
             return
-        if filename.startswith("/"):
+        if self._linux:
             for path, kinds in self._linux_files(call, filename, api):
                 if "write_files" in kinds:
                     m = self._LINUX_SERVICE_FILE.match(path)
                     if m:
                         self._add_service(self.created_services, m.group(1) or m.group(2))
-                if not path.startswith(self._LINUX_EXCLUDED):
+                # A log removed is the one thing under /var/log that is
+                # behaviour: every daemon writes there
+                if not path.startswith(self._LINUX_EXCLUDED) or (
+                        "delete_files" in kinds and path.startswith("/var/log/")):
                     self._note_file(process, path, kinds)
             return
         else:
@@ -2450,10 +2668,11 @@ class Enhanced:
 
     key = "enhanced"
 
-    def __init__(self, details=False):
+    def __init__(self, details=False, linux=False):
         """
         @param details: Also add some (not so relevant) Details to the log
         """
+        self._linux = linux
         self.eid = 0
         self.details = details
         self.modules = {}
@@ -2693,6 +2912,10 @@ class Enhanced:
 
             for logname, dataname in item["args"]:
                 event["data"][logname] = args.get(dataname)
+            # CreateProcessA/W and CreateProcessAsUser name the program in
+            # ApplicationName, or only in the command line
+            if item["event"] == "execute" and event["data"].get("file") is None:
+                event["data"]["file"] = args.get("ApplicationName") or args.get("CommandLine")
 
             # The file Windows opens, not the string it was given: the
             # call's own argument keeps it as passed.
@@ -2806,14 +3029,23 @@ class Enhanced:
         filename = call.get("filename")
         if not isinstance(filename, str) or not filename:
             return []
-        if filename.startswith("/"):
-            if filename.startswith(Summary._LINUX_EXCLUDED):
-                return []
+        if self._linux:
+            failed = call.get("status") is False
             if service in self._LINUX_RENAMES:
-                old = _call_argument(call, "old_name")
-                return [("move", "file", {"from": old, "to": filename})] if old else []
+                # As Summary._linux_files: which end FileName is depends on
+                # where filetracer hooked
+                old, new = _call_argument(call, "old_name"), call.get("newname")
+                old, new = (old, filename) if old else (filename, new)
+                if failed or not new or new.startswith(Summary._LINUX_EXCLUDED):
+                    return []
+                return [("move", "file", {"from": old, "to": new})]
             found = self._LINUX_FILE_EVENTS.get(service)
-            return [(found[0], found[1], {"file": filename})] if found else []
+            if failed or not found:
+                return []
+            if filename.startswith(Summary._LINUX_EXCLUDED) and not (
+                    found[0] == "delete" and filename.startswith("/var/log/")):
+                return []
+            return [(found[0], found[1], {"file": filename})]
         filename = Summary._dos_name(filename)
         if service == "NtWriteFile":
             return [("write", "file", {"file": filename})]
@@ -2850,8 +3082,14 @@ class Enhanced:
         event = self._process_call(call) if call.get("api") else None
         if event:
             event.update(who)
-            self.events.append(event)
-            self._api_keys.add(self._event_key(process, event))
+            key = self._event_key(process, event)
+            # A file read or written in 328 calls is one event, as the
+            # kernel's records of it already were, and a read or a write
+            # with no file named (the console) is none.
+            io = event["object"] == "file" and event["event"] in ("read", "write")
+            if not io or (key[3] and key not in self._api_keys):
+                self.events.append(event)
+            self._api_keys.add(key)
             return
         for kind, obj, data in self._kernel_events(call):
             event = {"event": kind, "object": obj, "timestamp": call["timestamp"], "eid": 0, "data": data,
@@ -3371,6 +3609,25 @@ def _enrich_tree_com_parents(tree_nodes, com_activations):
     _walk(tree_nodes)
 
 
+def mark_launcher(processes, options) -> list:
+    """Mark (`launcher`: True) the processes of sandboxd's own launch, and
+    return them. Which they are is trace_split's finding
+    (`options.launcher`, by launch.launch_seqids): the injected shell, its
+    console host and the wait. They are sandboxd's, not the sample's: a
+    shell that creates a suspended process, writes its parameters and
+    resumes it is every job (9 of the 24 signatures of a benign installer,
+    2026-11-12). They stay in the process tree and the call log.
+
+    One of them the sample made run its code is not among them
+    (trace_split.follow_transfers): it runs the sample's from then on, and
+    is scored whole, as a process outside the tree the sample took over is
+    -- the split is by process, not by time."""
+    marked = [p for p in processes if p.get("seqid") in (options.launcher or ())]
+    for process in marked:
+        process["launcher"] = True
+    return marked
+
+
 class BehaviorAnalysis(Processing):
     """Behavior Analyzer."""
 
@@ -3390,12 +3647,22 @@ class BehaviorAnalysis(Processing):
             return behavior
 
         behavior = {"processes": Processes(logs_path, self.task, self.options, self.platform).run()}
+        launcher = mark_launcher(behavior["processes"], self.options)
+        if launcher:
+            log.info("launcher processes, left out of the behaviour: %s",
+                     ", ".join(f"{p['process_name']} ({p['process_id']})" for p in launcher))
+            if self.options.capa_pids is not None:
+                self.options.capa_pids = set(self.options.capa_pids) - {p["process_id"] for p in launcher}
 
+        linux = self.platform != TargetOs.WINDOWS
+        Summary.system_device = next(
+            (m.group(1) for m in (_SYSTEM_DEVICE.match(str(p.get("module_path") or ""))
+                                  for p in behavior["processes"]) if m), None)
         instances = [
             Anomaly(getattr(self, "aux_path", None)),
             ProcessTree(),
-            Summary(self.options),
-            Enhanced(),
+            Summary(self.options, linux=linux),
+            Enhanced(linux=linux),
             EncryptedBuffers(),
             NetworkMap(self.options),
         ]
@@ -3413,8 +3680,11 @@ class BehaviorAnalysis(Processing):
                 for instance in enabled_instances:
                     if hasattr(instance, "event_process"):
                         instance.event_process(process)
-                for call in process["calls"]:
-                    for instance in enabled_instances:
+                # The launcher's calls are no behaviour of the sample's; its
+                # node stays in the tree.
+                readers = [i for i in enabled_instances if not process.get("launcher") or i.key == "processtree"]
+                for call in process["calls"] if readers else ():
+                    for instance in readers:
                         try:
                             instance.event_apicall(call, process)
                         except Exception as e:
@@ -3444,12 +3714,17 @@ class BehaviorAnalysis(Processing):
         # ELF as well (capa_integration.capa_report says how), and the
         # calls here include the syscalls.
         if HAVE_FLARE_CAPA and getattr(self.options, "capa", False):
+            # Whether capa ran to its end, and over how many calls: an empty
+            # capa_summary alone reads as "no capabilities"
+            status = self.results.setdefault("statistics", {}).setdefault("capa", {})
             try:
                 self.results["capa_summary"] = flare_capa_details(
                     results={"behavior": behavior, **self.results},
                     rules_path=self.options.capa_rules,
                     pids=self.options.capa_pids,
+                    status=status,
                 )
             except Exception as e:
                 log.exception("Can't generate CAPA summary: %s", e)
+                status.update({"completed": False, "error": f"{type(e).__name__}: {e}"})
         return behavior

@@ -255,7 +255,7 @@ def _trace_waits(os_: TargetOs, kind: SampleKind,
 
 def budgets(os_: TargetOs, kind: SampleKind, trace_timeout: int,
             waits: Waits = DEFAULT_WAITS, *,
-            makes_drop_dir: bool = False) -> PhaseBudgets:
+            makes_drop_dir: bool = False, launch_slack: int = 0) -> PhaseBudgets:
     """Phase guards for one job, derived rather than tabulated.
 
     **The preconfig and trace budgets are computed from what they contain**,
@@ -271,7 +271,9 @@ def budgets(os_: TargetOs, kind: SampleKind, trace_timeout: int,
     """
     preconfig_floor = _preconfig_waits(os_, kind, waits,
                                        makes_drop_dir=makes_drop_dir)
-    trace_floor = _trace_waits(os_, kind, waits) + float(trace_timeout)
+    # `launch_slack`: what DRAKVUF's `-t` is raised by where the analysis
+    # clock starts with the sample (guests.LAUNCH_SLACK)
+    trace_floor = _trace_waits(os_, kind, waits) + float(trace_timeout) + float(launch_slack)
 
     return PhaseBudgets(
         clone=CLONE_BUDGET,

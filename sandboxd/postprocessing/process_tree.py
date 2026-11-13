@@ -389,8 +389,11 @@ def parse_kernel_clone(pstree: ProcessTree, entry: Dict[str, Any]) -> None:
         ppid=process_ppid,
         ts_from=float(entry["TimeStamp"]),
         evtid_from=evtid,
-        procname="Unnamed",
+        # A fork runs its parent's program, under its parent's command line,
+        # until it execs: a daemon's second fork and a bot's workers never do.
+        procname=parent.procname if parent is not None else "Unnamed",
         parent=parent,
+        args=list(parent.args) if parent is not None and parent.args else None,
     )
 
 

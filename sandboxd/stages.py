@@ -952,7 +952,8 @@ class Analysis:
     def _trace(self, job: Job, component: str | None, beat: Heartbeat) -> None:
         """Run DRAKVUF with the capture alongside it."""
         budgets = timing.budgets(job.target_os, job.kind,
-                                 job.options.timeout, self._cfg.waits)
+                                 job.options.timeout, self._cfg.waits,
+                                 launch_slack=job.options.launch_slack)
 
         if job.options.interaction is not Interaction.NONE:
             # DRAFT-055 (hidsim) and DRAFT-056 (VNC). Nothing supplies this
@@ -1024,15 +1025,20 @@ class Analysis:
             # ended, so the report can mark both frames.
             if self._screens is not None:
                 self._screens.mark("trace_start")
-            result = self._runner.run(
-                guests.argv_trace(job, component),
-                timeout=budgets.trace, what="drakvuf",
-                # SEPARATE, and there is no merge option. `-o json` makes
-                # stdout a JSONL event stream and `2>&1` is what contaminates
-                # it -- which is what blocks capa (DRAFT-019).
-                stdout_path=job.result_dir / TRACE_LOG,
-                stderr_path=job.result_dir / TRACE_STDERR,
-            )
+            # SEPARATE, and there is no merge option. `-o json` makes
+            # stdout a JSONL event stream and `2>&1` is what contaminates
+            # it -- which is what blocks capa (DRAFT-019).
+            outputs = dict(stdout_path=job.result_dir / TRACE_LOG,
+                           stderr_path=job.result_dir / TRACE_STDERR)
+            marker = guests.sample_start_marker(job)
+            started = None
+            if marker is None:
+                result = self._runner.run(guests.argv_trace(job, component),
+                                          timeout=budgets.trace, what="drakvuf", **outputs)
+            else:
+                child = self._runner.spawn(guests.argv_trace(job, component), capture=True, **outputs)
+                result, started = self._await_trace(child, job.result_dir / TRACE_LOG, marker,
+                                                    job.options.timeout, budgets.trace, beat)
             if self._screens is not None:
                 self._screens.mark("trace_end")
             # NOT `check=True`, and the choice is deliberate rather than an
@@ -1054,6 +1060,9 @@ class Analysis:
             # uploaded), beside a note naming the exit code, is diagnosable
             # where a bare `completed` is not.
             notes = []
+            if marker is not None and started is None:
+                notes.append(f"the sample was not seen to start: traced for "
+                             f"{job.options.timeout + job.options.launch_slack}s from DRAKVUF's start")
             if not result.ok:
                 notes.append(
                     f"drakvuf exited {result.returncode}"
@@ -1444,6 +1453,49 @@ class Analysis:
     def _check(beat: Heartbeat) -> None:
         if beat.cancelled.is_set():
             raise Cancelled()
+
+    @staticmethod
+    def _await_trace(child, trace_log: Path, marker: tuple[bytes, ...], timeout: int,
+                     budget: float, beat: Heartbeat, *, poll: float = 0.5):
+        """Wait for DRAKVUF, ending the trace `timeout` seconds after the
+        sample started: (its result, seconds from DRAKVUF's start to the
+        sample's, or None when it was never seen).
+
+        DRAKVUF's own clock starts when its loop does, and the sample starts
+        whenever a guest slowed by the hooks being placed gets to it -- 37 to
+        63 s into a 120 s window on 2026-11-12, one sample left with 8.5 s.
+        So DRAKVUF is given `timeout` plus a slack as its `-t`, the trace is
+        read as it is written for the record of the sample starting, and
+        `timeout` seconds after that record DRAKVUF is interrupted: it stops
+        its plugins as it does when `-t` runs out. The start is when the
+        record was READ, at most a poll and DRAKVUF's output buffer after it
+        was made, which only lengthens the window. `budget` guards the phase
+        as before: past it the group is killed."""
+        began = time.monotonic()
+        started = end_at = None
+        offset, tail = 0, b""
+        while child.running() and time.monotonic() - began < budget:
+            if beat.cancelled.is_set():
+                child.stop()
+                raise Cancelled()
+            now = time.monotonic()
+            if end_at is None:
+                try:
+                    with open(trace_log, "rb") as fh:
+                        fh.seek(offset)
+                        data = fh.read()
+                except OSError:
+                    data = b""
+                offset += len(data)
+                *lines, tail = (tail + data).split(b"\n")
+                if any(all(part in line for part in marker) for line in lines):
+                    started = now - began
+                    end_at = now + timeout
+            elif now >= end_at:
+                child.interrupt()
+                break
+            time.sleep(poll)
+        return child.wait(timeout=max(1.0, budget - (time.monotonic() - began))), started
 
     @staticmethod
     def _sleep(seconds: float, beat: Heartbeat) -> None:

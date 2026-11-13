@@ -121,7 +121,9 @@ def _parse_http(payload: bytes, dst: str, dport: int) -> Optional[dict]:
         if sep:
             headers[key.strip().lower()] = value.strip()
     host = headers.get("host", dst)
-    return {"count": 1, "host": host, "port": dport, "method": method, "path": path,
+    # `dst`: the server's address, which the Host header need not be -- and
+    # what says whose request this was (modules.Network)
+    return {"count": 1, "host": host, "dst": dst, "port": dport, "method": method, "path": path,
             "uri": f"http://{host}{path}" if path.startswith("/") else path,
             "version": version.replace("HTTP/", ""), "user-agent": headers.get("user-agent", ""),
             "data": head.decode("latin-1") + "\r\n\r\n", "body": body[:4096].decode("latin-1")}
@@ -239,6 +241,13 @@ def read_pcap(path: Path) -> dict:
                                     if answer not in entry["answers"]:
                                         entry["answers"].append(answer)
                 elif proto in (1, 58) and len(l4) >= 4:
+                    # ICMPv6's housekeeping is every IPv6 interface's, not a
+                    # ping: multicast listener reports (130-132, 143) and
+                    # neighbour discovery (133-137). A router solicitation to
+                    # ff02::2 made network_icmp (severity 3) fire on every
+                    # Linux job.
+                    if proto == 58 and (130 <= l4[0] <= 137 or l4[0] == 143):
+                        continue
                     icmp.append({"src": src, "dst": dst, "type": l4[0], "data": l4[4:68].hex()})
             except (struct.error, IndexError, ValueError):
                 continue

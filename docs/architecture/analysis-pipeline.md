@@ -261,10 +261,27 @@ Four properties, each of which something depends on:
    usable in its place — it reads the console for a keypress and aborts with
    "ERROR: Input redirection is not supported" when it has none, which is the
    normal case under `/c` from an injected `ShellExecuteEx`.
-4. **`drakvuf -t` is not raised to compensate.** The window still opens when
-   `loop()` does, so the sample is observed from its first instruction for
-   `timeout` minus whatever of the delay outlasted arming — a few seconds at
-   the end of the window traded for the whole beginning of it.
+4. **On Ubuntu and Android, `drakvuf -t` is not raised to compensate.** The
+   window still opens when `loop()` does, so the sample is observed from its
+   first instruction for `timeout` minus whatever of the delay outlasted
+   arming — a few seconds at the end of the window traded for the whole
+   beginning of it. **On Windows this no longer holds, since 2026-11-12** —
+   next paragraph.
+
+**Windows: the analysis clock starts with the sample (2026-11-12, working
+tree only, never run on Dom0).** The trade in point 4 assumed the delay costs
+"a few seconds". On Windows it did not: with ~1,350 usermode hooks being
+placed, three samples of 2026-11-12 started 37, 45 and 63 s into 120–180 s
+traces. So there `-t` is the job's timeout plus `guests.LAUNCH_SLACK` (90 s),
+a ceiling, and sandboxd interrupts DRAKVUF `timeout` seconds after procmon's
+record of the sample's creation appears in `trace.log`
+(`stages.Analysis._await_trace`). The phase budget moves with it
+(`timing.budgets`, `launch_slack`); the Android APK path's wait and both
+Linux-family guests are untouched (`launch_slack` 0). Until this change the
+section said raising `-t` "would also move the phase budget and the Android
+APK path's 150s", with no evidence to touch either — the evidence arrived for
+one guest, and only that guest changed. The decision, the mechanism and what
+is unverified: `sample-scope.md` §5.
 
 **`LAUNCH_DELAY = 5` is unmeasured on this host**, chosen for the asymmetry:
 too short silently reinstates the gap, too long costs late-trace runtime. It
@@ -273,6 +290,12 @@ is measurable from the trace itself now and only now — the sample's own
 staged path), which it could not be while the exec happened before the
 syscalls plugin existed. The span from the run's first event to that one is
 the arming cost on the real plugin set.
+
+**The launch's own processes are not the sample** (2026-11-12, same status).
+On Windows the injected `cmd.exe`, its `conhost.exe` and the `ping` are marked
+`launcher` in `cape_results.json` and feed no signature, summary or capa;
+`sample-scope.md` §3 has the rules, including the `.bat`/`.cmd` case where the
+shell *is* the sample.
 
 ### Where the sample is dropped, and its command line (2026-11-01)
 

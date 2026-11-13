@@ -16,7 +16,12 @@ syscall plugin reports (drakvuf src/plugins/syscalls/win.cpp, `get_origin`):
   of the mapping, when it is a second mapping of a system DLL -- a copy of
   ntdll the sample mapped, or a file of that path on another volume;
 * `StubSyscall`: when frame 0 is in a stub, the service that stub is for,
-  when the thread called another;
+  when the thread called another. DRAKVUF up to 9722578 took the service
+  called from KTHREAD.SystemCallNumber, which is stale on a thread's first
+  win32k call: converting it to a GUI thread makes callbacks and Zw calls
+  that overwrite the number before the service is dispatched. So it is
+  compared here with `Syscall`, the service the kernel dispatched, in
+  `Module`'s table, and counts only when it is another;
 * `ParentCallTarget` / `ParentCallTargetModule`: what the call instruction
   before frame 1 called, when that was not the stub `syscall` ran in but
   that stub past its start, or code that looks like a syscall stub of its own
@@ -109,9 +114,16 @@ _CALLED_STUBS = SYSCALL_SITES - {_SYSTEM32 + "wow64cpu.dll"}
 WOW64_LAYER = frozenset(_SYSTEM32 + name for name in (
     "ntdll.dll", "wow64.dll", "wow64win.dll", "wow64cpu.dll", "wow64base.dll", "wow64con.dll"))
 # Where a 32-bit process's stubs call Wow64Transition: ntdll's and win32u's;
-# user32's, gdi32's and imm32's on Windows 7.
+# user32's, gdi32's and imm32's on Windows 7. kernel32's and KernelBase's are
+# the NtWow64Csr* thunks, which wow64.dll answers with a call to csrss
+# (NtAlpcSendWaitReceivePort): every 32-bit process creation makes them.
 WOW64_STUBS = frozenset(_SYSWOW64 + name for name in (
-    "ntdll.dll", "win32u.dll", "user32.dll", "gdi32.dll", "imm32.dll"))
+    "ntdll.dll", "win32u.dll", "user32.dll", "gdi32.dll", "imm32.dll",
+    "kernel32.dll", "kernelbase.dll"))
+# The service number in a stub's `mov eax`: bit 12 is win32k's table (DRAKVUF's
+# SERVICE_MASK, origin.h)
+_WIN32K_TABLE = 0x1000
+_SERVICE_MASK = 0x1fff
 
 
 @dataclass(frozen=True)
@@ -158,6 +170,9 @@ def _frame(rec: dict, address: str, module: str, copy: str) -> _Frame:
         return _Frame(None, None, None)
     name = rec.get(module)
     copied = rec.get(copy)
+    # DRAKVUF up to 9722578 printed the empty string as "(null)"
+    if name == "(null)":
+        name = ""
     return _Frame(value, name if isinstance(name, str) else None,
                   copied if isinstance(copied, str) else None)
 
@@ -167,6 +182,22 @@ def _is(frame: _Frame, places) -> bool:
     directory below System32 that any user can write to -- in Windows' own
     mapping of it."""
     return frame.path in places and not frame.copy
+
+
+def _another_services_stub(rec: dict, stub_service) -> bool:
+    """`StubSyscall` is a stub of another service than the one the kernel
+    dispatched. A record without a service number says nothing against it."""
+    if not isinstance(stub_service, str):
+        return False
+    number = rec.get("Syscall")
+    if isinstance(number, bool) or not isinstance(number, int):
+        return True
+    try:
+        stub = int(stub_service, 16)
+    except ValueError:
+        return True
+    called = number | (_WIN32K_TABLE if rec.get("Module") == "win32k" else 0)
+    return (stub ^ called) & _SERVICE_MASK != 0
 
 
 def _classify_linux(rec: dict) -> Optional[Origin]:
@@ -215,7 +246,7 @@ def classify(rec: dict, linux: bool = False) -> Optional[Origin]:
         return origin(own or "indirect", parent,
                       f"{parent.address} called {target.describe()}, not the stub of "
                       f"{caller.module} that ran the syscall")
-    if isinstance(stub_service, str):
+    if _another_services_stub(rec, stub_service):
         return origin(own or "indirect", parent,
                       f"the syscall ran in the stub of service {stub_service} at "
                       f"{caller.address}, not of the one called")

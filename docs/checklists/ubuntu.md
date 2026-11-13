@@ -195,6 +195,87 @@ Three things the same run surfaced that are **not** fixed:
      that `execve` is the arming cost measured on the real plugin set; raise
      `LAUNCH_DELAY` if it exceeds the delay, and do not patch a per-guest row.
 
+  **Ubuntu keeps DRAKVUF's own clock.** Since 2026-11-12 the Windows trace
+  ends `timeout` seconds after the sample starts
+  (`docs/architecture/sample-scope.md` §5); here `launch_slack` is 0 and `-t`
+  is the whole trace, as in every evidenced run. Nothing measured a late
+  start on this guest — item 3 above is still how to find out.
+
+- [ ] **To confirm on Dom0: the sample-scope work** (added 2026-11-12).
+  **Nothing below has run on Dom0 or against this guest.** The code is in the
+  development container's working tree, not committed and not deployed;
+  `docs/architecture/sample-scope.md` is its design record. It touches the
+  evidenced Ubuntu path in three places — the DRAKVUF fork's Linux plugins,
+  `so-hooks-linux.txt` (already committed, `3857c8b`) and one more DRAKVUF
+  flag with `procdump2` — so **the first box is that an ordinary job still
+  completes clean**, before any of the new behaviour is looked for.
+
+  Each box names the observable that ticks it. The job must have run on the
+  rebuilt `drakvuf` submodule (`make sandboxd`; provenance per
+  `CURRENT-STATE.md` §1.2, "DRAKVUF provenance"), this repository's
+  `sandboxd/` and the `cape-community` submodule; a job on the old binary
+  with the new post-processing ticks only the boxes marked
+  *(post-processing)*. The observables are the job's uploaded artifacts, or
+  Dom0's copy under `/var/lib/sandboxd/results/<job>` when the daemon runs
+  with `SANDBOXD_KEEP_RESULTS=1`.
+
+  - [ ] **An ordinary x86-64 job completes clean on the new build**, as the
+    jobs of 2026-11-04 did (`docs/runbooks/18-deploy-with-makefile.md` §5b),
+    with every selected plugin still writing records. The regression check
+    for the evidenced path.
+  - [ ] **An i386 sample has filetracer records and a file summary.** The bot
+    of 2026-11-12 had 0 filetracer records against 245k opens. Observable:
+    `"Plugin":"filetracer"` records with the sample's PID, and a non-empty
+    file list in `behavior.summary`. fileextractor and memdump hook the same
+    compat dispatcher: a file the sample wrote is in `extracted.zip`.
+  - [ ] **`renameat2`'s `newpath` is the path.** It read `H=`. Observable: a
+    syscall record of `renameat2` (or `mmap`'s flags, `openat`'s mode — any
+    4th argument) with the value the sample passed.
+  - [ ] **`/dev/null` is printed in full**, not `/null`, in filetracer's and
+    the syscalls plugin's paths; a relative path carries `Cwd`.
+  - [ ] **`execve` prints `filename` on a failed exec.** Observable: a syscall
+    record of an `execve` that returned an error, naming what was tried.
+    `linux_exec_format_error_loop` is the signature that needs it.
+  - [ ] **`prctl(PR_SET_NAME)` prints the name.** Observable: a `prctl`
+    syscall record whose second argument is text. Then
+    `linux_process_name_masquerade` can fire, on a sample that takes a blank
+    or kernel-thread name; it cannot on any trace recorded before this
+    DRAKVUF.
+  - [ ] **A bot's workers are dumped at finish.** Linux procdump2 did not
+    dump at finish before this change, and whether finish-time dumps
+    complete inside `--wait-stop-plugins 30` is unknown on either guest
+    (`sample-scope.md` §6). Observable: `"Plugin":"procdump"` records with
+    `"DumpReason":"FinishAnalysis"` for the worker PIDs, their files in
+    `procdumps/`, and `procdump[].yara`/`cape_yara` with `scanned_size` in
+    `cape_results.json` — the replay scored the bot 8.0 only once a dump was
+    scanned.
+  - [ ] **fileextractor writes no `unknown_fd_*` socket junk**, and honours
+    `--fileextractor-exclude-list`. Observable: no such name in
+    `extracted.zip` for a sample that talks over sockets; a path the list
+    names has a record with `Excluded by filter` and no file.
+  - [ ] **capa completes on a large job under the postprocess memory limit**
+    *(post-processing)*. On the bot's 1.43 M calls it reached 3.66 GiB
+    without finishing; the limit is `SANDBOXD_POSTPROCESS_MAX_MIB` (3072).
+    Observable: `statistics.capa` with `completed: true`, `calls_fed` far
+    below `calls_seen`, and `manifest.json`'s `notes` naming no failed
+    plugin.
+  - [ ] **The new signatures, on the two samples** *(post-processing, except
+    as noted above)*. Observable: the signature lists of the shell dropper
+    and the bot beside the replay's 20 and 12 (`sample-scope.md` §1), and
+    `statistics.signature_failures` empty.
+  - [ ] **libmon without `read`/`write`/`poll`/`ppoll`** — committed, and
+    possibly already deployed with `3857c8b`; say which when ticking.
+    Observable: libmon's record count on an idle-desktop job beside one from
+    before, against the header's 57 %.
+  - [ ] **The first job after deployment runs under Python 3.12 without a
+    traceback.** Nothing was run under 3.12; the container has 3.14.
+    Observable: the daemon's stderr for that job.
+
+  Open, and not something a box can close yet: `clock_gettime` was 58 % of
+  all syscalls in the first Linux job of 2026-11-12, the vDSO falling back to
+  a real syscall. A guest setting to test, with the RDTSC work in the way —
+  `sample-scope.md` §8.
+
 - [ ] **`xl destroy` on a clone whose DRAKVUF is still attached leaves a
   `(null) --p--d` zombie domain** (observed on Dom0 2026-08-20).
   Pre-existing behaviour, not introduced by any change in flight at the

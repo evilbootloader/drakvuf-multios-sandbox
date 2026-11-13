@@ -191,6 +191,13 @@ class Child:
             timed_out=timed_out,
         )
 
+    def interrupt(self) -> None:
+        """SIGINT the group and return: asked to finish, not killed. DRAKVUF
+        ends its loop on it and stops its plugins as it does at `-t` --
+        SIGTERM makes it exit without stopping them (main.cpp)."""
+        if self.running():
+            _killpg_quiet(os.getpgid(self._proc.pid), signal.SIGINT)
+
     def stop(self, *, grace: float = DEFAULT_GRACE) -> Completed:
         """Signal the group and collect. Used for `tcpdump` at end of trace."""
         if self.running():

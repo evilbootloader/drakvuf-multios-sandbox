@@ -39,6 +39,19 @@ DEFAULT_RULES = Path(__file__).resolve().parents[3] / "data" / "capa-rules"
 # (capa/features/extractors/cape/extractor.py, TESTED_VERSIONS).
 CAPE_REPORT_VERSION = "2.5-CAPE"
 
+# How many calls of one thread with the same API and the same argument
+# values capa is fed; the rest are counted and skipped. A bot's scan loop is
+# the same few calls a million times -- the ELF job of 2026-11-12 had 1.43 M
+# calls in the sample's processes, 300 189 of them `stat` and 150 792
+# `getpgid`, and capa reached 3.66 GiB after nine CPU-minutes over them
+# without finishing. capa matches a rule on what is present in a call or a
+# span of calls, and on `count(...)` of a feature there: the largest count
+# any rule of sandboxd/data/capa-rules asks for is 48, so 64 identical calls
+# say everything 300 000 do (89 786 of the 1.43 M are fed).
+# Consecutive repeats are NOT folded into one: `count(api(GetTickCount)): 2
+# or more` is two identical calls side by side.
+REPEAT_CAP = 64
+
 HAVE_FLARE_CAPA = False
 try:
     import capa.capabilities.common
@@ -367,6 +380,9 @@ if HAVE_FLARE_CAPA:
         def __init__(self, report, sources):
             super().__init__(report)
             self._sources = sources
+            # Calls read from the logs, and those of them handed to capa (REPEAT_CAP)
+            self.calls_seen = 0
+            self.calls_fed = 0
 
         def get_calls(self, ph, th):
             source = self._sources.get((ph.address.pid, ph.address.ppid))
@@ -374,8 +390,16 @@ if HAVE_FLARE_CAPA:
                 yield from super().get_calls(ph, th)
                 return
             tid = th.address.tid
+            repeats = collections.Counter()
             for index, raw in source.calls(tid):
-                call = CapeCall.model_validate(_capa_call(raw, tid))
+                shaped = _capa_call(raw, tid)
+                self.calls_seen += 1
+                same = hash((shaped["api"], tuple(str(a["value"]) for a in shaped["arguments"])))
+                repeats[same] += 1
+                if repeats[same] > REPEAT_CAP:
+                    continue
+                self.calls_fed += 1
+                call = CapeCall.model_validate(shaped)
                 # As capa's cape/thread.py: one handle per symbol variant
                 # (CreateFileW, CreateFile), the call renamed for each.
                 for symbol in generate_symbols("", call.api):
@@ -433,35 +457,57 @@ class _SummaryDoc:
 
 
 def flare_capa_details(results: dict, rules_path=None, pids: Optional[Iterable[int]] = None,
-                       disable_progress: bool = True) -> Dict[str, Any]:
+                       disable_progress: bool = True, status: Optional[dict] = None) -> Dict[str, Any]:
     """capa's capabilities over `results["behavior"]`, rendered as CAPE's
     `capa_summary`. {} when capa is missing, the report is empty, or capa
-    refuses it."""
-    if not HAVE_FLARE_CAPA:
+    refuses it -- and `status` (the report's `statistics.capa`) then says
+    which, so that no capability listed is not read as none found:
+    `completed`, `error` where it did not, and how many calls were read and
+    how many fed (REPEAT_CAP)."""
+    status = status if status is not None else {}
+    status.update({"completed": False, "repeat_cap": REPEAT_CAP})
+
+    def failed(error: str) -> Dict[str, Any]:
+        status["error"] = error
         return {}
+
+    if not HAVE_FLARE_CAPA:
+        return failed("flare-capa is not installed")
     rules_path = Path(rules_path or DEFAULT_RULES)
     if not rules_path.exists():
         log.error("FLARE CAPA rules missing at %s", rules_path)
-        return {}
+        return failed(f"no rules at {rules_path}")
     capa_output: Dict[str, Any] = {}
+    extractor = None
     try:
         rules = _rules(str(rules_path))
         try:
             extractor = StreamingCapeExtractor.from_inputs(*capa_inputs(results, pids))
         except ValidationError as e:
             log.warning("CAPA ValidationError %s", e)
-            return {}
+            return failed(f"ValidationError: {e}")
 
         capabilities = capa.capabilities.common.find_capabilities(rules, extractor, disable_progress=disable_progress)
         doc = _SummaryDoc(rules, capabilities.matches, extractor, results)
         capa_output = render_dictionary(doc)
+        status["completed"] = True
     except MemoryError:
+        # RLIMIT_DATA of the postprocessing child (config.POSTPROCESS_MAX_MIB)
         log.warning("FLARE CAPA -> MemoryError")
-    except UnsupportedFormatError:
+        failed("MemoryError: over the postprocessing memory limit")
+    except UnsupportedFormatError as e:
         log.error("FLARE CAPA -> UnsupportedFormatError")
-    except EmptyReportError:
+        failed(f"UnsupportedFormatError: {e}")
+    except EmptyReportError as e:
         log.info("FLARE CAPA -> No process data available")
+        failed(f"EmptyReportError: {e}")
     except Exception as e:
         log.exception(e)
+        failed(f"{type(e).__name__}: {e}")
+    if extractor is not None:
+        status.update({"calls_seen": extractor.calls_seen, "calls_fed": extractor.calls_fed})
+        log.info("capa: %d of %d calls fed (at most %d of one call per thread), %s",
+                 extractor.calls_fed, extractor.calls_seen, REPEAT_CAP,
+                 "completed" if status["completed"] else status.get("error"))
 
     return capa_output

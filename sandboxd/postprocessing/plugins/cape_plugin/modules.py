@@ -25,6 +25,7 @@ process produced it.
 """
 from __future__ import annotations
 
+import gzip
 import hashlib
 import ipaddress
 import importlib
@@ -32,9 +33,10 @@ import json
 import logging
 import os
 import posixpath
+import tempfile
 import time
 import zlib
-from collections import defaultdict
+from collections import Counter, defaultdict
 from functools import lru_cache
 from pathlib import Path, PureWindowsPath
 from typing import Dict, Iterator, List, Optional
@@ -44,6 +46,7 @@ import orjson
 
 from ....guests import TargetOs
 from .abstracts import Processing
+from .filetype import sniff
 from .pcap import read_pcap
 
 log = logging.getLogger(__name__)
@@ -91,22 +94,47 @@ def _yara_rules(rules_dir: str):
 class FileInfo:
     """CAPE's `File.get_all()` (lib/cuckoo/common/objects.py) for one file:
     the hashes, the type, the YARA hits in CAPE's `{name, meta, strings,
-    addresses}` form. No ssdeep/tlsh: neither library is in the venv."""
+    addresses}` form. No ssdeep/tlsh: neither library is in the venv.
 
-    def __init__(self, yara_rules_dir: Optional[str]):
-        self.scanner = None
-        if yara_x is not None and yara_rules_dir and Path(yara_rules_dir).is_dir():
-            try:
-                self.scanner = yara_x.Scanner(_yara_rules(str(yara_rules_dir)))
-                self.scanner.set_timeout(60)
-            except Exception as e:  # noqa: BLE001 - a bad rule must not cost the file list
-                log.error("YARA rules at %s did not compile: %s", yara_rules_dir, e)
+    Two rule sets, as in CAPE: `yara` is the general one (sandboxd's
+    `yara.rules_directory`), `cape_yara` CAPE's own family rules -- the
+    community checkout's data/yara/CAPE, 487 files that all compile under
+    yara-x (2026-11-12) -- which is what CAPE names a family from."""
+
+    def __init__(self, yara_rules_dir: Optional[str], cape_rules_dir: Optional[str] = None):
+        self.scanner = self._scanner(yara_rules_dir)
+        self.cape_scanner = self._scanner(cape_rules_dir)
+
+    @staticmethod
+    def _scanner(rules_dir: Optional[str]):
+        if yara_x is None or not rules_dir or not Path(rules_dir).is_dir():
+            return None
+        try:
+            scanner = yara_x.Scanner(_yara_rules(str(rules_dir)))
+            scanner.set_timeout(60)
+            return scanner
+        except Exception as e:  # noqa: BLE001 - a bad rule must not cost the file list
+            log.error("YARA rules at %s did not compile: %s", rules_dir, e)
+            return None
 
     def yara(self, path: Path) -> List[dict]:
-        if self.scanner is None:
+        return self._hits(self.scanner, path)
+
+    def cape_yara(self, path: Path) -> List[dict]:
+        """The hits of CAPE's rules that name a payload (`cape_type` in the
+        rule's meta, which is how CAPE itself reads a family out of one).
+        The checkout also holds indicator rules without it -- deprecated/'s
+        embedded_pe, embedded_win_api and shellcode_get_eip matched the dump
+        of PING.EXE (2026-11-12) -- and `procmem_yara` (severity 3) fires on
+        any hit listed."""
+        return [hit for hit in self._hits(self.cape_scanner, path) if hit["meta"].get("cape_type")]
+
+    @staticmethod
+    def _hits(scanner, path: Path) -> List[dict]:
+        if scanner is None:
             return []
         try:
-            scan = self.scanner.scan_file(str(path))
+            scan = scanner.scan_file(str(path))
         except Exception as e:  # noqa: BLE001 - ScanError, TimeoutError, OSError
             log.warning("YARA scan of %s failed: %s", path.name, e)
             return []
@@ -137,11 +165,13 @@ class FileInfo:
                 file_type = magic.from_file(str(path))
             except Exception:  # noqa: BLE001
                 file_type = ""
+        # No libmagic (Dom0), or none that answered: the file's own bytes
+        file_type = file_type or sniff(path)
         return {
             "name": path.name, "path": str(path), "guest_paths": "", "size": size,
             "crc32": f"{crc & 0xFFFFFFFF:08X}",
             **{n: d.hexdigest() for n, d in digests.items()},
-            "type": file_type, "yara": self.yara(path), "cape_yara": [],
+            "type": file_type, "yara": self.yara(path), "cape_yara": self.cape_yara(path),
         }
 
 
@@ -161,7 +191,8 @@ class _Module(Processing):
         return pids is None or pid in pids
 
     def _files(self) -> FileInfo:
-        return FileInfo(getattr(self.options, "yara_rules", None))
+        return FileInfo(getattr(self.options, "yara_rules", None),
+                        getattr(self.options, "cape_yara_rules", None))
 
     def _process_name(self, path: str) -> str:
         if self.platform == TargetOs.WINDOWS:
@@ -246,12 +277,48 @@ class Dropped(_Module):
 
 class ProcDump(_Module):
     """procdump2's process dumps (`procdumps/`, one data file and a
-    `.metadata` sidecar each), as CAPE's `procdump`. Compressed dumps
-    (`--compress-procdumps`) are hashed and listed as they are on disk and
-    not scanned: YARA would be reading gzip."""
+    `.metadata` sidecar each), as CAPE's `procdump`. A compressed dump
+    (`--compress-procdumps`, which sandboxd always passes: gzip, by the
+    sidecar's `Compression` and the file's own 1f 8b) is hashed and listed
+    as it is on disk, and scanned as what it holds: inflated in a stream
+    into a temporary file that is removed again -- a 5 MB dump of a Windows
+    process is 50 MB inflated, and the postprocessing child has a memory
+    limit -- and YARA reads that file. Until 2026-11-12 it was not scanned
+    at all, and the Mirai bot's own dump had no hit."""
 
     key = "procdump"
     order = 2
+    # Inflated bytes scanned of one dump; what is past it is not scanned,
+    # and the entry says so (`scan_truncated`). procdump2 writes a process's
+    # committed memory, tens of MB; this is the bound on a file that is not
+    # what its sidecar says.
+    MAX_SCAN_BYTES = 1 << 30
+
+    def _scan_compressed(self, info: FileInfo, data: Path) -> dict:
+        """`yara`, `cape_yara` and the size scanned of a gzip dump's content."""
+        out = {"yara": [], "cape_yara": []}
+        if info.scanner is None and info.cape_scanner is None:
+            return out
+        try:
+            with tempfile.NamedTemporaryFile(prefix="procdump-", suffix=".bin") as plain:
+                size = 0
+                with gzip.open(data, "rb") as packed:
+                    while size < self.MAX_SCAN_BYTES:
+                        chunk = packed.read(min(1 << 20, self.MAX_SCAN_BYTES - size))
+                        if not chunk:
+                            break
+                        plain.write(chunk)
+                        size += len(chunk)
+                    else:
+                        out["scan_truncated"] = bool(packed.read(1))
+                plain.flush()
+                out.update({"yara": info.yara(Path(plain.name)), "cape_yara": info.cape_yara(Path(plain.name)),
+                            "scanned_size": size})
+        except (OSError, EOFError, zlib.error) as e:
+            # Not gzip after all, or cut short: listed, not scanned
+            log.warning("process dump %s could not be inflated for YARA: %s", data.name, e)
+            out["scan_error"] = f"{type(e).__name__}: {e}"
+        return out
 
     def run(self):
         directory = Path(self.procdump_path)
@@ -272,7 +339,7 @@ class ProcDump(_Module):
                 continue
             compressed = str(meta.get("Compression") or "none").lower() not in ("none", "")
             entry = info.describe(data) if not compressed else {
-                **FileInfo(None).describe(data), "yara": []}
+                **FileInfo(None).describe(data), **self._scan_compressed(info, data)}
             entry.update({
                 "name": [data.name],
                 "pid": meta.get("PID"),
@@ -319,6 +386,10 @@ class MemDumps(_Module):
                 "proc_path": rec.get("ProcessName") or "", "yara": [], "cape_yara": [],
                 "address_space": [],
             })
+            for kind in ("yara", "cape_yara"):
+                for hit in described[kind]:
+                    if hit["name"] not in {h["name"] for h in proc[kind]}:
+                        proc[kind].append(hit)
             start = int(str(rec.get("DumpAddr") or "0"), 16)
             size = int(str(rec.get("DumpSize") or "0"), 16)
             proc["address_space"].append({
@@ -327,9 +398,6 @@ class MemDumps(_Module):
                 "method": rec.get("Method"), "reason": rec.get("DumpReason"),
                 "target_pid": rec.get("TargetPID"),
             })
-            for hit in described["yara"]:
-                if hit["name"] not in {h["name"] for h in proc["yara"]}:
-                    proc["yara"].append(hit)
         return list(by_pid.values())
 
 
@@ -346,22 +414,43 @@ class Network(_Module):
     key = "network"
     order = 3      # after BehaviorAnalysis: it reads results["behavior"]
 
+    @staticmethod
+    def _owner(rec) -> Optional[int]:
+        """The process a socket record is of: socketmon's `OwnerPID` where it
+        has one -- a kernel-side send runs in whatever process was current
+        (NetBIOS from System, printed with a console host's PID) -- else the
+        record's own."""
+        owner = rec.get("OwnerPID")
+        return owner if isinstance(owner, int) and not isinstance(owner, bool) else rec.get("PID")
+
     def run(self):
         tcp, udp, seen = [], [], set()
         hosts: Dict[str, set] = defaultdict(set)
+        # Addresses and names only the guest's other processes used: what
+        # the wire has of them is not the sample's (_drop_background)
+        others, other_names, own = set(), set(), set()
         for plugin in ("socketmon", "unixsocketmon"):
             for rec in aux_records(self.aux_path, plugin):
                 ip, proto = rec.get("RemoteIp"), str(rec.get("Protocol") or "")
-                if not ip or not self._in_scope(rec.get("PID")):
+                owner = self._owner(rec)
+                # The guest's own addresses are every flow's other end
+                own.add(rec.get("LocalIp"))
+                if rec.get("DnsName") and not self._in_scope(owner):
+                    other_names.add(str(rec["DnsName"]).lower().rstrip("."))
+                # socketmon prints "(null)" where it resolved no peer
+                if not ip or ip == "(null)":
                     continue
                 if str(rec.get("Type") or "AF_INET").startswith("AF_LOCAL"):
+                    continue
+                if not self._in_scope(owner):
+                    others.add(ip)
                     continue
                 entry = {
                     "src": rec.get("LocalIp") or "", "sport": rec.get("LocalPort") or 0,
                     "dst": ip, "dport": rec.get("RemotePort") or 0,
                     "time": float(rec.get("TimeStamp") or 0),
-                    "process_id": rec.get("PID"),
-                    "process_name": self._process_name(rec.get("ProcessName") or ""),
+                    "process_id": owner,
+                    "process_name": self._process_name(rec.get("ProcessName") or "") if owner == rec.get("PID") else "",
                     "source": "behavior",
                 }
                 key = (proto[:3].upper(), entry["src"], entry["sport"], ip, entry["dport"], entry["process_id"])
@@ -397,7 +486,7 @@ class Network(_Module):
         # socketmon's DnsQuery_* records (Windows): the name asked of the
         # resolver, by the process that asked.
         for rec in aux_records(self.aux_path, "socketmon"):
-            if rec.get("DnsName") and self._in_scope(rec.get("PID")):
+            if rec.get("DnsName") and self._in_scope(self._owner(rec)):
                 add_dns(str(rec["DnsName"]), float(rec.get("TimeStamp") or 0), rec.get("PID"),
                         self._process_name(rec.get("ProcessName") or ""))
         # Resolver API calls (getaddrinfo, gethostbyname, DnsQuery_A...).
@@ -431,6 +520,7 @@ class Network(_Module):
         if not net:
             net = {"hosts": [], "domains": [], "tcp": [], "udp": [], "icmp": [], "dns": [],
                    "http": [], "tls": [], "smtp": [], "irc": [], "dead_hosts": []}
+        self._drop_background(net, others - set(hosts) - own, other_names - asked)
         wire_dns = {d["request"].lower(): d for d in net["dns"]}
         for entry in dns:
             seen = wire_dns.get(entry["request"].lower())
@@ -452,17 +542,75 @@ class Network(_Module):
             else:
                 net["hosts"].append({"ip": ip, "country_name": "", "hostname": names.get(ip, ""),
                                      "inaddrarpa": "", "ports": sorted(p for p in ports if p)})
-        net["tcp"] += tcp
-        net["udp"] += udp
+        # A connection the wire has too is one connection: it gets the
+        # process, which the pcap cannot know, and is not listed twice.
+        for kind, mine in (("tcp", tcp), ("udp", udp)):
+            wire = defaultdict(list)
+            for flow in net[kind]:
+                wire[(flow.get("dst"), flow.get("dport"))].append(flow)
+            for entry in mine:
+                same = wire.get((entry["dst"], entry["dport"]))
+                if not same:
+                    net[kind].append(entry)
+                    continue
+                for flow in same:
+                    flow.setdefault("process_id", entry["process_id"])
+                    flow.setdefault("process_name", entry["process_name"])
         wire_uris = {r["uri"] for r in net["http"]}
         net["http"] += [r for r in http if r["uri"] not in wire_uris]
         return net
 
 
+    def _drop_background(self, net: dict, addresses: set, names: set) -> None:
+        """Take out of the wire's entries the ones the guest's other
+        processes made: the pcap is the clone's whole interface, and a
+        browser's, an updater's and the resolver's own traffic were listed
+        as the sample's (three Windows jobs of 2026-11-12 had 18 hosts and
+        11 HTTP requests each, none a sample process's). `addresses` are
+        peers a socket plugin saw only processes outside the sample talk
+        to, `names` ones only they asked the resolver for. What no plugin
+        attributed to anyone stays: a flow the instrumentation missed is
+        still on the wire. How many went is `background`."""
+        if getattr(self.options, "scope", "sample") != "sample" or not (addresses or names):
+            return
+        dropped = Counter()
+
+        def keep(kind, entries, background):
+            kept = [e for e in entries if not background(e)]
+            if len(kept) != len(entries):
+                dropped[kind] = len(entries) - len(kept)
+            net[kind] = kept
+
+        def name_of(value):
+            return str(value or "").lower().rstrip(".")
+
+        def resolved_elsewhere(entry):
+            answers = [a.get("data") for a in entry.get("answers") or () if a.get("type") in ("A", "AAAA")]
+            return name_of(entry.get("request")) in names or (answers and all(a in addresses for a in answers))
+
+        keep("hosts", net.get("hosts", []), lambda e: e.get("ip") in addresses)
+        for kind in ("tcp", "udp"):
+            keep(kind, net.get(kind, []), lambda e: e.get("dst") in addresses or e.get("src") in addresses)
+        keep("http", net.get("http", []), lambda e: e.get("dst") in addresses)
+        keep("tls", net.get("tls", []), lambda e: e.get("dst") in addresses)
+        keep("dns", net.get("dns", []), resolved_elsewhere)
+        keep("domains", net.get("domains", []),
+             lambda e: name_of(e.get("domain")) in names or e.get("ip") in addresses)
+        if dropped:
+            net["background"] = dict(dropped)
+
+
 # -- tls keys -------------------------------------------------------------------
 
 class TlsKeys(_Module):
-    """tlsmon's session keys as `wireshark_key_file.txt`, beside the pcap."""
+    """tlsmon's session keys as `wireshark_key_file.txt`, beside the pcap.
+
+    **The whole guest's**, where the rest of the report is the sample's:
+    tlsmon hooks lsass.exe, which derives every process's Schannel keys, so
+    a record's PID is lsass's (828 in three jobs of 2026-11-12) and it has
+    no field naming the client -- `client_random` and `master_key` are all
+    it carries. `keys` therefore counts every TLS session of the guest. The
+    key file is for decrypting the capture, which is the whole guest's too."""
 
     key = "tlskeys"
     order = 2
@@ -580,6 +728,19 @@ class Falco(_Module):
                 "records": trace.stats.records, "events": trace.stats.events,
                 "alerts_written": len(result.alerts), "alerts_dropped": result.dropped_alerts,
                 "rules_matched": {name: o.matched for name, o in result.outcomes.items() if o.matched},
+                # What each rule came to (falco_analysis's falco-rules.json):
+                # a rule that could not be evaluated is not one that found
+                # nothing. `ok` rules that neither matched nor were left
+                # undetermined are only counted.
+                "rules_by_status": dict(Counter(rule.status for rule in ruleset.rules.values())),
+                "rules": [
+                    {"rule": rule.name, "status": rule.status, "reason": rule.reason,
+                     "matched": outcome.matched if outcome else 0,
+                     "undetermined": outcome.undetermined if outcome else 0,
+                     "missing": dict(outcome.missing.most_common(8)) if outcome else {}}
+                    for rule, outcome in ((rule, result.outcomes.get(rule.name))
+                                          for rule in ruleset.rules.values())
+                    if rule.status != "ok" or (outcome and (outcome.matched or outcome.undetermined))],
                 "warnings": ruleset.warnings,
             },
         }

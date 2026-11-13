@@ -1772,6 +1772,8 @@ class Signature:
                     break
         return res
 
+    MAX_CALL_MARKS = 100
+
     def mark_call(self, *args, **kwargs):
         """Mark the current call as explanation as to why this signature matched."""
 
@@ -1784,6 +1786,13 @@ class Signature:
         if args or kwargs:
             log.warning("You have provided extra arguments to the mark_call() method which does not support doing so.")
 
+        # The first MAX_CALL_MARKS calls are the explanation; the rest are
+        # counted. A signature that marks every call of a hot API wrote
+        # 56 534 marks into one report (encrypted_ioc on a RAT hashing its
+        # traffic, 2026-11-12); `call_marks` in as_result is the total.
+        self.call_marks = getattr(self, "call_marks", 0) + 1
+        if self.call_marks > self.MAX_CALL_MARKS:
+            return
         self.data.append(mark)
 
     def add_match(self, process, type, match):
@@ -1849,6 +1858,8 @@ class Signature:
             new_data=self.new_data,
             alert=self.alert,
             families=self.families,
+            # Calls marked in all; `data` holds the first MAX_CALL_MARKS
+            call_marks=getattr(self, "call_marks", 0),
         )
 
 

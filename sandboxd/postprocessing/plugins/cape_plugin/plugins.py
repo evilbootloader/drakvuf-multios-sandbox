@@ -670,12 +670,26 @@ class RunSignatures:
                 return signature.as_result()
         except (KeyError, TypeError, AttributeError) as e:
             log.debug('Failed to run signature "%s": %s', signature.name, e)
+            self._failed(signature, "run", e)
         except NotImplementedError:
             return None
         except Exception as e:
             log.exception('Failed to run signature "%s": %s', signature.name, e)
+            self._failed(signature, "run", e)
 
         return None
+
+    def _failed(self, signature, stage, error):
+        """A signature whose `run` or `on_complete` raised did not say "no
+        match": it said nothing. Into `statistics.signature_failures`, beside
+        the on_call failures, with where it stopped."""
+        tb = error.__traceback__
+        while tb is not None and tb.tb_next:
+            tb = tb.tb_next
+        where = f"{os.path.basename(tb.tb_frame.f_code.co_filename)}:{tb.tb_lineno}" if tb is not None else ""
+        self.results["statistics"].setdefault("signature_failures", []).append(
+            {"name": signature.name, "error": type(error).__name__, "stage": stage,
+             "message": str(error)[:200], "where": where})
 
     def run(self, test_signature: str = False):
         """Run evented signatures.
@@ -685,6 +699,8 @@ class RunSignatures:
         # This will contain all the matched signatures.
         matched = []
         stats = {}
+        # Always there, empty when every signature ran: what failed, and where
+        self.results["statistics"]["signature_failures"] = []
 
         if test_signature:
             self.evented_list = next((sig for sig in self.evented_list if sig.name == test_signature), [])
@@ -708,6 +724,9 @@ class RunSignatures:
             evented_set = set(self.evented_list)
             always = frozenset(evented_set.intersection(self.call_always))
             for proc in self.results["behavior"]["processes"]:
+                # sandboxd's own launch (behaviour.mark_launcher)
+                if proc.get("launcher"):
+                    continue
                 process_name = proc["process_name"]
                 process_id = proc["process_id"]
                 calls = proc.get("calls", [])
@@ -788,9 +807,9 @@ class RunSignatures:
                             sig.matched = True
 
             # What still misreads DRAKVUF's form of a call, for the report.
-            self.results["statistics"]["signature_failures"] = [
-                {"name": name, "error": error, "calls": count}
-                for (name, error), count in sorted(call_failures.items())]
+            self.results["statistics"].setdefault("signature_failures", []).extend(
+                {"name": name, "error": error, "stage": "on_call", "calls": count}
+                for (name, error), count in sorted(call_failures.items()))
 
             # Call the stop method on all remaining instances.
             for sig in self.evented_list:
@@ -808,8 +827,10 @@ class RunSignatures:
                     continue
                 except (KeyError, TypeError, AttributeError) as e:
                     log.debug('Failed to run signature "%s": %s', sig.name, e)
+                    self._failed(sig, "on_complete", e)
                 except Exception as e:
                     log.exception('Failed run on_complete() method for signature "%s": %s', sig.name, e)
+                    self._failed(sig, "on_complete", e)
                     continue
                 else:
                     if result and not sig.matched:

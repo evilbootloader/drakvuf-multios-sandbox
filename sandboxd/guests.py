@@ -57,13 +57,14 @@ blocks capa (DRAFT-019). `proc.spawn` takes separate paths and offers no merge.
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 import shlex
 import zipfile
 from dataclasses import dataclass, field
 from enum import Enum
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from . import config
 
 from .postprocessing.paths import DUMPS_DIR, EXTRACTED_DIR, IPT_DIR, PROCDUMPS_DIR
@@ -156,6 +157,11 @@ class TraceOptions:
     # from boot, for every CPUID, and Xen's leaves at 0x40000100 too, which
     # `-s` left visible.
     cpuid_stealth: bool = True
+    # Seconds the trace may run past `timeout` waiting for the sample to
+    # start: `timeout` then counts from the sample's start, not from
+    # DRAKVUF's (`LAUNCH_SLACK`). 0: `-t` is the whole trace, as it always
+    # was -- Ubuntu's and Android's evidenced runs.
+    launch_slack: int = 0
 
     def drakvuf_flags(self) -> list[str]:
         flags: list[str] = []
@@ -412,6 +418,7 @@ def default_trace_options(os_: TargetOs, kind: SampleKind) -> TraceOptions:
             fast_singlestep=True,
             disable_sysret=True,
             cpuid_stealth=False,
+            launch_slack=LAUNCH_SLACK,
         )
 
     # Not dead code: it is what a fourth `TargetOs` member gets on the day one
@@ -459,8 +466,24 @@ def default_trace_options(os_: TargetOs, kind: SampleKind) -> TraceOptions:
 # few seconds at the end of the window for the whole beginning of it, which is
 # the trade this exists to make; raising `-t` instead would also move the phase
 # budget and the Android APK path's 150s, neither of which this change has
-# evidence to touch.
+# evidence to touch. (Windows no longer makes that trade: its clock starts
+# with the sample -- `LAUNCH_SLACK` below, 2026-11-12. Ubuntu and Android do.)
 LAUNCH_DELAY = 5
+
+# How long past its `-t` a trace may wait for the sample to start, where the
+# analysis clock runs from the sample's start rather than DRAKVUF's
+# (`TraceOptions.launch_slack`, `stages._await_trace`). The launch is not the
+# five seconds its name says: arming ~1,300 usermode hooks slows the guest so
+# much that on Windows the injected shell took 14 to 45 s to start the wait and
+# the wait itself 17 to 22 s, and the samples of 2026-11-12 started 37, 45 and
+# 63 s into a 120 s window. 90 covers the slowest of those with room; a sample
+# that has not started by then is traced for what is left of `-t`, as before.
+LAUNCH_SLACK = 90
+
+# The record that says the sample started, per OS: (plugin, method) of the
+# procmon line that names its file (`sample_start_marker`). An OS without a
+# row keeps the clock DRAKVUF's own.
+_SAMPLE_START = {TargetOs.WINDOWS: ("procmon", "NtCreateUserProcess")}
 
 
 class DropLocation(str, Enum):
@@ -1166,6 +1189,25 @@ def argv_remove_handoff(job: Job, handoff: str) -> list[str]:
 
 # --- tracing -----------------------------------------------------------------
 
+def sample_start_marker(job) -> tuple[bytes, ...] | None:
+    """What a line of the trace holds when it is the sample starting, or
+    None where the clock is DRAKVUF's own (`launch_slack` 0, or an OS
+    without a `_SAMPLE_START` row).
+
+    The procmon record of the creation, and the sample's file NAME: an
+    executable is its image, a script an argument of its host's command line
+    (`wscript.exe "C:\\...\\x.js"`), and the name is in both whatever DRAKVUF
+    did to the backslashes around it. A creation that fails (elevation
+    required, then UAC) starts the clock too: the sample was run. A name
+    JSON would escape is not looked for -- the trace then runs to `-t`."""
+    record = _SAMPLE_START.get(job.target_os)
+    name = PurePosixPath(job.guest_sample.replace("\\", "/")).name
+    if not job.options.launch_slack or record is None or not name or json.dumps(name) != f'"{name}"':
+        return None
+    plugin, method = record
+    return (f'"Plugin":"{plugin}"'.encode(), f'"Method":"{method}"'.encode(), name.encode())
+
+
 def _linux_launch(paths: GuestPaths, target: str,
                   words: list[str] | tuple[str, ...] = ()) -> list[str]:
     """Wait `LAUNCH_DELAY`, then become the sample.
@@ -1387,7 +1429,9 @@ def argv_trace(job: Job, component: str | None = None) -> list[str]:
         argv += _launch(job)
 
     argv += job.options.drakvuf_flags()
-    argv += ["-o", "json", "-t", str(job.options.timeout)]
+    # With a launch slack, `-t` is the ceiling: sandboxd ends the trace
+    # `timeout` seconds after the sample started (stages._await_trace).
+    argv += ["-o", "json", "-t", str(job.options.timeout + job.options.launch_slack)]
     argv += ["--wait-stop-plugins", str(PLUGIN_STOP_WAIT)]
     for plugin in job.options.plugins:
         argv += ["-a", plugin]
@@ -1450,6 +1494,14 @@ def argv_trace(job: Job, component: str | None = None) -> list[str]:
     #
     if PROCDUMP2_PLUGIN in job.options.plugins:
         argv += ["--procdump-dir", str(job.result_dir / PROCDUMPS_DIR), "--compress-procdumps"]
+        # Also what started during the trace and is still running when it
+        # ends ("Dump new processes on finish", `drakvuf --help`): the sample
+        # is the injected shell's CHILD on Windows, and a bot's workers
+        # outlive the process that was injected, so without this the one
+        # process worth a dump was the one never dumped (a RAT and a bot,
+        # 2026-11-12). Every new process of the guest is dumped; only the
+        # sample's are uploaded (`postprocessing/procdumps`).
+        argv += ["--procdump-new-processes-on-finish"]
     for option, name in SYMBOL_PROFILES[job.target_os]:
         argv += [option, str(job.profile.parent / name)]
     return argv

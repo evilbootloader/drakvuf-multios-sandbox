@@ -552,6 +552,9 @@
    "ModuleFileName": "FileName",
    "pHModule": "ModuleHandle"
   },
+  "LdrGetProcedureAddress": {
+   "ProcedureName": "FunctionName"
+  },
   "LdrLoadDll": {
    "DllCharacteristics": "Flags",
    "DllHandle": "BaseAddress",
@@ -598,6 +601,7 @@
    "szName": "Name"
   },
   "MoveFileWithProgress": {
+   "lpExistingFileName": "ExistingFileName",
    "lpNewFileName": "NewFileName",
    "dwFlags": "Flags"
   },
@@ -660,7 +664,8 @@
    "level": "Level"
   },
   "NtAllocateVirtualMemory": {
-   "Protect": "Protection"
+   "Protect": "Protection",
+   "PageProtection": "Protection"
   },
   "NtAllocateVirtualMemoryEx": {
    "PageProtection": "Protection"
@@ -743,6 +748,10 @@
   },
   "ObtainUserAgentString": {
    "pcszUAOut": "UserAgent"
+  },
+  "OpenProcess": {
+   "dwDesiredAccess": "DesiredAccess",
+   "dwProcessId": "ProcessId"
   },
   "OpenSCManager": {
    "lpMachineName": "MachineName",

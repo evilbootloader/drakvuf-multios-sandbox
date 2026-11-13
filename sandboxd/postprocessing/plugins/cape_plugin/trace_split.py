@@ -39,9 +39,10 @@ import orjson
 
 from ....guests import TargetOs
 from ...drakvuf_records import DRAKVUF_STRING_ARG, unescape_drakvuf
-from ...process_tree import Process, ProcessTree, tree_from_log
+from ...process_tree import Process, ProcessTree, split_commandline, tree_from_log
 from .api_kernel import OBJECT_NAME_KEYS, VALUE_SERVICES, kernel_services
 from .api_tables import canonical
+from .launch import launch_seqids
 
 log = logging.getLogger(__name__)
 
@@ -86,6 +87,13 @@ MAX_OPEN_FILES = 256
 # The Plugin name of a raw line, without decoding it. DRAKVUF writes most
 # lines compact but some spaced (`{ "Plugin": "apimon", ...`).
 _PLUGIN = re.compile(rb'"Plugin":\s*"([A-Za-z0-9_]+)"')
+# How every record begins. A line that does not is the rest of a record cut
+# by a raw newline inside one of its strings: regmon prints a REG_SZ as it
+# is, and a JSON document stored in the registry is a value of twenty lines
+# (6 records over 105 more lines in one Windows job, 2026-11-12).
+_RECORD_START = re.compile(rb'\{\s*"Plugin"')
+# Lines of one record at most; a cut record longer than this is bad_json
+MAX_CONTINUATION_LINES = 64
 _CONTROL = re.compile(r"[\x00-\x1f]")
 
 
@@ -95,6 +103,7 @@ class SplitStats:
     records: Counter = field(default_factory=Counter)   # kept, per plugin
     plugins: Counter = field(default_factory=Counter)   # every line, per plugin
     bad_json: int = 0          # dropped: not a JSON object
+    joined: int = 0            # kept: a record cut over several lines, put together
     bad_utf8: int = 0          # kept: decoded with U+FFFD for the bad bytes
     bad_control: int = 0       # kept: a raw control character escaped first
     no_pid: int = 0            # dropped: a record that names no process
@@ -184,8 +193,14 @@ class TracePrelude:
     injected: List[Tuple[int, float]]   # (pid, inject TimeStamp)
     has_sysret: bool
     # (source PID, TimeStamp, target PID, how): one process making another
-    # run code (_control_transfer)
+    # run code (_control_transfer, _WindowsEvidence)
     transfers: List[Tuple[int, float, int, str]] = field(default_factory=list)
+    # (requester PID, when it asked, TimeStamp, new PID, how): a process a
+    # broker started from a command the requester named (_WindowsEvidence)
+    started_for: List[Tuple[int, float, float, int, str]] = field(default_factory=list)
+    # (PID, TimeStamp, call): a thread started through a process handle the
+    # trace never saw opened -- a transfer nobody can follow
+    unresolved: List[Tuple[int, float, str]] = field(default_factory=list)
 
 
 # How one process makes another run its code: from then on the other runs
@@ -197,7 +212,12 @@ class TracePrelude:
 # among them, for it to continue there
 _PTRACE_TRANSFER = frozenset(("PTRACE_SETREGS", "PTRACE_SETREGSET", "PTRACE_POKEUSER"))
 # memdump (Windows): a remote thread, or a thread whose context was set,
-# starting in the target's executable memory -- the dump is of the target
+# starting in the target's executable memory. The record names the target
+# only where memdump prints one: `DumpPID` is the process the calling thread
+# is attached to, which is the caller's own for a user-mode call -- all 309
+# such records of three Windows jobs (2026-11-12) are the System process's,
+# with DumpPID 4 -- so on those traces this rule finds nothing, and the
+# calls themselves are what is read (_WindowsEvidence).
 _MEMDUMP_TRANSFER = frozenset(("CreateRemoteThread heuristic", "SetThreadContext heuristic"))
 # A line worth parsing for one: cheaper than parsing every line
 _TRANSFER_HINTS = (b'"ptracemon"', b'heuristic"')
@@ -214,10 +234,316 @@ def _control_transfer(rec: dict) -> Optional[Tuple[int, int, str]]:
     if plugin == "ptracemon" and rec.get("Type") in _PTRACE_TRANSFER:
         target, how = rec.get("TargetPID"), f"ptrace {rec['Type']}"
     elif plugin == "memdump" and rec.get("DumpReason") in _MEMDUMP_TRANSFER:
-        target, how = rec.get("DumpPID"), f"memdump {rec['DumpReason']}"
+        target = rec.get("TargetPID") if isinstance(rec.get("TargetPID"), int) else rec.get("DumpPID")
+        how = f"memdump {rec['DumpReason']}"
     if not isinstance(target, int) or target <= 0 or target == pid:
         return None
     return pid, target, how
+
+
+def _hex(value) -> Optional[int]:
+    try:
+        return int(value, 16) if isinstance(value, str) else None
+    except ValueError:
+        return None
+
+
+def _nt_success(value) -> bool:
+    status = _hex(value)
+    return status is not None and status < 0x80000000
+
+
+def _words(command: str) -> Tuple[str, ...]:
+    """A Windows command line as its words, lower case: what two spellings
+    of one command -- quoted or not, any case -- share."""
+    try:
+        return tuple(w.lower() for w in mslex.split(command, check=False, like_cmd=False))
+    except Exception:  # noqa: BLE001 - not a command line mslex can read: no match
+        return ()
+
+
+def _basename(path) -> str:
+    return PureWindowsPath(str(path or "")).name.lower()
+
+
+class _WindowsEvidence:
+    """Windows control transfers, read from the calls of pass 1.
+
+    **A thread of another process made to run** (`transfers`), each rule
+    with the records it rests on (three Windows jobs, 2026-11-12):
+
+    * a thread created in another process -- NtCreateThreadEx /
+      NtCreateThread whose ProcessHandle is not the caller's own
+      (CreateRemoteThread and RtlCreateUserThread end in it);
+    * an APC queued to a thread of another process -- NtQueueApcThread[Ex,
+      Ex2];
+    * the context of a thread of another process set -- NtSetContextThread,
+      or NtSetInformationThread(ThreadWow64Context) for a 32-bit thread.
+      The set alone: where the thread then runs is decided, whichever of
+      NtResumeThread, NtAlertResumeThread or NtResumeProcess lets it.
+
+    The syscall plugin's record is the call (a direct syscall included); it
+    carries a handle, not a PID. What a handle is open on comes from
+    procmon, which prints the handle a process was given beside the PID it
+    is of: NtOpenProcess (`ProcessHandle`, `ClientID`), NtOpenThread
+    (`ThreadHandle`, `ClientID`, `UniqueThread`) and NtCreateUserProcess
+    (`NewProcessHandle`/`NewPid`, `NewThreadHandle`/`NewTid`), until the
+    process closes it (NtClose). apimon resolves a thread handle itself
+    (`ProcessId=`, `ThreadId=` on NtQueueApcThread, NtResumeThread...), so
+    its record of the same call names the target where no procmon record
+    did -- and NtQueueApcThreadEx2's syscall record has no arguments at
+    all. A call counts once it returned success (sysret), or as made in a
+    trace without sysret.
+
+    Not transfers, and why: NtWriteVirtualMemory and NtResumeThread on
+    another process are every process creation (the launch's cmd.exe wrote
+    twice into each child and resumed it once; csrss wrote four times) and
+    an executable section mapped into another process is csrss's and
+    svchost's daily work (32..47 and 6 a job) -- neither runs anything by
+    itself. Where one came before a transfer to the same target, `how` says
+    so. A handle the trace never saw opened (duplicated, inherited,
+    NtGetNextProcess) resolves to nothing: `unresolved`.
+
+    **A process a broker started for another** (`started_for`): the
+    requester's own records name a command, and a broker then creates a
+    process from exactly that command line -- compared as words, lower
+    case. Linked, because each is an equality and no guess:
+
+    * a service: CreateService[A|W] / ChangeServiceConfig[A|W]'s
+      `lpBinaryPathName`, then services.exe;
+    * a scheduled task: the `/TR` of a `schtasks.exe /Create` the requester
+      started, then the Schedule service's svchost.exe (taskeng.exe and
+      taskhostw.exe before it);
+    * WMI: the command of a `wmic.exe process call create` the requester
+      started, then WmiPrvSE.exe.
+
+    A process started with elevation (AppInfo's svchost) needs no link: its
+    records name the requester as its parent and tree_from_log moves it
+    there. Not linked, for want of a record naming the command: a task
+    registered through ITaskService, Win32_Process.Create through
+    IWbemServices::ExecMethod (PowerShell, a script's GetObject), and a
+    ShellExecute handed to explorer or DllHost through COM."""
+
+    # (the argument holding the target's handle, whether it is a thread's)
+    TRIGGERS = {
+        "NtCreateThreadEx": ("ProcessHandle", False, "remote thread"),
+        "NtCreateThread": ("ProcessHandle", False, "remote thread"),
+        "NtQueueApcThread": ("ThreadHandle", True, "APC queued to a thread"),
+        "NtQueueApcThreadEx": ("ThreadHandle", True, "APC queued to a thread"),
+        "NtQueueApcThreadEx2": ("ThreadHandle", True, "APC queued to a thread"),
+        "NtSetContextThread": ("ThreadHandle", True, "thread context set"),
+        "NtSetInformationThread": ("ThreadHandle", True, "thread context set"),
+    }
+    THREAD_WOW64_CONTEXT = 0x1d
+    # The caller's own process (-1) and thread (-2), as 64 and 32 bit values
+    OWN = frozenset((0xFFFFFFFFFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFFFFFFFFFE, 0xFFFFFFFE))
+    # PAGE_EXECUTE, _READ, _READWRITE, _WRITECOPY
+    EXECUTABLE = 0xF0
+    # (a broker's image name, what it was asked through)
+    BROKERS = {
+        "service": (frozenset(("services.exe",)), "the service binary it registered ({api})"),
+        "task": (frozenset(("svchost.exe", "taskeng.exe", "taskhostw.exe")),
+                 "the /TR command of the schtasks.exe it ran"),
+        "wmi": (frozenset(("wmiprvse.exe",)), "the command of the `wmic process call create` it ran"),
+    }
+    SERVICE_APIS = frozenset(("CreateServiceA", "CreateServiceW", "ChangeServiceConfigA",
+                              "ChangeServiceConfigW"))
+    HINTS = (b"NtCreateThread", b"NtQueueApcThread", b"NtSetContextThread", b"NtSetInformationThread",
+             b"NtMapViewOfSection", b"NtWriteVirtualMemory called", b'"NtClose"',
+             b"CreateService", b"ChangeServiceConfig")
+    # What every line with one of HINTS (or _TRANSFER_HINTS) has: most
+    # lines fail these five tests and are spared the eleven
+    COARSE = (b"Thread", b"Nt", b"Service", b"ptracemon", b"heuristic")
+    PROCMON = (b'"NtOpenProcess"', b'"NtOpenThread"', b'"NtCreateUserProcess"')
+    _CLOSE = re.compile(rb'"PID":\s*(\d+),.*"Method":\s*"NtClose".*"Handle":\s*"(0x[0-9a-fA-F]+)"')
+
+    def __init__(self):
+        self.transfers: List[Tuple[int, float, int, str]] = []
+        self.started_for: List[Tuple[int, float, float, int, str]] = []
+        self.unresolved: List[Tuple[int, float, str]] = []
+        self.has_sysret = False
+        # (PID, handle) -> the PID the handle is open on
+        self.handles: Dict[Tuple[int, int], int] = {}
+        # thread -> [call, TimeStamp, target PID or None, counted]: entered;
+        # kept once counted, so apimon's record of it is not a second call
+        self.pending: Dict[Tuple[int, int], list] = {}
+        # (source PID, target PID) -> what the source did to the target before
+        self.prepared: Dict[Tuple[int, int], Set[str]] = {}
+        # (requester PID, TimeStamp, kind, words, how)
+        self.asked: List[Tuple[int, float, str, Tuple[str, ...], str]] = []
+
+    def wants(self, plugin: bytes, line: bytes) -> bool:
+        if plugin == b"procmon":
+            return any(h in line for h in self.PROCMON)
+        if b"NtSetInformationThread" in line and b"0x1d" not in line:
+            return plugin == b"sysret" and bool(self.pending)
+        return plugin in (b"syscall", b"sysret", b"apimon", b"memdump")
+
+    def feed(self, plugin: bytes, line: bytes) -> None:
+        if b'"NtClose"' in line:
+            closed = self._CLOSE.search(line) if plugin == b"syscall" and self.handles else None
+            if closed:
+                self.handles.pop((int(closed.group(1)), int(closed.group(2), 16)), None)
+            return
+        try:
+            rec = orjson.loads(line)
+        except orjson.JSONDecodeError:
+            return
+        pid = rec.get("PID") if isinstance(rec, dict) else None
+        if not isinstance(pid, int):
+            return
+        getattr(self, "_" + plugin.decode("ascii"))(rec, pid, float(rec.get("TimeStamp") or 0))
+
+    # -- what the records say ---------------------------------------------------
+
+    def _procmon(self, rec: dict, pid: int, ts: float) -> None:
+        method = rec.get("Method")
+        if method == "NtCreateUserProcess":
+            if not _nt_success(rec.get("Status")) or not isinstance(rec.get("NewPid"), int):
+                return
+            for name in ("NewProcessHandle", "NewThreadHandle"):
+                self._opened(pid, rec.get(name), rec["NewPid"])
+            self._created(rec, pid, ts)
+        elif method in ("NtOpenProcess", "NtOpenThread") and isinstance(rec.get("ClientID"), int):
+            self._opened(pid, rec.get("ProcessHandle" if method == "NtOpenProcess" else "ThreadHandle"),
+                         rec["ClientID"])
+
+    def _opened(self, pid: int, handle, target: int) -> None:
+        handle = _hex(handle)
+        if handle:
+            self.handles[(pid, handle)] = target
+
+    def _target(self, pid: int, handle) -> Optional[int]:
+        """The PID `handle` is open on in `pid`: its own for the pseudo
+        handles, None for a handle nothing here saw opened."""
+        handle = _hex(handle)
+        if handle is None:
+            return None
+        return pid if handle in self.OWN else self.handles.get((pid, handle))
+
+    def _memdump(self, rec: dict, pid: int, ts: float) -> None:
+        target = rec.get("TargetPID")
+        if rec.get("DumpReason") == "NtWriteVirtualMemory called" and isinstance(target, int) and target != pid:
+            self.prepared.setdefault((pid, target), set()).add("NtWriteVirtualMemory")
+
+    def _syscall(self, rec: dict, pid: int, ts: float) -> None:
+        method = rec.get("Method")
+        if rec.get("PreviousMode") == "Kernel":
+            return      # a driver's, in whatever process was current
+        if method in ("NtMapViewOfSection", "NtMapViewOfSectionEx"):
+            target = self._target(pid, rec.get("ProcessHandle"))
+            if target not in (None, pid) and (_hex(rec.get("Win32Protect")) or 0) & self.EXECUTABLE:
+                self.prepared.setdefault((pid, target), set()).add(f"an executable section mapped ({method})")
+            return
+        trigger = self.TRIGGERS.get(method)
+        if trigger is None or (method == "NtSetInformationThread"
+                               and _hex(rec.get("ThreadInformationClass")) != self.THREAD_WOW64_CONTEXT):
+            return
+        thread = (pid, rec.get("TID"))
+        entered = self.pending.pop(thread, None)
+        if entered is not None and not self.has_sysret:
+            self._made(pid, entered)      # no sysret in this trace: as made
+        # NtQueueApcThreadEx2 is printed without arguments: apimon names it
+        self.pending[thread] = [method, ts, self._target(pid, rec.get(trigger[0])) if trigger[0] in rec
+                                else None, False]
+
+    def _sysret(self, rec: dict, pid: int, ts: float) -> None:
+        self.has_sysret = True
+        thread = (pid, rec.get("TID"))
+        entered = self.pending.get(thread)
+        if entered is None or entered[0] != rec.get("Method"):
+            return
+        if not _nt_success(rec.get("Ret")):
+            del self.pending[thread]
+        elif entered[2] is not None or not self.TRIGGERS[entered[0]][1]:
+            self._made(pid, entered)
+        # else: returned, on a thread handle only apimon's record can resolve
+
+    def _apimon(self, rec: dict, pid: int, ts: float) -> None:
+        method = rec.get("Method")
+        if rec.get("Event") != "api_called" or not isinstance(method, str):
+            return
+        arguments = dict(a.split("=", 1) for a in rec.get("Arguments") or () if isinstance(a, str) and "=" in a)
+        if method in self.SERVICE_APIS:
+            found = DRAKVUF_STRING_ARG.match(arguments.get("lpBinaryPathName", ""))
+            words = _words(unescape_drakvuf(found.group(1))) if found else ()
+            # A NULL handle is a service not created; ChangeServiceConfig returns a BOOL
+            if words and _hex(rec.get("ReturnValue")):
+                self.asked.append((pid, ts, "service", words,
+                                   self.BROKERS["service"][1].format(api=method)))
+            return
+        if method.startswith("Zw"):
+            method = "Nt" + method[2:]
+        trigger = self.TRIGGERS.get(method)
+        if trigger is None or (method == "NtSetInformationThread" and _hex(
+                arguments.get("ThreadInformationClass")) != self.THREAD_WOW64_CONTEXT):
+            return
+        thread = (pid, rec.get("TID"))
+        entered = self.pending.get(thread)
+        if entered is not None and entered[0] == method:
+            del self.pending[thread]
+        else:
+            entered = [method, ts, None, False]     # no syscall record of it: apimon's alone
+        if entered[3] or not _nt_success(rec.get("ReturnValue")):
+            return
+        if entered[2] is None and arguments.get("ProcessId", "").isdigit():
+            entered[2] = int(arguments["ProcessId"])    # of the thread handle, resolved by apimon
+        if entered[2] is None:
+            entered[2] = self._target(pid, arguments.get(trigger[0]))
+        self._made(pid, entered)
+
+    def _made(self, pid: int, entered: list) -> None:
+        """Count a call that was made, once."""
+        method, ts, target, counted = entered
+        if counted:
+            return
+        entered[3] = True
+        if target is None:
+            if not self.TRIGGERS[method][1]:
+                self.unresolved.append((pid, ts, method))
+            return      # (a thread handle nothing resolved is the caller's own CreateThread's, mostly)
+        if target <= 0 or target == pid:
+            return
+        how = f"{self.TRIGGERS[method][2]} ({method})"
+        before = self.prepared.get((pid, target))
+        if before:
+            how += " after " + " and ".join(sorted(before))
+        self.transfers.append((pid, ts, target, how))
+
+    def _created(self, rec: dict, pid: int, ts: float) -> None:
+        """A creation: something a requester asks a broker through
+        (schtasks.exe, wmic.exe), or a broker's answer to an earlier one."""
+        try:
+            args = [a.lower() for a in split_commandline(rec.get("CommandLine") or "")]
+        except Exception:  # noqa: BLE001 - a command line nobody can split names nothing
+            return
+        image = _basename(rec.get("ImagePathName"))
+        if image == "schtasks.exe" and "/create" in args and "/tr" in args[:-1]:
+            words = _words(args[args.index("/tr") + 1])
+            if words:
+                self.asked.append((pid, ts, "task", words, self.BROKERS["task"][1]))
+        elif image == "wmic.exe" and args[1:4] == ["process", "call", "create"] and len(args) > 4:
+            words = _words(args[4])
+            if words:
+                self.asked.append((pid, ts, "wmi", words, self.BROKERS["wmi"][1]))
+        broker = _basename(rec.get("ProcessName"))
+        words = tuple(args)
+        for requester, asked_ts, kind, wanted, what in self.asked:
+            if broker in self.BROKERS[kind][0] and wanted == words and requester != pid:
+                self.started_for.append((requester, asked_ts, ts, rec["NewPid"],
+                                         f"{broker} started {what}"))
+                break
+
+    def finish(self) -> None:
+        if not self.has_sysret:
+            for (pid, _), entered in self.pending.items():
+                self._made(pid, entered)
+        self.pending.clear()
+
+
+# The reader of control transfers in the calls themselves, per guest: Linux
+# has ptracemon's records (_control_transfer) and nothing to add.
+_EVIDENCE = {TargetOs.WINDOWS: _WindowsEvidence}
 
 
 def read_prelude(trace: Path, os_: TargetOs) -> TracePrelude:
@@ -228,17 +554,22 @@ def read_prelude(trace: Path, os_: TargetOs) -> TracePrelude:
     injected: List[Tuple[int, float]] = []
     transfers: List[Tuple[int, float, int, str]] = []
     has_sysret = False
+    evidence = _EVIDENCE[os_]() if os_ in _EVIDENCE else None
+    hints = _TRANSFER_HINTS + (evidence.HINTS if evidence is not None else ())
+    coarse = evidence.COARSE if evidence is not None else _TRANSFER_HINTS
 
     def procmon_lines() -> Iterator[str]:
         nonlocal has_sysret
         with trace.open("rb") as f:
             for line in f:
-                hint = any(h in line for h in _TRANSFER_HINTS)
+                hint = any(h in line for h in coarse) and any(h in line for h in hints)
                 if b"procmon" not in line and b"inject" not in line and not hint and (
                         has_sysret or b"sysret" not in line):
                     continue
                 m = _PLUGIN.search(line)
                 plugin = m.group(1) if m else b""
+                if evidence is not None and (hint or plugin == b"procmon") and evidence.wants(plugin, line):
+                    evidence.feed(plugin, line)
                 if plugin == b"sysret":
                     has_sysret = True
                 elif plugin == b"procmon":
@@ -261,7 +592,12 @@ def read_prelude(trace: Path, os_: TargetOs) -> TracePrelude:
                         transfers.append((found[0], float(rec.get("TimeStamp") or 0), found[1], found[2]))
 
     tree = tree_from_log(procmon_lines(), os_)
-    return TracePrelude(tree, injected, has_sysret, transfers)
+    prelude = TracePrelude(tree, injected, has_sysret, transfers)
+    if evidence is not None:
+        evidence.finish()
+        prelude.transfers += evidence.transfers
+        prelude.started_for, prelude.unresolved = evidence.started_for, evidence.unresolved
+    return prelude
 
 
 def _instances(tree: ProcessTree) -> Dict[int, List[Process]]:
@@ -289,10 +625,13 @@ def sample_roots(prelude: TracePrelude) -> Tuple[Set[int], Set[int]]:
     return found, missing
 
 
-def follow_transfers(prelude: TracePrelude, sample: Set[int], pending_roots: Set[int]) -> List[dict]:
+def follow_transfers(prelude: TracePrelude, sample: Set[int], pending_roots: Set[int],
+                     launcher: Optional[Set[int]] = None,
+                     unresolved: Optional[List[Tuple[int, float, str]]] = None) -> List[dict]:
     """Grow `sample` (seqids) by every process a sample process made run code
-    (TracePrelude.transfers), and what that one started from then on --
-    until no transfer adds one: the target may make another in turn.
+    (TracePrelude.transfers) or had a broker start (`started_for`), and what
+    that one started from then on -- until no transfer adds one: the target
+    may make another in turn.
 
     A process is the sample's from a point in time: the injected ones and
     their descendants always, a target from its transfer. Only a transfer
@@ -300,11 +639,22 @@ def follow_transfers(prelude: TracePrelude, sample: Set[int], pending_roots: Set
     thread before the sample took it over is explorer's own. The target is
     the instance of its PID alive at the transfer; one the tree does not know
     yet joins `pending_roots`, the sample's at its first record (_Attributor),
-    as an injected PID the tree does not know is (no procmon). Returns what
-    was followed, for the report."""
+    as an injected PID the tree does not know is (no procmon).
+
+    `launcher` (seqids, launch.launch_seqids) are sandboxd's own launch:
+    in the sample's tree and not the sample, so no source of a transfer --
+    what the launch's shell does to another process is sandboxd's doing --
+    until a sample process makes one of them run its code. That one is taken
+    out of `launcher` and is a source from then on, as any target is. The
+    shell creating the sample is no transfer at all (_WindowsEvidence).
+
+    Returns what was followed, for the report: one entry per (source,
+    target, how), the first. `unresolved` is given the sample's share of
+    TracePrelude.unresolved."""
     by_pid = _instances(prelude.tree)
     pending_sample = set(pending_roots)     # injected, not in the tree: the sample's throughout
-    since: Dict[int, float] = {seqid: float("-inf") for seqid in sample}
+    launcher = launcher if launcher is not None else set()
+    since: Dict[int, float] = {seqid: float("-inf") for seqid in sample if seqid not in launcher}
 
     def alive_at(pid: int, ts: float) -> Optional[Process]:
         alive = [p for p in by_pid.get(pid, ())
@@ -317,16 +667,22 @@ def follow_transfers(prelude: TracePrelude, sample: Set[int], pending_roots: Set
             return pid in pending_sample
         return src.seqid in since and since[src.seqid] <= ts
 
+    # (source PID, when the source acted, TimeStamp, target PID, how)
+    transfers = sorted([(src, ts, ts, target, how) for src, ts, target, how in prelude.transfers]
+                       + list(prelude.started_for), key=lambda t: t[2])
     followed: List[dict] = []
+    listed: Set[Tuple[int, int, str]] = set()
     done: Set[Tuple[int, float, int]] = set()
     changed = True
     while changed:
         changed = False
-        for src_pid, ts, target_pid, how in sorted(prelude.transfers, key=lambda t: t[1]):
-            if (src_pid, ts, target_pid) in done or not is_sample(src_pid, ts):
+        for src_pid, acted, ts, target_pid, how in transfers:
+            if (src_pid, ts, target_pid) in done or not is_sample(src_pid, acted):
                 continue        # not the sample's then (a later round may find it was)
             done.add((src_pid, ts, target_pid))
-            followed.append({"pid": src_pid, "target_pid": target_pid, "time": ts, "how": how})
+            if (src_pid, target_pid, how) not in listed:
+                listed.add((src_pid, target_pid, how))
+                followed.append({"pid": src_pid, "target_pid": target_pid, "time": ts, "how": how})
             target = alive_at(target_pid, ts)
             if target is None:
                 pending_roots.add(target_pid)
@@ -337,7 +693,10 @@ def follow_transfers(prelude: TracePrelude, sample: Set[int], pending_roots: Set
                 if joined < since.get(seqid, float("inf")):
                     since[seqid] = joined
                     sample.add(seqid)
+                    launcher.discard(seqid)
                     changed = True
+    if unresolved is not None:
+        unresolved += [u for u in prelude.unresolved if is_sample(u[0], u[1])]
     return followed
 
 
@@ -389,10 +748,44 @@ def _records(trace: Path, stats: SplitStats,
             handle.close()
 
 
+def _whole_lines(f, stats: SplitStats) -> Iterator[bytes]:
+    """The lines of `f`, with a record cut over several lines (_RECORD_START)
+    put together again -- the raw newlines stay in it, and _decode escapes
+    them as it does any raw control character. Put together only when the
+    first line is not a record by itself and the lines up to one ending in
+    `}` are: anything else goes out line by line, as it came."""
+    held: List[bytes] = []
+    for line in f:
+        stats.lines += 1
+        if not held and line.endswith(b"}\n"):
+            yield line          # nearly every line: a whole record
+            continue
+        if held:
+            if _RECORD_START.match(line) or len(held) >= MAX_CONTINUATION_LINES:
+                yield from held         # never completed: each line as it was
+                held = []
+            else:
+                held.append(line)
+                if line.rstrip().endswith(b"}"):
+                    whole = b"".join(held)
+                    counted = (stats.bad_json, stats.bad_utf8, stats.bad_control)
+                    complete = _decode(whole, stats) is not None
+                    stats.bad_json, stats.bad_utf8, stats.bad_control = counted
+                    if complete:
+                        stats.joined += 1
+                        held = []
+                        yield whole
+                continue
+        if _RECORD_START.match(line) and not line.rstrip().endswith(b"}"):
+            held = [line]       # cut short: wait for the rest
+            continue
+        yield line
+    yield from held
+
+
 def _records_of(trace, stats, aux_dir, aux, last_uid, last_rank):
     with trace.open("rb") as f:
-        for line in f:
-            stats.lines += 1
+        for line in _whole_lines(f, stats):
             m = _PLUGIN.search(line)
             if m is None:
                 continue
@@ -824,9 +1217,12 @@ def _header(proc: Process, os_: TargetOs) -> dict:
         "TimeStamp": proc.ts_from or 0.0,
         # How it ended, as procmon saw it: the report's process facts
         "ExitTimeStamp": proc.ts_to,
-        "ExitCode": proc.exit_code,
-        "ExitCodeStr": proc.exit_code_str,
-        "KilledBy": proc.killed_by,
+        # Only of a process that ended: an NtTerminateProcess that ended
+        # nothing leaves a status too (a NULL handle ends the caller's other
+        # threads; procmon repeats the record while procdump2 holds the call)
+        "ExitCode": proc.exit_code if proc.ts_to is not None else None,
+        "ExitCodeStr": proc.exit_code_str if proc.ts_to is not None else None,
+        "KilledBy": proc.killed_by if proc.ts_to is not None else None,
     }
 
 
@@ -871,6 +1267,14 @@ class SplitResult:
     # seqids of the injected processes the tree knew (sample_roots): what
     # the report calls the sample itself, its descendants aside
     roots: Set[int] = field(default_factory=set)
+    # seqids of sandboxd's own launch (launch.launch_seqids), which are in
+    # `sample` and not the sample; and those of them a sample process made
+    # run its code (follow_transfers), which are the sample's after all
+    launcher: Set[int] = field(default_factory=set)
+    launcher_followed: Set[int] = field(default_factory=set)
+    # Threads the sample started through a process handle the trace never
+    # saw opened: (PID, TimeStamp, call), transfers nobody could follow
+    unresolved: List[Tuple[int, float, str]] = field(default_factory=list)
 
     @property
     def sample_pids(self) -> Set[int]:
@@ -878,11 +1282,17 @@ class SplitResult:
 
 
 def split_by_process(analysis_dir: Path, out_dir: Path, os_: TargetOs,
-                     scope: str = "sample", kernel_syscalls: bool = False) -> SplitResult:
+                     scope: str = "sample", kernel_syscalls: bool = False,
+                     launch: Optional[Tuple[Optional[str], Optional[str], Optional[str]]] = None,
+                     ) -> SplitResult:
     """Write `<out_dir>/<seqid>.log` for every process in `scope` ("sample":
     the injected processes and their descendants, and the processes they
     made run code (follow_transfers); "all": every process). The sample is
-    worked out either way; capa looks at nothing else."""
+    worked out either way; capa looks at nothing else.
+
+    `launch` is (shell, delay, sample name) of sandboxd's own launch
+    (launch.launch_seqids), when its processes are not to count as the
+    sample: they then make no control transfer of the sample's."""
     if scope not in ("sample", "all"):
         raise ValueError(f"scope must be 'sample' or 'all', not {scope!r}")
     trace = analysis_dir / TRACE_LOG
@@ -895,8 +1305,16 @@ def split_by_process(analysis_dir: Path, out_dir: Path, os_: TargetOs,
     sample = descendants(prelude.tree.processes[s] for s in found)
     if not prelude.injected:
         log.warning("%s has no successful inject record: no sample processes", trace)
+    launcher = launch_seqids(
+        ({"seqid": p.seqid, "parent_seqid": p.parent.seqid if p.parent is not None else None,
+          "module_path": h["ModulePath"], "process_name": h["ProcessName"],
+          "command_line": h["CommandLine"]}
+         for p, h in ((p, _header(p, os_)) for p in (prelude.tree.processes[s] for s in sorted(sample)))),
+        *launch) if launch else set()
+    launch_processes = set(launcher)
+    unresolved: List[Tuple[int, float, str]] = []
     # A process the sample made run code runs the sample's: the sample's too
-    followed = follow_transfers(prelude, sample, pending_roots)
+    followed = follow_transfers(prelude, sample, pending_roots, launcher, unresolved)
 
     attribute = _Attributor(prelude.tree, sample, pending_roots, stats)
     # An injected PID the tree did not know is a root from its first record
@@ -927,4 +1345,5 @@ def split_by_process(analysis_dir: Path, out_dir: Path, os_: TargetOs,
 
     files = {s: out_dir / f"{s}.log" for s in sorted(writers.started)}
     stats.processes = len(files)
-    return SplitResult(prelude.tree, sample, files, stats, aux_dir, followed, attribute.roots)
+    return SplitResult(prelude.tree, sample, files, stats, aux_dir, followed, attribute.roots,
+                       launcher, launch_processes - launcher, unresolved)

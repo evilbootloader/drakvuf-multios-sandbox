@@ -230,7 +230,7 @@ shape what the page needs: each process's `seqid` and `parent_seqid`, its
 times and exit; `pid`/`seqid` on each enhanced event; `summary.by_process`,
 each process's own summary lists, which the Summary tab shows one process at
 a time (since 2026-11-12); `trace_split.sample` and `roots`;
-`info.started_ts`.
+`info.started_ts`. §4.1a lists the keys added on 2026-11-12.
 
 **The calls are beside it, not in it.** `calls.jsonl.gz` holds the sample's
 calls as CAPE parsed them, one gzip member per 200 calls of one process, and
@@ -308,6 +308,43 @@ kept frames and dropped the trace. `stages._collect` orders them last.
 network traffic is a real result, and #37's upload policy starts its
 `content-length-range` at 0 rather than 1 for exactly this reason. Recorded so
 that the next reader does not "fix" it back.
+
+### 4.1a `cape_results.json`: keys added 2026-11-12
+
+**Scope of this subsection: only what changed on 2026-11-12.** This document
+does not specify `cape_results.json` — its shape is CAPE's, extended by
+`sandboxd/postprocessing/plugins/cape_analysis.py`, and the platform's reader
+is lenient about unknown keys on purpose. These are listed because each one
+exists so that an absence is not read as a finding, and a reader who does not
+know the key will read it that way.
+
+**Status: in the working tree, not committed, not deployed.** No job on the
+deployment has these keys. They were produced by replaying the post-processing
+over five recorded traces; `sample-scope.md` §1 says what that does and does
+not show.
+
+| Key | Meaning | Absent or empty means |
+|---|---|---|
+| `behavior.processes[].launcher` | `true` on sandboxd's own launch — on Windows the injected `cmd.exe`, its `conhost.exe` and the `PING`. Such a process is in the tree and the call log and feeds no signature, summary, enhanced event or capa | the process is the sample's; on Linux, always |
+| `network.background` | `{kind: count}` of pcap-derived `hosts`/`tcp`/`udp`/`http`/`tls`/`dns`/`domains` entries dropped because a socket plugin attributed them only to processes outside the sample | nothing was dropped — **not** "the guest was quiet": with no socketmon/unixsocketmon record nothing can be attributed, so nothing is dropped |
+| `trace_split.followed` | `[{pid, target_pid, time, how}]`: a process made the sample's by a sample process making it run code, or by a broker starting it from a command the sample named | no transfer was seen |
+| `trace_split.launcher_followed` | seqids of launcher processes a sample process took over: the sample's after all, and scored | — |
+| `trace_split.transfers_unresolved` | `[{pid, time, call}]`: threads the sample started through a handle the trace never saw opened. **A target nobody could follow** | every transfer was resolved, or none was made |
+| `trace_split.joined` | regmon records a raw newline had cut over several lines, rejoined | — |
+| `statistics.capa` | `completed`, `error` when it did not, `repeat_cap`, `calls_seen`, `calls_fed` | capa did not run. **`capa_summary: {}` with `completed: false` is "capa failed", not "no capabilities"** |
+| `statistics.signature_failures[]` | `{name, error, stage, …}`; `stage` is `run`, `on_complete` or `on_call`. Always present, `[]` when every signature ran | — |
+| `signatures[].call_marks` | calls the signature marked in all; `data` holds the first 100 | — |
+| `procdump[].yara`, `.cape_yara` | hits of the project's rules and of CAPE's family rules over the dump's **inflated** content | no hit. With `scan_error`, not scanned |
+| `procdump[].scanned_size` | bytes inflated and scanned; `scan_truncated` when the dump is larger than the 1 GiB bound | the dump was not compressed, or could not be inflated |
+| `target.file.type`, `info.package` | **the sample's own type**, from libmagic where python-magic is installed and from `cape_plugin/filetype.py` where it is not (Dom0). Until 2026-11-12 an empty type fell back to the guest's, so a script was a 64-bit executable. `info.guest_type` still carries the guest's, which is what capa reads | — |
+| `behavior.processes[].environ.MainExeBase`, `.DllBase` | where the process's own image is mapped, from apimon's module discovery | apimon did not report the image |
+
+Two procdump facts that belong beside these. `--procdump-new-processes-on-finish`
+is passed with `procdump2` on every guest since 2026-11-12, so `procdumps/`
+may hold dumps taken when the trace ended as well as at `TerminateProcess`;
+`DumpReason` in the plugin's own record of each dump (`"Plugin":"procdump"`;
+`FinishAnalysis` / `TerminateProcess`) tells them apart. **Whether a finish-time dump is ever written on this Dom0 is unknown**
+— `sample-scope.md` §6.
 
 ### 4.2 The manifest
 

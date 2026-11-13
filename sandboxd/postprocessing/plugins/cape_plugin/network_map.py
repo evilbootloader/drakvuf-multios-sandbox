@@ -22,6 +22,7 @@ from collections import defaultdict
 from typing import Dict, Optional, Tuple
 
 from .api_tables import canonical
+from .pcap import _parse_dns
 from .network_utils import (
     _extract_first_url,
     _get_call_ret_handle,
@@ -491,6 +492,23 @@ class NetworkMap:
         # another's (a sample serving gets the requests made of it)
         if event == "send" and call.get("value"):
             self._payload(call["value"], process, call, plugin)
+            # A name asked of a resolver over the process's own socket, no
+            # resolver API in between: a static program's DNS (a bot's
+            # `lkol.dyn` to eight servers, 2026-11-12)
+            if port == 53:
+                self._dns_query(call["value"], process, call, plugin)
+
+    def _dns_query(self, value, process, call, source):
+        """The names in a DNS query unixsocketmon printed as hex."""
+        try:
+            message = _parse_dns(bytes.fromhex(str(value)))
+        except ValueError:
+            return
+        if not message or message["response"]:
+            return
+        for name, _qtype in message["questions"]:
+            if name:
+                self._dns(name, process, call, source)
 
     def _wininet(self, name, args, call, process, source):
         """InternetOpen -> InternetConnect -> HttpOpenRequest -> HttpSendRequest,

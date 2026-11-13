@@ -24,11 +24,12 @@ from typing import Optional
 
 import orjson
 
-from ...guests import TargetOs
+from ...guests import PATHS, TargetOs
 from ..paths import CAPE_RESULTS
 from .cape_plugin import (
     CapeOptions, RunProcessing, RunSignatures, load_signatures, split_by_process,
 )
+from .cape_plugin.filetype import package
 from .cape_plugin.modules import FileInfo
 from .cape_plugin.static import pe_info
 from .plugin_base import CapeConfigSection, PostprocessContext
@@ -36,10 +37,13 @@ from .plugin_base import CapeConfigSection, PostprocessContext
 log = logging.getLogger(__name__)
 
 
-# `target.file.type` is the output of `file` in CAPE, and capa's CAPE
-# extractor reads format, OS and arch out of it -- nothing else. There is no
-# sample here to run `file` on, so it is the guest's: what DRAKVUF traced is
-# a 64-bit Windows or Linux userland, whatever the sample itself was.
+# The guest's type, in `file`'s words: what DRAKVUF traced is a 64-bit
+# Windows or Linux userland, whatever the sample itself was. capa's CAPE
+# extractor reads format, OS and arch out of it (`info.guest_type`,
+# capa_integration.capa_inputs) -- so a 32-bit sample or a script gets its
+# dynamic pass all the same. It is `target.file.type` only for a job whose
+# sample file the daemon did not pass: the sample's own type otherwise
+# (FileInfo.describe: libmagic's, else filetype.sniff's).
 TARGET_FILE_TYPE = {
     TargetOs.WINDOWS: "PE32+ executable (GUI) x86-64, for MS Windows",
     TargetOs.UBUNTU: "ELF 64-bit LSB executable, x86-64, version 1 (SYSV), for GNU/Linux",
@@ -47,17 +51,29 @@ TARGET_FILE_TYPE = {
     TargetOs.ANDROID: "ELF 64-bit LSB executable, x86-64, version 1 (SYSV), for GNU/Linux",
 }
 
+# `info.package` of a job whose sample file is not at hand, as before
+# 2026-11-12; with the file it is filetype.package's answer.
+DEFAULT_PACKAGE = {TargetOs.WINDOWS: "exe", TargetOs.UBUNTU: "generic", TargetOs.ANDROID: "generic"}
 
-def _target(os_: TargetOs, sample: Optional[Path], yara_rules) -> dict:
+
+def cape_yara_rules(cfg: CapeConfigSection) -> Path:
+    """CAPE's family YARA rules, where the community checkout keeps them."""
+    return Path(cfg.community) / "data" / "yara" / "CAPE"
+
+
+def _target(os_: TargetOs, sample: Optional[Path], yara_rules, cape_rules=None) -> dict:
     """CAPE's `target`: the sample's own hashes, type, YARA hits and PE
     fields when the daemon passed it; otherwise the guest's type and no
-    hashes, which is all a trace alone can say."""
-    file = {"type": TARGET_FILE_TYPE[os_], "md5": "", "sha1": "", "sha256": "", "yara": [],
-            "cape_yara": []}
+    hashes, which is all a trace alone can say. The guest's type is no
+    stand-in for a sample whose type is unknown: that one is `data`."""
+    # `name` and `path` always: signatures index them without asking
+    # (mimics_extension raised KeyError on every job without a sample file)
+    file = {"name": "", "path": "", "type": TARGET_FILE_TYPE[os_], "md5": "", "sha1": "", "sha256": "",
+            "yara": [], "cape_yara": []}
     if sample is not None and sample.is_file():
-        file = FileInfo(yara_rules).describe(sample)
+        file = FileInfo(yara_rules, cape_rules).describe(sample)
         file["name"] = sample.name
-        file["type"] = file["type"] or TARGET_FILE_TYPE[os_]
+        file["type"] = file["type"] or "data"
         pe = pe_info(sample)
         if pe:
             file["pe"] = pe
@@ -225,12 +241,16 @@ def run_cape(context: PostprocessContext, cfg: CapeConfigSection,
     sample = sample or getattr(context, "sample", None)
     started, ended = _trace_times(analysis_dir)
     windows = context.target_os == TargetOs.WINDOWS
+    target = _target(context.target_os, sample, str(context.config.yara.rules_directory),
+                     str(cape_yara_rules(cfg)))
     results = {
         # CAPE's analysisinfo, as far as a sandboxd job has the facts. Twenty
         # one signature files read `info.package` unconditionally.
         "info": {
             "id": analysis_dir.name, "version": "2.5-CAPE", "category": "file",
-            "package": "exe" if windows else "generic",
+            # CAPE's package for the sample's type and name (filetype.package)
+            "package": (package(target["file"]["type"], sample.name)
+                        if sample is not None and sample.is_file() else DEFAULT_PACKAGE[context.target_os]),
             "machine": {"name": context.target_os.value, "platform": "windows" if windows else "linux"},
             "started": _iso(started), "ended": _iso(ended),
             "duration": int(max(0.0, ended - started)),
@@ -239,15 +259,19 @@ def run_cape(context: PostprocessContext, cfg: CapeConfigSection,
             "started_ts": started,
             # What capa reads format, OS and arch from: the guest's, not the
             # sample's own type (a script, a 32-bit PE), see TARGET_FILE_TYPE.
+            # Unchanged by what `target.file.type` says of the sample.
             "guest_type": TARGET_FILE_TYPE[context.target_os],
         },
-        "target": _target(context.target_os, sample, str(context.config.yara.rules_directory)),
+        "target": target,
         "statistics": {"processing": [], "signatures": [], "reporting": []},
     }
     with tempfile.TemporaryDirectory(dir=analysis_dir, prefix=".cape-") as tmp:
         logs = Path(tmp) / "logs"
+        paths = PATHS[context.target_os]
         split = split_by_process(analysis_dir, logs, context.target_os,
-                                 scope=cfg.scope, kernel_syscalls=cfg.kernel_syscalls)
+                                 scope=cfg.scope, kernel_syscalls=cfg.kernel_syscalls,
+                                 launch=(paths.shell, paths.delay, sample.name if sample is not None else None)
+                                 if cfg.skip_launcher else None)
         s = split.stats
         log.info("trace split: %d processes (%d in the sample), %d lines, records %s, "
                  "%d syscalls paired / %d unpaired / %d kernel-mode dropped, "
@@ -262,9 +286,18 @@ def run_cape(context: PostprocessContext, cfg: CapeConfigSection,
             "syscalls_unpaired": s.syscalls_unpaired,
             "kernel_syscalls_dropped": s.kernel_syscalls_dropped,
             "nodes_added": s.nodes_added, "bad_utf8": s.bad_utf8, "bad_json": s.bad_json,
+            # Records a raw newline in a value had cut over several lines
+            "joined": s.joined,
             # Processes made the sample's by a sample process making them
             # run code (trace_split.follow_transfers), and how
             "followed": split.followed,
+            # Of sandboxd's launch (behaviour.mark_launcher), the processes
+            # among those: the sample's since it took them over, by seqid
+            "launcher_followed": sorted(split.launcher_followed),
+            # Threads the sample started through a process handle the trace
+            # never saw opened: targets nobody could follow
+            "transfers_unresolved": [{"pid": pid, "time": ts, "call": call}
+                                     for pid, ts, call in split.unresolved],
             # The sample, by seqid: the injected processes the tree knew, and
             # everything the report shows (theirs, their descendants', the
             # ones they took over). The platform renders nothing else.
@@ -279,7 +312,9 @@ def run_cape(context: PostprocessContext, cfg: CapeConfigSection,
             capa_pids=split.sample_pids,
             scope=cfg.scope,
             sample_pids=split.sample_pids,
+            launcher=split.launcher,
             yara_rules=str(context.config.yara.rules_directory),
+            cape_yara_rules=str(cape_yara_rules(cfg)),
             falco=context.config.falco,
             vlan=context.vlan,
             trace_plugins=set(s.plugins),

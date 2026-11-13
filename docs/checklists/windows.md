@@ -151,8 +151,158 @@ What a run must confirm, and nothing here can: that `ping.exe` is at that path
 and reachable from the injected `cmd.exe`, that the sample is created at all
 (if the command line is malformed, `cmd` exits and **the trace completes having
 run no sample**), and that five pings is longer than arming with `apimon`'s
-~1,330 hooks going in — the Windows plugin set is heavier than Ubuntu's, so
-this is the guest most likely to need a larger `LAUNCH_DELAY`.
+hooks going in (1,352 lines in the working tree's `hooks.txt`, 2026-11-12).
+
+**The last of those was answered on 2026-11-12, the other way round.** Five
+pings were not too short; the launch was far too long. Recorded traces of
+three jobs showed the samples starting 37, 45 and 63 s into 120–180 s traces,
+because a guest having its hooks placed is slow at everything, the wait
+included. Raising `LAUNCH_DELAY` would have made that worse. What changed
+instead, **in the working tree and unvalidated on this guest**:
+
+- **The analysis clock starts with the sample.** `-t` is the timeout plus
+  `guests.LAUNCH_SLACK` (90 s) and sandboxd interrupts DRAKVUF `timeout`
+  seconds after procmon records the sample's creation.
+- **`cmd.exe`, its `conhost.exe` and the `ping` are marked `launcher`** and
+  scored as sandboxd's, not the sample's — point 1 above, taken to its
+  conclusion. A `.bat`/`.cmd` keeps its `cmd.exe` as the sample.
+- **Hooks nothing reads were removed**, and the hash-loop hooks report at
+  entry only.
+
+`docs/architecture/sample-scope.md` has the decisions; the boxes are below.
+
+### To confirm on Dom0: the sample-scope work
+
+**Added 2026-11-12. Nothing here has run on Dom0 or against this guest.** The
+code is in the development container's working tree — not committed, not
+deployed; `docs/architecture/sample-scope.md` is its design record. Each box
+names the observable that ticks it. A box is ticked by pasted output, as
+everywhere in this file.
+
+**Before any of them means anything**, the job must have run on the new
+code, and that is three separate deployments: the `drakvuf` submodule rebuilt
+(`make sandboxd`; provenance per `CURRENT-STATE.md` §1.2, "DRAKVUF
+provenance" — the banner does not say), this repository's `sandboxd/` with
+its `hooks.txt`, and the `cape-community` submodule. A job on the old binary
+with the new post-processing ticks only the boxes marked *(post-processing)*.
+
+**Where the observables are.** `cape_results.json`, `trace.log.gz`,
+`trace.stderr`, `manifest.json` and `procdumps/` are the job's uploaded
+artifacts. Dom0's own copy under `/var/lib/sandboxd/results/<job>` is deleted
+after upload unless the daemon runs with `SANDBOXD_KEEP_RESULTS=1`, which is
+the easier way to look.
+
+**First, because the rest depends on it:**
+
+- [ ] **A finish-time procdump exists at all.** In the three jobs of
+  2026-11-12 none did — not even of the injected process — only
+  `TerminateProcess` dumps. Observable: a `"Plugin":"procdump"` record with
+  `"DumpReason":"FinishAnalysis"` in the trace, and its file in `procdumps/`.
+  If there is none, note how long DRAKVUF ran past the end of the trace
+  against `--wait-stop-plugins 30` and what `trace.stderr` says: the next
+  box cannot pass and the cause is not the new flag.
+- [ ] **The sample's own process is dumped at the end**
+  (`--procdump-new-processes-on-finish`). Observable: a sample still running
+  when the trace ends has a `FinishAnalysis` record naming *its* PID — not
+  `cmd.exe`'s — a file in `procdumps/`, an entry in `manifest.json`, and an
+  entry under `procdump` in `cape_results.json` with `scanned_size` set.
+
+**The analysis clock:**
+
+- [ ] **The trace ends `timeout` seconds after the sample started.**
+  Observable: in `trace.log.gz`, the `TimeStamp` of the last record minus the
+  `TimeStamp` of procmon's `NtCreateUserProcess` record naming the sample's
+  file is between `timeout` and `timeout` + 30 s (`PLUGIN_STOP_WAIT`) plus a
+  few seconds of read lag; `manifest.json`'s `notes` and `trace.stderr` say
+  nothing of a sample not seen to start.
+- [ ] **DRAKVUF, interrupted, stops its plugins and exits cleanly.**
+  Observable: no `drakvuf exited N` in `notes`; `extracted.zip` and the
+  finish-time dump are present as on a job that ran to `-t`.
+- [ ] **The marker matches a real record.** It is three byte strings on one
+  line: `"Plugin":"procmon"`, `"Method":"NtCreateUserProcess"` and the file
+  name, with no space after the colons. Observable: the box above passing is
+  the proof; a job that always carries `the sample was not seen to start:
+  traced for <timeout+90>s` while the sample visibly ran is this failing.
+  Check a `.js` or `.ps1` as well as an `.exe` — a script is named in its
+  host's command line, not as the image.
+- [ ] **A sample that never starts runs to the ceiling and says so.**
+  Observable: the note above, on a job whose launch was made to fail.
+- [ ] **A job cancelled mid-trace still stops.** `_await_trace` owns the wait
+  now. Observable: the clone is gone and the job is `cancelled` within the
+  usual grace.
+
+**What the report calls the sample's** *(post-processing)*:
+
+- [ ] **`behavior.processes` marks exactly `cmd.exe`, `conhost.exe` and
+  `PING.EXE` as `launcher`**, and nothing else, on an `.exe` job. On a `.bat`
+  job the root `cmd.exe` is not marked and the other two are.
+- [ ] **A benign GUI installer no longer scores Malicious.** Observable: the
+  score and signature list of `SteamSetup.exe` beside the replay's 2.8 and 8
+  signatures (`sample-scope.md` §1). A live run differs from the replay by
+  the DRAKVUF changes and the hook list, so the number may differ; no
+  signature should name a launcher process.
+- [ ] **`network.background` is non-empty and no browser or updater host is
+  listed** as the sample's, on a job whose sample makes no traffic of its own.
+- [ ] **A sample that really injects is followed.** None of the five jobs
+  exercised this; the rules have synthetic tests only. Observable:
+  `trace_split.followed` names the target with `how`, the target's calls are
+  in the call log, and `trace_split.transfers_unresolved` is empty or
+  explained. One sample per mechanism: remote thread, queued APC, thread
+  context set; and one per broker: a registered service, `schtasks /Create
+  /TR`, `wmic process call create`.
+
+**The DRAKVUF fork** (needs the rebuilt binary):
+
+- [ ] **No `indirect_syscall` on a benign GUI program.** It fired on every job
+  with a GUI thread. Observable: the signature absent from `SteamSetup.exe`'s
+  report, and no syscall record whose `StubSyscall` differs from its service
+  on a thread's first win32k call.
+- [ ] **A handle-resolved `FileName` carries its device**
+  (`\Device\HarddiskVolumeN\…`), **and the summary lists each file once**, as
+  `C:\…`. Observable: both forms of one file in the trace, one entry in
+  `behavior.summary`.
+- [ ] **`LdrGetProcedureAddress`'s `ProcedureName` is printed as text**
+  (`pansi_string`), not as a pointer. Observable: an apimon record with a
+  function name in that argument. A pointer there means the hook list and the
+  binary were deployed apart.
+- [ ] **An unbacked module prints `""`, not `"(null)"`.**
+
+**The hook list:**
+
+- [ ] **apimon event volume, before and after, on the same sample.** The
+  measurement the removals rest on is shares of recorded traces (0.66–2.0 M
+  events a job, six hooks 61–81 % of them). Observable: `apimon` record
+  counts for `SteamSetup.exe` under the old list and the new, and the second
+  at which the sample starts in each — the figure that says whether the
+  guest got faster, which is the point.
+- [ ] **Nothing still expected went missing.** Observable: the capa rules
+  named in `sample-scope.md` §2.1 as lost are the only ones lost between the
+  two runs.
+
+**The environment:**
+
+- [ ] **The first job after deployment runs under Python 3.12 without a
+  traceback.** Nothing was run under 3.12; the container has 3.14, whose lazy
+  annotations hid a `NameError` from it once already (`f373dc6`).
+  Observable: the daemon's stderr for that job, and
+  `statistics.signature_failures` in its `cape_results.json`.
+
+Candidate, for the clock box — run against a kept results directory or a
+downloaded `trace.log.gz`; unproven here, and `<name>` is the sample's file
+name:
+
+```bash
+# DOM0 -- Candidate
+zcat /var/lib/sandboxd/results/<job>/trace.log.gz \
+  | grep -a '"Plugin":"procmon"' | grep -a '"Method":"NtCreateUserProcess"' \
+  | grep -aF '<name>'
+```
+
+Expect at least one line; the first is the one the clock started on, and its
+`TimeStamp` is what to subtract from the last record's. Several are a creation
+that failed and was retried (elevation). **No line while the sample visibly
+ran means the marker cannot match either** — paste the procmon record that
+does name the sample.
 
 ### Inherited contract (issue #6, 2026-08-10)
 

@@ -68,6 +68,18 @@ ORDINARY = dict(Caller=STUB, FromModule=NTDLL, ParentCaller=IN_KERNELBASE, FromP
                       FromParentModule=WOW64), id="WoW64's own 64-bit code"),
     pytest.param(dict(Bitness=64, Caller="0x77c51234", FromModule=WOW64CPU, ParentCaller=IN_SAMPLE32,
                       FromParentModule=SAMPLE), id="a wow64cpu turbo thunk"),
+    # From the benign SteamSetup job (2026-11-12): a thread's first win32k call, whose stub
+    # DRAKVUF compared with a stale KTHREAD.SystemCallNumber
+    pytest.param(dict(Caller="0x7ffa51f870f4", FromModule=WIN32U, ParentCaller="0x7ffa51abd97c",
+                      FromParentModule="\\Windows\\System32\\gdi32full.dll", Module="win32k", Syscall=738,
+                      StubSyscall="0x12e2"), id="the stub of the service dispatched, win32k"),
+    pytest.param(dict(ORDINARY, StubSyscall="0x18"), id="the stub of the service dispatched, nt"),
+    # and the 32-bit kernel32's and KernelBase's own thunks, for the CSR calls of a process creation
+    pytest.param(dict(Bitness=32, Caller="0x7563dd6c", FromModule="\\Windows\\SysWOW64\\kernel32.dll",
+                      ParentCaller="0x75641eec", FromParentModule="\\Windows\\SysWOW64\\kernel32.dll"),
+                 id="WoW64, kernel32's NtWow64Csr thunk"),
+    pytest.param(dict(Bitness=32, Caller="0x76af1d9c", FromModule=KERNELBASE32, ParentCaller="0x76ae9ad7",
+                      FromParentModule=KERNELBASE32), id="WoW64, KernelBase's NtWow64Csr thunk"),
 ])
 def test_windows_own_syscalls_are_not_reported(fields):
     assert classify(syscall(**fields)) is None
@@ -86,6 +98,10 @@ def test_windows_own_syscalls_are_not_reported(fields):
                  "indirect", IN_SAMPLE, id="HellsHall, a stub of its own"),
     pytest.param(dict(ORDINARY, ParentCaller=IN_SAMPLE, FromParentModule=SAMPLE, StubSyscall="0x50"),
                  "indirect", IN_SAMPLE, id="another service's stub"),
+    pytest.param(dict(ORDINARY, ParentCaller=IN_SAMPLE, FromParentModule=SAMPLE, Syscall=738,
+                      StubSyscall="0x12e2"), "indirect", IN_SAMPLE, id="a win32k stub for an nt service"),
+    pytest.param(dict(Caller="0x16954934a8c", FromModule="(null)", ParentCaller="0x16954934000",
+                      FromParentModule="(null)"), "direct", "0x16954934a8c", id="unbacked, as 9722578 printed it"),
     pytest.param(dict(Bitness=32, Caller=IN_SAMPLE32, FromModule=SAMPLE, ParentCaller="0x401300",
                       FromParentModule=SAMPLE), "wow64_direct", IN_SAMPLE32, id="call fs:[0C0h]"),
     pytest.param(dict(Bitness=32, Caller=STUB32, FromModule=NTDLL32, ParentCaller=IN_SAMPLE32,

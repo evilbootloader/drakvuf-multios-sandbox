@@ -76,10 +76,17 @@ class CapeConfigSection(BaseModel):
     enabled: bool = True
     # "sample": the injected process and its descendants, which is what
     # CAPE's monitor follows and its signatures assume -- and a process one
-    # of them made run code (a remote thread, a context set and resumed, a
-    # ptrace register write; trace_split.follow_transfers), with what that
-    # one starts afterwards. "all": every process on the guest.
+    # of them made run code (a remote thread, an APC, a thread context set,
+    # a ptrace register write) or had a broker start from a command it named
+    # (a service, a scheduled task, wmic; trace_split.follow_transfers), with
+    # what that one starts afterwards. "all": every process on the guest.
     scope: Literal["sample", "all"] = "sample"
+    # Leave sandboxd's own launch out of the behaviour, the signatures and
+    # capa: on Windows the injected cmd.exe, its console host and the PING it
+    # waits with (behaviour.mark_launcher). They stay in the process tree
+    # and the call log. Off: they are scored as the sample, as before
+    # 2026-11-12.
+    skip_launcher: bool = True
     # Windows syscalls with PreviousMode Kernel: a driver's own calls, made
     # in whatever process was current. Never the sample's; off.
     kernel_syscalls: bool = False
@@ -104,9 +111,12 @@ class CapeConfigSection(BaseModel):
     # the `syscall` calls syscall_origin logs, which tell a technique by
     # address range or a seen allocation; all/evasive_syscalls.py reads the
     # technique syscall_origin found. (`direct_syscall` here would be that
-    # file's own signature.)
+    # file's own signature.) `similarity_match` reads `results["similarity"]`,
+    # the output of a CAPE processing module over a family database that is
+    # not here, and without it raises AttributeError (its `self.ret` is never
+    # set) on every job.
     signatures_disabled: List[str] = ["antisandbox_unhook", "direct_syscall_evasion",
-                                      "unbacked_syscall_execution"]
+                                      "unbacked_syscall_execution", "similarity_match"]
     community: pathlib.Path = _DATA / "cape-community"
     # The behaviour's network_map (cape_plugin/network_map.py): domains and
     # networks it leaves out, and ones it keeps whatever the exclusions say.

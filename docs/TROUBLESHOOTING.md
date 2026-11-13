@@ -112,6 +112,23 @@ from exit 183, a finding, and it excludes that manifest from both scans. To see
 the raw result by hand, run `trufflehog filesystem . --results=verified,unknown`
 without the exclusions.
 
+### `git push` refused: an unverified `Enigma` secret on line 1 of the cape-community ATT&CK bundle
+
+**Symptom.** Every push is refused by the pre-push hook with one unverified
+`Enigma` finding at
+`sandboxd/data/cape-community/data/mitre/enterprise_attck_json.json`, line 1.
+2026-11-12, once the `cape-community` submodule was checked out in the tree.
+
+**Cause.** The file is MITRE's public ATT&CK bundle, one 31 MB line, and the
+detector reads something in it as a key. It is the **submodule's** file: git
+here records only the submodule's gitlink, so nothing this repository pushes
+contains it — which is also why the history scan never flags it and only the
+working-tree scan does.
+
+**Fix.** `bc45ae4`: `scripts/check-secrets.sh` leaves that one path out of the
+tree scan, with the reason beside the exclusion. Not `--no-verify`, which
+skips the project-specific pass as well.
+
 ### `cd platform && .venv/bin/python -m pytest -q` fails or hangs in the dev container
 
 **Symptom.** The command `CLAUDE.md` documents does not work. Postgres refuses
@@ -1343,6 +1360,10 @@ arming on this host. **Measure it rather than guessing**: the sample's own
 `execve` is now an event in the log (`do_execveat_common`, `FileName` = the
 staged path), and the span from the run's first event to that one is what
 arming actually cost. Raise `LAUNCH_DELAY`; do not patch a per-guest row.
+
+**On Windows, do not raise it** — there the sample starts late because the
+whole launch is slow, the wait included, and a longer wait is a later start.
+That is the entry "The sample did almost nothing in the trace window".
 
 Two things that are *not* this symptom. A trace with **no** sample events at
 all and no `execve` is a failed launch, not a late one — check the anchor PID
@@ -3526,6 +3547,203 @@ and printed only `LD_PRELOAD`, `PWD` and `OLDPWD`; `proc.cmdline`/`proc.pname`
 -- the process was running before the trace; `fd.sip`/`fd.l4proto` --
 unixsocketmon did not run. docs/architecture/falco-rules.md has the full
 table.
+
+### A benign program scores Malicious
+
+**Symptom.** `SteamSetup.exe`, a benign installer, scored **Malicious 8.0**
+with 24 signatures (2026-11-12). Among them: a process created suspended,
+written to and resumed; `indirect_syscall`; network signatures over hosts the
+installer never contacted.
+
+**Cause.** Three, and none is the sample. **sandboxd's own launch was scored
+as the sample**: the injected `cmd.exe` creates the sample suspended, writes
+its parameters and resumes it, which is what every process creation is and
+what nine of the 24 signatures were about. **The guest's background traffic
+was listed as the sample's** — next entry but one. And `indirect_syscall`
+fired on a stale number — next entry.
+
+**Fix.** The launch's `cmd.exe`, `conhost.exe` and `PING` are marked
+`launcher` and feed no signature, summary or capa (`cape_plugin/launch.py`,
+`behaviour.mark_launcher`; switch `skip_launcher`), and the wire's entries
+that only other processes made are dropped (`network.background`). A replay
+of the same trace scores 2.8 with 8 signatures.
+`docs/architecture/sample-scope.md` §3 and §4. **Working tree, 2026-11-12:
+not deployed, not run on Dom0** — a job on the deployment still scores the
+launch.
+
+**What is left is true.** `mountpoint_manager_access` and
+`discover_registry_mount_points` fire on a real installer because it does
+those things. A severity to tune, not a defect to fix.
+
+### Every Windows job fires `indirect_syscall`
+
+**Symptom.** `indirect_syscall` matches on every Windows job whose sample —
+or any process in scope — has a GUI thread, benign ones included. The marked
+calls are win32k syscalls whose `StubSyscall` names another service than the
+one recorded.
+
+**Cause.** The syscalls plugin compared the stub's service with
+`KTHREAD.SystemCallNumber`. On a thread's **first win32k syscall** the kernel
+converts it to a GUI thread before dispatching, and the callbacks and `Zw`
+calls of that conversion overwrite the number. So the comparison was between
+the stub and a later, unrelated syscall. The fork's own code, not upstream's:
+it came with the syscall-origin work (`b02e11d0`).
+
+**Fix.** Two, either enough for a new job. In the DRAKVUF fork, `StubSyscall`
+is compared with the service the kernel is dispatching — every entry of the
+routine, since the linker folds identical routines into one
+(`syscalls/origin.h`, `other_service`). In post-processing,
+`cape_plugin/syscall_origin.py` checks `StubSyscall` against the record's own
+`Syscall` and `Module` before believing it, which also quiets **traces
+recorded by the old binary**. **Both in the working tree, 2026-11-12; neither
+deployed.** The same guard reads `"(null)"` as the empty module name older
+binaries meant by it.
+
+### `network` lists Edge and svchost traffic as the sample's
+
+**Symptom.** A job whose sample made no connection lists hosts, DNS queries
+and HTTP requests — 18 hosts and 11 HTTP requests in each of three Windows
+jobs of 2026-11-12, none a sample process's. Network signatures fire on them.
+
+**Cause.** `capture.pcap` is the clone's whole interface, and the pcap-derived
+sections were not cut to the sample: a browser's, an updater's and the
+resolver's own traffic are on the same wire. A second, smaller one: a
+kernel-side send is recorded with whatever process was current, so NetBIOS
+from System carried a console host's PID.
+
+**Fix.** `cape_plugin/modules.py`, `Network._drop_background`: an entry whose
+peer or name socketmon/unixsocketmon attribute **only** to processes outside
+the sample is dropped, and counted in `network.background`; `_owner` takes
+socketmon's `OwnerPID` where there is one. **What no plugin attributed stays**
+— so a job without socketmon still lists everything, and that is not this
+bug. Working tree, 2026-11-12, not deployed. The capture itself is unchanged:
+it is the whole guest's, and so is the TLS key file.
+
+### The sample did almost nothing in the trace window
+
+**Symptom.** A Windows job completes, the sample is in the process tree, and
+its calls cover a few seconds or one tight loop. Three jobs of 2026-11-12: the
+samples started **37, 45 and 63 s** into 120–180 s traces; an installer past
+its UAC prompt was left 8.5 s; a RAT's whole window was key derivation.
+
+**Cause.** Three, compounding.
+
+1. **The sample starts late.** Not the missing-first-seconds entry above —
+   the launch delay works, and is the problem: a guest having ~1,350 usermode
+   hooks placed is slow at everything, so the injected shell took tens of
+   seconds to start a five-second wait, and `-t` was already counting.
+2. **Hot hooks.** apimon wrote 0.66–2.0 M events a job and six trivial hooks
+   were 61–81 % of them — `RtlAllocateHeap`, `TlsGetValue` and the like, two
+   traps a call, on calls nothing reads.
+3. **Key-derivation loops.** Nine hooked crypto calls per round of a hash
+   loop, each with a return trap.
+
+A fourth that is not ours: **UAC costs about a minute** on any sample needing
+elevation. Not fixed — a golden-image setting.
+
+**Fix.** One per cause, all `docs/architecture/sample-scope.md`: the analysis
+clock counts from the sample's start on Windows (§5; `guests.LAUNCH_SLACK`,
+`stages.Analysis._await_trace`); hooks nothing reads are removed (§2; first
+batch committed in `3857c8b`); the hash-loop hooks are `no-retval`. **The
+clock and the second batch are in the working tree, 2026-11-12, and nothing
+has run on Dom0** — in particular nobody has measured that the guest is
+faster with the shorter list. Do not raise `LAUNCH_DELAY` for this.
+
+If a job's notes say `the sample was not seen to start`, the clock found no
+procmon `NtCreateUserProcess` record naming the sample and the trace ran to
+its ceiling: a failed launch, a job without `procmon`, or a marker that does
+not match this DRAKVUF's output.
+
+### The sample's process was never dumped
+
+**Symptom.** A job with `procdump2` has dumps of processes that exited and
+none of the one that matters: the RAT still running at the end, a bot's
+workers. In the three Windows jobs of 2026-11-12 there is **no finish-time
+dump at all** — no record, no file — only `TerminateProcess` dumps.
+
+**Cause.** Two, and only the first is understood. DRAKVUF dumps the
+*injected* process at finish; on Windows that is the launch's `cmd.exe`, and
+on Linux a bot's workers outlive the injected process, so the process worth a
+dump was never asked for. **And the injected process was not dumped either**,
+which the first cause does not explain: whether finish-time dumps complete
+inside `--wait-stop-plugins` (30 s) is unknown.
+
+**Fix.** For the first: `--procdump-new-processes-on-finish` is passed with
+`procdump2` on every guest (`guests.argv_trace`), and the fork's Linux
+procdump2 dumps at finish as Windows does. Working tree, 2026-11-12, not
+deployed. **For the second there is no fix, because there is no diagnosis** —
+it is the first box of `docs/checklists/windows.md`, "To confirm on Dom0: the
+sample-scope work". If it fails, the new flag changes nothing.
+
+### Summary has no files for a 32-bit ELF
+
+**Symptom.** An i386 sample's Summary lists no files, `filetracer.log` has no
+record with its PID — 0 against 245k opens in its syscall records, for the
+bot of 2026-11-12 — nothing it wrote is extracted, and no memory is dumped
+on its behalf. Its syscalls are there.
+
+**Cause.** The same shape as "A 32-bit Linux sample has no syscall records",
+one layer up. `6f37d02` taught the syscalls plugin the 32-bit dispatcher;
+filetracer, fileextractor and memdump each hook the 64-bit one on their own
+and never saw a 32-bit process.
+
+**Fix.** In the fork, all three also hook the compat dispatcher and translate
+its numbers and arguments (`plugins/helpers/linux_compat_syscall.h`).
+**Uncommitted on top of `9722578`, 2026-11-12, never run against a guest.**
+A trace from an older binary has no file records for 32-bit processes;
+re-run rather than conclude the sample touched nothing.
+
+### `renameat2`'s `newpath` reads `H=`
+
+**Symptom.** A Linux syscall record's fourth argument is garbage:
+`renameat2`'s `newpath` a two-character string, `mmap`'s flags and `openat`'s
+mode values no caller passed. First seen in the 2026-10-23 benchmark trace
+and worked around then — `sandboxd/postprocessing/falco/linux.py` prefers
+filetracer's path for the same `EventUID` and says why.
+
+**Cause.** The plugin read the fourth argument from `rcx`, where a function's
+is. A syscall's is in `r10`: the `syscall` instruction puts its return address
+in `rcx`. The first three and the last two were always right, which is why
+it passed for a string-reading quirk.
+
+**Fix.** The fork reads `r10` (`syscalls/linux.cpp`). Uncommitted on top of
+`9722578`, 2026-11-12, never run against a guest. **Every Linux trace before
+it has a wrong fourth argument on every x86-64 syscall that takes one**;
+Falco's workaround stays, and covers paths only.
+
+### `capa_summary` is `{}` on a large job
+
+**Symptom.** A job with a busy sample has an empty `capa_summary`, which
+reads as "no capabilities". The i386 bot of 2026-11-12: 1.43 M calls in the
+sample's processes, capa at 3.66 GiB after nine CPU-minutes, not finished —
+over the postprocessing child's limit (`SANDBOXD_POSTPROCESS_MAX_MIB`, 3072).
+
+**Cause.** Two. capa was fed every call, and a bot's scan loop is the same
+few calls a million times (300,189 `stat`, 150,792 `getpgid`). And the
+failure was silent: `{}` is what capa returns for nothing found, for a
+refused report and for a `MemoryError` alike.
+
+**Fix.** `cape_plugin/capa_integration.py`: at most `REPEAT_CAP` (64)
+identical calls of one thread are fed and the rest counted — the largest
+`count()` any rule in `sandboxd/data/capa-rules` asks for is 48, and
+consecutive repeats are deliberately not folded into one. And
+`statistics.capa` says `completed`, the `error` when not, and `calls_seen`
+against `calls_fed`. **Read that key before reading an empty summary.**
+Working tree, 2026-11-12; that capa then fits under the limit on Dom0 is on
+`docs/checklists/ubuntu.md`, not yet shown.
+
+### `pe_entrypoint_outside_sections` on every PE
+
+**Symptom.** The signature — "the PE entry point falls outside all declared
+sections" — matches on every PE sample, benign ones included.
+
+**Cause.** `cape_plugin/static.py` reported `entrypoint` as a virtual address,
+image base added. The sections' addresses beside it are RVAs, as CAPE's own
+`entrypoint` is, and the signature compares the two.
+
+**Fix.** `entrypoint` is the RVA. Working tree, 2026-11-12, not deployed. A
+`cape_results.json` written before it has the VA; subtract `imagebase`
+rather than trust the signature.
 
 ---
 
