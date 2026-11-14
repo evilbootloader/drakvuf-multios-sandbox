@@ -83,7 +83,12 @@ class Image:
     """What of a program the locators read."""
     kind: str                                   # "elf" or "pe"
     bits: int
-    base: int = 0                               # PE ImageBase; 0 for ELF
+    #: What a hook's offset is counted from, in the file's own addresses: the
+    #: PE ImageBase; for ELF the page of the program headers, which is the one
+    #: address of a running executable the tracer has without reading it (the
+    #: aux vector's AT_PHDR). None: the headers are in no loaded segment, the
+    #: kernel passes no AT_PHDR and nothing can be placed.
+    base: Optional[int] = 0
     entry: int = 0
     #: (virtual address, file offset, bytes) of each executable range
     code: list = field(default_factory=list)
@@ -124,8 +129,14 @@ def read_elf(path: Path, data: bytes) -> Optional[Image]:
             return None     # FLIRT's call scan below is x86's
         image = Image("elf", 64 if elf.elfclass == 64 else 32, entry=elf["e_entry"])
         dynamic = False
+        image.base = None
+        phoff = elf["e_phoff"]
         for segment in elf.iter_segments():
             kind = segment["p_type"]
+            # As load_elf_binary() works AT_PHDR out
+            if (kind == "PT_LOAD" and image.base is None
+                    and segment["p_offset"] <= phoff < segment["p_offset"] + segment["p_filesz"]):
+                image.base = (segment["p_vaddr"] + phoff - segment["p_offset"]) & ~0xFFF
             if kind in ("PT_INTERP", "PT_DYNAMIC"):
                 dynamic = True
             if kind == "PT_LOAD" and segment["p_flags"] & 1 and segment["p_filesz"]:
@@ -378,10 +389,11 @@ def static_hooks(text: str) -> dict:
 _MODULE_OK = re.compile(r"^[^,\r\n#]+$")
 
 
-def sample_lines(located: list, known: dict, module: str, base: int = 0) -> list:
+def sample_lines(located: list, known: dict, module: str, base: Optional[int] = 0) -> list:
     """The hook-list lines for what was located and the list knows, one per
-    address. [] for a module name the list cannot spell."""
-    if not _MODULE_OK.match(module) or module != module.strip():
+    address. [] for a module name the list cannot spell, and for an image
+    with no base to count from."""
+    if base is None or not _MODULE_OK.match(module) or module != module.strip():
         return []
     lines, seen = [], set()
     for found in sorted(located, key=lambda f: (f.offset, f.name)):
@@ -394,6 +406,15 @@ def sample_lines(located: list, known: dict, module: str, base: int = 0) -> list
         if len(lines) >= MAX_HOOKS:
             break
     return lines
+
+
+def module_name(image: Image, guest_path: str) -> str:
+    """How the tracer knows the sample's image. Windows names a mapped file
+    from the root of its volume, with no drive, and libusermode compares the
+    end of that from a `\\` on; Linux has the path as it is."""
+    if image.kind == "pe":
+        return re.sub(r"^[A-Za-z]:\\+", "", guest_path)
+    return guest_path
 
 
 def write_list(static_text: str, lines: list, out: Path) -> None:
@@ -412,7 +433,7 @@ def report(image: Optional[Image], located: list, lines: list) -> dict:
     """What the job's report says of it (`static.located`)."""
     if image is None:
         return {"analysed": False}
-    hooked = {int(line.split(",")[2], 16) + image.base for line in lines}
+    hooked = {int(line.split(",")[2], 16) + (image.base or 0) for line in lines}
     by_how: dict = {}
     for found in located:
         by_how[found.how.split(":", 1)[0]] = by_how.get(found.how.split(":", 1)[0], 0) + 1
@@ -446,7 +467,8 @@ def main(argv: Optional[list] = None) -> int:
     try:
         image, located = locate(args.sample, args.flirt, args.code_signatures)
         if image is not None:
-            lines = sample_lines(located, static_hooks(static_text), args.guest_path, image.base)
+            lines = sample_lines(located, static_hooks(static_text),
+                                 module_name(image, args.guest_path), image.base)
     except Exception as exc:  # noqa: BLE001 - a program no parser reads gets the static list
         print(f"samplehooks: {args.sample.name}: {type(exc).__name__}: {exc}", file=sys.stderr)
         image, located, lines = None, [], []

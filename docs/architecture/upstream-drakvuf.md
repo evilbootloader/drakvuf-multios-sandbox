@@ -110,6 +110,33 @@ runs, preserving the agentless design.
 > same map is why `rtld_db_dlactivity` is worth building on — it is canonical
 > upstream, not a BlissOS artifact.
 >
+> **2026-11-14 — both hooking libraries take entries for the program itself.
+> Candidate: compiled against Dom0's flags, not yet run on a guest.**
+> A hook-list line whose module is an executable and which gives an offset
+> (`<path>,<name>,<hex offset>,log,…`) is placed in that program's own image.
+> `sandboxd/samplehooks.py` writes such lines per job, for the functions it
+> located in the sample *and* the static list already hooks by name.
+>
+> - **libmon.** `dl_rendezvous` reports every executable at `finalize_exec`
+>   (and at adoption), interpreter or none, so a statically linked process is
+>   no longer dropped at "no AT_BASE". Offsets count from the page of
+>   `AT_PHDR`: the one address of the program known before it has run, for a
+>   fixed and a randomised load alike. Nothing is resident at exec, and no
+>   other process maps a sample's file, so these hooks wait on
+>   `handle_mm_fault` returning for a fault near them, not on the CR3 tick,
+>   and are never given up on.
+> - **Forks are followed** (`wake_up_new_task`, in `dl_rendezvous`). The child
+>   gets its parent's tracking and every hook the parent had, in libraries
+>   and in the executable: until now a child that never exec'd produced no
+>   libmon record at all. Operator's decision, 2026-11-14 — an Ubuntu trace
+>   of a forking sample holds more `api_called` records than before.
+> - **libusermode.** After ntdll, the process's own image VAD is looked up by
+>   the process's path and offered to the hook lists like a mapped DLL. The
+>   module is spelled as the VAD names it: no drive (`Users\u\Desktop\s.exe`).
+> - `dl_rendezvous` now tells its consumer of every exec and exit, not only
+>   those of processes it tracked: a dynamic program that exec'd a static one
+>   used to keep its breakpoints.
+>
 > The immediately useful consequence: **`procmon`, `procdump2`, `cpuidmon`,
 > **`-a` is restrictive, verified 2026-08-26.** `src/main.cpp:438` enables
 > every plugin by default, but the first `-a` calls `disable_all_plugins()`

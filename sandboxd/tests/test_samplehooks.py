@@ -170,6 +170,35 @@ def test_the_child_writes_the_list_and_the_report(built, tmp_path):
     assert any(f["name"].endswith("connect") and f["hooked"] for f in report["functions"])
 
 
+def test_offsets_count_from_where_the_tracer_finds_the_program(built, tmp_path):
+    """libmon knows one address of an executable before it has run, the aux
+    vector's AT_PHDR, and takes its page as the base; libusermode has the
+    image's base. An offset counted from anything else lands a breakpoint in
+    the middle of some other instruction."""
+    from elftools.elf.elffile import ELFFile
+
+    with_symbols, _, _ = built
+    image = sh.read_image(with_symbols)
+    with with_symbols.open("rb") as f:
+        elf = ELFFile(f)
+        load = next(s for s in elf.iter_segments() if s["p_type"] == "PT_LOAD")
+        # the kernel: AT_PHDR = where the segment holding the headers put them
+        at_phdr = load["p_vaddr"] + elf["e_phoff"] - load["p_offset"]
+    assert image.base == at_phdr & ~0xFFF
+    line = next(l for l in sh.sample_lines(sh.from_symbols(image), {"connect": "log"}, "/s", image.base)
+                if l.split(",")[1] == "connect")
+    assert int(line.split(",")[2], 16) + image.base in {a for n, a in image.symbols.items()
+                                                         if sh.plain_name(n) == "connect"}
+
+    # headers no segment loads: no AT_PHDR, nothing to count from, no lines
+    assert sh.sample_lines([sh.Located("connect", 0x401000, "symtab")], {"connect": "log"}, "/s", None) == []
+
+    # Windows names a mapped file without its drive
+    pe = sh.Image("pe", 64)
+    assert sh.module_name(pe, r"C:\Users\u\Desktop\s.exe") == r"Users\u\Desktop\s.exe"
+    assert sh.module_name(image, "/home/u/Desktop/s.elf") == "/home/u/Desktop/s.elf"
+
+
 def test_what_is_no_program_gets_the_static_list(tmp_path):
     sample = tmp_path / "s"
     out = tmp_path / "hooks.txt"
