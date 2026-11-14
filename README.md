@@ -151,6 +151,26 @@ platform/.venv/bin/python scripts/bazaar-submit.py --platform https://sandbox.ex
 platform/.venv/bin/python scripts/bazaar-submit.py --platform https://sandbox.example.com --os ubuntu --seconds 600 --dry-run
 ```
 
+Measuring the signatures against samples whose answer is known:
+`scripts/detection-eval.py submit` runs malicious samples from MalwareBazaar and
+benign ones beside them, with `bazaar-submit.py`'s options. The benign samples
+are drawn at random from the Ubuntu archive of the guest's release and from
+Scoop's command-line `main` bucket, both of which publish a hash per file, and
+each is dropped if MalwareBazaar knows it. `--query detections` takes the
+malicious side from MalwareBazaar's recent detections, one family at a time
+(`--per-family`), and no file is submitted when the state files or the platform
+already hold a job for its sha256. `report` then fetches every run's
+`cape_results.json` and ranks the signatures by how often they fire on each
+side. It also replays the malscore with the severities in this checkout, so
+editing a severity and rerunning `report` shows its effect without a new
+analysis.
+
+```bash
+# WORKSTATION
+platform/.venv/bin/python scripts/detection-eval.py submit --platform https://sandbox.example.com --malicious 20 --benign 20 --os ubuntu
+platform/.venv/bin/python scripts/detection-eval.py report --platform https://sandbox.example.com --os ubuntu
+```
+
 Creating users when registration is not active:
 ```
 # PLATFORM DOMU, as root
