@@ -2383,6 +2383,10 @@ class Summary:
                 self._add_file_activity(process, kind, filename)
             self._add(target, filename)
 
+    #: What follows `\??\` in a device's DOS name: one component, no drive.
+    #: `C:\x` is a file, `pipe\x`, `UNC\x` and `Volume{..}\x` are paths.
+    _DOS_DEVICE = re.compile(r"[^\\:]+\Z")
+
     def _handle_filetracer(self, call, process):
         """A file the kernel saw opened, read, written or deleted, classified
         by the service (filetracer's own record, or the syscall it was folded
@@ -2412,6 +2416,15 @@ class Summary:
                     self._note_file(process, path, kinds)
             return
         else:
+            # `\??\HGFS`, `\??\VBoxMiniRdrDN`, `\??\PhysicalDrive0`: a device
+            # asked for by its DOS name, which capemon lists as it was asked
+            # for and the anti-VM and bootkit signatures match in that form.
+            # Opened or not: the probe that finds no such device is the one
+            # worth seeing. No read or write list -- it is not a file.
+            if (api in ("NtCreateFile", "NtOpenFile") and filename.startswith("\\??\\")
+                    and self._DOS_DEVICE.match(filename[4:])):
+                self._note_file(process, filename, ())
+                return
             filename = self._dos_name(filename)
             if api == "NtWriteFile":
                 kinds = ("write_files",)

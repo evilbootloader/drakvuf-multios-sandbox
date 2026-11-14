@@ -1302,3 +1302,22 @@ def test_signatures_written_for_cape_load_and_run(tmp_path):
     assert results["signatures"][0]["data"] == [{"type": "call", "pid": 100, "cid": 0}]
     assert results["ttps"] == [{"signature": "opens_valve", "ttps": ["T1012"], "mbcs": []}]
     assert results["malscore"] > 0
+
+
+def test_summary_lists_a_device_by_the_dos_name_it_was_asked_for(tmp_path):
+    """Job c12bc2b5 of 2026-11-13: a stealer probed for VirtualBox's, VMware's
+    and Parallels' devices, found none and left; the three opens were dropped
+    as "not a file with a drive" and antivm_vbox_devices had nothing to match."""
+    s = behaviour(
+        tmp_path, *BASE,
+        rec("filetracer", 0x10, 100, method="NtCreateFile", FileName="\\??\\VBoxMiniRdrDN", Status="0xc0000034",
+            DesiredAccess="0x100080"),
+        rec("filetracer", 0x11, 100, method="NtCreateFile", FileName="\\??\\HGFS", Status="0xc0000034",
+            DesiredAccess="0x100080"),
+        rec("filetracer", 0x12, 100, method="NtOpenFile", FileName="\\??\\PhysicalDrive0", DesiredAccess="0x80000000"),
+        rec("filetracer", 0x13, 100, method="NtCreateFile", FileName="\\??\\C:\\x.txt", DesiredAccess="0x80000000"),
+        # a path under a device, and an object that is no DOS name at all
+        rec("filetracer", 0x14, 100, method="NtCreateFile", FileName="\\??\\pipe\\x", DesiredAccess="0x80000000"),
+        rec("filetracer", 0x15, 100, method="NtOpenFile", FileName="\\Device\\Nsi", DesiredAccess="0x80000000"))["summary"]
+    assert s["files"] == ["\\??\\VBoxMiniRdrDN", "\\??\\HGFS", "\\??\\PhysicalDrive0", "C:\\x.txt"]
+    assert s["read_files"] == ["C:\\x.txt"]
