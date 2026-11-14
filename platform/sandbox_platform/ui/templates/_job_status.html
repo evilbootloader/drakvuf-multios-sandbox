@@ -20,7 +20,13 @@
   its description, which HTML permits inside <dl> for exactly this -- laying
   a pair out as a unit.
 #}
+{% from "tabs/_macros.html" import score with context %}
 <dl class="facts">
+  {#- First, and on every tab: the number a reader opens a finished run for.
+      The row's (0014), which outlives the report past retention; the
+      report's for a run finished before the column and not yet backfilled. #}
+  {% if job.malscore is not none %}<div><dt>Score</dt><dd>{{ score(job.malscore, job.malstatus) }}</dd></div>
+  {% elif report and report.malscore is not none %}<div><dt>Score</dt><dd>{{ score(report.malscore, report.malstatus) }}</dd></div>{% endif %}
   <div>
   <dt>State</dt>
   <dd>

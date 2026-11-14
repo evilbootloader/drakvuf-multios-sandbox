@@ -90,8 +90,8 @@ What the report gives, per guest:
 * the benign runs that score Suspicious or Malicious, with the scored
   signatures that put them there.
 
-Reports are fetched once through the API (`artifact.zip`, the ZipCrypto
-wrapper every download gets), trimmed to the signature hits and what scoring
+Reports are fetched once through the API (`artifact.zip`, the AES-256
+wrapper every download gets since 2026-11-14, read with `stream_unzip`), trimmed to the signature hits and what scoring
 reads, and cached under `<workdir>/reports/`. `--refresh` fetches them again.
 `--bazaar-state` adds the runs `bazaar-submit.py` recorded, labelled malicious.
 
@@ -101,8 +101,9 @@ after the upload unless `--keep`. Archives are read member by member: nothing
 is written under a name the archive chose.
 
 Dependencies: `bazaar-submit.py`'s (`httpx`; `pyzipper` or `7z` for
-MalwareBazaar's zip) and Python 3.14 for the zstd `data.tar` in jammy's
-packages. `platform/.venv` has both.
+MalwareBazaar's zip), `stream_unzip` for the platform's own wrapper, and
+Python 3.14 for the zstd `data.tar` in jammy's packages. `platform/.venv` has
+all of them (platform/requirements.in).
 """
 from __future__ import annotations
 
@@ -145,7 +146,7 @@ GUEST_OF_FILE_TYPE = {"exe": "windows", "elf": "ubuntu"}   # MalwareBazaar's fil
 #: is the fallback for a name defined there.
 SIGNATURE_DIR_OF = {"ubuntu": "linux", "windows": "windows"}
 RESULTS_NAME = "cape_results.json"
-ARTIFACT_PASSWORD = b"infected"       # packaging.py's, on every download
+ARTIFACT_PASSWORD = "infected"        # packaging.py's, on every download
 MAX_RESULTS_BYTES = 64 * 1024 * 1024  # the platform's own cap (cape.py)
 FLAGGED = frozenset({"Suspicious", "Malicious"})
 HTTP_HEADERS = {"User-Agent": "detection-eval/1.0 (+https://github.com/evilbootloader/drakvuf-multios-sandbox)"}
@@ -1076,12 +1077,18 @@ def fetch(platform, job_id: str) -> dict:
     r = platform._call("GET", f"/api/v1/jobs/{job_id}/artifact.zip", params={"name": RESULTS_NAME})
     if r.status_code != 200:
         raise LookupError(f"artifact.zip answered {r.status_code}: {r.text[:120]}")
+    # The directory is not encrypted: the standard library reads the size,
+    # and stream_unzip the AES member (zipfile reads ZipCrypto, not AES)
     with zipfile.ZipFile(io.BytesIO(r.content)) as z:
         info = z.infolist()[0]   # the wrapper of one artifact holds that artifact
         if info.file_size > MAX_RESULTS_BYTES:
             out["report"], out["why"] = None, f"{RESULTS_NAME} over {MAX_RESULTS_BYTES} bytes"
             return out
-        raw = z.read(info, pwd=ARTIFACT_PASSWORD)
+    from stream_unzip import stream_unzip
+    raw = b""
+    for _name, _size, chunks in stream_unzip([r.content], password=ARTIFACT_PASSWORD):
+        raw = b"".join(chunks)
+        break
     out["report"] = summarize(json.loads(raw))
     return out
 

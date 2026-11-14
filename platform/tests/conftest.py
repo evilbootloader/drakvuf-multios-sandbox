@@ -559,3 +559,21 @@ def other_worker_headers(conn):
         (hash_refresh_token(token),),
     )
     return {"Authorization": f"Bearer {token}"}
+
+
+class Unzipped:
+    """A downloaded artifact archive, opened -- `namelist` and `read`, as
+    `zipfile.ZipFile` offers them. The downloads are AES-256 since
+    2026-11-14 (packaging.py), which the standard library cannot decrypt;
+    stream_unzip can."""
+
+    def __init__(self, payload: bytes, password: str = "infected"):
+        from stream_unzip import stream_unzip
+        self.files = {name.decode(): b"".join(chunks)
+                      for name, _size, chunks in stream_unzip([payload], password=password)}
+
+    def namelist(self) -> list[str]:
+        return list(self.files)
+
+    def read(self, name: str) -> bytes:
+        return self.files[name]

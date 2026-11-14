@@ -211,17 +211,14 @@ class Settings:
     # Ceiling on a SINGLE uploaded artifact, bound into the presigned POST
     # policy the same way max_sample_bytes is (issue #37).
     #
-    # **4 GiB minus 16 bytes, and the odd number is the point.** It is
-    # `packaging._MAX_ENTRY`: the download path wraps every artifact in a
-    # single-pass ZIP whose local header carries 32-bit sizes, so one entry
-    # above that value cannot be served at all (`packaging.EntryTooLarge`).
-    # An artifact the store accepts but the browser can never fetch is the
-    # worse failure, so this cap is the zip's and `test_packaging` pins the
-    # two together. Raising it past the zip ceiling means the download path
-    # needs Zip64 local headers, which a single pass cannot write; and past
-    # 5 GB a presigned POST cannot carry the object either -- S3's
-    # single-request limit, which only multipart upload gets around, and
-    # neither form here provides that.
+    # **4 GiB minus 16 bytes, the ceiling the download path had** until
+    # 2026-11-14: the hand-written ZIP writer put 32-bit sizes in each local
+    # header, so a larger entry could not be served, and this cap was pinned
+    # to it. packaging.py writes every entry as Zip64 since (stream-zip), so
+    # the download no longer bounds one artifact; the value is kept as
+    # deployed rather than raised in passing. Past 5 GB a presigned POST
+    # cannot carry the object either -- S3's single-request limit, which only
+    # multipart upload gets around, and neither form here provides that.
     #
     # 2 GiB until 2026-11-03, raised with the per-job budget below when runs
     # went to 20 minutes: the largest result set to that date was 1.74 GB

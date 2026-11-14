@@ -5,6 +5,11 @@
   capture itself shows of the same hosts. From CAPE's network map, which
   reads every plugin with network data; the capture rows are kept where they
   meet an address or name the sample used.
+
+  **Each detection opens its own timeline in place** (operator, 2026-11-14):
+  the rows of the whole timeline naming its address, name or host -- the
+  resolve, the connect, the send -- in order (tabs/_timeline_matches.html),
+  each linking to its place in the Timeline tab.
 #}
 {% from "tabs/_macros.html" import head, proc, toggle, xrow, chips, nothing, no_report with context %}
 
@@ -22,6 +27,8 @@
 
 {% if not report %}{{ no_report() }}{% else %}
 {% set nm = report.network_map %}
+
+{% macro matches_url(q) -%}/ui/jobs/{{ job.id }}/timeline/matches?q={{ q | urlencode }}{%- endmacro %}
 
 {% macro pinfo_cells(item) -%}
 <td>{% for p in item.pinfo %}{{ proc(pid=p.process_id) }}{% endfor %}</td>
@@ -50,6 +57,7 @@
     {% for p in e.pinfo %}<tr><td>{{ proc(pid=p.process_id) }}</td><td>{{ chips(p.events, 'netev') }}</td><td>{{ chips(p.sources) }}</td></tr>{% endfor %}
     </tbody>
   </table>
+  {% if e.ip %}<div class="tl-lazy" hx-get="{{ matches_url(e.ip) }}" hx-trigger="intersect once" hx-swap="outerHTML">Loading its timeline…</div>{% endif %}
   {% endcall %}
   {% endfor %}
   </tbody>
@@ -76,13 +84,16 @@
 {% set answers = {} %}{% for a in nm.dns_answers %}{% set _ = answers.update({a.domain: a.answers}) %}{% endfor %}
 <div class="table-wrap">
 <table class="grid">
-  <thead><tr><th>Name</th><th class="fill">Answers</th><th>Process</th><th>Through</th></tr></thead>
+  <thead><tr><th>Name</th><th class="fill">Answers</th><th>Process</th><th>Through</th><th></th></tr></thead>
   <tbody>
   {% for d in nm.dns_intents %}
-  <tr><td class="mono break">{{ d.domain }}</td>
+  {% set id = 'dns-' ~ loop.index0 %}
+  <tr class="xr" data-x="{{ id }}"><td class="mono break">{{ d.domain }}</td>
       <td class="mono break">{{ answers.get(d.domain, []) | join(', ') }}</td>
       <td>{% for i in d.intents %}{{ proc(pid=i.process.process_id) }}{% endfor %}</td>
-      <td>{% set apis = [] %}{% for i in d.intents %}{% if i.api not in apis %}{% set _ = apis.append(i.api) %}{% endif %}{% endfor %}{{ chips(apis) }}</td></tr>
+      <td>{% set apis = [] %}{% for i in d.intents %}{% if i.api not in apis %}{% set _ = apis.append(i.api) %}{% endif %}{% endfor %}{{ chips(apis) }}</td>
+      <td class="nowrap">{{ toggle(id, 'timeline ▾', matches_url(d.domain)) }}</td></tr>
+  {{ xrow(id, 5, d.domain ~ ' in the timeline') }}
   {% endfor %}
   </tbody>
 </table>
@@ -95,12 +106,18 @@
 {% if nm.http_requests %}
 <div class="table-wrap">
 <table class="grid">
-  <thead><tr><th>Method</th><th class="fill">URL</th><th>Process</th><th>User agent</th><th>From</th></tr></thead>
+  <thead><tr><th>Method</th><th class="fill">URL</th><th>Process</th><th>User agent</th><th>From</th><th></th></tr></thead>
   <tbody>
   {% for r in nm.http_requests %}
-  <tr><td class="mono"><b>{{ r.method or '' }}</b></td><td class="mono break">{{ r.url or r.host }}</td>
+  {% set id = 'http-' ~ loop.index0 %}
+  {#- By host: the timeline's rows carry the host (a resolve, a Host:
+      header) far more often than the whole URL #}
+  {% set needle = r.host or r.url %}
+  <tr class="xr" data-x="{{ id }}"><td class="mono"><b>{{ r.method or '' }}</b></td><td class="mono break">{{ r.url or r.host }}</td>
       <td>{{ proc(pid=r.process_id) }}</td><td class="mono small break dim">{{ r.user_agent or '' }}</td>
-      <td class="nowrap"><span class="chip">{{ r.api or r.source }}</span></td></tr>
+      <td class="nowrap"><span class="chip">{{ r.api or r.source }}</span></td>
+      <td class="nowrap">{% if needle %}{{ toggle(id, 'timeline ▾', matches_url(needle)) }}{% endif %}</td></tr>
+  {% if needle %}{{ xrow(id, 6, (r.url or r.host) ~ ' in the timeline') }}{% endif %}
   {% endfor %}
   </tbody>
 </table>
@@ -136,12 +153,15 @@
 {{ head('In the capture', (net.tcp | length) + (net.udp | length), 'Flows to the hosts above, as the capture and the kernel saw them.') }}
 <div class="table-wrap">
 <table class="grid">
-  <thead><tr><th>Proto</th><th>From</th><th class="fill">To</th><th>Process</th><th>Source</th></tr></thead>
+  <thead><tr><th>Proto</th><th>From</th><th class="fill">To</th><th>Process</th><th>Source</th><th></th></tr></thead>
   <tbody>
-  {% for proto, flows in (('TCP', net.tcp), ('UDP', net.udp)) %}{% for f in flows %}
-  <tr><td class="mono">{{ proto }}</td><td class="mono nowrap dim">{{ f.src }}:{{ f.sport }}</td>
+  {% for proto, flows in (('TCP', net.tcp), ('UDP', net.udp)) %}{% set outer = loop.index0 %}{% for f in flows %}
+  {% set id = 'flow-' ~ outer ~ '-' ~ loop.index0 %}
+  <tr class="xr" data-x="{{ id }}"><td class="mono">{{ proto }}</td><td class="mono nowrap dim">{{ f.src }}:{{ f.sport }}</td>
       <td class="mono">{{ f.dst }}:{{ f.dport }} <span class="dim">{{ port_name(f.dport) }}</span></td>
-      <td>{% if f.process_id is not none %}{{ proc(pid=f.process_id) }}{% endif %}</td><td><span class="chip">{{ f.source or 'pcap' }}</span></td></tr>
+      <td>{% if f.process_id is not none %}{{ proc(pid=f.process_id) }}{% endif %}</td><td><span class="chip">{{ f.source or 'pcap' }}</span></td>
+      <td class="nowrap">{% if f.dst %}{{ toggle(id, 'timeline ▾', matches_url(f.dst)) }}{% endif %}</td></tr>
+  {% if f.dst %}{{ xrow(id, 6, f.dst ~ ' in the timeline') }}{% endif %}
   {% endfor %}{% endfor %}
   </tbody>
 </table>

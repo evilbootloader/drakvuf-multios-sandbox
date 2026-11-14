@@ -37,10 +37,11 @@ from functools import cached_property, lru_cache
 from typing import Any
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 from . import manifest as manifest_schema
 from . import objects
+from .enums import MalStatus
 
 log = logging.getLogger("sandbox_platform.cape")
 
@@ -359,6 +360,20 @@ class Dropped(FileFacts):
             return self.guest_paths[0] if self.guest_paths else ""
         return self.guest_paths
 
+    @property
+    def all_guest_paths(self) -> list[str]:
+        """Every path the sample wrote these bytes to: fileextractor keeps
+        one copy of identical content written under several names."""
+        if isinstance(self.guest_paths, list):
+            return self.guest_paths
+        return [self.guest_paths] if self.guest_paths else []
+
+    @property
+    def archive_name(self) -> str:
+        """Its member name in `extracted.zip`, where sandboxd packs the
+        `extracted/` directory (pack_dirs.compress_extracted)."""
+        return f"extracted/{self.stored_name}" if self.stored_name else ""
+
 
 class ProcDump(FileFacts):
     pid: int | None = None
@@ -437,9 +452,136 @@ class Pe(_Lenient):
     overlay: dict[str, Any] | None = None
     pdbpath: str | None = None
 
+    @field_validator("versioninfo")
+    @classmethod
+    def _distinct(cls, value: list[NameValue]) -> list[NameValue]:
+        """Each (name, value) once, in first-seen order. pefile reads one
+        StringTable per language of the version resource, and an installer
+        carrying 29 translations of the same four strings listed them 29
+        times (SteamSetup.exe, job bd31b474, 2026-11-14). static.py dedupes
+        since; this keeps the reports written before that readable."""
+        seen: set[tuple[str, str]] = set()
+        out = []
+        for item in value:
+            if (item.name, item.value) not in seen:
+                seen.add((item.name, item.value))
+                out.append(item)
+        return out
+
+
+class ElfSection(_Lenient):
+    name: str = ""
+    type: str = ""
+    addr: str = ""
+    size: int | None = None
+    offset: str = ""
+    flags: str = ""
+    entropy: str = ""
+
+
+class ElfSegment(_Lenient):
+    type: str = ""
+    addr: str = ""
+    flags: str = ""
+    size: int | None = None
+    offset: str = ""
+    filesz: int | None = None
+
+
+class ElfSymbol(_Lenient):
+    value: str = ""
+    type: str = ""
+    bind: str = ""
+    ndx_name: str = ""
+    table: str = ""
+    section: str = ""
+
+
+class ElfNote(_Lenient):
+    owner: str = ""
+    type: str = ""
+    size: int | str | None = None
+    note: str = ""
+
+
+class Elf(_Lenient):
+    """An ELF's headers (sandboxd cape_plugin/static.py::elf_info): CAPE's
+    parse_elf names, and what static.py adds beside them."""
+    file_header: dict[str, str | int | None] = Field(default_factory=dict)
+    section_headers: list[ElfSection] = Field(default_factory=list)
+    program_headers: list[ElfSegment] = Field(default_factory=list)
+    symbol_tables: list[ElfSymbol] = Field(default_factory=list)
+    symbols_total: int = 0
+    notes: list[ElfNote] = Field(default_factory=list)
+    interpreter: str | None = None
+    needed: list[str] = Field(default_factory=list)
+    soname: str | None = None
+    rpath: str | None = None
+    runpath: str | None = None
+    build_id: str | None = None
+    stripped: bool | None = None
+    linking: str = ""
+
+    @property
+    def imports(self) -> list[ElfSymbol]:
+        """Symbols it takes from a library: undefined here."""
+        return [s for s in self.symbol_tables if s.section == "UND"]
+
+    @property
+    def exports(self) -> list[ElfSymbol]:
+        """Functions and objects it defines for others to use."""
+        return [s for s in self.symbol_tables if s.section != "UND" and s.bind in ("GLOBAL", "WEAK")
+                and s.type in ("FUNC", "OBJECT")]
+
+
+class Indicator(_Lenient):
+    kind: str = ""
+    value: str = ""
+
+
+class ArchiveEntry(_Lenient):
+    name: str = ""
+    size: int | None = None
+    compressed: int | None = None
+    encrypted: bool = False
+    date: str = ""
+
+
+class Archive(_Lenient):
+    kind: str = ""
+    count: int = 0
+    encrypted: int = 0
+    entries: list[ArchiveEntry] = Field(default_factory=list)
+
+
+class FileStatic(_Lenient):
+    """What any file's bytes say whatever their format (static.py::
+    file_static): entropy, strings and the indicators among them, an
+    archive's members, a text file's opening."""
+    entropy: str = ""
+    strings: list[str] = Field(default_factory=list)
+    strings_total: int = 0
+    iocs: list[Indicator] = Field(default_factory=list)
+    archive: Archive | None = None
+    text: str | None = None
+    text_truncated: bool = False
+
 
 class TargetFile(FileFacts):
     pe: Pe | None = None
+    elf: Elf | None = None
+    static: FileStatic | None = None
+
+    @field_validator("pe", "elf", "static", mode="wrap")
+    @classmethod
+    def _part_or_none(cls, value, handler):
+        """A format's part that does not validate is left out, not the
+        target with it: `target` is one section, and an odd symbol table must
+        not cost the page the sample's hashes."""
+        try:
+            return handler(value)
+        except ValidationError:
+            return None
 
 
 class Target(_Lenient):
@@ -497,6 +639,21 @@ class Falco(_Lenient):
 SUMMARY_KEYS = ("files", "read_files", "write_files", "delete_files", "keys", "read_keys",
                 "write_keys", "delete_keys", "executed_commands", "resolved_apis", "mutexes",
                 "created_services", "started_services")
+
+# What CAPE's calc_scoring can call a run: enums.MalStatus, one definition
+# for the report, the request model and the column's CHECK (0014).
+MALSTATUS = tuple(s.value for s in MalStatus)
+
+
+def _score(document: dict) -> tuple[float | None, str | None]:
+    """The report's malscore (0 to 10) and malstatus, or None for each that
+    is absent or not one calc_scoring could have written."""
+    score = document.get("malscore")
+    if isinstance(score, bool) or not isinstance(score, (int, float)) or not 0 <= score <= 10:
+        score = None
+    status = document.get("malstatus")
+    return (float(score) if score is not None else None,
+            status if status in MALSTATUS else None)
 
 
 # --- derived shapes -------------------------------------------------------------
@@ -608,6 +765,7 @@ class Report:
         behavior = document.get("behavior") if isinstance(document.get("behavior"), dict) else {}
 
         self.info = self._one(Info, document.get("info"), "info")
+        self.malscore, self.malstatus = _score(document)
         self.target = self._one(Target, document.get("target"), "target")
         self.trace_split = self._one(TraceSplit, document.get("trace_split"), "trace_split")
         processes = self._many(Process, behavior.get("processes"), "processes")
@@ -950,7 +1108,8 @@ class Report:
             filled.add("dropped")
         if self.dump_count:
             filled.add("memory")
-        if self.target.file.pe or self.target.file.sha256:
+        f = self.target.file
+        if f.pe or f.elf or f.static or f.sha256:
             filled.add("static")
         return filled
 

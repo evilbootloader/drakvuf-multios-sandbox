@@ -90,7 +90,7 @@ class FakeApi:
     def upload_artifact(self, ticket, name, path):
         pass
 
-    def complete(self, job_id, manifest):
+    def complete(self, job_id, manifest, score=None):
         # /complete is what SETS `completed`, together with the manifest, in
         # one committed row -- that is what makes publication atomic. The
         # worker never reports `completed` through /state, and a fake that did

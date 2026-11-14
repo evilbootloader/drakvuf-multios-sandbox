@@ -46,7 +46,9 @@ MAX_INDEX_BYTES = 16 * 1024 * 1024
 MAX_MEMBER_BYTES = 8 * 1024 * 1024
 MAX_INFLATED = 32 * 1024 * 1024
 MAX_MEMBERS_PER_PAGE = 16
-PAGE_CALLS = 100
+# 20 a fetch: the table is a window 20 rows tall that loads the next page as
+# it scrolls (operator, 2026-11-14; ui/__init__.py LIST_PAGE).
+PAGE_CALLS = 20
 MAX_ARGUMENTS = 64
 MAX_VALUE = 16 * 1024
 MAX_CHUNKS = 200_000

@@ -1,24 +1,57 @@
 {#
-  A page of events. Each opens its whole data in place.
+  Rows of the timeline, and the edges that load more as they scroll into
+  view: "earlier" above (`earlier`, the first row shown) and "later" below
+  (`later`, where the next window starts). A row matching the search text is
+  marked (`data-hit`), the row a search or a row number landed on more so
+  (`data-target`); static/timeline.js marks the text itself.
+
+  A call's row opens the whole call in place, out of the calls log; a CAPE
+  event's (a run without the timeline file) opens its data. A record of a
+  plugin that makes no call (memdump, inject, ...) is the line it shows.
+
+  `mode` "matches" is one Network row's own timeline (_timeline_matches):
+  only the rows naming its address, each linking to its place in the whole.
 #}
 {% from "tabs/_macros.html" import proc, toggle, xrow with context %}
-{% for e in events %}
-{% set id = 'ev-' ~ (offset + loop.index0) %}
-<tr class="xr" data-x="{{ id }}">
-  <td class="mono nowrap dim">{{ report.t(e.timestamp) | secs }}</td>
-  <td>{{ proc(pid=e.pid, seqid=e.seqid) }}</td>
-  <td class="nowrap"><span class="chip" data-kind="ev-{{ e.event }}">{{ e.event }}</span> <span class="dim">{{ e.object }}</span></td>
-  <td class="mono break">{{ e.target | printable }}</td>
-  <td>{{ toggle(id, '▾') }}</td>
+{% set base = '/ui/jobs/' ~ job.id ~ '/timeline' ~ ('/matches' if mode == 'matches' else '') %}
+{% set keep = ('&seqid=' ~ tl_seqid if tl_seqid is not none else '') ~ ('&q=' ~ (tl_q | urlencode) if tl_q else '') %}
+{% if earlier is not none %}
+{% set url = base ~ '?part=before&end=' ~ earlier ~ keep %}
+<tr class="more-row tl-edge" data-edge="up"><td colspan="7">
+  <a class="more" href="{{ url }}" hx-get="{{ url }}" hx-trigger="intersect once root:(closest .window), click" hx-target="closest tr" hx-swap="outerHTML">Earlier rows <span class="dim">· above #{{ '{:,}'.format(earlier) }}</span></a></td></tr>
+{% endif %}
+{% for r in rows %}
+{#- In "matches" a row opens nothing: two Network rows' lists can hold the
+    same row, and a panel's id must be one on the page. Its number links to
+    its place in the whole timeline, where it opens. #}
+{% set inline = mode != 'matches' %}
+{% set id = 'tl-' ~ r.index %}
+{% set opens = inline and r.cid is not none and r.seqid is not none %}
+<tr class="tl-row{% if inline %} xr{% endif %}"{% if inline %} data-x="{{ id }}"{% endif %} data-i="{{ r.index }}"{% if r.index in tl_hits %} data-hit="1"{% endif %}{% if r.index == tl_target %} data-target="1"{% endif %}{% if r.failed %} data-failed="1"{% endif %}>
+  <td class="num mono dim">
+    {%- if mode == 'matches' %}<a href="/ui/jobs/{{ job.id }}?tab=timeline&amp;at={{ r.index }}&amp;q={{ tl_q | urlencode }}" title="this row in the whole timeline">{{ r.index }}</a>
+    {%- else %}{{ r.index }}{% endif %}</td>
+  <td class="mono nowrap dim">{{ report.t(r.ts) | secs }}</td>
+  <td class="nowrap">{% if r.seqid is none and r.pid is none and r.plugin == 'rootkitmon' %}<span class="proc dim">kernel</span>{% else %}{{ proc(pid=r.pid, seqid=r.seqid) }}{% endif %}</td>
+  <td><span class="chip" data-kind="src">{{ r.plugin or 'other' }}</span></td>
+  <td class="nowrap"><span class="tl-name">{{ r.name }}</span>{% if r.category %} <span class="dim small">{{ r.category }}</span>{% endif %}</td>
+  <td class="mono tl-text" title="{{ r.text | printable }}">{{ r.text | printable }}</td>
+  <td class="nowrap">
+    {%- if r.status is false %}<span class="fail" title="failed">✗</span> {% endif %}
+    {%- if opens %}{{ toggle(id, '▾', '/ui/jobs/' ~ job.id ~ '/call?seqid=' ~ r.seqid ~ '&cid=' ~ r.cid) }}{% elif inline and r.data %}{{ toggle(id, '▾') }}{% endif %}</td>
 </tr>
-{% call xrow(id, 5, e.event ~ ' ' ~ e.object) %}
+{% if opens %}{{ xrow(id, 7, r.name) }}
+{% elif inline and r.data %}{% call xrow(id, 7, r.name ~ ' ' ~ r.category) %}
 <dl class="kv">
-  {% for k, v in e.data | dictsort %}<dt>{{ k }}</dt><dd class="mono break">{{ v | printable(false) }}</dd>{% endfor %}
-  <dt>process</dt><dd>{{ proc(pid=e.pid, seqid=e.seqid) }}</dd>
+  {% for k, v in r.data | dictsort %}<dt>{{ k }}</dt><dd class="mono break">{{ v | printable(false) }}</dd>{% endfor %}
+  <dt>process</dt><dd>{{ proc(pid=r.pid, seqid=r.seqid) }}</dd>
 </dl>
-{% endcall %}
+{% endcall %}{% endif %}
 {% endfor %}
-{% if next_offset %}
-{% set url = '/ui/jobs/' ~ job.id ~ '/timeline?part=rows&offset=' ~ next_offset ~ ('&' ~ (filters | urlencode) if filters else '') %}
-<tr class="more-row"><td colspan="5"><a class="more" href="{{ url }}" hx-get="{{ url }}" hx-target="closest tr" hx-swap="outerHTML">Show more <span class="dim">· {{ '{:,}'.format(matching - next_offset) }} left</span></a></td></tr>
+{% if later is not none %}
+{% set url = base ~ '?part=rows&start=' ~ later ~ keep %}
+<tr class="more-row tl-edge" data-edge="down"><td colspan="7">
+  <a class="more" href="{{ url }}" hx-get="{{ url }}" hx-trigger="intersect once root:(closest .window), click" hx-target="closest tr" hx-swap="outerHTML">
+    {%- if mode == 'matches' and not rows %}Searching on <span class="dim">· from #{{ '{:,}'.format(later) }} of {{ '{:,}'.format(tl.count) }}</span>
+    {%- else %}Later rows <span class="dim">· from #{{ '{:,}'.format(later) }} of {{ '{:,}'.format(tl.count) }}</span>{% endif %}</a></td></tr>
 {% endif %}

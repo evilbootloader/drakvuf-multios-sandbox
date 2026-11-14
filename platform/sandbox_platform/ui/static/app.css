@@ -33,6 +33,8 @@
     --red:       #e5484d;
     --red-dim:   #7d2226;
     --red-wash:  #1e0f11;
+    --hit:       #5c4b00;
+    --hit-fg:    #fff3b0;
 
     --shadow:    0 1px 0 rgb(0 0 0 / 0.35), 0 10px 28px -14px rgb(0 0 0 / 0.75);
 
@@ -72,6 +74,8 @@
         --red:       #c62a2f;
         --red-dim:   #f0b4b6;
         --red-wash:  #fdf0f0;
+    --hit:       #fff176;
+    --hit-fg:    #3a3000;
         --shadow:    0 1px 0 rgb(0 0 0 / 0.04), 0 10px 24px -14px rgb(0 0 0 / 0.25);
     }
 }
@@ -90,6 +94,8 @@
     --red:       #c62a2f;
     --red-dim:   #f0b4b6;
     --red-wash:  #fdf0f0;
+    --hit:       #fff176;
+    --hit-fg:    #3a3000;
     --shadow:    0 1px 0 rgb(0 0 0 / 0.04), 0 10px 24px -14px rgb(0 0 0 / 0.25);
 }
 
@@ -808,6 +814,24 @@ a.proc:hover { border-color: var(--fg-faint); }
 }
 .sev[data-level="medium"] { color: var(--fg); border-color: var(--fg-faint); }
 .sev[data-level="high"] { color: var(--red); border-color: var(--red-dim); background: var(--red-wash); }
+
+/* CAPE's malscore: the number, "/10", and calc_scoring's word. Red only for
+ * Malicious, as only high severity is red. */
+.score { display: inline-flex; align-items: baseline; gap: 0.1rem; font-family: var(--mono); white-space: nowrap; }
+.score b { font-size: 1.05rem; font-weight: 600; color: var(--fg); }
+.score .of { color: var(--fg-faint); font-size: 0.8rem; }
+.score .word { margin-left: 0.45rem; padding: 0 0.45rem; border: 1px solid var(--line); border-radius: var(--radius);
+               font: 500 0.72rem/1.6 var(--sans); text-transform: uppercase; letter-spacing: 0.04em; color: var(--fg-muted); }
+.score[data-status="Malicious"] b { color: var(--red); }
+.score[data-status="Malicious"] .word { color: var(--red); border-color: var(--red-dim); background: var(--red-wash); }
+.score[data-status="Suspicious"] .word { color: var(--fg); border-color: var(--fg-faint); }
+.scorecard { display: flex; align-items: center; gap: 1rem; flex-wrap: wrap; margin: 0 0 0.4rem; }
+.scorecard .score b { font-size: 1.6rem; }
+.scorecard .meter { display: inline-block; width: min(18rem, 100%); height: 0.45rem; border-radius: 2px;
+                    background: var(--bg-inset); overflow: hidden; }
+.scorecard .meter i { display: block; height: 100%; background: var(--fg-faint); }
+.scorecard[data-status="Suspicious"] .meter i { background: var(--fg); }
+.scorecard[data-status="Malicious"] .meter i { background: var(--red); }
 .sig-name { font: 600 0.88rem var(--mono); }
 .sig-desc { color: var(--fg-muted); font-size: 0.85rem; margin-top: 0.1rem; }
 
@@ -830,6 +854,58 @@ table.grid.list td { padding: 0.35rem 0.75rem; }
 .xpanel table.grid tr:hover > td { background: transparent; }
 tr[data-alert] > td:first-child { box-shadow: inset 2px 0 0 var(--red); }
 tr[data-level="high"] > td:first-child { box-shadow: inset 2px 0 0 var(--red); }
+
+/* A window: every long list of the report tabs -- the timeline, calls,
+ * summary lists, static tables -- is 20 rows tall and scrolls, loading the
+ * next 20 as its last row comes into view (operator, 2026-11-14). Observed
+ * against the window itself (`root:` on the edge's trigger), not the page: a
+ * window taller than what is left of the screen would otherwise never load.
+ * Not on a table whose rows open large panels (Network, Signatures), where
+ * the panel would be clipped inside a second scroll. The head stays put; a
+ * list's rows set --row-h when taller than one line. Scroll chains to the
+ * page at either end, so a window is never a trap. */
+.window {
+    --row-h: 2.2rem;
+    max-height: min(75vh, calc(20 * var(--row-h) + 2.6rem));
+    overflow-y: auto;
+}
+.window thead th { position: sticky; top: 0; z-index: 1; box-shadow: inset 0 -1px 0 var(--line-soft); }
+.window.calls-window { --row-h: 3.7rem; }
+
+/* The timeline: one line a row, the detail cut with an ellipsis (whole on
+ * hover, and whole in a row the search marked). */
+.tl-controls { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 0.5rem 1.75rem; }
+.tl-controls .callfilter { margin: 0 0 0.6rem; }
+.tl-goto input { width: 8rem; }
+.tl-search input[type="search"] { width: min(24rem, 70vw); }
+.tl-plugins { display: flex; margin: -0.25rem 0 0.9rem; }
+.tl-table td { white-space: nowrap; }
+.tl-table td.tl-text {
+    max-width: 0; width: 100%;
+    overflow: hidden; text-overflow: ellipsis;
+    font-size: 0.8rem; color: var(--fg-muted);
+}
+.tl-table tr[data-hit] td.tl-text, .tl-table tr[data-target] td.tl-text { white-space: normal; overflow-wrap: anywhere; }
+.tl-table td.num a { color: inherit; }
+.tl-name { font-family: var(--mono); font-size: 0.82rem; }
+.chip[data-kind="src"] { font-size: 0.7rem; }
+mark { background: var(--hit); color: var(--hit-fg); border-radius: 2px; padding: 0 1px; }
+.tl-table tr[data-hit] > td { background: color-mix(in srgb, var(--hit) 22%, transparent); }
+.tl-table tr[data-target] > td { background: color-mix(in srgb, var(--hit) 45%, transparent); }
+.tl-table tr[data-target] > td:first-child { box-shadow: inset 3px 0 0 var(--hit); }
+.tl-status { min-height: 1.4rem; margin: 0 0 0.5rem; font-size: 0.85rem; color: var(--fg-muted); }
+.tl-status .ghost { margin-left: 0.4rem; }
+.tl-progress { display: inline-block; width: 8rem; height: 0.35rem; margin: 0 0.4rem; vertical-align: middle;
+               border-radius: 2px; background: var(--bg-inset); overflow: hidden; }
+.tl-progress i { display: block; height: 100%; background: var(--hit); }
+.tl-status[data-searching] .ghost { display: inline-block; }
+.tl-matches { margin-top: 0.75rem; }
+.tl-matches .sub { margin: 0 0 0.4rem; }
+.tl-lazy { margin-top: 0.75rem; color: var(--fg-faint); font-size: 0.85rem; }
+
+/* Static: a text sample's opening, as text. */
+pre.source { margin: 0; padding: 0.75rem 0.9rem; background: var(--bg-inset); border: 1px solid var(--line);
+             border-radius: var(--radius-lg); font: 0.8rem/1.45 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; }
 
 /* Summary, split by process: a process's head, then its lists. */
 .proc-head h2 { flex-wrap: wrap; }
@@ -1063,6 +1139,12 @@ pre.cmdline {
 .catlegend a:hover { color: var(--fg); }
 .catlegend i { width: 0.65rem; height: 0.65rem; border-radius: 2px; }
 .catlegend b { color: var(--fg); font: 500 0.8rem var(--mono); }
+/* The chosen category: its segment outlined, its legend entry underlined,
+ * the others dimmed -- the bar says what the table below is showing. */
+.catbar .seg[aria-current] { box-shadow: inset 0 0 0 2px var(--red); }
+.catlegend[data-filtered] a { opacity: 0.55; }
+.catlegend[data-filtered] a[aria-current] { opacity: 1; color: var(--fg); text-decoration: underline; text-underline-offset: 3px; }
+.calls { scroll-margin-top: 0.75rem; }
 
 /* The calls filter and the timeline's: one row of labelled controls. */
 .callfilter {
@@ -1178,6 +1260,16 @@ summary:hover::before { border-color: var(--fg-muted); }
     white-space: nowrap;
 }
 .kind b { color: var(--fg); font-weight: 600; margin-left: 0.2rem; }
+
+/* Summary: one closed group per process (operator, 2026-11-14). */
+details.proc-group > summary .pname { font-family: var(--mono); font-weight: 600; unicode-bidi: isolate; }
+details.proc-group > summary .pname.root { color: var(--red); }
+details.proc-group > summary .pid { font: 0.8rem var(--mono); color: var(--fg-faint); }
+.proc-body { padding: 0.5rem 0.9rem 0.75rem 2.05rem; }
+.proc-body td:first-child, .proc-body th:first-child { padding-left: 0.6rem; }
+.proc-line { display: flex; gap: 0.75rem; align-items: baseline; margin: 0 0 0.5rem; font-size: 0.8rem; }
+.proc-line .jump { margin-left: auto; color: var(--fg-faint); text-decoration: none; white-space: nowrap; }
+.proc-line .jump:hover { color: var(--fg); }
 
 /* --- page furniture ---------------------------------------------------------- */
 

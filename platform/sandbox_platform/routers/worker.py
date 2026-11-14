@@ -32,7 +32,7 @@ from .. import objects
 from ..auth import LeasedJob, WorkerAuth, authenticated_worker
 from ..config import settings
 from ..db import connection
-from ..enums import TERMINAL_STATES, EgressMode, JobState, TargetOs
+from ..enums import TERMINAL_STATES, EgressMode, JobState, MalStatus, TargetOs
 
 router = APIRouter(
     prefix="/api/v1/worker",
@@ -238,11 +238,24 @@ class HeartbeatResponse(BaseModel):
     console_requested: bool = False
 
 
+class Score(BaseModel):
+    """CAPE's malscore and its word, as sandboxd read them out of the run's
+    `cape_results.json` (sandboxd/postprocessing/report_facts.py). The range
+    is calc_scoring's own clamp; 0014 checks both again."""
+    malscore: float = Field(ge=0, le=10, allow_inf_nan=False)
+    malstatus: MalStatus | None = None
+
+
 class CompleteRequest(BaseModel):
     # Was `dict`, and was the one worker-supplied payload with no shape at all
     # while every other one -- names, sizes, filenames -- was carefully bounded.
     # See sandbox_platform/manifest.py for what that cost.
     manifest: manifest_schema.Manifest
+    # The run's score, for the jobs row (0014, 2026-11-14). Optional, and None
+    # is honest rather than a default answering for something: a run whose
+    # postprocessing wrote no report has no score, and a sandboxd from before
+    # this field sends none -- the row stays NULL until backfill_scores.py.
+    score: Score | None = None
 
 
 # --- registration and recovery --------------------------------------------
@@ -686,10 +699,14 @@ def complete(job: LeasedJob, req: CompleteRequest) -> None:
         cur.execute(
             """
             UPDATE jobs
-               SET state = %s, manifest = %s, lease_expires_at = NULL
+               SET state = %s, manifest = %s, lease_expires_at = NULL,
+                   malscore = %s, malstatus = %s
              WHERE id = %s
             """,
-            (JobState.COMPLETED.value, req.manifest.model_dump_json(), job["id"]),
+            (JobState.COMPLETED.value, req.manifest.model_dump_json(),
+             req.score.malscore if req.score else None,
+             req.score.malstatus.value if req.score and req.score.malstatus else None,
+             job["id"]),
         )
 
         # The successful exit, and the one `report_state` never sees: a

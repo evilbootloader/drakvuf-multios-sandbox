@@ -1,19 +1,23 @@
 """The password-protected ZIP wrapper (`packaging.py`).
 
-Every test here decrypts with the STDLIB `zipfile`, deliberately. The module
-writes an archive format by hand, and the only claim worth making about it is
-that a reader nobody on this project wrote can open it -- an assertion against
-our own parser would pass just as happily on a format only we understand.
+Every archive here is read back by a reader this project did not write:
+stream-unzip (the writer's author's, but a different code path), and 7-Zip
+where it is installed -- the tool an analyst opens these with. The standard
+library's `zipfile` reads ZipCrypto and not AES, which these archives are
+since 2026-11-14; it is used only to read the directory, which is not
+encrypted.
 """
 
 from __future__ import annotations
 
 import io
 import os
-import struct
+import shutil
+import subprocess
 import zipfile
 
 import pytest
+from stream_unzip import stream_unzip
 
 from sandbox_platform import packaging
 
@@ -32,50 +36,59 @@ def build(files: dict[str, bytes], chunk: int = 8192) -> bytes:
     )
 
 
-def opened(blob: bytes, password: bytes = packaging.PASSWORD) -> zipfile.ZipFile:
-    archive = zipfile.ZipFile(io.BytesIO(blob))
-    archive.setpassword(password)
-    return archive
+def opened(blob: bytes, password: str = packaging.PASSWORD) -> dict[str, bytes]:
+    """Every member of the archive, decrypted and inflated, by name."""
+    return {name.decode(): b"".join(body)
+            for name, _size, body in stream_unzip([blob], password=password)}
 
 
-# --- the format ------------------------------------------------------------
+FILES = {
+    "trace.log": b"syscall openat\n" * 5000,
+    "memdump/0x1000.dmp": os.urandom(70000),
+    "extracted/evil.exe": b"MZ" + os.urandom(4096),
+    "capture.pcap": os.urandom(3),
+}
 
-def test_a_written_archive_round_trips_through_the_stdlib():
+
+def test_a_written_archive_round_trips():
     """The whole point: a reader we did not write opens it and gets the bytes
     back exactly."""
-    files = {
-        "trace.log": b"syscall openat\n" * 5000,
-        "memdump/0x1000.dmp": os.urandom(70000),
-        "extracted/evil.exe": b"MZ" + os.urandom(4096),
-        "capture.pcap": os.urandom(3),
-    }
+    assert opened(build(FILES)) == FILES
 
-    archive = opened(build(files))
 
-    assert archive.testzip() is None
-    assert set(archive.namelist()) == set(files)
-    for name, expected in files.items():
-        assert archive.read(name) == expected
+@pytest.mark.skipif(shutil.which("7z") is None, reason="7-Zip is not installed")
+def test_7zip_opens_it_with_the_password(tmp_path):
+    """What an analyst runs. An AES archive does not open in Windows
+    Explorer, macOS Archive Utility or Info-ZIP unzip; 7-Zip is the tool the
+    Artifacts tab names."""
+    archive = tmp_path / "a.zip"
+    archive.write_bytes(build(FILES))
+    test = subprocess.run(["7z", "t", f"-p{packaging.PASSWORD}", str(archive)],
+                          capture_output=True, text=True, timeout=60)
+    assert test.returncode == 0 and "Everything is Ok" in test.stdout, test.stdout + test.stderr
+    out = tmp_path / "out"
+    subprocess.run(["7z", "x", f"-p{packaging.PASSWORD}", f"-o{out}", str(archive)],
+                   capture_output=True, check=True, timeout=60)
+    for name, blob in FILES.items():
+        assert (out / name).read_bytes() == blob
 
 
 def test_an_empty_artifact_survives():
     """A zero-byte file is a legitimate result -- `trace.log` at 0 bytes is
     exactly what the trace-note path records."""
-    archive = opened(build({"trace.log": b""}))
-
-    assert archive.read("trace.log") == b""
+    assert opened(build({"trace.log": b""})) == {"trace.log": b""}
 
 
 def test_the_archive_is_actually_encrypted():
-    """Without the password the stdlib refuses, which is the property that
-    stops a browser, an OS or a scanner acting on the contents."""
+    """AES-256 on every member, and a wrong password reads nothing: the
+    property that stops a browser, an OS or a scanner acting on the
+    contents."""
     blob = build({"extracted/evil.exe": b"MZ" + b"\x90" * 1024})
+    info = zipfile.ZipFile(io.BytesIO(blob)).getinfo("extracted/evil.exe")
+    assert info.flag_bits & 0x1 and info.compress_type == 99  # AE-x
 
-    with pytest.raises(RuntimeError, match="password required"):
-        zipfile.ZipFile(io.BytesIO(blob)).read("extracted/evil.exe")
-
-    with pytest.raises(RuntimeError):
-        opened(blob, b"wrong").read("extracted/evil.exe")
+    with pytest.raises(Exception):
+        opened(blob, "wrong")
 
 
 def test_the_executable_bytes_do_not_appear_in_the_stream():
@@ -95,164 +108,43 @@ def test_hostile_filenames_are_carried_verbatim():
     Nothing here re-parses a name, so nothing here can be confused by one."""
     name = 'weird; $(id) `x` "q".txt'
 
-    archive = opened(build({name: b"edge case"}))
-
-    assert archive.read(name) == b"edge case"
+    assert opened(build({name: b"edge case"})) == {name: b"edge case"}
 
 
 def test_names_are_written_as_utf8():
-    archive = opened(build({"报告.log": b"ok"}))
+    blob = build({"报告.log": b"ok"})
 
-    assert archive.read("报告.log") == b"ok"
-    assert archive.getinfo("报告.log").flag_bits & 0x800
-
-
-# --- the central directory -------------------------------------------------
-#
-# An archive only reaches a >4 GiB entry offset by actually containing 4 GiB,
-# which no test is going to stream. `_central_record` is pure and takes the
-# offset as an argument for exactly that reason, so the escape path is reachable
-# with a synthetic number. What these cannot cover is a real reader opening a
-# real oversized archive; the round-trip tests above do that for the common path.
-
-_CENTRAL_FIXED = 46  # bytes before the name: the record minus its variable tail
+    assert opened(blob) == {"报告.log": b"ok"}
+    assert zipfile.ZipFile(io.BytesIO(blob)).getinfo("报告.log").flag_bits & 0x800
 
 
-def decoded_central(offset: int, name: str = "memdump/0x1000.dmp") -> dict:
-    """`_central_record` unpacked back into the fields this file asserts on."""
-    raw = packaging._central_record(
-        name, 0x0809, 0x4321, 0x5678, 0xDEADBEEF, 1234, 5678, offset)
+def test_nothing_is_read_before_it_is_asked_for():
+    """An abandoned download stops pulling from the store: the writer takes
+    an artifact's chunks only as the response asks for the archive's."""
+    taken = []
 
-    (sig, _made_by, needed, _flags, _method, _time, _date, _crc,
-     _compressed, _uncompressed, name_len, extra_len, _comment_len, _disk,
-     _internal, _external, stored_offset) = struct.unpack(
-        "<IHHHHHHIIIHHHHHII", raw[:_CENTRAL_FIXED])
+    def chunks(name):
+        for i in range(4):
+            taken.append((name, i))
+            yield os.urandom(1 << 16)
 
-    assert sig == packaging._SIG_CENTRAL
-    return {
-        "version_needed": needed,
-        "declared_extra_len": extra_len,
-        "stored_offset": stored_offset,
-        "name": raw[_CENTRAL_FIXED:_CENTRAL_FIXED + name_len],
-        "extra": raw[_CENTRAL_FIXED + name_len:],
-    }
+    archive = packaging.stream([(n, chunks(n)) for n in ("a", "b")])
+    assert taken == []
+    next(iter(archive))
+    assert ("b", 0) not in taken
 
 
-def test_an_ordinary_offset_carries_no_extra_field():
-    """The common case, pinned so the Zip64 path cannot regress it: a normal
-    archive is byte-for-byte what it was before any of this existed."""
-    record = decoded_central(0x1000)
-
-    assert record["stored_offset"] == 0x1000
-    assert record["version_needed"] == 20
-    assert record["declared_extra_len"] == 0
-    assert record["extra"] == b""
-    assert record["name"] == b"memdump/0x1000.dmp"
-
-
-def test_an_offset_past_4_gib_escapes_into_a_zip64_extra_field():
-    """The bug this replaces wrote the 0xFFFFFFFF escape with a hard-coded
-    extra-field length of 0, so a reader found the marker with nothing to
-    resolve it against and the whole central directory was unreadable."""
-    offset = 0x1_0000_0000 + 4242  # 4 GiB and change, never actually streamed
-
-    record = decoded_central(offset)
-
-    # The 32-bit field holds the escape, not a truncated offset.
-    assert record["stored_offset"] == 0xFFFFFFFF
-
-    # The declared length matches the bytes actually appended. This is the
-    # assertion the old code failed.
-    assert record["declared_extra_len"] == len(record["extra"])
-    assert record["declared_extra_len"] != 0
-
-    header_id, payload_len = struct.unpack("<HH", record["extra"][:4])
-    assert header_id == 0x0001
-    assert payload_len == len(record["extra"]) - 4
-
-    # Payload is the offset ALONE -- `_MAX_ENTRY` refuses any entry whose sizes
-    # would need escaping, so the two size fields that would otherwise precede
-    # it in the fixed order are absent.
-    assert payload_len == 8
-    assert struct.unpack("<Q", record["extra"][4:])[0] == offset
-
-    # A reader that cannot do Zip64 must be told to refuse rather than misparse.
-    assert record["version_needed"] == 45
-
-
-def test_the_escape_value_itself_is_escaped():
-    """0xFFFFFFFF is the marker, so an offset of exactly that cannot be written
-    literally -- a reader would look for the extra field either way."""
-    record = decoded_central(0xFFFFFFFF)
-
-    assert record["stored_offset"] == 0xFFFFFFFF
-    assert record["version_needed"] == 45
-    assert struct.unpack("<Q", record["extra"][4:])[0] == 0xFFFFFFFF
-
-
-@pytest.mark.parametrize("count, offset, size", [
-    (packaging._U16, 0x1000, 0x1000),          # exactly 65,535 entries
-    (2, packaging._U32, 0x1000),               # directory at exactly 4 GiB
-    (2, 0x1000, packaging._U32),               # directory exactly 4 GiB long
-])
-def test_a_value_sitting_on_its_escape_marker_forces_eocd64(count, offset, size):
-    """The archive-level twin of `test_the_escape_value_itself_is_escaped`.
-
-    The plain EOCD writes each of these through `min(value, escape)`, so a value
-    EQUAL to its marker is written as the marker. `>` would emit no EOCD64
-    record behind it and the directory would be unreadable -- the same defect
-    the per-entry extra field fixes, one level up.
-
-    `count` is the arm with no backstop: a 4 GiB directory implies some entry
-    was past 4 GiB and `forced` covers it, but 65,535 small entries reach the
-    count with every offset still inside 32 bits.
-    """
-    assert packaging._needs_eocd64(count, offset, size, forced=False)
-
-
-def test_ordinary_totals_need_no_eocd64():
-    """One below each marker, so the boundary is pinned from both sides."""
-    assert not packaging._needs_eocd64(
-        packaging._U16 - 1, packaging._U32 - 1, packaging._U32 - 1,
-        forced=False)
-
-
-def test_an_escaped_entry_forces_eocd64_on_its_own():
-    """`forced` is the entry-level decision arriving here, and is not a
-    threshold: an entry that escaped its offset needs these records too."""
-    assert packaging._needs_eocd64(1, 0, 0, forced=True)
-
-
-def test_real_archives_still_take_the_ordinary_path():
-    """Nothing a normal download produces should be emitting Zip64 per entry."""
-    blob = build({"trace.log": b"syscall openat\n" * 1000,
-                  "capture.pcap": os.urandom(2048)})
-
-    for info in opened(blob).infolist():
-        assert info.header_offset < 0xFFFFFFFF
-        assert info.extra == b""
-        assert info.extract_version == 20
-
-
-# --- the guard -------------------------------------------------------------
-
-def test_an_entry_too_large_for_one_pass_is_refused(monkeypatch):
-    """Zip64 in a local header needs the compressed size before the bytes are
-    written, which a single pass cannot know. `max_artifact_bytes` defaults to
-    exactly `_MAX_ENTRY` (the test below), so this guards a reconfigured
-    deployment rather than a normal run."""
-    monkeypatch.setattr(packaging, "_MAX_ENTRY", 16)
-
-    with pytest.raises(packaging.EntryTooLarge, match="single pass"):
-        build({"huge.dmp": b"x" * 64}, chunk=8)
-
-
-def test_the_artifact_cap_never_exceeds_what_one_pass_can_serve():
-    """`config.max_artifact_bytes` is bound into every upload ticket. An
-    artifact the store accepts but this module cannot wrap is a 500 at
-    download time, after the analysis is over and those bytes are the only
-    copy -- so the two values are pinned together here (2026-11-03, when the
-    cap went from 2 GiB to the zip's own ceiling)."""
-    from sandbox_platform.config import settings
-
-    assert settings.max_artifact_bytes <= packaging._MAX_ENTRY
+def test_an_entry_past_four_gib_is_not_refused_up_front():
+    """Every entry is Zip64, so no artifact size is refused (the hand-written
+    writer stopped at 4 GiB per entry). Shown on the header: a member's
+    local header carries the Zip64 extra field before a byte is read."""
+    import struct
+    head = b"".join(packaging.stream([("big.dmp", iter([b"x"]))]))
+    assert head[:4] == b"PK\x03\x04"
+    name_len, extra_len = struct.unpack("<HH", head[26:30])
+    extra, ids = head[30 + name_len:30 + name_len + extra_len], []
+    while extra:
+        field, size = struct.unpack("<HH", extra[:4])
+        ids.append(field)
+        extra = extra[4 + size:]
+    assert 0x0001 in ids  # the Zip64 extended information field

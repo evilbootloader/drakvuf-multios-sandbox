@@ -465,7 +465,8 @@ def test_a_gzip_process_dump_is_scanned_inflated_and_left_as_it_was(tmp_path):
     assert broken["yara"] == [] and "scan_error" in broken
     # nothing inflated is left in the job
     after = sorted(p.name for p in job.rglob("*"))
-    assert [n for n in after if n not in before] == ["calls.jsonl.gz", "calls_index.json", "cape_results.json"]
+    assert [n for n in after if n not in before] == ["calls.jsonl.gz", "calls_index.json", "cape_results.json",
+                                                    "timeline.jsonl.gz", "timeline_index.json"]
 
 
 # --- capa is fed a bounded number of the same call, and says how it ended -----------------

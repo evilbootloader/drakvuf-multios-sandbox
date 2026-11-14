@@ -163,3 +163,16 @@ class Visibility(StrEnum):
 
     PRIVATE = "private"
     PUBLIC = "public"
+
+
+class MalStatus(StrEnum):
+    """What CAPE's calc_scoring calls a run (sandboxd cape_plugin/scoring.py,
+    vendored), beside its malscore. Authority: 0014, whose CHECK lists the
+    same five; the report page and the history list colour by the word, so a
+    value outside the set reads as no verdict at all."""
+
+    MALICIOUS = "Malicious"
+    SUSPICIOUS = "Suspicious"
+    CLEAN = "Clean"
+    UNDETECTED = "Undetected"
+    FAILED = "Failed"

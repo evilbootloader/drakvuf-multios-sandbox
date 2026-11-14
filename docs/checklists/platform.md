@@ -85,10 +85,35 @@
   `stages.Analysis._remove_results`, `SANDBOXD_KEEP_RESULTS`. A completed
   job's directory is gone once `/complete` is accepted; a failed one is kept.
   Needs `verify-launch-options.md` Part G on Dom0.
+- [ ] **Report tabs, operator's list of 2026-11-14** — Timeline of every
+  plugin's records with row numbers, search that moves and marks
+  (`sandboxd/postprocessing/plugins/cape_plugin/timeline.py`,
+  `platform/sandbox_platform/timeline.py`); per-detection timelines on Network;
+  the score; Summary's processes closed until clicked; Dropped naming its
+  member of `extracted.zip`; version information once per value; ELF and
+  any-file static facts (`cape_plugin/static.py`); 20-row scrolling windows;
+  AES-256 downloads by stream-zip (`packaging.py`). Implemented and tested in
+  the development container, the timeline writer against the calls logs of two
+  real Windows runs (al-khaser: 7.8 M rows in 35 s, 97 MiB). Every box needs
+  the deployment:
+  - [ ] The platform DomU has the new dependencies (`stream-zip`,
+        `pycryptodome`, `stream-unzip`; `docs/DEVELOPING.md` 5.2).
+  - [ ] A run postprocessed after the sandboxd deploy uploads
+        `timeline.jsonl.gz` and `timeline_index.json` — **Ubuntu**,
+        **Android**, **Windows** — and its Timeline tab searches it.
+  - [ ] Postprocessing time added on a large Dom0 run, against the 35 s
+        measured here.
+  - [ ] An ELF sample's Static tab (Ubuntu or Android).
+  - [ ] An artifact download opened with 7-Zip where analysts work.
+  - [ ] **The score on the jobs row** (0014): migration applied, then
+        `cd platform && .venv/bin/python backfill_scores.py --dry-run` and
+        without `--dry-run`, its counts recorded; a run completed after the
+        sandboxd deploy shows its score in the history list with no backfill.
 - [ ] Reuse `[preset.x]`-style per-OS configuration presets.
 
 **Not yet evidenced on the deployment:** artifact ZIP downloads have been
-tested in the development container only.
+tested in the development container only — and since 2026-11-14 they are
+AES-256, which Windows Explorer, macOS Archive Utility and `unzip` cannot open.
 
 # M8 — Public hardening + legal gate
 

@@ -42,7 +42,7 @@ from uuid import UUID, uuid4
 import pytest
 from starlette.websockets import WebSocketDisconnect
 
-from conftest import enqueue, owner_id
+from conftest import Unzipped, enqueue, owner_id
 from sandbox_platform import auth, objects
 
 A = "analyst-a@example.test"
@@ -266,8 +266,7 @@ def test_a_can_still_download_their_own(client, conn, put_object, as_a):
     r = client.get(f"/api/v1/jobs/{job_id}/artifacts.zip", headers=as_a)
 
     assert r.status_code == 200
-    archive = zipfile.ZipFile(io.BytesIO(r.content))
-    archive.setpassword(b"infected")
+    archive = Unzipped(r.content)
     assert archive.read("extracted/evil.exe") == payload
 
 
@@ -296,8 +295,7 @@ def test_a_public_job_is_readable_by_anyone_in_full(client, conn, put_object,
     r = client.get(f"/api/v1/jobs/{job_id}/artifact.zip",
                    params={"name": "extracted/evil.exe"}, headers=as_b)
     assert r.status_code == 200
-    archive = zipfile.ZipFile(io.BytesIO(r.content))
-    archive.setpassword(b"infected")
+    archive = Unzipped(r.content)
     assert archive.read("extracted/evil.exe") == payload
 
 
@@ -491,8 +489,7 @@ def test_a_can_publish_their_own_and_b_then_reads_it_in_full(
     r = client.get(f"/api/v1/jobs/{job_id}/artifact.zip",
                    params={"name": "extracted/evil.exe"}, headers=as_b)
     assert r.status_code == 200
-    archive = zipfile.ZipFile(io.BytesIO(r.content))
-    archive.setpassword(b"infected")
+    archive = Unzipped(r.content)
     assert archive.read("extracted/evil.exe") == payload
 
 
@@ -832,8 +829,7 @@ def test_a_legacy_row_still_resolves_to_the_flat_layout(conn, put_object,
     r = client.get(f"/api/v1/jobs/{job_id}/artifact.zip",
                    params={"name": "trace.log"}, headers=as_a)
     assert r.status_code == 200
-    archive = zipfile.ZipFile(io.BytesIO(r.content))
-    archive.setpassword(b"infected")
+    archive = Unzipped(r.content)
     assert archive.read("trace.log") == payload
 
 
@@ -869,8 +865,7 @@ def test_a_published_job_under_a_prefix_is_readable_by_b_in_full(
     r = client.get(f"/api/v1/jobs/{job_id}/artifact.zip",
                    params={"name": "extracted/evil.exe"}, headers=as_b)
     assert r.status_code == 200
-    archive = zipfile.ZipFile(io.BytesIO(r.content))
-    archive.setpassword(b"infected")
+    archive = Unzipped(r.content)
     assert archive.read("extracted/evil.exe") == payload
 
     # And the whole-run download, which builds the key by a different route.

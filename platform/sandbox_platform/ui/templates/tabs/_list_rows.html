@@ -7,5 +7,5 @@
 {% endfor %}
 {% if next_offset %}
 {% set url = '/ui/jobs/' ~ job.id ~ '/list/' ~ name ~ '?offset=' ~ next_offset ~ ('&seqid=' ~ seqid if seqid is not none else '') %}
-<tr class="more-row"><td><a class="more" href="{{ url }}" hx-get="{{ url }}" hx-target="closest tr" hx-swap="outerHTML">Show more <span class="dim">· {{ '{:,}'.format(total - next_offset) }} left</span></a></td></tr>
+<tr class="more-row"><td><a class="more" href="{{ url }}" hx-get="{{ url }}" hx-trigger="intersect once root:(closest .window), click" hx-target="closest tr" hx-swap="outerHTML">Show more <span class="dim">· {{ '{:,}'.format(total - next_offset) }} left</span></a></td></tr>
 {% endif %}

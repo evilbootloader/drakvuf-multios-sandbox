@@ -40,16 +40,21 @@
   so the claim is the behaviour.
 
   Deliberately does NOT say the archive keeps anything secret. `infected` is a
-  published convention, ZipCrypto is weak, and anyone who can open this page
-  can open the file. What it buys is that the bytes in transit are not the
-  bytes of an executable.
+  published convention and anyone who can open this page can open the file.
+  What it buys is that the bytes in transit are not the bytes of an
+  executable.
+
+  Names the tools that open it: AES-256 since 2026-11-14 (packaging.py), which
+  Windows Explorer, macOS Archive Utility and `unzip` do not read -- a
+  download that will not open with no word why reads as a broken archive.
 #}
 <p class="note danger">
-  Artifacts download as ZIP with the password <code>infected</code>. That is the
-  convention every analyst and tool expects, and it stops the browser, the OS
-  and any scanner in between from executing or quarantining the file
-  mid-download. It is packaging, not protection — anything here may be live, so
-  open it in an isolated environment.
+  Artifacts download as AES-256 ZIP with the password <code>infected</code>:
+  open them with 7-Zip, WinRAR, The Unarchiver or <code>7z x</code> — Windows
+  Explorer, macOS Archive Utility and <code>unzip</code> cannot. The wrapping
+  stops the browser, the OS and any scanner in between from executing or
+  quarantining the file mid-download. It is packaging, not protection —
+  anything here may be live, so open it in an isolated environment.
 </p>
 <p>
   <a class="button" href="/api/v1/jobs/{{ job.id }}/artifacts.zip" rel="noopener nofollow">

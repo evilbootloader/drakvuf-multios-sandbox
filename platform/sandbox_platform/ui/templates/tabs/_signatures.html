@@ -10,7 +10,7 @@
 
 <section class="section">
 {{ head('Signatures', report.signatures | length,
-        'CAPE community signatures over the behaviour. Severity is each signature\'s own; there is no total score.') }}
+        'CAPE community signatures over the behaviour. Severity is each signature\'s own; the run\'s score, on Overview, is computed from them.') }}
 {% if report.signatures %}
 <div class="table-wrap">
 <table class="grid sigs">

@@ -1,0 +1,19 @@
+{#
+  One Network row's own timeline (operator, 2026-11-14), opened in place
+  under it: the rows of the whole timeline naming its address or name -- the
+  resolve, the connect, what was sent -- in order, 20 at a time, each row's
+  number its place in the whole timeline.
+#}
+<div class="tl-matches" data-q="{{ tl_q }}">
+<p class="sub">Timeline rows naming <span class="mono">{{ tl_q }}</span> ·
+  <a href="/ui/jobs/{{ job.id }}?tab=timeline{% if rows %}&amp;at={{ rows[0].index }}{% endif %}&amp;q={{ tl_q | urlencode }}">in the whole timeline ↗</a></p>
+<div class="table-wrap window tl-window">
+<table class="grid events tl-table compact">
+  <thead><tr><th class="num">#</th><th>At</th><th>Process</th><th>Source</th><th>Event</th><th class="fill">Detail</th><th></th></tr></thead>
+  <tbody>
+  {% include "tabs/_timeline_rows.html" %}
+  {% if not rows and later is none %}<tr><td colspan="7"><p class="none">No row of the timeline names it.</p></td></tr>{% endif %}
+  </tbody>
+</table>
+</div>
+</div>

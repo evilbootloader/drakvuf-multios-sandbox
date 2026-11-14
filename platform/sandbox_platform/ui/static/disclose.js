@@ -36,7 +36,8 @@
 
   // Open every closed <details> between the fragment's target and the page,
   // then bring the target into view: the browser scrolled to it, if at all,
-  // while it was still hidden.
+  // while it was still hidden. A target that IS a <details> (Summary's
+  // `#summary-N` process groups, closed until clicked) opens too.
   function reveal() {
     var id;
     try { id = decodeURIComponent(window.location.hash.slice(1)); } catch (e) { return; }
@@ -44,6 +45,7 @@
     var target = document.getElementById(id);
     if (!target) return;
     var opened = false;
+    if (target.tagName === "DETAILS" && !target.open) { target.open = true; opened = true; }
     for (var d = target.parentElement && target.parentElement.closest("details");
          d; d = d.parentElement && d.parentElement.closest("details")) {
       if (!d.open) { d.open = true; opened = true; }

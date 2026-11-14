@@ -29,6 +29,6 @@
 {% if page.next %}
 {% set url = '/ui/jobs/' ~ job.id ~ '/process/' ~ seqid ~ '/calls?part=rows&cursor=' ~ page.next ~ ('&' ~ (filters | urlencode) if filters else '') %}
 <tr class="more-row"><td colspan="5">
-  <a class="more" href="{{ url }}" hx-get="{{ url }}" hx-target="closest tr" hx-swap="outerHTML">Show more calls{% if page.stopped %} <span class="dim">· searched as far as one request may; more may match further on</span>{% endif %}</a>
+  <a class="more" href="{{ url }}" hx-get="{{ url }}" hx-trigger="intersect once root:(closest .window), click" hx-target="closest tr" hx-swap="outerHTML">Show more calls{% if page.stopped %} <span class="dim">· searched as far as one request may; more may match further on</span>{% endif %}</a>
 </td></tr>
 {% endif %}

@@ -59,7 +59,7 @@ from .postprocessing.paths import (DUMPS_DIR, DUMPS_ZIP, EXTRACTED_DIR,
 # not import capa or vivisect at all (sandboxd/postprocessing/child.py).
 from .postprocessing.child import postprocess_in_child
 # Standard library only: which procdumps are the sample's, by the report
-from .postprocessing import procdumps
+from .postprocessing import procdumps, report_facts
 
 # Well inside LEASE_SECONDS=120: twelve beats per lease, so a run of failures
 # on a busy platform is survivable where a single missed beat used to eat a
@@ -140,6 +140,9 @@ class Outcome:
     cleanup_status: str | None = None
     manifest: dict | None = None
     artifacts: list = field(default_factory=list)
+    # CAPE's malscore and its word (report_facts.score), sent with the
+    # manifest; None for a run with no report or none in it
+    score: dict | None = None
 
 
 class Heartbeat:
@@ -1173,7 +1176,10 @@ class Analysis:
         # are tens of megabytes each of the result budget. Left on Dom0, not
         # deleted. Without a readable report every dump uploads, as before --
         # they are most of what is left of a run whose postprocessing failed.
-        not_sample = procdumps.outside_sample(job_dir)
+        # The report, read once: for which dumps upload, and for the score
+        # `/complete` carries to the jobs row (report_facts.py)
+        report = report_facts.read(job_dir)
+        not_sample = procdumps.outside_sample(job_dir, report)
         left_out = not_sample or set()
         procdump_note = ""
         if left_out:
@@ -1258,6 +1264,7 @@ class Analysis:
         return Outcome(
             state="completed", manifest=manifest,
             artifacts=[e["name"] for e in entries],
+            score=report_facts.score(report),
         )
 
     def _destroy(self, clone, vlan: int) -> list[str]:
@@ -1443,7 +1450,7 @@ class Analysis:
                     "a completed run has no manifest; /complete is the only "
                     "writer of jobs.manifest and it cannot be skipped"
                 )
-            self._api.complete(lease.job_id, outcome.manifest)
+            self._api.complete(lease.job_id, outcome.manifest, outcome.score)
             return
 
         self._api.report_state(lease.job_id, outcome.state, **extra)

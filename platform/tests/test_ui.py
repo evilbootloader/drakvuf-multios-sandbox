@@ -747,7 +747,7 @@ def test_the_download_links_go_through_the_wrapping_route(client, conn):
 
 
 def test_the_notice_does_not_promise_secrecy(client, conn):
-    """`infected` is a published convention and ZipCrypto is weak. The wrapping
+    """`infected` is a published convention, whatever the cipher. The wrapping
     stops a browser, an OS or a scanner acting on the bytes; it protects
     nothing from whoever holds the link, and the tab must not imply it does."""
     job_id = _with_artifacts(conn, ["trace.log"])

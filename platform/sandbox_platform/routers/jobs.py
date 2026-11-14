@@ -43,6 +43,7 @@ from ..enums import (
     TERMINAL_STATES,
     EgressMode,
     JobState,
+    MalStatus,
     RejectReason,
     TargetOs,
     Visibility,
@@ -343,6 +344,13 @@ class JobSummary(BaseModel):
     # answer for a column dropped from that list -- and `private` is exactly the
     # reassuring lie nobody would notice on a report.
     visibility: Visibility
+
+    # CAPE's malscore and its word (0014), as the worker reported them at
+    # `/complete`. NULL is "no score": not finished, failed, or finished
+    # before the column and not yet backfilled. No defaults, for
+    # `visibility`'s reason above.
+    malscore: float | None
+    malstatus: MalStatus | None
 
 
 class JobDetail(JobSummary):
@@ -859,6 +867,7 @@ def _detail(conn, job_id: UUID, identity: Caller) -> JobDetail:
             "      jobs.failure_stage, jobs.failure_reason, jobs.attempt, jobs.cancel_requested, "
             "      jobs.interacted, jobs.egress_mode, jobs.egress_exit, jobs.egress_applied, jobs.visibility, jobs.manifest, "
             "      jobs.plugins::text[], jobs.drop_location, jobs.drop_subdir, jobs.arguments, "
+            "      jobs.malscore, jobs.malstatus, "
             # COALESCE, because since DRAFT-061 an identity provisioned by
             # `resolve_tenant` carries its address in `access_subject` and
             # leaves `email` NULL -- the two keyspaces are separate so that a
@@ -926,7 +935,7 @@ def _detail(conn, job_id: UUID, identity: Caller) -> JobDetail:
             "failure_stage", "failure_reason", "attempt", "cancel_requested",
             "interacted",
             "egress_mode", "egress_exit", "egress_applied", "visibility",
-            "drop_location", "drop_subdir", "arguments",
+            "drop_location", "drop_subdir", "arguments", "malscore", "malstatus",
         )},
         # Not in the comprehension above, because this route reads `SELECT *`
         # and cannot cast one column in SQL the way `list_jobs` does. Same
@@ -1059,6 +1068,7 @@ def query_jobs(*, identity, state=None, target_os=None, sha256=None,
         # with a ValidationError. It also has to stay a string for the
         # REDACTED sentinel below to be assignable.
         "SELECT jobs.id, jobs.created_at, jobs.target_os, jobs.submitted_filename, jobs.state, jobs.sha256,"
+        "       jobs.malscore, jobs.malstatus,"
         # COALESCE for the reason `_detail` gives: an Access-provisioned
         # identity holds its address in `access_subject` and leaves `email`
         # NULL. Display only; the scoping is on `jobs.owner`.

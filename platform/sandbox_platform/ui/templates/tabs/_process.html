@@ -1,9 +1,12 @@
 {#
   One of the sample's processes, opened in place under its tree node (or a
-  page of its own without script). Four parts, top to bottom: its facts, its
-  calls per category (each one a filter for the table), its own share of the
-  report, and its calls, parsed -- read a page at a time out of the run's
-  calls log (calls.py), never whole.
+  page of its own without script). Three parts, top to bottom: its facts, its
+  own share of the report, and its calls -- per category, each category a
+  filter for the table directly below it (tabs/_calls.html), the calls parsed
+  and read a page at a time out of the run's calls log (calls.py), never whole.
+
+  Its events are not drawn here: the Timeline tab has them, filtered to this
+  process, and the panel links there (operator, 2026-11-14).
 #}
 {% from "tabs/_macros.html" import proc, chips, nothing with context %}
 <div class="pp">
@@ -33,26 +36,9 @@
   {% endfor %}
 </dl>
 
-{% if calls %}
-<h4>Calls by category <span class="count">{{ '{:,}'.format(calls.count) }}</span></h4>
-{% set base = '/ui/jobs/' ~ job.id ~ '/process/' ~ seqid ~ '/calls' %}
-<div class="catbar" role="list">
-  {% for cat, n in calls.categories.items() %}
-  <a role="listitem" class="seg" data-cat="{{ loop.index0 % 8 }}" style="flex-grow: {{ n }}"
-     href="{{ base }}?category={{ cat | urlencode }}" hx-get="{{ base }}?category={{ cat | urlencode }}"
-     hx-target="#calls-{{ seqid }}" hx-swap="outerHTML" title="{{ cat }}: {{ '{:,}'.format(n) }}"></a>
-  {% endfor %}
-</div>
-<ul class="catlegend">
-  {% for cat, n in calls.categories.items() %}
-  <li><a href="{{ base }}?category={{ cat | urlencode }}" hx-get="{{ base }}?category={{ cat | urlencode }}"
-         hx-target="#calls-{{ seqid }}" hx-swap="outerHTML"><i data-cat="{{ loop.index0 % 8 }}"></i>{{ cat or 'other' }} <b>{{ '{:,}'.format(n) }}</b></a></li>
-  {% endfor %}
-</ul>
-{% endif %}
-
 <h4>Its own activity</h4>
 {% set a = activity %}
+{% set timeline = '/ui/jobs/' ~ job.id ~ '?tab=timeline&seqid=' ~ seqid %}
 {% if a.signatures or a.events or a.endpoints or a.listeners or a.dns or a.http or a.encrypted %}
 <dl class="kv activity">
   {% if a.signatures %}<dt>Signatures</dt><dd>{% for s in a.signatures %}<span class="sev" data-level="{{ s.level }}">{{ s.name }}</span>{% endfor %}</dd>{% endif %}
@@ -61,27 +47,15 @@
   {% if a.dns %}<dt>DNS</dt><dd>{% for d in a.dns %}<span class="mono break">{{ d }}</span>{% if not loop.last %} · {% endif %}{% endfor %}</dd>{% endif %}
   {% if a.http %}<dt>HTTP</dt><dd>{% for r in a.http %}<div class="mono break"><b>{{ r.method }}</b> {{ r.url }}</div>{% endfor %}</dd>{% endif %}
   {% if a.encrypted %}<dt>Crypto</dt><dd>{{ a.encrypted | length }} buffer{{ 's' if a.encrypted | length != 1 }} through {{ a.encrypted | map(attribute='api_call') | unique | join(', ') }}</dd>{% endif %}
-  {% if a.events %}
   <dt>Timeline</dt>
-  <dd>
-    <div class="scroll-x"><table class="grid compact">
-      <tbody>
-      {% for e in a.events[:20] %}
-      <tr><td class="mono nowrap dim">{{ report.t(e.timestamp) | secs }}</td><td class="nowrap"><span class="chip" data-kind="ev">{{ e.event }}</span> {{ e.object }}</td>
-          <td class="mono break">{{ e.target }}</td></tr>
-      {% endfor %}
-      </tbody>
-    </table></div>
-    {% if a.events | length > 20 %}<a class="more" href="/ui/jobs/{{ job.id }}?tab=timeline"
-       hx-get="/ui/jobs/{{ job.id }}/timeline?seqid={{ seqid }}" hx-target="next .xslot" hx-swap="innerHTML">All {{ a.events | length }} of its events</a><div class="xslot"></div>{% endif %}
-  </dd>
-  {% endif %}
+  <dd><a href="{{ timeline }}">Its events, in order, on the Timeline ↗</a></dd>
 </dl>
 {% else %}
 {{ nothing('Nothing of the report is credited to this process alone beyond its calls.') }}
+<p><a href="{{ timeline }}">Its calls, in order, on the Timeline ↗</a></p>
 {% endif %}
 
-<h4>Calls</h4>
+<h4>Calls by category{% if calls %} <span class="count">{{ '{:,}'.format(calls.count) }}</span>{% endif %}</h4>
 {% if calls %}
 {% include "tabs/_calls.html" %}
 {% else %}

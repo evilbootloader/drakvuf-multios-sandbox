@@ -420,12 +420,16 @@ class WorkerAPI:
                              expires_in=t["expires_in"])
                 for name, t in body.items()}
 
-    def complete(self, job_id: str, manifest: dict) -> None:
+    def complete(self, job_id: str, manifest: dict, score: dict | None = None) -> None:
         """Terminal. **This one call is what makes publication atomic** -- the
         artifacts are already in the store, but nothing serves them as finished
-        until this row commits."""
-        self._post(f"/api/v1/worker/jobs/{job_id}/complete",
-                   json={"manifest": manifest})
+        until this row commits. `score` rides along for the jobs row (0014):
+        left out when there is none, which a platform from before the field
+        would also accept."""
+        body = {"manifest": manifest}
+        if score is not None:
+            body["score"] = score
+        self._post(f"/api/v1/worker/jobs/{job_id}/complete", json=body)
 
     # -- the object store ---------------------------------------------------
 

@@ -63,6 +63,7 @@ class FakeApi:
 
     states: list = field(default_factory=list)
     completed: list = field(default_factory=list)
+    scores: list = field(default_factory=list)
     uploaded: list = field(default_factory=list)
     ticket_batches: list = field(default_factory=list)
     cancel_after: int | None = None
@@ -140,7 +141,8 @@ class FakeApi:
     def upload_artifact(self, ticket, name, path):
         self.uploaded.append(name)
 
-    def complete(self, job_id, manifest):
+    def complete(self, job_id, manifest, score=None):
+        self.scores.append(score)
         # Same rule the server enforces: reachable only from `cleaning`, and it
         # is what SETS `completed` -- together with the manifest, in one
         # committed row. That is what makes publication atomic.
@@ -320,12 +322,13 @@ def _procdumps(job_dir, *dumps):
             {"DataFileName": name, "PID": pid, "ProcessName": "x.exe", "Compression": "gzip"}))
 
 
-def _report(job_dir, processes, sample=None):
-    """A cape_results.json naming (seqid, pid) processes, `sample` the seqids."""
+def _report(job_dir, processes, sample=None, **extra):
+    """A cape_results.json naming (seqid, pid) processes, `sample` the seqids;
+    `extra` its other top-level keys (malscore, malstatus)."""
     import json
     from sandboxd.postprocessing.paths import CAPE_RESULTS
     doc = {"behavior": {"processes": [{"process_id": pid, "seqid": seqid} for seqid, pid in processes]},
-           "trace_split": {} if sample is None else {"sample": sample}}
+           "trace_split": {} if sample is None else {"sample": sample}, **extra}
     (job_dir / CAPE_RESULTS).write_text(json.dumps(doc))
 
 
@@ -349,6 +352,43 @@ def test_only_the_samples_procdumps_upload(tmp_path):
         "procdumps/procdump.2", "procdumps/procdump.2.metadata"]
     assert "2 dumps of processes not the sample's left out" in outcome.manifest["notes"]
     assert (job_dir / "procdumps" / "procdump.1").exists(), "left out of the upload, not deleted"
+
+
+def test_the_reports_score_is_what_complete_carries(tmp_path):
+    """The run's score for the platform's jobs row (0014), read out of the
+    same report, in the same read, as the sample's dumps."""
+    cfg = config(tmp_path)
+    job_dir = tmp_path / "results" / "job"
+    job_dir.mkdir(parents=True)
+    _report(job_dir, [(10, 4100)], sample=[10], malscore=7.5, malstatus="Malicious")
+    outcome = S.Analysis(FakeApi(), runner_ready(), cfg)._collect(FakeLease(), job_dir)
+    assert outcome.score == {"malscore": 7.5, "malstatus": "Malicious"}
+
+    api = FakeApi(job_state="cleaning")
+    S.Analysis(api, runner_ready(), cfg)._report_terminal(FakeLease(), outcome)
+    assert api.scores == [{"malscore": 7.5, "malstatus": "Malicious"}]
+
+
+def test_a_run_without_a_report_completes_without_a_score(tmp_path):
+    cfg = config(tmp_path)
+    job_dir = tmp_path / "results" / "job"
+    job_dir.mkdir(parents=True)
+    outcome = S.Analysis(FakeApi(), runner_ready(), cfg)._collect(FakeLease(), job_dir)
+    assert outcome.score is None
+
+
+@pytest.mark.parametrize("doc, expected", [
+    ({"malscore": 8, "malstatus": "Suspicious"}, {"malscore": 8.0, "malstatus": "Suspicious"}),
+    # A word calc_scoring never writes: the number kept, the word dropped,
+    # because the platform refuses the whole /complete otherwise
+    ({"malscore": 4.0, "malstatus": "<b>bad</b>"}, {"malscore": 4.0, "malstatus": None}),
+    ({"malscore": 11}, None), ({"malscore": -1}, None), ({"malscore": True}, None),
+    ({"malscore": float("nan")}, None), ({"malscore": "7"}, None), ({}, None),
+])
+def test_a_score_is_one_calc_scoring_could_have_written(doc, expected):
+    from sandboxd.postprocessing import report_facts
+    assert report_facts.score(doc) == expected
+    assert report_facts.score(None) is None
 
 
 def test_without_a_report_every_procdump_uploads(tmp_path):
@@ -1606,7 +1646,7 @@ class _WatchingApi(FakeApi):
         self.refuse = refuse
         self.existed_at_complete = None
 
-    def complete(self, job_id, manifest):
+    def complete(self, job_id, manifest, score=None):
         self.existed_at_complete = self.job_dir.is_dir()
         if self.refuse:
             raise A.ProtocolError("/complete refused with 409: not cleaning")

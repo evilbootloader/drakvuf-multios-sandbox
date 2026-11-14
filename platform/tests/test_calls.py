@@ -40,8 +40,12 @@ def test_a_page_is_one_member_and_the_cursor_walks_on(store):
 def test_a_category_reads_only_the_members_that_hold_it(store):
     available, reader, reads = store
     page = calls.page(available, 10, category="crypto", reader=reader)
-    assert {c.api for c in page.calls} == {"CryptEncrypt"}
-    assert page.matching == 90 and len(page.calls) == 90 and page.next is None
+    found = list(page.calls)
+    while page.next:
+        page = calls.page(available, 10, page.next, category="crypto", reader=reader)
+        found += page.calls
+    assert {c.api for c in found} == {"CryptEncrypt"}
+    assert page.matching == 90 and len(found) == 90
 
 
 def test_api_thread_and_failed_filters(store):

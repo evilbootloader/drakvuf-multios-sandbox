@@ -861,8 +861,10 @@ def _seed_report(job_id: uuid.UUID, doc: dict) -> None:
     from botocore.config import Config
 
     index, log = F.calls_log(F.CALL_COUNTS)
+    tindex, tlog = F.timeline_log()
     objects = {"cape_results.json": json.dumps(doc).encode(),
-               "calls_index.json": index, "calls.jsonl.gz": log}
+               "calls_index.json": index, "calls.jsonl.gz": log,
+               "timeline_index.json": tindex, "timeline.jsonl.gz": tlog}
     manifest = {"schema_version": 1, "truncated": False, "documents": [],
                 "artifacts": [{"name": n, "size_bytes": len(b),
                                "sha256": hashlib.sha256(b).hexdigest()} for n, b in objects.items()]}
@@ -947,7 +949,7 @@ def test_panels_open_below_their_row_close_and_hide_nothing(strict_page, server,
     page.goto(f"{server}/ui/jobs/{job_id}?tab=timeline")
     rows = page.locator("table.events tr.xr")
     total = rows.count()
-    assert total == 5
+    assert total == 20
 
     def below(row_sel, panel_sel):
         row = page.locator(row_sel).bounding_box()
@@ -957,19 +959,24 @@ def test_panels_open_below_their_row_close_and_hide_nothing(strict_page, server,
         gap = panel["y"] - (row["y"] + row["height"])
         assert -1 < gap < 10, (row, panel)
 
-    page.locator("tr[data-x='ev-0'] .xbtn").click()
-    page.locator("tr[data-x='ev-2'] .xbtn").click()
-    assert page.locator("#x-ev-0").is_visible() and page.locator("#x-ev-2").is_visible()
-    below("tr[data-x='ev-0']", "#x-ev-0")
-    below("tr[data-x='ev-2']", "#x-ev-2")
-    # every event row is still on the page and visible
-    assert all(rows.nth(i).is_visible() for i in range(total))
-    assert page.locator("tr[data-x='ev-0'] .xbtn").get_attribute("aria-expanded") == "true"
+    # Two calls' rows (row 0 is a memdump record, which opens nothing)
+    page.locator("tr[data-x='tl-1'] .xbtn").click()
+    page.locator("#x-tl-1 .onecall").wait_for()
+    page.locator("tr[data-x='tl-3'] .xbtn").click()
+    page.locator("#x-tl-3 .onecall").wait_for()
+    assert page.locator("#x-tl-1").is_visible() and page.locator("#x-tl-3").is_visible()
+    below("tr[data-x='tl-1']", "#x-tl-1")
+    below("tr[data-x='tl-3']", "#x-tl-3")
+    # every row is still on the page; the window scrolls to each
+    for i in range(total):
+        rows.nth(i).scroll_into_view_if_needed()
+        assert rows.nth(i).is_visible()
+    assert page.locator("tr[data-x='tl-1'] .xbtn").get_attribute("aria-expanded") == "true"
 
-    page.locator("#x-ev-0 .xclose").click()
-    assert not page.locator("#x-ev-0").is_visible()
-    assert page.locator("#x-ev-2").is_visible()
-    assert page.locator("tr[data-x='ev-0'] .xbtn").get_attribute("aria-expanded") == "false"
+    page.locator("#x-tl-1 .xclose").click()
+    assert not page.locator("#x-tl-1").is_visible()
+    assert page.locator("#x-tl-3").is_visible()
+    assert page.locator("tr[data-x='tl-1'] .xbtn").get_attribute("aria-expanded") == "false"
 
     # A tree node's panel sits between the node and its children, which
     # stay visible below it

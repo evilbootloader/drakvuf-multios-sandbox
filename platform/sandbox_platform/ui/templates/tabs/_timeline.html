@@ -1,27 +1,34 @@
 {#
-  What the sample's processes did, in order: CAPE's enhanced events -- files,
-  registry, processes, libraries, services, from the API calls and from what
-  the kernel saw, each the first time per process and object where an API
-  call does not say it already -- then the anomalies DRAKVUF's detection
-  plugins raised.
+  What the sample's processes did, in order (operator, 2026-11-14): every
+  plugin's records of them -- each call, of every plugin that makes one, and
+  what no call holds: injection, extracted files, memory and process dumps,
+  TLS keys, rootkit checks, Falco's alerts -- across processes, by time. A
+  run from before sandboxd wrote the timeline gets CAPE's events instead.
+
+  Twenty rows at a time in a window that loads more as it scrolls either way.
+  A row number goes straight to that row; a search moves down (or up) the
+  list to the next match and marks it in yellow, leaving the rest in place
+  (tabs/_timeline_block.html, static/timeline.js). Then the anomalies
+  DRAKVUF's detection plugins raised.
 #}
 {% from "tabs/_macros.html" import head, proc, nothing, no_report with context %}
 {% if not report %}{{ no_report() }}{% else %}
 <section class="section">
-{{ head('Events', report.events | length, 'Each row opens its details in place. Filter by kind of object or by process.') }}
-{% if report.events %}
-{% with t = timeline(report, '', none, 0) %}
-{% with events=t.events, matching=t.matching, offset=t.offset, next_offset=t.next_offset, filters=t.filters %}
+{% if tl_file %}
+{{ head('Timeline', tl.count, 'Every plugin\'s records of the sample\'s processes, in time order. Go to a row by its number, or search: the list moves to the next row holding the text and marks it.') }}
+{% else %}
+{{ head('Timeline', tl.count, 'This run predates the full timeline: CAPE\'s events -- files, registry, processes, libraries, services -- in order. Go to a row by its number, or search: the list moves to the next match and marks it.') }}
+{% endif %}
+{% if tl.count %}
+<p class="kinds tl-plugins">{% for name, n in tl.plugins.items() %}<span class="kind">{{ name or 'other' }}<b>{{ '{:,}'.format(n) }}</b></span>{% endfor %}</p>
 {% include "tabs/_timeline_block.html" %}
-{% endwith %}
-{% endwith %}
-{% else %}{{ nothing('No events.') }}{% endif %}
+{% else %}{{ nothing('Nothing of the sample\'s is in the timeline.') }}{% endif %}
 </section>
 
 <section class="section">
 {{ head('Anomalies', report.anomalies | length, 'What DRAKVUF\'s detection plugins saw: a hypervisor query, a debug exception, a ptrace, an eBPF program, a kernel structure changed.') }}
 {% if report.anomalies %}
-<div class="table-wrap">
+<div class="table-wrap window">
 <table class="grid">
   <thead><tr><th>Category</th><th>What</th><th>Process</th><th class="fill">Detail</th></tr></thead>
   <tbody>

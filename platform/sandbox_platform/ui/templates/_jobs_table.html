@@ -14,6 +14,7 @@
   polled for the life of the tab. Carried by the swapped markup, the server's
   answer actually reaches the filter.
 #}
+{% from "tabs/_macros.html" import score %}
 <div class="table-card" data-live="{{ '1' if live else '0' }}">
 <table class="rows">
   <thead>
@@ -22,7 +23,7 @@
          content of a known width, and spreading a 1792px-wide table evenly
          over seven of them put a row's state half a screen from its name. #}
       <th>Submitted</th><th>Target</th><th class="wide">Filename</th>
-      <th>State</th><th>SHA-256</th><th>Owner</th><th>Visibility</th>
+      <th>State</th><th>Score</th><th>SHA-256</th><th>Owner</th><th>Visibility</th>
     </tr>
   </thead>
   <tbody>
@@ -38,6 +39,9 @@
       #}
       <td class="filename"><a href="/ui/jobs/{{ job.id }}">{{ job.submitted_filename }}</a></td>
       <td><span class="state" data-state="{{ job.state.value }}">{{ job.state.value }}</span></td>
+      {# The row's copy of the report's malscore (0014): a list of thirty jobs
+         must not read thirty reports out of the store. An em dash for none. #}
+      <td class="nowrap">{% if job.malscore is not none %}{{ score(job.malscore, job.malstatus) }}{% else %}<span class="dim">—</span>{% endif %}</td>
       {# Truncated with an explicit ellipsis and the full digest in the
          tooltip -- a silently-cut hash invites someone to compare a prefix
          against a full one and conclude they differ.

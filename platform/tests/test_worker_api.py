@@ -214,6 +214,52 @@ def test_an_illegal_transition_is_refused(client, worker_headers, conn):
     assert state_of(conn, uuid.UUID(job_id)) == "cloning"
 
 
+def _cleaning(client, worker_headers, conn) -> str:
+    enqueue(conn, "ubuntu", SMALL_MIB)
+    job_id = claim(client, worker_headers, free_mib=FREE_MIB).json()["job_id"]
+    for nxt in ("preparing", "executing", "collecting", "cleaning"):
+        client.post(f"/api/v1/worker/jobs/{job_id}/state",
+                    headers=worker_headers, json={"state": nxt})
+    return job_id
+
+
+def _score_of(conn, job_id):
+    return conn.execute("SELECT malscore, malstatus FROM jobs WHERE id = %s",
+                        (uuid.UUID(job_id),)).fetchone()
+
+
+def test_complete_records_the_runs_score(client, worker_headers, conn):
+    """The run's score on its row (0014), for the history list."""
+    job_id = _cleaning(client, worker_headers, conn)
+    r = client.post(f"/api/v1/worker/jobs/{job_id}/complete", headers=worker_headers,
+                    json={"manifest": {"schema_version": 1},
+                          "score": {"malscore": 7.5, "malstatus": "Malicious"}})
+    assert r.status_code == 204
+    assert _score_of(conn, job_id) == (7.5, "Malicious")
+
+
+def test_a_run_without_a_score_completes_with_none(client, worker_headers, conn):
+    """What a sandboxd from before the field sends, and a run whose
+    postprocessing wrote no report."""
+    job_id = _cleaning(client, worker_headers, conn)
+    r = client.post(f"/api/v1/worker/jobs/{job_id}/complete", headers=worker_headers,
+                    json={"manifest": {"schema_version": 1}})
+    assert r.status_code == 204
+    assert _score_of(conn, job_id) == (None, None)
+
+
+@pytest.mark.parametrize("score", [
+    {"malscore": 10.5}, {"malscore": -0.1}, {"malscore": "NaN"},
+    {"malscore": 5, "malstatus": "Pwned"}, {"malstatus": "Malicious"},
+])
+def test_a_score_calc_scoring_could_not_have_written_is_refused(client, worker_headers, conn, score):
+    job_id = _cleaning(client, worker_headers, conn)
+    r = client.post(f"/api/v1/worker/jobs/{job_id}/complete", headers=worker_headers,
+                    json={"manifest": {"schema_version": 1}, "score": score})
+    assert r.status_code == 422
+    assert state_of(conn, uuid.UUID(job_id)) == "cleaning"
+
+
 def test_completed_is_reachable_only_through_cleaning(client, worker_headers, conn):
     """A job that has not torn its clone down has not finished."""
     enqueue(conn, "ubuntu", SMALL_MIB)

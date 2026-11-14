@@ -1,18 +1,22 @@
 {#
-  The sample's own bytes, parsed on Dom0 (cape_plugin/static.py): a PE's
-  headers, sections, imports, exports and version information. Each DLL in
-  the imports opens its functions in place.
+  The sample's own bytes, parsed on Dom0 (cape_plugin/static.py), top to
+  bottom: a PE's headers, sections, imports, exports and version information
+  (each DLL in the imports opens its functions in place); an ELF's header,
+  libraries, sections, segments, symbols and notes (2026-11-14); then, for a
+  file of any format, its entropy, the indicators among its strings, an
+  archive's members, a text file's opening, and the strings themselves.
 #}
 {% from "tabs/_macros.html" import head, toggle, xrow, hits, nothing, no_report with context %}
 {% if not report %}{{ no_report() }}{% else %}
 {% set f = report.target.file %}
 {% set pe = f.pe %}
-{% if not pe %}
+{% if not (pe or f.elf or f.static) %}
 <section class="section">
 {{ head('Static analysis') }}
-{{ nothing('No PE to parse: the sample is not a Windows executable, or its bytes did not reach postprocessing. Its hashes and type are on Overview.') }}
+{{ nothing('Nothing to parse: the sample\'s bytes did not reach postprocessing, or this run predates static analysis of its format. Its hashes and type are on Overview.') }}
 </section>
-{% else %}
+{% endif %}
+{% if pe %}
 <section class="section">
 {{ head('PE header') }}
 <dl class="kv">
@@ -29,7 +33,7 @@
 
 <section class="section">
 {{ head('Sections', pe.sections | length) }}
-<div class="table-wrap">
+<div class="table-wrap window">
 <table class="grid">
   <thead><tr><th>Name</th><th>Virtual address</th><th class="num">Virtual size</th><th class="num">Raw size</th><th>Entropy</th><th class="fill">Characteristics</th></tr></thead>
   <tbody>
@@ -49,7 +53,7 @@
 <section class="section">
 {{ head('Imports', pe.imports | length) }}
 {% if pe.imports %}
-<div class="table-wrap">
+<div class="table-wrap window">
 <table class="grid">
   <thead><tr><th class="fill">DLL</th><th class="num">Functions</th><th></th></tr></thead>
   <tbody>
@@ -69,7 +73,7 @@
 {% if pe.exports %}
 <section class="section">
 {{ head('Exports', pe.exports | length) }}
-<div class="table-wrap">
+<div class="table-wrap window">
 <table class="grid">
   <thead><tr><th>Ordinal</th><th>Address</th><th class="fill">Name</th></tr></thead>
   <tbody>{% for x in pe.exports %}<tr><td class="mono">{{ x.ordinal }}</td><td class="mono">{{ x.address }}</td><td class="mono">{{ x.name }}</td></tr>{% endfor %}</tbody>
@@ -80,8 +84,146 @@
 
 {% if pe.versioninfo %}
 <section class="section">
-{{ head('Version information') }}
+{{ head('Version information', pe.versioninfo | length) }}
 <dl class="kv">{% for v in pe.versioninfo %}<dt>{{ v.name }}</dt><dd>{{ v.value }}</dd>{% endfor %}</dl>
+</section>
+{% endif %}
+{% endif %}
+
+{% set elf = f.elf %}
+{% if elf %}
+{% set h = elf.file_header %}
+<section class="section">
+{{ head('ELF header') }}
+<dl class="kv">
+  <dt>Class</dt><dd class="mono">{{ h.get('class', '') }} · {{ h.get('data', '') }}</dd>
+  <dt>Type</dt><dd class="mono">{{ h.get('type', '') }}</dd>
+  <dt>Machine</dt><dd class="mono">{{ h.get('machine', '') }}</dd>
+  <dt>OS/ABI</dt><dd class="mono">{{ h.get('os_abi', '') }}</dd>
+  <dt>Entry point</dt><dd class="mono">{{ h.get('entry_point_address', '') }}</dd>
+  <dt>Linking</dt><dd>{{ elf.linking or 'unknown' }}{% if elf.interpreter %} · <span class="mono">{{ elf.interpreter }}</span>{% endif %}</dd>
+  <dt>Symbols</dt><dd>{% if elf.stripped %}stripped: no <span class="mono">.symtab</span>, the dynamic ones only{% else %}not stripped{% endif %}</dd>
+  {% if elf.build_id %}<dt>Build ID</dt><dd class="mono hash">{{ elf.build_id }}</dd>{% endif %}
+  {% if elf.soname %}<dt>SONAME</dt><dd class="mono">{{ elf.soname }}</dd>{% endif %}
+  {% if elf.rpath %}<dt>RPATH</dt><dd class="mono break">{{ elf.rpath }}</dd>{% endif %}
+  {% if elf.runpath %}<dt>RUNPATH</dt><dd class="mono break">{{ elf.runpath }}</dd>{% endif %}
+  {% if elf.needed %}<dt>Libraries</dt><dd>{% for lib in elf.needed %}<span class="chip">{{ lib }}</span>{% endfor %}</dd>{% endif %}
+  {% if f.hits %}<dt>YARA</dt><dd>{{ hits(f.hits) }}</dd>{% endif %}
+</dl>
+</section>
+
+<section class="section">
+{{ head('Sections', elf.section_headers | length) }}
+{% if elf.section_headers %}
+<div class="table-wrap window">
+<table class="grid">
+  <thead><tr><th>Name</th><th>Type</th><th>Address</th><th class="num">Size</th><th>Offset</th><th>Flags</th><th class="fill">Entropy</th></tr></thead>
+  <tbody>
+  {% for s in elf.section_headers %}
+  {% set e = s.entropy | float(0) %}
+  <tr><td class="mono">{{ s.name }}</td><td class="mono small">{{ s.type }}</td><td class="mono">{{ s.addr }}</td>
+      <td class="num mono">{{ s.size | size }}</td><td class="mono dim">{{ s.offset }}</td><td class="mono">{{ s.flags }}</td>
+      <td class="mono nowrap">{% if s.entropy %}<span class="entropy"><i style="width: {{ (e / 8 * 100) | round(0) }}%"{% if e > 7.2 %} data-high="1"{% endif %}></i></span> {{ s.entropy }}{% endif %}</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+<p class="sub">Entropy over 7.2 of 8 is marked: packed or encrypted content. A binary with no section table at all was stripped of it on purpose.</p>
+{% else %}{{ nothing('No section table: removed, which a loader does not need and an analyst does.') }}{% endif %}
+</section>
+
+<section class="section">
+{{ head('Segments', elf.program_headers | length) }}
+<div class="table-wrap window">
+<table class="grid">
+  <thead><tr><th>Type</th><th>Address</th><th class="num">In memory</th><th class="num">In file</th><th>Offset</th><th class="fill">Flags</th></tr></thead>
+  <tbody>
+  {% for g in elf.program_headers %}
+  <tr{% if 'W' in g.flags and 'E' in g.flags %} data-alert="1"{% endif %}><td class="mono">{{ g.type }}</td><td class="mono">{{ g.addr }}</td><td class="num mono">{{ g.size | size }}</td>
+      <td class="num mono">{{ g.filesz | size }}</td><td class="mono dim">{{ g.offset }}</td><td class="mono">{{ g.flags }}</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+<p class="sub">A segment both writable and executable is marked: code written at run time, or a packer's.</p>
+</section>
+
+{% set imports = elf.imports %}
+{% set exports = elf.exports %}
+<section class="section">
+{{ head('Imported symbols', imports | length, 'Functions and data it takes from its libraries: what it can do without carrying the code.') }}
+{% if imports %}
+<div class="table-wrap window"><table class="grid compact"><thead><tr><th class="fill">Name</th><th>Type</th><th>Bind</th><th>Table</th></tr></thead><tbody>
+{% for s in imports %}<tr><td class="mono">{{ s.ndx_name }}</td><td class="mono small">{{ s.type }}</td><td class="mono small">{{ s.bind }}</td><td class="mono small dim">{{ s.table }}</td></tr>{% endfor %}
+</tbody></table></div>
+{% else %}{{ nothing('No imported symbol: statically linked, or its imports are resolved at run time.') }}{% endif %}
+</section>
+
+{% if exports %}
+<section class="section">
+{{ head('Defined symbols', exports | length, 'Global functions and data it defines.') }}
+<div class="table-wrap window"><table class="grid compact"><thead><tr><th>Value</th><th class="fill">Name</th><th>Type</th><th>Bind</th><th>Table</th></tr></thead><tbody>
+{% for s in exports %}<tr><td class="mono dim">{{ s.value }}</td><td class="mono">{{ s.ndx_name }}</td><td class="mono small">{{ s.type }}</td><td class="mono small">{{ s.bind }}</td><td class="mono small dim">{{ s.table }}</td></tr>{% endfor %}
+</tbody></table></div>
+</section>
+{% endif %}
+{% if elf.symbols_total > elf.symbol_tables | length %}<p class="sub">The first {{ '{:,}'.format(elf.symbol_tables | length) }} of {{ '{:,}'.format(elf.symbols_total) }} symbols are kept.</p>{% endif %}
+
+{% if elf.notes %}
+<section class="section">
+{{ head('Notes', elf.notes | length) }}
+<div class="table-wrap window"><table class="grid compact"><thead><tr><th>Owner</th><th>Type</th><th class="fill">Note</th></tr></thead><tbody>
+{% for n in elf.notes %}<tr><td class="mono">{{ n.owner }}</td><td class="mono small">{{ n.type }}</td><td><pre class="value">{{ n.note | printable(false) }}</pre></td></tr>{% endfor %}
+</tbody></table></div>
+</section>
+{% endif %}
+{% endif %}
+
+{% set st = f.static %}
+{% if st %}
+<section class="section">
+{{ head('File') }}
+{% set e = st.entropy | float(0) %}
+<dl class="kv">
+  <dt>Entropy</dt><dd class="mono"><span class="entropy"><i style="width: {{ (e / 8 * 100) | round(0) }}%"{% if e > 7.2 %} data-high="1"{% endif %}></i></span> {{ st.entropy }} <span class="dim">of 8{% if e > 7.2 %} · compressed or encrypted{% endif %}</span></dd>
+  <dt>Strings</dt><dd>{{ '{:,}'.format(st.strings_total) }} printable runs of 6 or more characters, ASCII and UTF-16</dd>
+</dl>
+</section>
+
+<section class="section">
+{{ head('Indicators in its strings', st.iocs | length, 'URLs, addresses, paths, registry keys and mail addresses written into the file. Hints, not detections: a URL may be a certificate\'s or a library\'s.') }}
+{% if st.iocs %}
+<div class="table-wrap window"><table class="grid compact"><thead><tr><th>Kind</th><th class="fill">Value</th></tr></thead><tbody>
+{% for i in st.iocs %}<tr><td><span class="chip">{{ i.kind }}</span></td><td class="mono break">{{ i.value | printable }}</td></tr>{% endfor %}
+</tbody></table></div>
+{% else %}{{ nothing('None found.') }}{% endif %}
+</section>
+
+{% if st.archive %}
+{% set a = st.archive %}
+<section class="section">
+{{ head(a.kind ~ ' members', a.count, 'From the archive\'s directory: nothing in it was unpacked.' ~ (' ' ~ a.encrypted ~ ' of them encrypted.' if a.encrypted else '')) }}
+<div class="table-wrap window"><table class="grid compact"><thead><tr><th class="fill">Name</th><th class="num">Size</th><th class="num">Packed</th><th>Date</th><th></th></tr></thead><tbody>
+{% for m in a.entries %}<tr><td class="mono break">{{ m.name }}</td><td class="num mono">{{ m.size | size }}</td><td class="num mono dim">{{ m.compressed | size }}</td>
+  <td class="mono small dim nowrap">{{ m.date }}</td><td>{% if m.encrypted %}<span class="chip" data-kind="key">encrypted</span>{% endif %}</td></tr>{% endfor %}
+</tbody></table></div>
+{% if a.count > a.entries | length %}<p class="sub">The first {{ '{:,}'.format(a.entries | length) }} of {{ '{:,}'.format(a.count) }} are listed.</p>{% endif %}
+</section>
+{% endif %}
+
+{% if st.text is not none %}
+<section class="section">
+{{ head('Text', none, 'Its opening characters, as text: a script\'s source, shown, never run.' ~ (' The file goes on past them.' if st.text_truncated else '')) }}
+<pre class="source window">{{ st.text | printable(false) }}</pre>
+</section>
+{% endif %}
+
+{% if st.strings %}
+<section class="section">
+{{ head('Strings', st.strings_total, ('The first ' ~ '{:,}'.format(st.strings | length) ~ ', in file order.') if st.strings_total > st.strings | length else 'In file order.') }}
+<div class="table-wrap window"><table class="grid list"><tbody>
+{% for x in st.strings %}<tr><td class="mono break">{{ x | printable }}</td></tr>{% endfor %}
+</tbody></table></div>
 </section>
 {% endif %}
 {% endif %}

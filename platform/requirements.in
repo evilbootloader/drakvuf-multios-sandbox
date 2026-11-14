@@ -55,6 +55,24 @@ pytest==9.1.1
 pytest-playwright==0.9.0
 python-magic==0.4.27
 starlette==1.6.0
+# Artifact downloads (packaging.py): a streaming ZIP writer -- local headers,
+# data descriptors, Zip64, the central directory -- with AES-256 (WinZip
+# AE-2), replacing a hand-written ZipCrypto writer on 2026-11-14 (operator).
+# AES through pycryptodome, in C, where the ZipCrypto loop was per byte in
+# Python. Pinned below its newest (4.4.0, 2026-11-07): a release two weeks
+# old has had the least scrutiny.
+#
+# **Upgrade pycryptodome deliberately.** 4.x warns that stream-zip's
+# `PBKDF2(password, salt, n, 1000)` leans on defaults (HMAC-SHA1) that "will
+# be removed". AE-2 specifies exactly that derivation, so the warning is not a
+# weakness to fix here -- but the release that removes the default breaks every
+# download until stream-zip passes SHA1 itself. tests/test_packaging.py
+# round-trips through 7-Zip and would fail first.
+stream-zip==0.0.84
+pycryptodome==4.2.0
+# Tests only: reads the AES archives back. The standard library's zipfile
+# reads ZipCrypto and not AES.
+stream-unzip==0.0.101
 uvicorn==0.52.4
 # uvicorn does NOT implement the WebSocket protocol itself. Without one of
 # these it does not handle an upgrade at all: the request is treated as a plain

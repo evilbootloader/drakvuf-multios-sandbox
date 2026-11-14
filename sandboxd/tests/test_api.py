@@ -151,6 +151,23 @@ def test_the_manifest_satisfies_the_server_model():
     assert CompleteRequest.model_validate(sent).manifest.schema_version == 1
 
 
+def test_the_score_rides_with_the_manifest_and_satisfies_the_server_model():
+    """The run's score for the jobs row (0014): sent when the report had
+    one, left out otherwise -- which a platform from before it also takes."""
+    sent = []
+    def handler(request):
+        sent.append(__import__("json").loads(request.content))
+        return httpx.Response(204)
+
+    manifest = {"schema_version": 1, "artifacts": []}
+    api(handler).complete("job-1", manifest, {"malscore": 7.5, "malstatus": "Malicious"})
+    api(handler).complete("job-1", manifest, None)
+
+    scored = CompleteRequest.model_validate(sent[0]).score
+    assert (scored.malscore, scored.malstatus.value) == (7.5, "Malicious")
+    assert "score" not in sent[1] and CompleteRequest.model_validate(sent[1]).score is None
+
+
 def test_artifact_sizes_satisfy_the_server_model():
     sent = {}
     def handler(request):

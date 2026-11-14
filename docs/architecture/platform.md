@@ -379,8 +379,15 @@ Artifacts upload **directly to MinIO** via presigned POSTs requested from the
 API — never through the API itself. Then one terminal call:
 
 ```text
-POST /api/v1/worker/jobs/<id>/complete   { manifest }
+POST /api/v1/worker/jobs/<id>/complete   { manifest, score? }
 ```
+
+`score` (2026-11-14) is CAPE's malscore and its word, `{malscore, malstatus}`,
+which sandboxd reads out of the run's `cape_results.json`
+(`sandboxd/postprocessing/report_facts.py`) for the jobs row the history list
+reads (0014). Optional: a run without a report sends none, and so does a
+sandboxd from before the field. `platform/backfill_scores.py` fills the rows
+of runs completed before it from their stored reports.
 
 The job is not `completed` until that row lands. A half-uploaded result set
 is therefore never served as finished, which closed the atomic-publication
@@ -655,6 +662,13 @@ Candidate. Names and shapes are the design's, not an implementation's.
 > samples. The password is packaging, not confidentiality; `packaging.py` says
 > so at length.
 >
+> **Amended 2026-11-14: AES-256, written by stream-zip.** The hand-written
+> ZipCrypto writer was replaced by the stream-zip library (operator): same
+> streaming, every entry Zip64 (so no per-artifact size ceiling), AES in C.
+> The cost is that Windows Explorer, macOS Archive Utility and `unzip` cannot
+> open the archives; 7-Zip, WinRAR, The Unarchiver and `7z` can, and the
+> Artifacts tab says so.
+>
 > **Amended 2026-10-30 (DRAFT-054): one narrow exception, for display.** The
 > Screenshots tab is a strip of `<img>`, and an `<img>` cannot load a ZIP, so
 > `/screenshot` serves frames raw. Only a manifest-declared
@@ -673,7 +687,7 @@ Candidate. Names and shapes are the design's, not an implementation's.
 | `POST /api/v1/worker/jobs/{id}/state` | Transition, with `queue_reason`/`failure_*` |
 | `POST /api/v1/worker/jobs/{id}/heartbeat` | Keepalive; response carries `cancel_requested` |
 | `POST /api/v1/worker/jobs/{id}/artifacts` | Request presigned PUT URLs |
-| `POST /api/v1/worker/jobs/{id}/complete` | Manifest; terminal state |
+| `POST /api/v1/worker/jobs/{id}/complete` | Manifest and score; terminal state |
 
 ---
 
@@ -709,6 +723,8 @@ jobs
   clone_domain       text        -- nullable; reconciliation key
   vlan               integer     -- nullable; recorded, not authoritative
   manifest           jsonb       -- nullable until complete
+  malscore           real        -- nullable; 0 to 10, from /complete (0014)
+  malstatus          text        -- nullable; enums.MalStatus (0014)
 ```
 
 `vlan` and `clone_domain` are **recorded for diagnostics and reconciliation,

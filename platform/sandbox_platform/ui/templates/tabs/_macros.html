@@ -60,6 +60,17 @@
 {%- if colspan %}</td></tr>{% else %}</div>{% endif %}
 {%- endmacro %}
 
+{#- CAPE's malscore, `7.5/10 Malicious`, coloured by the word: only
+    Malicious is red. Nothing without a number -- from the report, or from
+    the job's row (0014) where there is no report to read. -#}
+{% macro score(value, status=none) -%}
+{%- if value is not none -%}
+<span class="score" data-status="{{ status or 'none' }}" title="CAPE malscore: 0 to 10, from the signatures that matched">
+  <b>{{ '%.1f' | format(value) }}</b><span class="of">/10</span>
+  {%- if status %} <span class="word">{{ status }}</span>{% endif %}</span>
+{%- endif -%}
+{%- endmacro %}
+
 {#- CAPE's severity, as a word in a pill. Only `high` is red. -#}
 {% macro sev(signature) -%}
 <span class="sev" data-level="{{ signature.level }}" title="severity {{ signature.severity }}">{{ signature.level }}</span>
@@ -83,7 +94,7 @@
 {#- "Show more": a row that replaces itself with the next rows. -#}
 {% macro more(url, colspan, left) -%}
 <tr class="more-row"><td colspan="{{ colspan }}">
-  <a class="more" href="{{ url }}" hx-get="{{ url }}" hx-target="closest tr" hx-swap="outerHTML">Show more <span class="dim">· {{ '{:,}'.format(left) }} left</span></a>
+  <a class="more" href="{{ url }}" hx-get="{{ url }}" hx-trigger="intersect once root:(closest .window), click" hx-target="closest tr" hx-swap="outerHTML">Show more <span class="dim">· {{ '{:,}'.format(left) }} left</span></a>
 </td></tr>
 {%- endmacro %}
 

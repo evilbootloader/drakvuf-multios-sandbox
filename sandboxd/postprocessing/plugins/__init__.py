@@ -13,7 +13,10 @@ the rest is reference until it is deleted, and none of it runs.
 
 The platform's job page reads `cape_results.json` and, for the process
 panels' calls, `calls.jsonl.gz` through `calls_index.json` (since
-2026-11-11; `platform/sandbox_platform/cape.py`, `calls.py`).
+2026-11-11; `platform/sandbox_platform/cape.py`, `calls.py`), and for the
+Timeline tab, `timeline.jsonl.gz` through `timeline_index.json` -- every
+plugin's records of the sample, in time order (since 2026-11-14;
+`cape_plugin/timeline.py`, `platform/sandbox_platform/timeline.py`).
 """
 from ..paths import (DUMPS_DIR, DUMPS_ZIP, EXTRACTED_DIR, EXTRACTED_ZIP, IPT_DIR,
                      IPT_ZIP, TRACE_LOG)

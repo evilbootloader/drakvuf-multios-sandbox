@@ -1,9 +1,36 @@
 {#
-  A process's calls: the filter and the table, swapped whole when a filter
-  changes. Rows are tabs/_calls_rows.html; "show more" appends the next.
+  A process's calls: the category bar, the filter and the table, swapped
+  whole when a filter changes. Rows are tabs/_calls_rows.html; "show more"
+  appends the next.
+
+  **The category bar is inside the swapped block, directly above the table it
+  filters**, and a click on it scrolls the block into view (`show:` on the
+  swap). It used to sit at the top of the process panel, a screen above the
+  table, so a click filtered a table below the fold and looked like it did
+  nothing (operator, 2026-11-14). Inside the block it re-renders with the
+  chosen category marked, and a click on the marked one clears it.
 #}
 {% set base = '/ui/jobs/' ~ job.id ~ '/process/' ~ seqid ~ '/calls' %}
+{% set active = filters.get('category', '') %}
+{% set swap = 'outerHTML show:#calls-' ~ seqid ~ ':top' %}
 <div class="calls" id="calls-{{ seqid }}">
+<div class="catbar" role="list" aria-label="calls by category">
+  {% for cat, n in calls.categories.items() %}
+  {% set url = base ~ ('?category=' ~ (cat | urlencode) if cat and cat != active else '') %}
+  <a role="listitem" class="seg" data-cat="{{ loop.index0 % 8 }}" style="flex-grow: {{ n }}"
+     href="{{ url }}" hx-get="{{ url }}" hx-target="#calls-{{ seqid }}" hx-swap="{{ swap }}"
+     {%- if active and cat == active %} aria-current="true"{% endif %}
+     title="{{ cat or 'other' }}: {{ '{:,}'.format(n) }}"></a>
+  {% endfor %}
+</div>
+<ul class="catlegend"{% if active %} data-filtered="1"{% endif %}>
+  {% for cat, n in calls.categories.items() %}
+  {% set url = base ~ ('?category=' ~ (cat | urlencode) if cat and cat != active else '') %}
+  <li><a href="{{ url }}" hx-get="{{ url }}" hx-target="#calls-{{ seqid }}" hx-swap="{{ swap }}"
+         {%- if active and cat == active %} aria-current="true" title="showing only {{ cat }}; click for all"{% endif %}>
+      <i data-cat="{{ loop.index0 % 8 }}"></i>{{ cat or 'other' }} <b>{{ '{:,}'.format(n) }}</b></a></li>
+  {% endfor %}
+</ul>
 <form class="callfilter" action="{{ base }}" hx-get="{{ base }}" hx-target="#calls-{{ seqid }}"
       hx-swap="outerHTML" hx-trigger="change">
   <label><span>Category</span>
@@ -27,7 +54,7 @@
   {% if filters %}<a class="clear" href="{{ base }}" hx-get="{{ base }}" hx-target="#calls-{{ seqid }}" hx-swap="outerHTML">clear</a>{% endif %}
   <noscript><button type="submit">Apply</button></noscript>
 </form>
-<div class="table-wrap">
+<div class="table-wrap window calls-window">
 <table class="grid calls-table">
   <thead><tr><th>At</th><th>Thread</th><th>Call</th><th class="fill">Arguments</th><th>Result</th></tr></thead>
   <tbody>

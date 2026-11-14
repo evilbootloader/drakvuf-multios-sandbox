@@ -1,7 +1,10 @@
 {#
   Files the sample wrote that fileextractor kept: each row opens its hashes,
-  its YARA hits and its download in place. The download is the extracted
-  copy in the job's artifacts -- a file the sample made, so live content.
+  its YARA hits and which extracted file it is, in place -- as Memory names
+  each region's file (operator, 2026-11-14). sandboxd uploads `extracted/`
+  as one archive, `extracted.zip`, so that name is the member to open in it.
+  A run from before the archive has the file on its own, and links it.
+  Either way it is a file the sample made: live content.
 #}
 {% from "tabs/_macros.html" import head, proc, toggle, xrow, hits, nothing, no_report with context %}
 {% if not report %}{{ no_report() }}{% else %}
@@ -10,7 +13,7 @@
 {% if report.dropped %}
 {% if 'extracted.zip' in job.artifacts %}<p class="downloads"><a class="button danger" href="{{ job.artifacts['extracted.zip'] }}" rel="noopener nofollow">extracted.zip</a>
   <span class="note danger">Live files the sample wrote. Handle as malware.</span></p>{% endif %}
-<div class="table-wrap">
+<div class="table-wrap window">
 <table class="grid">
   <thead><tr><th class="fill">Guest path</th><th>Process</th><th class="num">Size</th><th>Type</th><th>YARA</th><th></th></tr></thead>
   <tbody>
@@ -20,20 +23,24 @@
     <td class="filename">{{ d.guest_path or d.display_name }}</td>
     <td>{{ proc(pid=d.pid) }}</td>
     <td class="num mono nowrap">{{ d.size | size }}</td>
-    <td class="small break">{{ d.type }}</td>
+    <td class="small">{{ d.type }}</td>
     <td>{{ hits(d.hits) }}</td>
     <td>{{ toggle(id, '▾') }}</td>
   </tr>
   {% call xrow(id, 6, d.display_name) %}
+  {% set link = job.artifacts.get(d.archive_name) %}
   <dl class="kv">
+    {% if d.archive_name %}<dt>File</dt>
+    <dd><span class="mono">{{ d.archive_name }}</span>
+      {%- if link %} <a class="button danger" href="{{ link }}" rel="noopener nofollow">download</a>
+      {%- elif 'extracted.zip' in job.artifacts %} <span class="dim">in extracted.zip</span>{% endif %}</dd>{% endif %}
+    {% if d.all_guest_paths | length > 1 %}<dt>Written as</dt><dd>{% for g in d.all_guest_paths %}<div class="filename">{{ g }}</div>{% endfor %}</dd>{% endif %}
     <dt>SHA-256</dt><dd class="mono hash">{{ d.sha256 }}</dd>
     <dt>SHA-1</dt><dd class="mono hash">{{ d.sha1 }}</dd>
     <dt>MD5</dt><dd class="mono hash">{{ d.md5 }}</dd>
     {% if d.crc32 %}<dt>CRC32</dt><dd class="mono">{{ d.crc32 }}</dd>{% endif %}
     {% if d.reason %}<dt>Kept because</dt><dd>{{ d.reason }}</dd>{% endif %}
     {% for h in d.hits %}<dt>YARA</dt><dd><span class="mono">{{ h.name }}</span> <span class="dim">{{ h.namespace }}</span> <span class="mono small dim">{{ h.strings | join(' ') }}</span></dd>{% endfor %}
-    {% set link = job.artifacts.get('extracted/' ~ d.stored_name) %}
-    {% if link %}<dt>Download</dt><dd><a class="button danger" href="{{ link }}" rel="noopener nofollow">{{ d.stored_name }}</a></dd>{% endif %}
   </dl>
   {% endcall %}
   {% endfor %}

@@ -31,7 +31,8 @@ from .cape_plugin import (
 )
 from .cape_plugin.filetype import package
 from .cape_plugin.modules import FileInfo
-from .cape_plugin.static import pe_info
+from .cape_plugin.static import elf_info, file_static, pe_info
+from .cape_plugin.timeline import TIMELINE_INDEX, TIMELINE_LOG, write_timeline
 from .plugin_base import CapeConfigSection, PostprocessContext
 
 log = logging.getLogger(__name__)
@@ -62,8 +63,8 @@ def cape_yara_rules(cfg: CapeConfigSection) -> Path:
 
 
 def _target(os_: TargetOs, sample: Optional[Path], yara_rules, cape_rules=None) -> dict:
-    """CAPE's `target`: the sample's own hashes, type, YARA hits and PE
-    fields when the daemon passed it; otherwise the guest's type and no
+    """CAPE's `target`: the sample's own hashes, type, YARA hits, PE or
+    ELF fields and format-free static facts when the daemon passed it; otherwise the guest's type and no
     hashes, which is all a trace alone can say. The guest's type is no
     stand-in for a sample whose type is unknown: that one is `data`."""
     # `name` and `path` always: signatures index them without asking
@@ -77,6 +78,15 @@ def _target(os_: TargetOs, sample: Optional[Path], yara_rules, cape_rules=None) 
         pe = pe_info(sample)
         if pe:
             file["pe"] = pe
+        # An ELF's headers (CAPE's parse_elf names), and for any format its
+        # entropy, strings, archive members and text: static.py has why
+        # these are keys no signature reads.
+        elf = elf_info(sample)
+        if elf:
+            file["elf"] = elf
+        facts = file_static(sample)
+        if facts:
+            file["static"] = facts
     return {"category": "file", "file": file}
 
 
@@ -222,6 +232,20 @@ def write_results(path: Path, results: dict, sample: Optional[set] = None) -> No
                                   option=orjson.OPT_NON_STR_KEYS | orjson.OPT_INDENT_2))
 
 
+def _timeline(analysis_dir: Path, results: dict, split) -> None:
+    """Every plugin's records of the sample, in time order, beside the calls
+    log (cape_plugin/timeline.py): the platform's Timeline tab. A failure
+    here costs the timeline, never the report it is built from; the partial
+    files go, so the platform falls back rather than reading half of one."""
+    try:
+        rows = write_timeline(analysis_dir, results, split.sample, split.aux_dir, CALLS_LOG, CALLS_INDEX)
+        log.info("timeline: %d rows", rows)
+    except Exception:  # noqa: BLE001 - the report is already written and must ship
+        log.exception("timeline not written")
+        for name in (TIMELINE_LOG, TIMELINE_INDEX):
+            (analysis_dir / name).unlink(missing_ok=True)
+
+
 def network_filter(cfg: CapeConfigSection) -> dict:
     """NetworkMap's NetworkFilter arguments from the config section: a list
     left unset keeps network_map.py's default."""
@@ -330,6 +354,9 @@ def run_cape(context: PostprocessContext, cfg: CapeConfigSection,
                 RunSignatures(context=context, results=results).run()
 
         write_results(analysis_dir / CAPE_RESULTS, results, sample=split.sample)
+        # Inside the `with` too: the non-call plugins' records are read from
+        # trace_split's aux logs, which go with the temporary directory.
+        _timeline(analysis_dir, results, split)
     if cfg.compress_trace:
         compress_trace(analysis_dir)
     return results

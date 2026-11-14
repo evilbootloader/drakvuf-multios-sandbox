@@ -20,29 +20,19 @@ import logging
 from pathlib import Path
 from typing import Optional, Set
 
-from .paths import CAPE_RESULTS, PROCDUMPS_DIR
+from . import report_facts
+from .paths import PROCDUMPS_DIR
 
 log = logging.getLogger(__name__)
 
-# The report is read whole to find the sample; a report this large is not one
-# cape_analysis wrote for any trace seen so far (78 KB for a one-process
-# Windows run, 2026-11-11), and reading it is not worth the daemon's memory.
-MAX_REPORT_BYTES = 256 * 1024 * 1024
+# Not yet read: `outside_sample` reads the report itself unless handed one
+_UNREAD = object()
 
 
-def sample_pids(job_dir: Path) -> Optional[Set[int]]:
-    """The PIDs of the sample's processes, from `cape_results.json`; None when
-    there is no report, or none that can be read."""
-    path = job_dir / CAPE_RESULTS
-    try:
-        if path.stat().st_size > MAX_REPORT_BYTES:
-            log.warning("%s is over %d bytes; not read for the sample's PIDs", path, MAX_REPORT_BYTES)
-            return None
-        report = json.loads(path.read_bytes())
-    except (OSError, ValueError) as exc:
-        log.info("no readable %s for the sample's PIDs: %s", path.name, exc)
-        return None
-    if not isinstance(report, dict):
+def sample_pids(report: Optional[dict]) -> Optional[Set[int]]:
+    """The PIDs of the sample's processes, from the run's report
+    (report_facts.read); None without one."""
+    if report is None:
         return None
     behavior = report.get("behavior") if isinstance(report.get("behavior"), dict) else {}
     processes = [p for p in behavior.get("processes") or () if isinstance(p, dict)]
@@ -56,16 +46,17 @@ def sample_pids(job_dir: Path) -> Optional[Set[int]]:
     return {p["process_id"] for p in processes if isinstance(p.get("process_id"), int)}
 
 
-def outside_sample(job_dir: Path) -> Optional[Set[str]]:
+def outside_sample(job_dir: Path, report=_UNREAD) -> Optional[Set[str]]:
     """The files under `procdumps/` that are not the sample's, as paths
     relative to `job_dir`: a dump whose sidecar names another process, and a
     file no sidecar of the sample's names (a dump that cannot be attributed
     is not known to be the sample's). None when there is no report to say
-    what the sample is -- everything is kept then, as before."""
+    what the sample is -- everything is kept then, as before. `report` is the
+    run's, already read (report_facts.read), so the daemon reads it once."""
     directory = job_dir / PROCDUMPS_DIR
     if not directory.is_dir():
         return set()
-    pids = sample_pids(job_dir)
+    pids = sample_pids(report_facts.read(job_dir) if report is _UNREAD else report)
     if pids is None:
         return None
     keep: Set[Path] = set()

@@ -1,0 +1,27 @@
+{#
+  The search's status line. Three states:
+
+    found=none   in the block: where the window is, when a search or a row
+                 number put it there
+    resume       this request's share of the file held no match: the line
+                 asks again from `found.resume` as soon as it is drawn
+                 (hx-trigger="load"), saying how far the search has got --
+                 the reader can stop it (static/timeline.js)
+    the end      nothing further holds the text
+#}
+{% set base = '/ui/jobs/' ~ job.id ~ '/timeline' %}
+{% if found is none %}
+<p id="tl-status" class="tl-status" aria-live="polite">
+  {%- if tl_target is not none %}Row <b>#{{ '{:,}'.format(tl_target) }}</b>{% if tl_q %} · rows holding “<span class="mono">{{ tl_q }}</span>” are marked{% endif %}{% endif %}</p>
+{% elif found.resume is not none %}
+{% set url = base ~ '/find?q=' ~ (tl_q | urlencode) ~ '&start=' ~ found.resume ~ '&dir=' ~ dir ~ ('&seqid=' ~ tl_seqid if tl_seqid is not none else '') %}
+{% set done = (found.scanned if dir == 'next' else tl.count - found.scanned) %}
+<p id="tl-status" class="tl-status" aria-live="polite" aria-busy="true"
+   hx-get="{{ url }}" hx-trigger="load" hx-target="this" hx-swap="outerHTML" data-searching="1">
+  Searching {{ 'down' if dir == 'next' else 'up' }} for “<span class="mono">{{ tl_q }}</span>” · at #{{ '{:,}'.format(found.scanned) }} of {{ '{:,}'.format(tl.count) }}
+  <span class="tl-progress"><i style="width: {{ ((done / (tl.count or 1)) * 100) | round(1) }}%"></i></span>
+  <button type="button" class="ghost tl-stop" data-tl-stop>stop</button>
+  <noscript><a href="{{ url }}">continue</a></noscript></p>
+{% else %}
+<p id="tl-status" class="tl-status" aria-live="polite">No {{ 'later' if dir == 'next' else 'earlier' }} row{% if tl_seqid is not none %} of this process{% endif %} holds “<span class="mono">{{ tl_q }}</span>”.</p>
+{% endif %}

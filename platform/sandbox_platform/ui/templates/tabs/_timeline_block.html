@@ -1,27 +1,55 @@
 {#
-  The events table with its filter, swapped whole when the filter changes.
+  The timeline's controls and its window, swapped whole on a process change,
+  a row number, or a search that found a row -- which arrives as this block
+  opened at that row, marked (`tl_target`).
+
+  Three forms, each a plain GET without script:
+    Process      one process's rows; numbers stay the whole timeline's
+    Go to row    the window opens at that row
+    Search       the next row from where the reader is holding the text
+                 (static/timeline.js sets `start` from the marked or the top
+                 visible row); a match far on is reached over several
+                 requests, the status line saying how far it has got
 #}
 {% set base = '/ui/jobs/' ~ job.id ~ '/timeline' %}
-<div class="timeline" id="timeline">
+<div class="timeline" id="timeline" data-q="{{ tl_q }}"{% if tl_target is not none %} data-target="{{ tl_target }}"{% endif %}>
+<div class="tl-controls">
 <form class="callfilter" action="{{ base }}" hx-get="{{ base }}" hx-target="#timeline" hx-swap="outerHTML" hx-trigger="change">
-  <label><span>Object</span>
-    <select name="object">
-      <option value="">all</option>
-      {% for o in report.events | map(attribute='object') | unique | sort %}<option value="{{ o }}"{% if filters.get('object') == o %} selected{% endif %}>{{ o }}</option>{% endfor %}
-    </select></label>
   <label><span>Process</span>
     <select name="seqid">
-      <option value="">all</option>
-      {% for p in report.processes %}<option value="{{ p.seqid }}"{% if filters.get('seqid') == p.seqid %} selected{% endif %}>{{ p.basename }} ({{ p.process_id }})</option>{% endfor %}
+      <option value="">all ({{ '{:,}'.format(tl.count) }})</option>
+      {% for p in report.processes if p.seqid is not none %}<option value="{{ p.seqid }}"{% if tl_seqid == p.seqid %} selected{% endif %}>{{ p.basename }} ({{ p.process_id }}) · {{ '{:,}'.format(tl.processes.get(p.seqid, 0)) }}</option>{% endfor %}
     </select></label>
-  <span class="dim small">{{ '{:,}'.format(matching) }} event{{ 's' if matching != 1 }}</span>
+  <input type="hidden" name="q" value="{{ tl_q }}">
   <noscript><button type="submit">Apply</button></noscript>
 </form>
-<div class="table-wrap">
-<table class="grid events">
-  <thead><tr><th>At</th><th>Process</th><th>Event</th><th class="fill">Target</th><th></th></tr></thead>
+<form class="callfilter tl-goto" action="{{ base }}" hx-get="{{ base }}" hx-target="#timeline" hx-swap="outerHTML">
+  <label><span>Go to row</span>
+    <input type="number" name="at" min="0" max="{{ [tl.count - 1, 0] | max }}" inputmode="numeric" placeholder="#" required></label>
+  {% if tl_seqid is not none %}<input type="hidden" name="seqid" value="{{ tl_seqid }}">{% endif %}
+  <input type="hidden" name="q" value="{{ tl_q }}">
+  <button type="submit">Go</button>
+</form>
+<form class="callfilter tl-search" action="{{ base }}/find" hx-get="{{ base }}/find" hx-target="#tl-status" hx-swap="outerHTML">
+  <label><span>Search</span>
+    <input type="search" name="q" value="{{ tl_q }}" maxlength="200" required
+           placeholder="a path, a name, an address, an API" autocomplete="off"></label>
+  <input type="hidden" name="start" value="{{ (tl_target + 1) if tl_target is not none else tl_window.start }}">
+  {% if tl_seqid is not none %}<input type="hidden" name="seqid" value="{{ tl_seqid }}">{% endif %}
+  {#- "next" first: Enter submits with the first button #}
+  <button type="submit" name="dir" value="next" title="next match (Enter)">Find next ↓</button>
+  <button type="submit" name="dir" value="prev" title="previous match (Shift+Enter)" aria-label="previous match">↑</button>
+</form>
+</div>
+{% with found=none %}{% include "tabs/_timeline_status.html" %}{% endwith %}
+<div class="table-wrap window tl-window" tabindex="0" aria-label="timeline rows">
+<table class="grid events tl-table">
+  <thead><tr><th class="num">#</th><th>At</th><th>Process</th><th>Source</th><th>Event</th><th class="fill">Detail</th><th></th></tr></thead>
   <tbody>
+  {% with rows=tl_window.rows, mode='timeline', earlier=tl_window.start if tl_window.start > 0 else none, later=tl_window.next %}
   {% include "tabs/_timeline_rows.html" %}
+  {% endwith %}
+  {% if not tl_window.rows and tl_window.next is none %}<tr><td colspan="7"><p class="none">No row{% if tl_seqid is not none %} of this process{% endif %} from here on.</p></td></tr>{% endif %}
   </tbody>
 </table>
 </div>

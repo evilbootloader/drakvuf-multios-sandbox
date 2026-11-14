@@ -105,6 +105,60 @@ def calls_log(counts: dict[int, int], chunk: int = 200) -> tuple[bytes, bytes]:
 CALL_COUNTS = {10: 450, 11: 40, 12: 12, 13: 6}
 
 
+def _text(arguments) -> str:
+    """cape_plugin/timeline.call_text, as far as these calls need it: the
+    values that are not a number, a port kept."""
+    out = []
+    for a in arguments:
+        v = str(a["value"])
+        if "port" in a["name"].lower():
+            out.append(f"{a['name']}={int(v, 0)}")
+        elif not (v.startswith("0x") or v.isdigit()):
+            out.append(f"{a['name']}={v[:120]}")
+    return " ".join(out)[:320]
+
+
+def timeline_log(counts: dict[int, int] = None, chunk: int = 50) -> tuple[bytes, bytes]:
+    """(timeline_index.json, timeline.jsonl.gz) in the format sandboxd's
+    cape_plugin/timeline.py writes: every call of the given processes,
+    merged by time, a memdump record of the injected process and a
+    rootkitmon record of the kernel's among them."""
+    counts = counts or CALL_COUNTS
+    rows = []
+    for seqid, n in counts.items():
+        pid = SAMPLE.get(seqid, GUEST.get(seqid))[0]
+        for cid, c in enumerate(calls_for(seqid, n)):
+            rows.append((float(c["ts"]), seqid, cid, {
+                "ts": c["ts"], "seqid": seqid, "pid": pid, "cid": cid, "plugin": c["plugin"],
+                "name": c["api"], "category": c["category"], "status": c["status"],
+                "text": _text(c["arguments"])}))
+    rows.append((T0 + 0.75, -1, 0, {"ts": f"{T0 + 0.75:.6f}", "seqid": 10, "pid": 4100,
+                                    "plugin": "memdump", "name": "NtWriteVirtualMemory heuristic",
+                                    "category": "memory", "status": None,
+                                    "text": "NtWriteVirtualMemory 0x400000 0x1000 → 400000_feedface"}))
+    rows.append((T0 + 1.5, -1, 1, {"ts": f"{T0 + 1.5:.6f}", "seqid": None, "pid": None,
+                                   "plugin": "rootkitmon", "name": "ssdt", "category": "kernel",
+                                   "status": None, "text": "Type=ssdt Message=modified"}))
+    rows.sort(key=lambda r: (r[0], r[1], r[2]))
+    log, chunks, offset, plugins, procs = bytearray(), [], 0, {}, {}
+    for start in range(0, len(rows), chunk):
+        part = [r[3] for r in rows[start:start + chunk]]
+        member = gzip.compress(b"\n".join(json.dumps(r).encode() for r in part) + b"\n")
+        seqids = {}
+        for r in part:
+            key = str(r["seqid"] if r["seqid"] is not None else -1)
+            seqids[key] = seqids.get(key, 0) + 1
+            plugins[r["plugin"]] = plugins.get(r["plugin"], 0) + 1
+            if r["seqid"] is not None:
+                procs[str(r["seqid"])] = procs.get(str(r["seqid"]), 0) + 1
+        chunks.append([offset, len(member), start, float(part[0]["ts"]), seqids])
+        log += member
+        offset += len(member)
+    index = {"version": 1, "chunk": chunk, "log": "timeline.jsonl.gz", "count": len(rows),
+             "plugins": plugins, "processes": procs, "chunks": chunks}
+    return json.dumps(index).encode(), bytes(log)
+
+
 def document(scope_all: bool = False) -> dict:
     everything = {**SAMPLE, **(GUEST if scope_all else {})}
     processes = [_process(s, *v, CALL_COUNTS.get(s, 3)) for s, v in everything.items()]
@@ -122,6 +176,29 @@ def document(scope_all: bool = False) -> dict:
             "name": "invoice.exe", "path": "/srv/job/invoice.exe", "size": 284672, "type": "PE32+ executable (GUI) x86-64, for MS Windows",
             "md5": "0" * 32, "sha1": "1" * 40, "sha256": "2" * 64, "sha512": "3" * 128, "crc32": "DEADBEEF",
             "yara": [{"name": "UPX_Packed", "namespace": "packers", "meta": {}, "strings": ["$upx0"]}], "cape_yara": [],
+            # Not a Windows sample's, but every part the Static tab draws,
+            # the sample's text in each: the escaping tests read every tab
+            "elf": {"file_header": {"class": "ELF64", "data": "2's complement, little endian",
+                                    "type": "EXEC (Executable file)", "machine": "Advanced Micro Devices X86-64",
+                                    "os_abi": "UNIX - System V", "entry_point_address": "0x0000000000401000"},
+                    "section_headers": [{"name": ".text" + HOSTILE, "type": "PROGBITS", "addr": "0x401000",
+                                         "size": 4096, "offset": "0x1000", "flags": "AX", "entropy": "7.50"}],
+                    "program_headers": [{"type": "LOAD", "addr": "0x400000", "flags": "RWE", "size": 8192,
+                                         "offset": "0x0", "filesz": 8192}],
+                    "symbol_tables": [{"value": "0x0", "type": "FUNC", "bind": "GLOBAL", "ndx_name": "connect",
+                                       "table": ".dynsym", "section": "UND"},
+                                      {"value": "0x401100", "type": "FUNC", "bind": "GLOBAL",
+                                       "ndx_name": "x_" + HOSTILE, "table": ".dynsym", "section": "12"}],
+                    "symbols_total": 2, "notes": [{"owner": "GNU", "type": "NT_GNU_BUILD_ID", "size": 20,
+                                                   "note": "Build ID: " + HOSTILE}],
+                    "interpreter": "/lib64/ld-linux-x86-64.so.2", "needed": ["libc.so.6", HOSTILE + ".so"],
+                    "rpath": "$ORIGIN/" + HOSTILE, "build_id": "ab" * 20, "stripped": True, "linking": "dynamic"},
+            "static": {"entropy": "7.912", "strings": ["!This program cannot be run in DOS mode.", HOSTILE],
+                       "strings_total": 2, "iocs": [{"kind": "url", "value": "http://c2.example/" + HOSTILE}],
+                       "archive": {"kind": "ZIP", "count": 1, "encrypted": 0,
+                                   "entries": [{"name": HOSTILE + ".js", "size": 10, "compressed": 8,
+                                                "encrypted": False, "date": "2026-01-01 00:00:00"}]},
+                       "text": "#!/bin/sh\necho " + HOSTILE + "\n", "text_truncated": False},
             "pe": {"imagebase": "0x140000000", "entrypoint": "0x140012340", "machine_type": "IMAGE_FILE_MACHINE_AMD64",
                    "timestamp": "2026-08-30 22:14:01", "imphash": "f" * 32, "pdbpath": "C:\\build\\" + HOSTILE + ".pdb",
                    "sections": [{"name": "UPX0", "virtual_address": "0x00001000", "virtual_size": "0x00034000",

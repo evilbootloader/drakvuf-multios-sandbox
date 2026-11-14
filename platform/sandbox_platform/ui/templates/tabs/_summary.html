@@ -1,16 +1,21 @@
 {#
   CAPE's summary of what the sample touched, split by process (operator,
-  2026-11-12): one section per process of the sample, in the tree's order,
+  2026-11-12): one group per process of the sample, in the tree's order,
   each with only the lists that process has -- files, registry (Windows),
   commands, services, mutexes, resolved APIs -- and the buffers it
   enciphered or deciphered. A long list shows its first page and the rest a
   page at a time, in place. The processes with nothing are named in one line
   at the end.
 
+  **Every group starts closed** and opens on a click (operator, 2026-11-14):
+  its summary line names the process and counts each list, so the page reads
+  as an index of processes rather than one long scroll of the first
+  process's files. A `#summary-N` link opens its group (disclose.js).
+
   A report from before sandboxd kept the lists per process gets them whole,
   under one heading.
 #}
-{% from "tabs/_macros.html" import head, proc, toggle, xrow, hexview, nothing, no_report with context %}
+{% from "tabs/_macros.html" import head, proc, toggle, xrow, hexview, nothing, no_report, disclose_tools with context %}
 {% if not report %}{{ no_report() }}{% else %}
 {% set kinds = [
     ('write_files', 'Files written'), ('delete_files', 'Files deleted'), ('read_files', 'Files read'),
@@ -25,10 +30,10 @@
   <h3>{{ title }} <span class="count">{{ '{:,}'.format(items | length) }}</span>
     {%- if autostart %} <span class="chip" data-kind="autostart">{{ autostart | length }} autostart</span>{% endif %}</h3>
   {#- autostart first, already: cape.py orders the key lists so every page agrees #}
-  <div class="table-wrap"><table class="grid list"><tbody>
-  {#- 25 at first, so every process's section is in sight before one long
-      list fills the screen; "show more" brings 100 at a time -#}
-  {% set first = 25 %}
+  <div class="table-wrap window"><table class="grid list"><tbody>
+  {#- A window of 20 rows, the next 20 loading as it scrolls (operator,
+      2026-11-14; LIST_PAGE) -#}
+  {% set first = list_page %}
   {% with items=items[:first], next_offset=first if items | length > first else none,
           total=items | length, name=name, seqid=seqid %}
   {% include "tabs/_list_rows.html" %}
@@ -72,23 +77,42 @@
 {% set groups = report.summary_groups() %}
 {% if groups is not none %}
 {% set idle = [] %}
+{% set busy = [] %}
 {% for p, lists, encrypted in groups %}
+{% if (kinds | selectattr(0, 'in', lists) | list) or encrypted %}{% set _ = busy.append((p, lists, encrypted)) %}{% else %}{% set _ = idle.append(p) %}{% endif %}
+{% endfor %}
+{% if busy %}
+<section class="section" data-disclose-scope>
+<header class="block-head">
+  <h2>By process <span class="count">{{ busy | length }}</span></h2>
+  <span class="summary">Each opens what that process touched.</span>
+  {% if busy | length > 1 %}{{ disclose_tools() }}{% endif %}
+</header>
+<div class="groups">
+{% for p, lists, encrypted in busy %}
 {% set shown = kinds | selectattr(0, 'in', lists) | list %}
-{% if shown or encrypted %}
-<section class="section" id="summary-{{ p.seqid }}">
-<header class="section-head proc-head">
-  <h2><span class="pname{% if p.seqid in report.roots %} root{% endif %}" title="{{ p.process_name }}">{{ p.basename }}</span>
+<details class="group proc-group" id="summary-{{ p.seqid }}">
+  <summary>
+    <span class="pname{% if p.seqid in report.roots %} root{% endif %}" title="{{ p.process_name }}">{{ p.basename }}</span>
     <span class="pid">{{ p.process_id }}</span>
     {%- if p.seqid in report.roots %}<span class="chip" data-kind="sample">injected</span>{% endif %}
     {%- if p.seqid in report.followed_seqids %}<span class="chip" data-kind="followed">taken over</span>{% endif %}
-    <a class="jump" href="/ui/jobs/{{ job.id }}?tab=behaviour#proc-{{ p.seqid }}" title="its node in the process tree">tree ↗</a></h2>
-  {%- if p.command_line %}<p class="sub mono break">{{ p.command_line[:300] }}{% if p.command_line | length > 300 %}…{% endif %}</p>{% endif %}
-</header>
-{% for name, title in shown %}{{ listing(name, title, lists[name], p.seqid) }}{% endfor %}
-{% if encrypted %}{{ buffers(encrypted, p.seqid) }}{% endif %}
-</section>
-{% else %}{% set _ = idle.append(p) %}{% endif %}
+    <span class="kinds">
+      {%- for name, title in shown %}<span class="kind">{{ title | lower }}<b>{{ '{:,}'.format(lists[name] | length) }}</b></span>{% endfor %}
+      {%- if encrypted %}<span class="kind">encrypted buffers<b>{{ encrypted | length }}</b></span>{% endif %}</span>
+  </summary>
+  <div class="group-body proc-body">
+  <p class="proc-line">
+    {%- if p.command_line %}<span class="mono break dim">{{ p.command_line[:300] }}{% if p.command_line | length > 300 %}…{% endif %}</span>{% endif %}
+    <a class="jump" href="/ui/jobs/{{ job.id }}?tab=behaviour#proc-{{ p.seqid }}" title="its node in the process tree">tree ↗</a></p>
+  {% for name, title in shown %}{{ listing(name, title, lists[name], p.seqid) }}{% endfor %}
+  {% if encrypted %}{{ buffers(encrypted, p.seqid) }}{% endif %}
+  </div>
+</details>
 {% endfor %}
+</div>
+</section>
+{% endif %}
 {% if idle %}
 <section class="section">
 {{ head('Nothing summarised', idle | length, 'No file, key, command, service, mutex or API of these processes is in the summary; their calls are on Behaviour.') }}

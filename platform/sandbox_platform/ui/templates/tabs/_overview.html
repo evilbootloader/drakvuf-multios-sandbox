@@ -1,12 +1,29 @@
 {#
-  The run at a glance, top to bottom: the sample, how it ran, how it was
-  started, then what every other tab holds as a count. Facts, no verdict:
-  CAPE's malscore is not shown (operator, 2026-11-11) -- each signature
-  carries its own severity on its tab.
+  The run at a glance, top to bottom: its score, the sample, how it ran, how
+  it was started, then what every other tab holds as a count.
+
+  The score is CAPE's malscore, shown since 2026-11-14 (operator; it was
+  left out on 2026-11-11). It is calc_scoring's number, computed on Dom0 --
+  this page reads it and does not re-derive it, so the method described
+  below is a summary of sandboxd's vendored scoring.py, not a second copy.
 #}
-{% from "tabs/_macros.html" import head, proc, hits, no_report, chips with context %}
+{% from "tabs/_macros.html" import head, proc, hits, no_report, chips, score with context %}
 
 {% set f = report.target.file if report else none %}
+{% if report and report.malscore is not none %}
+<section class="section">
+{{ head('Score') }}
+<div class="scorecard" data-status="{{ report.malstatus or 'none' }}">
+  {{ score(report.malscore, report.malstatus) }}
+  <span class="meter" role="img" aria-label="{{ '%.1f' | format(report.malscore) }} of 10"><i style="width: {{ (report.malscore * 10) | round(1) }}%"></i></span>
+</div>
+<p class="sub">CAPE's malscore, from {{ report.signatures | length }} matched signature{{ 's' if report.signatures | length != 1 }}:
+  a YARA family hit on the sample scores 10; a signature in a malicious category (malware, RAT, ransomware, rootkit, anti-sandbox …) 7 to 9;
+  only suspicious categories (network, injection, persistence, anti-debug …) 4 to 6; nothing matched, 0.
+  <a href="/ui/jobs/{{ job.id }}?tab=signatures" hx-get="/ui/jobs/{{ job.id }}/tabs?tab=signatures"
+     hx-target="#job-tabs" hx-push-url="/ui/jobs/{{ job.id }}?tab=signatures">The signatures</a></p>
+</section>
+{% endif %}
 <section class="section">
 {{ head('Sample') }}
 <dl class="kv">

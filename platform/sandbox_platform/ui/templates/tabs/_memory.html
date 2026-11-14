@@ -12,7 +12,7 @@
 <section class="section">
 {{ head('Process dumps', report.procdump | length, 'Whole processes, dumped as they exited or were terminated.') }}
 {% if report.procdump %}
-<div class="table-wrap">
+<div class="table-wrap window">
 <table class="grid">
   <thead><tr><th>Process</th><th>Of</th><th class="num">Size</th><th>Status</th><th class="fill">YARA</th><th></th></tr></thead>
   <tbody>
@@ -44,7 +44,7 @@
 {{ head('Memory regions', report.procmemory | map(attribute='address_space') | map('length') | sum,
         'Regions memdump took: written into, executed from, or left behind.') }}
 {% if report.procmemory %}
-<div class="table-wrap">
+<div class="table-wrap window">
 <table class="grid">
   <thead><tr><th>Process</th><th>Address</th><th class="num">Size</th><th class="fill">Why</th><th>Into</th><th></th></tr></thead>
   <tbody>

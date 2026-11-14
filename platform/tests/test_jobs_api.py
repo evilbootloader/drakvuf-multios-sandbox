@@ -5,14 +5,12 @@ Issue #36 (DRAFT-043), with the two-endpoint split from #39.
 
 from __future__ import annotations
 
-import io
 import json
 import uuid
-import zipfile
 
 import pytest
 
-from conftest import WORKER_TOKEN, enqueue, owner_id, state_of
+from conftest import Unzipped, WORKER_TOKEN, enqueue, owner_id, state_of
 from sandbox_platform.catalogue import MAX_TRACE_TIMEOUT
 
 WINDOWS_MIB = 6294
@@ -551,10 +549,8 @@ def _completed_with_objects(conn, put_object, files: dict[str, bytes]):
     return job_id
 
 
-def _unzip(payload: bytes) -> zipfile.ZipFile:
-    archive = zipfile.ZipFile(io.BytesIO(payload))
-    archive.setpassword(b"infected")
-    return archive
+def _unzip(payload: bytes) -> Unzipped:
+    return Unzipped(payload)
 
 
 def test_one_artifact_downloads_as_an_encrypted_zip(client, conn, put_object):

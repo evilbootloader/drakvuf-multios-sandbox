@@ -36,7 +36,7 @@ from uuid import UUID
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Path as PathParam, Query
-from pydantic import BeforeValidator
+from pydantic import AfterValidator, BeforeValidator
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -47,6 +47,7 @@ from .. import jobs as dal
 from .. import calls as calls_store
 from .. import cape
 from .. import screenshots as screenshot_store
+from .. import timeline as timeline_store
 from ..config import settings
 from ..db import connection
 from ..enums import CONSOLE_STATES, TERMINAL_STATES, EgressMode, JobState, TargetOs
@@ -288,6 +289,20 @@ def _blank_is_absent(v: object) -> object:
 # it is just how forms work.
 BlankableState = Annotated[JobState | None, BeforeValidator(_blank_is_absent)]
 BlankableOs = Annotated[TargetOs | None, BeforeValidator(_blank_is_absent)]
+# The timeline's process select sends `seqid=` for "all", and its row box an
+# empty `at=` before anything is typed: absent, not a 422.
+def _within(low: int, high: int) -> AfterValidator:
+    """A range for a value that may be absent: `Field(ge=...)` applies to
+    None too, and refused the timeline's "all processes"."""
+    def check(v: int | None) -> int | None:
+        if v is not None and not low <= v <= high:
+            raise ValueError(f"must be from {low} to {high}")
+        return v
+    return AfterValidator(check)
+
+
+BlankableSeqid = Annotated[int | None, BeforeValidator(_blank_is_absent), _within(0, 10_000_000)]
+BlankableRow = Annotated[int | None, BeforeValidator(_blank_is_absent), _within(0, 1 << 40)]
 
 
 # 30 a page. Small enough that a page is scannable without scrolling, and it
@@ -417,17 +432,20 @@ _TAB_BODIES = {
     "artifacts": "tabs/_artifacts.html",
 }
 
-# Rows of a long list drawn before "show more": enough to scan, few enough
-# that a sample touching ten thousand files does not send ten thousand rows.
-LIST_PAGE = 100
-TIMELINE_PAGE = 300
+# Rows of a long list per fetch: every list of the report tabs is a window
+# 20 rows tall that loads the next 20 as it is scrolled (operator,
+# 2026-11-14), so a sample touching ten thousand files sends twenty at a time.
+LIST_PAGE = 20
 
 
 def _tab_body(slug: str) -> str:
     return _TAB_BODIES.get(slug, "tabs/_pending.html")
 
 
-def _job_context(job_id: UUID, tab: str, identity) -> dict:
+def _job_context(job_id: UUID, tab: str, identity, timeline_at: tuple = (None, None, "")) -> dict:
+    """`timeline_at` is where the Timeline tab opens: (seqid, row, search
+    text), from the page's URL -- a process panel links to its rows, a
+    Network row to the row naming its address."""
     with connection() as conn:
         job = _detail(conn, job_id, identity)
         key_prefix = _key_prefix(conn, job_id)
@@ -450,7 +468,18 @@ def _job_context(job_id: UUID, tab: str, identity) -> dict:
                                          job.artifacts,
                                          expired=job.artifacts_expired)
 
+    # The timeline file's row count, for the tab bar (its index is one small
+    # read, cached), and its first window when it is the tab being drawn
+    timeline = {}
+    timeline_file = (timeline_store.for_job(job.id, job.manifest, key_prefix, expired=job.artifacts_expired)
+                     if loaded.report is not None else None)
+    if active == "timeline" and loaded.report is not None:
+        seqid, at, q = timeline_at
+        source = timeline_file or timeline_store.from_events(loaded.report.events)
+        timeline = _timeline_ctx(source, loaded.report, seqid, at or 0, q, target=at)
+
     return {
+        **timeline,
         "job": job,
         # Where the sample was dropped, for Overview. Display only, from this
         # platform's username -- see `launch.drop_dir`.
@@ -461,14 +490,16 @@ def _job_context(job_id: UUID, tab: str, identity) -> dict:
         "active": active,
         "tab": next(t for t in tabs if t.slug == active),
         "body_template": _tab_body(active),
-        "filled": _filled(job, loaded),
+        "filled": _filled(job, loaded) | ({"timeline"} if timeline_file and timeline_file.count else set()),
+        # Rows of the timeline file; None for a run without one, whose tab
+        # counts CAPE's events (Report.tab_counts)
+        "timeline_count": timeline_file.count if timeline_file else None,
         # The report itself, or the sentence for why there is none. Both are
         # read by every tab template; `report` is None for a run from before
         # the CAPE chain, which shows Screenshots and Artifacts only.
         "report": loaded.report,
         "report_error": loaded.error,
         "list_page": LIST_PAGE,
-        "timeline_page": TIMELINE_PAGE,
         "strip": strip,
         "frame_count": screenshot_store.count(job.artifacts),
         # Rendered into data-terminal for job.js, which must know when to stop
@@ -517,9 +548,14 @@ def _filled(job, loaded: cape.Loaded) -> set[str]:
 def job_view(request: Request,
              job_id: UUID = PathParam(),
              tab: str = Query("overview"),
+             seqid: BlankableSeqid = None,
+             at: BlankableRow = None,
+             q: str = Query("", max_length=timeline_store.MAX_QUERY),
              identity: auth.Identity = None) -> HTMLResponse:
+    """`seqid`, `at` and `q` place the Timeline tab: one process's rows, a
+    row by its number, a search text marked."""
     return _render(request, "job.html", view="jobs",
-                   **_job_context(job_id, tab, identity))
+                   **_job_context(job_id, tab, identity, (seqid, at, q)))
 
 
 @router.get("/jobs/{job_id}/live", response_class=HTMLResponse)
@@ -537,12 +573,15 @@ def job_live(request: Request,
 def job_tabs(request: Request,
              job_id: UUID = PathParam(),
              tab: str = Query("overview"),
+             seqid: BlankableSeqid = None,
+             at: BlankableRow = None,
+             q: str = Query("", max_length=timeline_store.MAX_QUERY),
              identity: auth.Identity = None) -> HTMLResponse:
     """Just the tab bar and its body, for a tab click. Narrower than `/live`
     deliberately: that also carries the live console (DRAFT-056), and swapping
     it on a tab click would kill an open session. The nav is inside this
     fragment, which is what lets `aria-selected` move."""
-    ctx = _job_context(job_id, tab, identity)
+    ctx = _job_context(job_id, tab, identity, (seqid, at, q))
     return _render(request, "_job_tabs.html", **ctx)
 
 
@@ -647,32 +686,114 @@ def signature_view(request: Request,
                    signature=signature, index=index, marks=report.signature_marks(signature))
 
 
+# --- the timeline ---------------------------------------------------------------------
+#
+# Every plugin's records of the sample, in time order (timeline.py), shown 20
+# rows at a time in a window that loads more as it scrolls either way. A
+# search moves through the list and marks the match rather than filtering
+# (operator, 2026-11-14); a row number goes straight to that row.
+
+def _timeline_source(job, key_prefix: str, report: cape.Report):
+    """The run's timeline file, or for a run from before it, its CAPE
+    events -- the same operations over either."""
+    store = timeline_store.for_job(job.id, job.manifest, key_prefix, expired=job.artifacts_expired)
+    return store if store is not None else timeline_store.from_events(report.events)
+
+
+def _hits(rows, q: str) -> set[int]:
+    needle = q.lower()
+    return {r.index for r in rows if needle and r.matches(needle)} if needle else set()
+
+
+def _timeline_ctx(source, report: cape.Report, seqid: int | None, at: int, q: str,
+                  target: int | None = None) -> dict:
+    q = q.strip()[:timeline_store.MAX_QUERY]
+    if seqid is not None and seqid not in report.by_seqid:
+        seqid = None
+    at = min(max(0, at), max(0, source.count - 1))
+    window = source.window(at, seqid)
+    return {"tl": source, "tl_file": isinstance(source, timeline_store.Store),
+            "tl_seqid": seqid, "tl_q": q, "tl_target": target,
+            "tl_window": window, "tl_hits": _hits(window.rows, q)}
+
+
+def _timeline_for(job_id: UUID, identity):
+    job, key_prefix, report = _report_for(job_id, identity)
+    return job, report, _timeline_source(job, key_prefix, report)
+
+
 @router.get("/jobs/{job_id}/timeline", response_class=HTMLResponse)
 def timeline_view(request: Request,
                   job_id: UUID = PathParam(),
-                  object: str = Query("", max_length=32),
-                  seqid: int | None = Query(None, ge=0, le=10_000_000),
-                  offset: int = Query(0, ge=0, le=1 << 30),
-                  part: str = Query("block", pattern=r"^(block|rows)$"),
+                  seqid: BlankableSeqid = None,
+                  at: BlankableRow = None,
+                  q: str = Query("", max_length=timeline_store.MAX_QUERY),
+                  start: int = Query(0, ge=0, le=1 << 40),
+                  end: int = Query(0, ge=0, le=1 << 40),
+                  part: str = Query("block", pattern=r"^(block|rows|before)$"),
                   identity: auth.Identity = None) -> HTMLResponse:
-    """The timeline, filtered by object kind and process: the block (filter
-    change) or the next rows (`part=rows`)."""
-    job, _, report = _report_for(job_id, identity)
-    template = "tabs/_timeline_rows.html" if part == "rows" else "tabs/_timeline_block.html"
-    return _render(request, template, job=job, report=report,
-                   **_timeline(report, object, seqid, offset))
+    """The timeline block at a row (`at`, filter or row-number change), or
+    the 20 rows after `start` (`rows`, scrolling down) or before `end`
+    (`before`, scrolling up)."""
+    job, report, source = _timeline_for(job_id, identity)
+    if part == "block":
+        return _render(request, "tabs/_timeline_block.html", job=job, report=report,
+                       **_timeline_ctx(source, report, seqid, at or 0, q, target=at))
+    if seqid is not None and seqid not in report.by_seqid:
+        seqid = None
+    window = source.window(start, seqid) if part == "rows" else source.before(end, seqid)
+    return _render(request, "tabs/_timeline_rows.html", job=job, report=report, tl=source,
+                   tl_seqid=seqid, tl_q=q.strip(), tl_target=None, tl_hits=_hits(window.rows, q.strip()),
+                   rows=window.rows, mode="timeline",
+                   earlier=(window.start or None) if part == "before" else None,
+                   later=window.next if part == "rows" else None)
 
 
-def _timeline(report: cape.Report, object_: str, seqid: int | None, offset: int) -> dict:
-    events = [e for e in report.events
-              if (not object_ or e.object == object_) and (seqid is None or e.seqid == seqid)]
-    return {"events": events[offset:offset + TIMELINE_PAGE], "matching": len(events),
-            "offset": offset, "next_offset": offset + TIMELINE_PAGE
-            if offset + TIMELINE_PAGE < len(events) else None,
-            "filters": {k: v for k, v in (("object", object_), ("seqid", seqid)) if v not in ("", None)}}
+@router.get("/jobs/{job_id}/timeline/find", response_class=HTMLResponse)
+def timeline_find(request: Request,
+                  job_id: UUID = PathParam(),
+                  q: str = Query(min_length=1, max_length=timeline_store.MAX_QUERY),
+                  start: int = Query(0, ge=0, le=1 << 40),
+                  dir: str = Query("next", pattern=r"^(next|prev)$"),
+                  seqid: BlankableSeqid = None,
+                  identity: auth.Identity = None) -> HTMLResponse:
+    """The next (or previous) row from `start` holding `q`. Found: the whole
+    block, at that row and marking it, swapped over the old one
+    (HX-Retarget). Not found in this request's share of the file: the status
+    line, which asks again from where this one stopped as soon as it is
+    drawn -- the page keeps searching, and says how far it has got, until a
+    match, the end, or the reader's "stop"."""
+    job, report, source = _timeline_for(job_id, identity)
+    if seqid is not None and seqid not in report.by_seqid:
+        seqid = None
+    found = source.find(q, start, seqid, backwards=dir == "prev")
+    if found.index is not None:
+        response = _render(request, "tabs/_timeline_block.html", job=job, report=report,
+                           **_timeline_ctx(source, report, seqid, found.index, q, target=found.index))
+        response.headers["HX-Retarget"] = "#timeline"
+        response.headers["HX-Reswap"] = "outerHTML"
+        return response
+    return _render(request, "tabs/_timeline_status.html", job=job, tl=source, tl_q=q.strip(),
+                   tl_seqid=seqid, found=found, dir=dir)
 
 
-templates.env.globals["timeline"] = _timeline
+@router.get("/jobs/{job_id}/timeline/matches", response_class=HTMLResponse)
+def timeline_matches(request: Request,
+                     job_id: UUID = PathParam(),
+                     q: str = Query(min_length=1, max_length=timeline_store.MAX_QUERY),
+                     start: int = Query(0, ge=0, le=1 << 40),
+                     part: str = Query("block", pattern=r"^(block|rows)$"),
+                     identity: auth.Identity = None) -> HTMLResponse:
+    """One Network row's own timeline: only the rows naming its address or
+    name, 20 at a time, opened in place under the row. Each links to its
+    place in the whole timeline."""
+    job, report, source = _timeline_for(job_id, identity)
+    window = source.matches(q, start)
+    ctx = dict(job=job, report=report, tl=source, tl_seqid=None, tl_q=q.strip(), tl_target=None,
+               tl_hits=_hits(window.rows, q.strip()), rows=window.rows, mode="matches",
+               earlier=None, later=window.next)
+    template = "tabs/_timeline_matches.html" if part == "block" else "tabs/_timeline_rows.html"
+    return _render(request, template, **ctx)
 
 
 # The summary's lists, and the other lists a tab draws a page of.
