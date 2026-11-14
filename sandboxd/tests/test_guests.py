@@ -458,8 +458,30 @@ def test_windows_waits_with_ping_because_timeout_needs_a_console(tmp_path):
     assert "timeout" not in line
     # `&`, never `&&`: a guest with broken loopback would otherwise skip the
     # sample entirely and still produce a complete, empty-looking analysis.
-    assert ' & "C:\\Users\\user\\Desktop\\sample.bin"' in line
+    assert line.endswith(' & C:\\Windows\\explorer.exe "C:\\Users\\user\\Desktop\\sample.bin"')
     assert "&&" not in line
+
+
+def test_windows_hands_a_sample_with_no_command_line_to_the_shell(tmp_path):
+    """So that its parent is the user's explorer.exe, as after a double click
+    (al-khaser's parent check, job aa879b03). A command line, which
+    explorer.exe does not pass on, and what cmd.exe runs in itself keep
+    cmd.exe as their parent."""
+    paths = G.PATHS[TargetOs.WINDOWS]
+
+    def line(filename, arguments=""):
+        launch = G.resolve_launch(TargetOs.WINDOWS, None, None, arguments)
+        j = job(tmp_path, os_=TargetOs.WINDOWS, filename=filename, launch=launch)
+        argv = G.argv_trace(j)
+        assert argv[argv.index("-e") + 1] == paths.shell
+        return argv[argv.index("-e") + 3], j.guest_sample
+
+    for name in ("setup.exe", "invoice.js", "a b.msi"):
+        text, sample = line(name)
+        assert text == f'/c {paths.delay} & C:\\Windows\\explorer.exe "{sample}"'
+    for name, arguments in (("setup.exe", "/S"), ("run.bat", ""), ("run.CMD", "")):
+        text, sample = line(name, arguments)
+        assert "explorer.exe" not in text and f'& "{sample}"' in text
 
 
 @pytest.mark.parametrize("name", [
@@ -1305,3 +1327,14 @@ def test_an_apk_ignores_a_command_line_and_says_so(tmp_path):
 def test_a_linux_launch_has_no_caveat(tmp_path):
     launch = G.resolve_launch(TargetOs.UBUNTU, None, None, "'%&|^!\"'")
     assert G.launch_caveat(job(tmp_path, launch=launch)) is None
+
+
+@pytest.mark.parametrize("os_,kind", [(TargetOs.UBUNTU, SampleKind.ELF), (TargetOs.WINDOWS, SampleKind.PE)])
+def test_hidsim_reads_the_screen_for_buttons_when_a_job_selects_it(tmp_path, os_, kind):
+    """A bare `-a hidsim` moves the mouse and presses nothing: a sample at a
+    dialog stayed there. The monitor is the screen's, so it is the same option
+    on every guest; a job that did not ask for hidsim does not get it."""
+    assert "--hid-monitor-gui" not in G.argv_trace(job(tmp_path, os_, kind))
+    chosen = job(tmp_path, os_, kind, options=TraceOptions(plugins=("syscalls", G.HIDSIM_PLUGIN), timeout=120))
+    argv = G.argv_trace(chosen)
+    assert argv[argv.index("-a") + 1:].count("hidsim") == 1 and "--hid-monitor-gui" in argv

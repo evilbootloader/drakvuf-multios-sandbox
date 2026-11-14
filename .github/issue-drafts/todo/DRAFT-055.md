@@ -42,10 +42,24 @@ saying why. DRAFT-054's screenshots make that visible; this fixes it.
 
 ## What it is not
 
-Not scripted interaction. `hidsim` simulates *activity*, not intent — it
-cannot read a dialog and press the right button. A sample needing a specific
-sequence still needs DRAFT-056. Worth saying plainly, because "automated
-interaction" reads like more than it is.
+Not scripted interaction. `hidsim` simulates *activity*, not intent. A sample
+needing a specific sequence still needs DRAFT-056. Worth saying plainly,
+because "automated interaction" reads like more than it is.
+
+**It does press buttons it can read, since 2026-11-14 (CANDIDATE: not yet
+run on Dom0).** Upstream's `--hid-monitor-gui` walks the window manager's
+structures and runs on Windows 7 only; on our Windows 11 it turned itself off
+without a word, and Linux has nothing to walk. The fork's
+`gui/screen_buttons.cpp` reads the frame QEMU dumps instead, so it is the
+same on every guest: the text is isolated (what differs from its
+surroundings, the size of a letter), recognised with tesseract, and a word
+of a short list standing alone (Install, Next, Run, OK, Yes, I Agree ...) is
+clicked, once in 30 s per place. `sandboxd` passes the option whenever a job
+selects `hidsim`. Tried outside Dom0 on rendered dialogs (a message box, an
+installer page, a dark prompt: the right button each time) and on recorded
+screens of both guests (nothing pressed). It sees only what is on screen, a
+word of the list standing alone is pressed whether or not it is a button,
+and the screen it reads is drawn by the sample.
 
 ## It is mutually exclusive with human control
 

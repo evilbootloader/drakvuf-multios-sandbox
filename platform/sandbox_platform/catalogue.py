@@ -118,7 +118,7 @@ PLUGINS: tuple[Plugin, ...] = (
            linux=True, windows=True, default=True),
     Plugin("ipt", "Instruction-level trace (Intel PT)",
            linux=True, windows=True, heavy=True),
-    Plugin("hidsim", "Injects synthetic mouse and keyboard input",
+    Plugin("hidsim", "Moves the mouse and presses dialog buttons it can read on screen",
            linux=True, windows=True),
 
     Plugin("ptracemon", "Anti-debugging via ptrace",

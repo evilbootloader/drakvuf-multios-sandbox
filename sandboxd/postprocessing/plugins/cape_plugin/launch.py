@@ -5,6 +5,11 @@ first waits for the plugins to arm (guests._windows_launch: `cmd.exe /c
 PING.EXE -n 5 127.0.0.1 >nul & "sample"`), so the trace's root is that
 shell, with its console host and the wait beside the sample.
 
+A sample with no command line is handed to the guest's own shell instead
+(`... & explorer.exe "sample"`, since 2026-11-14): the `explorer.exe` the
+launch starts to do that is a launcher too, and the sample is whatever the
+shell then starts from that path (trace_split, `started_for`).
+
 One definition, read twice: `trace_split.follow_transfers` (a launcher is no
 source of a control transfer until the sample takes it over) and
 `behaviour.mark_launcher` (a launcher's calls are no behaviour of the
@@ -12,6 +17,7 @@ sample's). Each hands in its own view of the processes.
 """
 from __future__ import annotations
 
+import re
 from typing import Iterable, Mapping, Optional, Set
 
 # What the shell runs in itself rather than starts: for these the shell of the
@@ -23,6 +29,22 @@ def command_words(command) -> list:
     """A command line as its words, lower case, without redirections --
     `PING.EXE -n 5 127.0.0.1 >nul` is started as `PING.EXE  -n 5 127.0.0.1`."""
     return [w for w in str(command or "").lower().split() if not w.startswith((">", "<", "2>"))]
+
+
+def is_handoff(module_path, words) -> bool:
+    """`explorer.exe <one file>`, as the words of its command line: the shell
+    asked to open the file, which the running shell does. With no file it is
+    a new window, with a switch (`/e,`, `/select,`) a view: neither starts
+    anything."""
+    return _name(module_path) == "explorer.exe" and len(words) == 2 and not str(words[1]).startswith("/")
+
+
+_WORD = re.compile(r'"[^"]*"|\S+')
+
+
+def quoted_words(command) -> list:
+    """A command line as its words, a quoted one whole and without its quotes."""
+    return [w.strip('"') for w in _WORD.findall(str(command or ""))]
 
 
 def _name(path) -> str:
@@ -56,6 +78,8 @@ def launch_seqids(processes: Iterable[Mapping], shell: Optional[str], delay: Opt
         found.update(p["seqid"] for p in waits)
         found.update(p["seqid"] for p in children
                      if str(p.get("process_name") or "").lower() == "conhost.exe")
+        found.update(p["seqid"] for p in children
+                     if is_handoff(p.get("module_path"), quoted_words(p.get("command_line"))))
         if not str(sample_name or "").lower().endswith(SHELL_SCRIPTS):
             found.add(root["seqid"])
     return found

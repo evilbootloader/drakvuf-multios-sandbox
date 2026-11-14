@@ -42,7 +42,7 @@ from ...drakvuf_records import DRAKVUF_STRING_ARG, unescape_drakvuf
 from ...process_tree import Process, ProcessTree, split_commandline, tree_from_log
 from .api_kernel import OBJECT_NAME_KEYS, VALUE_SERVICES, kernel_services
 from .api_tables import canonical
-from .launch import launch_seqids
+from .launch import is_handoff, launch_seqids
 
 log = logging.getLogger(__name__)
 
@@ -253,6 +253,10 @@ def _nt_success(value) -> bool:
     return status is not None and status < 0x80000000
 
 
+# How follow_transfers knows a hand-off to the shell among `started_for`
+SHELL_HANDOFF = "the file of the `explorer.exe <file>` it ran"
+
+
 def _words(command: str) -> Tuple[str, ...]:
     """A Windows command line as its words, lower case: what two spellings
     of one command -- quoted or not, any case -- share."""
@@ -315,14 +319,20 @@ class _WindowsEvidence:
       started, then the Schedule service's svchost.exe (taskeng.exe and
       taskhostw.exe before it);
     * WMI: the command of a `wmic.exe process call create` the requester
-      started, then WmiPrvSE.exe.
+      started, then WmiPrvSE.exe;
+    * the shell: the file of an `explorer.exe <file>` the requester started,
+      then explorer.exe creating a process whose command line has that file
+      as one of its words -- the file itself, or the program it opens with.
+      sandboxd's own launch of a sample with no command line is one
+      (guests._windows_launch), and so is a sample leaving its tree this way.
 
     A process started with elevation (AppInfo's svchost) needs no link: its
     records name the requester as its parent and tree_from_log moves it
     there. Not linked, for want of a record naming the command: a task
     registered through ITaskService, Win32_Process.Create through
     IWbemServices::ExecMethod (PowerShell, a script's GetObject), and a
-    ShellExecute handed to explorer or DllHost through COM."""
+    ShellExecute handed to explorer or DllHost through COM by any other
+    means than explorer.exe's own command line."""
 
     # (the argument holding the target's handle, whether it is a thread's)
     TRIGGERS = {
@@ -345,6 +355,7 @@ class _WindowsEvidence:
         "task": (frozenset(("svchost.exe", "taskeng.exe", "taskhostw.exe")),
                  "the /TR command of the schtasks.exe it ran"),
         "wmi": (frozenset(("wmiprvse.exe",)), "the command of the `wmic process call create` it ran"),
+        "shell": (frozenset(("explorer.exe",)), SHELL_HANDOFF),
     }
     SERVICE_APIS = frozenset(("CreateServiceA", "CreateServiceW", "ChangeServiceConfigA",
                               "ChangeServiceConfigW"))
@@ -526,10 +537,16 @@ class _WindowsEvidence:
             words = _words(args[4])
             if words:
                 self.asked.append((pid, ts, "wmi", words, self.BROKERS["wmi"][1]))
+        elif is_handoff(rec.get("ImagePathName"), args):
+            self.asked.append((pid, ts, "shell", (args[1],), self.BROKERS["shell"][1]))
+            return      # the request itself, whoever's explorer.exe runs it
         broker = _basename(rec.get("ProcessName"))
         words = tuple(args)
         for requester, asked_ts, kind, wanted, what in self.asked:
-            if broker in self.BROKERS[kind][0] and wanted == words and requester != pid:
+            # The shell opens a file with the program for it: the file is a
+            # word of the command line, not the whole of it
+            same = wanted[0] in words if kind == "shell" else wanted == words
+            if broker in self.BROKERS[kind][0] and same and requester != pid:
                 self.started_for.append((requester, asked_ts, ts, rec["NewPid"],
                                          f"{broker} started {what}"))
                 break
@@ -646,7 +663,8 @@ def follow_transfers(prelude: TracePrelude, sample: Set[int], pending_roots: Set
     what the launch's shell does to another process is sandboxd's doing --
     until a sample process makes one of them run its code. That one is taken
     out of `launcher` and is a source from then on, as any target is. The
-    shell creating the sample is no transfer at all (_WindowsEvidence).
+    shell creating the sample is no transfer at all (_WindowsEvidence); the
+    shell handing it to explorer.exe is how the sample starts (is_launch).
 
     Returns what was followed, for the report: one entry per (source,
     target, how), the first. `unresolved` is given the sample's share of
@@ -667,6 +685,12 @@ def follow_transfers(prelude: TracePrelude, sample: Set[int], pending_roots: Set
             return pid in pending_sample
         return src.seqid in since and since[src.seqid] <= ts
 
+    def is_launch(pid: int, ts: float, how: str) -> bool:
+        """sandboxd's own launch handing the sample to the shell: the one
+        thing a launcher does that makes a process the sample's."""
+        src = alive_at(pid, ts)
+        return how.endswith(SHELL_HANDOFF) and src is not None and src.seqid in launcher
+
     # (source PID, when the source acted, TimeStamp, target PID, how)
     transfers = sorted([(src, ts, ts, target, how) for src, ts, target, how in prelude.transfers]
                        + list(prelude.started_for), key=lambda t: t[2])
@@ -677,7 +701,8 @@ def follow_transfers(prelude: TracePrelude, sample: Set[int], pending_roots: Set
     while changed:
         changed = False
         for src_pid, acted, ts, target_pid, how in transfers:
-            if (src_pid, ts, target_pid) in done or not is_sample(src_pid, acted):
+            if (src_pid, ts, target_pid) in done or not (
+                    is_sample(src_pid, acted) or is_launch(src_pid, acted, how)):
                 continue        # not the sample's then (a later round may find it was)
             done.add((src_pid, ts, target_pid))
             if (src_pid, target_pid, how) not in listed:

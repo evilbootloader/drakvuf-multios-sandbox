@@ -105,6 +105,64 @@ def test_a_shell_that_started_no_wait_is_the_sample(tmp_path):
     assert len(results["behavior"]["summary"]["write_keys"]) == 1
 
 
+# --- a sample handed to the shell (guests._windows_launch, 2026-11-14) -------------------------
+
+EXPLORER = "C:\\Windows\\explorer.exe"
+SHELL = "\\Device\\HarddiskVolume2\\Windows\\explorer.exe"
+
+
+def handed_off(path=SAMPLE, image=SAMPLE, command_line=None, by=50):
+    """`cmd /c PING ... & explorer.exe "sample"`: the injected cmd.exe (100),
+    its console host (110), the wait (120) and the explorer.exe that passes
+    the path on (125); then the running shell (50) starts it (130)."""
+    started = created(0x18, by, 130, image, command_line or f'"{path}" ')
+    started["ProcessName"] = SHELL
+    return (*BASE,
+            created(0x10, 100, 110, "C:\\Windows\\System32\\conhost.exe",
+                    "\\??\\C:\\Windows\\system32\\conhost.exe 0xffffffff -ForceV1"),
+            created(0x11, 100, 120, PING, f"{PING}  -n 5 127.0.0.1"),
+            created(0x15, 100, 125, EXPLORER, f'{EXPLORER}  "{path}"'),
+            key_set(0x16, 125, "ByTheHandOff"),
+            key_set(0x17, 50, "ByTheShellBefore"),
+            started,
+            key_set(0x19, 130, "ByTheSample"),
+            key_set(0x1a, 50, "ByTheShellAfter"))
+
+
+def test_a_sample_the_launch_handed_to_the_shell_is_the_sample(tmp_path):
+    """Its parent is the user's explorer.exe, as after a double click, so it
+    is no descendant of the injected cmd.exe: found by the path the launch
+    named. The shell itself stays out, before and after."""
+    results = run(tmp_path, *handed_off())
+    # (the console host and the wait have no record of their own here)
+    assert launchers(results) == [100, 125]
+    assert sorted(p["process_id"] for p in results["behavior"]["processes"]) == [100, 125, 130]
+    written = results["behavior"]["summary"]["write_keys"]
+    assert len(written) == 1 and "ByTheSample" in written[0]
+    followed = results["trace_split"]["followed"]
+    assert [(f["pid"], f["target_pid"]) for f in followed] == [(100, 130)]
+    assert "explorer.exe" in followed[0]["how"]
+
+
+def test_a_file_the_shell_opens_with_another_program_is_followed_by_its_path(tmp_path):
+    script = "C:\\Users\\u\\My Files\\a b.js"
+    wscript = "C:\\Windows\\System32\\WScript.exe"
+    results = run(tmp_path, *handed_off(path=script, image=wscript, command_line=f'"{wscript}" "{script}" '))
+    assert launchers(results) == [100, 125]
+    assert "ByTheSample" in " ".join(results["behavior"]["summary"]["write_keys"])
+
+
+def test_what_the_shell_starts_for_nobody_is_not_the_sample(tmp_path):
+    # the shell starting another file, and an explorer.exe asked for a view
+    for name in ("a", "b"):
+        (tmp_path / name).mkdir()
+    other = handed_off(command_line='"C:\\Users\\u\\Desktop\\other.exe" ')
+    assert "ByTheSample" not in " ".join(run(tmp_path / "a", *other)["behavior"]["summary"]["write_keys"])
+    view = list(handed_off())
+    view[len(BASE) + 2] = created(0x15, 100, 125, EXPLORER, f'{EXPLORER} /select,"{SAMPLE}"')
+    assert "ByTheSample" not in " ".join(run(tmp_path / "b", *view)["behavior"]["summary"]["write_keys"])
+
+
 # --- an API call is not a repeat of the kernel's record of it ------------------------------
 
 def test_ntdlls_stub_is_a_call_beside_the_syscall_it_makes(tmp_path):

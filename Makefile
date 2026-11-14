@@ -493,6 +493,10 @@ sandboxd:
 	# system-wide install of a pull-request branch was what it had to work \
 	# around. pdbconv's own imports come from the distribution instead. \
 	sudo apt-get install -y python3-pefile python3-construct; \
+	# hidsim's --hid-monitor-gui reads buttons off the guest's screen with \
+	# tesseract (drakvuf/src/plugins/hidsim/gui/screen_buttons.cpp). Without \
+	# the library DRAKVUF builds, says so when asked, and presses nothing. \
+	sudo apt-get install -y libtesseract-dev tesseract-ocr-eng; \
 	cd $(REPO_ROOT)/drakvuf; \
 	# threadsafety: required by --parallel-events. On a build/ that exists, \
 	# plain `meson setup` is a no-op that keeps the old options and the old \

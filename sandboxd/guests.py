@@ -76,6 +76,7 @@ log = logging.getLogger("sandboxd.guests")
 # platform's catalogue spells it (`catalogue.PLUGINS`).
 IPT_PLUGIN = "ipt"
 UNIXSOCKETMON_PLUGIN = "unixsocketmon"
+HIDSIM_PLUGIN = "hidsim"
 PROCMON_PLUGIN = "procmon"
 PROCDUMP2_PLUGIN = "procdump2"
 MEMDUMP_PLUGIN = "memdump"
@@ -779,6 +780,13 @@ _CMD_UNSAFE = frozenset('"%&<>|^!')
 # can be "not found" in a guest whose anchor has a thin one.
 _POWERSHELL = "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"
 
+# The shell itself, asked to open a file: `explorer.exe "<file>"` hands the
+# path to the running shell and leaves, and the shell starts it as a double
+# click would. Absolute for the reason above. What cmd.exe runs in itself,
+# which the hand-off would give a second cmd.exe for no gain.
+_EXPLORER = "C:\\Windows\\explorer.exe"
+_CMD_SCRIPTS = (".bat", ".cmd")
+
 
 # The symbol profiles DRAKVUF takes beside the kernel one (`-r`): option ->
 # file in the directory `Job.profile` is in, so the paths are absolute like
@@ -1267,6 +1275,18 @@ def _windows_launch(paths: GuestPaths, target: str,
     not before. And the sample runs with a console attached. Normal for
     Windows, and a closer parent than the anchor process was.
 
+    **A sample with no command line is handed to the shell** (2026-11-14,
+    CANDIDATE: not yet seen on the guest): `cmd /c <delay> & explorer.exe
+    "<sample>"`. "Is my parent explorer.exe" is among the first things a
+    sample asks (al-khaser's check, detected in job aa879b03), and a cmd.exe
+    parent with a five-ping sibling is what no user's double click leaves.
+    The sample is then no descendant of the injected process: `inject.log`
+    still names cmd.exe, and post-processing finds the sample by the path the
+    hand-off named (cape_plugin/trace_split.py, `started_for`; launch.py).
+    Not for a command line, which explorer.exe does not pass on, nor for a
+    `.bat`/`.cmd`, which cmd.exe runs in itself, nor for a `.ps1`: those keep
+    cmd.exe as their parent.
+
     **A job's command line follows the sample as typed**, which is what
     Windows itself does: `ShellExecuteEx` builds `"<file>" <parameters>` and
     the program splits that string however it chooses. It is held to the same
@@ -1305,6 +1325,10 @@ def _windows_launch(paths: GuestPaths, target: str,
 
     if not paths.delay or unsafe:
         return ["-e", execute_string] + (["-f", arguments] if arguments else [])
+
+    if not arguments and not target.lower().endswith(_CMD_SCRIPTS):
+        return ["-e", paths.shell, "-f",
+                f'/c {paths.delay} & {_EXPLORER} "{execute_string}"']
 
     return [
         "-e",
@@ -1502,6 +1526,16 @@ def argv_trace(job: Job, component: str | None = None) -> list[str]:
         # 2026-11-12). Every new process of the guest is dumped; only the
         # sample's are uploaded (`postprocessing/procdumps`).
         argv += ["--procdump-new-processes-on-finish"]
+    # hidsim alone moves the mouse. With this it also reads the screen (the
+    # frame QEMU dumps, not the guest's memory, so the same on every guest)
+    # and presses a button whose text is one it knows -- OK, Next, Install,
+    # Run -- which is where a sample waiting on a dialog spent its whole
+    # trace. Upstream's monitor ran on Windows 7 only and turned itself off
+    # elsewhere without a word; ours is `gui/screen_buttons.cpp` in the fork.
+    # A DRAKVUF built without the OCR library says so and moves the mouse.
+    # CANDIDATE (2026-11-14): not yet run on Dom0.
+    if HIDSIM_PLUGIN in job.options.plugins:
+        argv += ["--hid-monitor-gui"]
     for option, name in SYMBOL_PROFILES[job.target_os]:
         argv += [option, str(job.profile.parent / name)]
     return argv
