@@ -1,0 +1,118 @@
+Subject: [PATCH] hw/display/vga-pci: let the VGA card answer with given PCI IDs
+
+qemu-xen e064f42c80, QEMU_UPSTREAM_REVISION of Xen 4.20.1. The Xen build
+clones it into tools/qemu-xen-dir-remote; `make xen` applies this there,
+after automation/qemu-xen-cdrom-inquiry.patch.
+docs/architecture/guest-identity.md has why.
+
+QEMU's standard VGA is PCI 1234:1111, revision 2, and like every QEMU
+device has the subsystem 1af4:1100 (Red Hat, "QEMU Virtual Machine"). A
+guest names its display adapter from those: Windows' device instance is
+Enum\PCI\VEN_1234&DEV_1111&SUBSYS_11001AF4&REV_02, whose HardwareID
+Direct3D reads for the adapter's vendor and device, and Linux shows them in
+lspci and sysfs. A sample that asked Direct3D what the adapter was read that
+key and left (job c12bc2b5, 2026-11-13).
+
+Five properties on the VGA device, each 0 unless given:
+
+    -global VGA.vendor-id=0x10de -global VGA.device-id=0x2486
+    -global VGA.subsystem-vendor-id=0x19da -global VGA.subsystem-id=0x6630
+    -global VGA.revision=0xa1
+
+They are written over the configuration space at the end of realize, before
+the PCI core loads the option ROM, so pci_patch_ids() gives the VGA BIOS the
+same IDs and SeaBIOS runs it. The device is otherwise the same one. A card
+given none answers as before.
+
+What it does not do: the guest's driver for the card named finds no such
+card. Linux's bochs driver no longer binds either (it matches 1234:1111), so
+the guest runs on the firmware's framebuffer. hvmloader takes a VGA device
+with other IDs for a passed-through one (pci.c, VGA_pt), which changes
+nothing for it unless the vendor is Intel: do not give it 8086.
+
+Applied to Dom0's tree with `git apply --check` and compiled with QEMU's own
+flags (-fsyntax-only) on 2026-11-14. Never booted.
+
+ hw/display/vga-pci.c | 48 ++++++++++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 48 insertions(+)
+
+diff --git a/hw/display/vga-pci.c b/hw/display/vga-pci.c
+index 2d8adce..c43c770 100644
+--- a/hw/display/vga-pci.c
++++ b/hw/display/vga-pci.c
+@@ -48,6 +48,12 @@ struct PCIVGAState {
+     PCIDevice dev;
+     VGACommonState vga;
+     uint32_t flags;
++    /* The card's own IDs, 0 for QEMU's: pci_std_vga_identity() */
++    uint32_t vendor_id;
++    uint32_t device_id;
++    uint32_t subsystem_vendor_id;
++    uint32_t subsystem_id;
++    uint32_t revision;
+     qemu_edid_info edid_info;
+     MemoryRegion mmio;
+     MemoryRegion mrs[4];
+@@ -233,6 +239,39 @@ void pci_std_vga_mmio_region_init(VGACommonState *s,
+     }
+ }
+ 
++/*
++ * A card given IDs (-global VGA.vendor-id=0x10de ...) answers with them in
++ * place of QEMU's 1234:1111, revision 2, and the subsystem 1af4:1100 every
++ * QEMU device has. A guest reads them wherever it names its display adapter:
++ * Windows' device instance (Enum\PCI\VEN_1234&DEV_1111&SUBSYS_11001AF4), which
++ * Direct3D reports as the adapter's vendor and device, and lspci and sysfs on
++ * Linux. The device is the same one: its option ROM is patched to the IDs it
++ * is loaded for (pci_patch_ids), and a guest's own driver for the card named
++ * will not find that card behind them.
++ *
++ * Each is 0 unless given, and a card given none answers as before.
++ */
++static void pci_std_vga_identity(PCIVGAState *d)
++{
++    uint8_t *config = d->dev.config;
++
++    if (d->vendor_id) {
++        pci_config_set_vendor_id(config, d->vendor_id);
++    }
++    if (d->device_id) {
++        pci_config_set_device_id(config, d->device_id);
++    }
++    if (d->subsystem_vendor_id) {
++        pci_set_word(config + PCI_SUBSYSTEM_VENDOR_ID, d->subsystem_vendor_id);
++    }
++    if (d->subsystem_id) {
++        pci_set_word(config + PCI_SUBSYSTEM_ID, d->subsystem_id);
++    }
++    if (d->revision) {
++        pci_config_set_revision(config, d->revision);
++    }
++}
++
+ static void pci_std_vga_realize(PCIDevice *dev, Error **errp)
+ {
+     PCIVGAState *d = PCI_VGA(dev);
+@@ -269,6 +308,9 @@ static void pci_std_vga_realize(PCIDevice *dev, Error **errp)
+ 
+         pci_register_bar(&d->dev, 2, PCI_BASE_ADDRESS_SPACE_MEMORY, &d->mmio);
+     }
++
++    /* After the revision above, before the core loads the option ROM */
++    pci_std_vga_identity(d);
+ }
+ 
+ static void pci_secondary_vga_realize(PCIDevice *dev, Error **errp)
+@@ -339,6 +381,12 @@ static Property vga_pci_properties[] = {
+                     PCIVGAState, flags, PCI_VGA_FLAG_ENABLE_EDID, true),
+     DEFINE_EDID_PROPERTIES(PCIVGAState, edid_info),
+     DEFINE_PROP_BOOL("global-vmstate", PCIVGAState, vga.global_vmstate, false),
++    DEFINE_PROP_UINT32("vendor-id", PCIVGAState, vendor_id, 0),
++    DEFINE_PROP_UINT32("device-id", PCIVGAState, device_id, 0),
++    DEFINE_PROP_UINT32("subsystem-vendor-id", PCIVGAState,
++                       subsystem_vendor_id, 0),
++    DEFINE_PROP_UINT32("subsystem-id", PCIVGAState, subsystem_id, 0),
++    DEFINE_PROP_UINT32("revision", PCIVGAState, revision, 0),
+     DEFINE_PROP_END_OF_LIST(),
+ };
+ 

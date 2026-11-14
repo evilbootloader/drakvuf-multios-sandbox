@@ -1302,3 +1302,40 @@ def test_vlan_must_be_an_int():
         argv_apply("3", DIRECT)
     with pytest.raises(ValueError, match="must be an int"):
         argv_apply(True, DIRECT)
+
+def test_fakenets_raw_listeners_answer_nothing():
+    """Upstream's RawListener echoes, and a loader took its own request for
+    its payload (job fca804a4, 2026-11-13). Both raw listeners name the custom
+    response, the custom response names the module, and the module reads and
+    sends nothing. Run against the pinned RawListener itself on 2026-11-14:
+    upstream sent the bytes back on TCP and UDP, this sent none."""
+    import configparser
+    import importlib.util
+    import socket
+
+    automation = Path(__file__).resolve().parents[2] / "automation"
+    ini = configparser.ConfigParser()
+    ini.read(automation / "fakenet.ini")
+    custom = configparser.ConfigParser()
+    for proto in ("TCP", "UDP"):
+        assert ini[f"Raw{proto}Listener"]["Custom"] == "fakenet-custom.ini"
+    custom.read(automation / "fakenet-custom.ini")
+    by_type = {s["ListenerType"]: s for s in custom.values() if "ListenerType" in s}
+    assert by_type["TCP"]["TcpDynamic"] == by_type["UDP"]["UdpDynamic"] == "fakenet_raw_silent.py"
+    # `make sandboxd` puts all three in one directory, where RawListener looks
+    makefile = (automation.parent / "Makefile").read_text()
+    for name in ("fakenet.ini", "fakenet-custom.ini", "fakenet_raw_silent.py"):
+        assert f"automation/{name} /etc/{name}" in makefile
+
+    spec = importlib.util.spec_from_file_location("fakenet_raw_silent", automation / "fakenet_raw_silent.py")
+    silent = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(silent)
+    sample, server = socket.socketpair()
+    with sample, server:
+        sample.sendall(b"l64   \x00P45.86.229.111")
+        sample.shutdown(socket.SHUT_WR)
+        sample.settimeout(1)
+        silent.HandleTcp(server)                      # returns once the sample has closed
+        silent.HandleUdp(server, b"ping", ("127.0.0.1", 9))
+        server.close()
+        assert sample.recv(64) == b""                 # closed, with nothing sent first

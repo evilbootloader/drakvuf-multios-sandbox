@@ -45,6 +45,9 @@ XEN_IDENTITY_PATCH := $(REPO_ROOT)/automation/xen-guest-identity.patch
 # QEMU's CD-ROM answers INQUIRY with its ide-cd.model instead of "QEMU QEMU DVD-ROM";
 # applied to the qemu-xen tree the Xen build clones
 QEMU_CDROM_PATCH := $(REPO_ROOT)/automation/qemu-xen-cdrom-inquiry.patch
+# QEMU's VGA card answers with the PCI IDs the identity gives it (VGA.vendor-id and the
+# rest in device_model_args_hvm) instead of 1234:1111 and the subsystem 1af4:1100
+QEMU_VGA_PATCH := $(REPO_ROOT)/automation/qemu-xen-vga-ids.patch
 XEN_IDENTITY := $(REPO_ROOT)/scripts/xen-identity.py
 # The guests' firmware files, from the identity (not tracked, like the identity)
 GUEST_FIRMWARE := $(REPO_ROOT)/state/firmware
@@ -123,6 +126,7 @@ xen:
 	make -C tools qemu-xen-dir-find; \
 	git -C tools/qemu-xen-dir-remote checkout -- .; \
 	git -C tools/qemu-xen-dir-remote apply $(QEMU_CDROM_PATCH); \
+	git -C tools/qemu-xen-dir-remote apply $(QEMU_VGA_PATCH); \
 	make -j$$(nproc) dist-xen; \
 	make -j$$(nproc) dist-tools; \
 	make -j$$(nproc) debball; \
@@ -508,6 +512,9 @@ sandboxd:
 	# Reinstalled before patching, every time: patch --forward skips a file it finds partly patched \
 	/opt/fakenet-ng/bin/pip install --no-deps --force-reinstall 'git+https://github.com/mandiant/flare-fakenet-ng@$(FAKENET_COMMIT)'; \
 	install -m 0644 $(REPO_ROOT)/automation/fakenet.ini /etc/fakenet.ini; \
+	# The raw listeners' custom response, resolved against fakenet.ini's directory \
+	install -m 0644 $(REPO_ROOT)/automation/fakenet-custom.ini /etc/fakenet-custom.ini; \
+	install -m 0644 $(REPO_ROOT)/automation/fakenet_raw_silent.py /etc/fakenet_raw_silent.py; \
 	mkdir -p /var/lib/fakenet/root; \
 	SP="$$(/opt/fakenet-ng/bin/python -c 'import fakenet, os; print(os.path.dirname(os.path.dirname(fakenet.__file__)))')"; \
 	patch -p1 --forward -d "$$SP" < $(REPO_ROOT)/automation/fakenet-divert-no.patch; \
@@ -616,6 +623,17 @@ ubuntu_analysis_vm:
 	# pin lands in the target as /etc/apt/preferences.d/90curtin.pref and \
 	# stays, so no later apt run in the golden pulls firefox back. The image \
 	# has no browser. UNPROVEN until the next image built by this target. \
+	\
+	# `nopv` on the installed kernel's command line (2026-11-14, CANDIDATE, \
+	# never booted). Linux finds Xen's CPUID leaves whatever the hypervisor \
+	# bit and sets itself up as a Xen guest: the `xen` clocksource in \
+	# /sys/devices/system/clocksource/clocksource0, /sys/hypervisor, /proc/xen. \
+	# With nopv it still finds them (dmesg keeps "Hypervisor detected: Xen \
+	# HVM") and runs as on bare hardware: TSC clocksource, LAPIC timer. \
+	# guest-identity.md, section 4, has what has to be measured again. \
+	# GRUB_GFXMODE: with the display adapter's own PCI IDs the bochs driver \
+	# no longer binds, and the desktop is the firmware's framebuffer in the \
+	# mode GRUB left: 1280x800, the size it had under bochs. \
 	printf "%s\n" \
 	"#cloud-config" \
 	"autoinstall:" \
@@ -651,7 +669,8 @@ ubuntu_analysis_vm:
 	"    - curtin in-target --target=/target -- bash -c 'KVER=\$$(ls /boot/vmlinuz-* | sed \"s|/boot/vmlinuz-||\" | sort -V | tail -1); apt-get install -y linux-image-\$${KVER}-dbgsym'" \
 	"    - curtin in-target --target=/target -- mkdir -p /etc/gdm3" \
 	"    - curtin in-target --target=/target -- sh -c 'printf \"[daemon]\nAutomaticLoginEnable=true\nAutomaticLogin=$(ANALYSIS_VM_USER)\n\" > /etc/gdm3/custom.conf'" \
-	"    - curtin in-target --target=/target -- sed -i 's/^GRUB_CMDLINE_LINUX=\"/&net.ifnames=0 /' /etc/default/grub" \
+	"    - curtin in-target --target=/target -- sed -i 's/^GRUB_CMDLINE_LINUX=\"/&net.ifnames=0 nopv /' /etc/default/grub" \
+	"    - curtin in-target --target=/target -- sh -c 'echo GRUB_GFXMODE=1280x800 >> /etc/default/grub'" \
 	"    - curtin in-target --target=/target -- update-grub" \
 	"    - curtin in-target --target=/target -- sh -c 'printf \"network\072\n    version\072 2\n    renderer\072 networkd\n    ethernets\072\n        eth0\072\n            dhcp4\072 false\n\" > /etc/cloud/cloud.cfg.d/99-no-dhcp.cfg'" \
 	"    - curtin in-target --target=/target -- sh -c 'rm -f /etc/netplan/*.yaml'" \

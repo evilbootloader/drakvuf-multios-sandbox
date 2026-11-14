@@ -69,6 +69,13 @@ Added 2026-11-02: **`qemu-xen-cdrom-inquiry.patch`**, which `make xen` applies
 to the qemu-xen tree Xen's build clones, so a CD-ROM given the identity's model
 does not still answer as `QEMU QEMU DVD-ROM` (`guest-identity.md` §3).
 
+Added 2026-11-14: **`qemu-xen-vga-ids.patch`**, which `make xen` applies to the
+same tree after it: QEMU's VGA card answers with the PCI IDs the identity
+gives it (`guest-identity.md` §3). And **`fakenet-custom.ini`** with
+**`fakenet_raw_silent.py`**, which `make sandboxd` installs in `/etc` beside
+`fakenet.ini`: FakeNet's raw listeners read and answer nothing, where
+upstream's echo (`networking.md`, "simulated").
+
 ---
 
 ## Facts carried out of the deleted files

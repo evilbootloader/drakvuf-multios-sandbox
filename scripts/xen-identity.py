@@ -110,6 +110,25 @@ OPTICAL = [
 ]
 
 
+# The display adapter's PCI IDs: name, vendor:device, subsystem vendor:device, revision.
+# QEMU's VGA answers with them (automation/qemu-xen-vga-ids.patch) in place of 1234:1111
+# and the subsystem 1af4:1100, which name QEMU to whatever asks what the adapter is.
+# Every row is a card and a board maker's subsystem as pci.ids lists them (read
+# 2026-11-14). Discrete NVIDIA cards only:
+#   - hvmloader gives an Intel VGA device an IGD OpRegion (pci.c, VGA_pt), and the host
+#     CPU the guests see may have no integrated graphics at all (an F model);
+#   - no driver has to bind. nouveau reads the chipset from the card's BOOT0 register,
+#     finds none behind these IDs and leaves; a machine whose card has no driver yet
+#     is an ordinary one, on the firmware's framebuffer.
+GPUS = [
+    ("GeForce RTX 3060 Ti", 0x10DE, 0x2486, 0x19DA, 0x6630, 0xA1),
+    ("GeForce RTX 3070", 0x10DE, 0x2484, 0x10DE, 0x146B, 0xA1),
+    ("GeForce GTX 1650", 0x10DE, 0x1F82, 0x19DA, 0x3595, 0xA1),
+    ("GeForce GTX 1060 6GB", 0x10DE, 0x1C03, 0x1043, 0x85B6, 0xA1),
+    ("GeForce GTX 1050 Ti", 0x10DE, 0x1C82, 0x1458, 0x3763, 0xA1),
+]
+
+
 def pick(seq):
     return seq[secrets.randbelow(len(seq))]
 
@@ -178,9 +197,15 @@ def draw():
     return identity
 
 
+def draw_gpu():
+    name, vendor, device, subsystem_vendor, subsystem, revision = pick(GPUS)
+    return {"name": name, "vendor": vendor, "device": device, "subsystem_vendor": subsystem_vendor,
+            "subsystem": subsystem, "revision": revision}
+
+
 def draw_drive_details(identity):
     """The disk's and the optical drive's firmware revisions and the drive's serial, for the
-    models the identity has. An identity drawn before they were added gets them here, for
+    models the identity has, and a display adapter. An identity drawn before they were added gets them here, for
     its own models: a new model would be a new device to an installed Windows. Returns the
     keys it added."""
     revisions = {model: revs for model, _, revs in DISKS}
@@ -192,7 +217,10 @@ def draw_drive_details(identity):
     added = []
     for key, value in (("disk_firmware", lambda: pick(revisions[identity["disk_model"]])),
                        ("cdrom_firmware", lambda: pick(cdrom_revisions)),
-                       ("cdrom_serial", lambda: fill(serial))):
+                       ("cdrom_serial", lambda: fill(serial)),
+                       # A new device to an installed guest, as a new model would be: the
+                       # guests' configs take it at their install targets and nowhere else
+                       ("gpu", draw_gpu)):
         if key not in identity:
             identity[key] = value()
             added.append(key)
@@ -476,6 +504,12 @@ def xl_cfg(identity, out_dir):
     drives = ["ide-hd.model=" + identity["disk_model"], "ide-hd.serial=" + identity["disk_serial"],
               "ide-hd.ver=" + identity["disk_firmware"], "ide-cd.model=" + identity["cdrom_model"],
               "ide-cd.serial=" + identity["cdrom_serial"], "ide-cd.ver=" + identity["cdrom_firmware"]]
+    # The display adapter's IDs, which QEMU has only with automation/qemu-xen-vga-ids.patch:
+    # one built without it does not start a guest given them
+    gpu = identity["gpu"]
+    drives += ["VGA.%s=0x%04x" % (prop, gpu[key]) for prop, key in (
+        ("vendor-id", "vendor"), ("device-id", "device"), ("subsystem-vendor-id", "subsystem_vendor"),
+        ("subsystem-id", "subsystem"), ("revision", "revision"))]
     print("device_model_args_hvm = [ %s ]" % ", ".join("'-global', '%s'" % d for d in drives))
 
 

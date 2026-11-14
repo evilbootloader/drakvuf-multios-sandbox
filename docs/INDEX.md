@@ -368,22 +368,22 @@ It maps **headings, not content**: a fact stated in the middle of a section is n
 
 - `docs/architecture/automation-files.md:1` — [The shell/C launcher pipeline, and what replaced it](architecture/automation-files.md#the-shellc-launcher-pipeline-and-what-replaced-it)
   - `docs/architecture/automation-files.md:22` — [What replaced what](architecture/automation-files.md#what-replaced-what)
-  - `docs/architecture/automation-files.md:74` — [Facts carried out of the deleted files](architecture/automation-files.md#facts-carried-out-of-the-deleted-files)
-    - `docs/architecture/automation-files.md:80` — [The 10-second post-destroy settle](architecture/automation-files.md#the-10-second-post-destroy-settle)
-    - `docs/architecture/automation-files.md:92` — [The `ps aux | grep` wildcard defect](architecture/automation-files.md#the-ps-aux--grep-wildcard-defect)
-    - `docs/architecture/automation-files.md:112` — [The md5-keyed output directory](architecture/automation-files.md#the-md5-keyed-output-directory)
-    - `docs/architecture/automation-files.md:129` — [The compiled-in phase timers](architecture/automation-files.md#the-compiled-in-phase-timers)
-    - `docs/architecture/automation-files.md:138` — [The filename admission rule](architecture/automation-files.md#the-filename-admission-rule)
-    - `docs/architecture/automation-files.md:157` — [Untrusted filenames must never be spliced into a guest shell string](architecture/automation-files.md#untrusted-filenames-must-never-be-spliced-into-a-guest-shell-string)
-    - `docs/architecture/automation-files.md:170` — [Android traces with `-F` and `--disable-sysret`; Ubuntu did not](architecture/automation-files.md#android-traces-with--f-and---disable-sysret-ubuntu-did-not)
-    - `docs/architecture/automation-files.md:189` — [Why the APK install is not traced, and why the launch is not `monkey`](architecture/automation-files.md#why-the-apk-install-is-not-traced-and-why-the-launch-is-not-monkey)
-    - `docs/architecture/automation-files.md:203` — [The shebang, and why `automation/` is POSIX](architecture/automation-files.md#the-shebang-and-why-automation-is-posix)
-    - `docs/architecture/automation-files.md:221` — [The shellcheck baseline](architecture/automation-files.md#the-shellcheck-baseline)
-  - `docs/architecture/automation-files.md:235` — [What the pipeline was](architecture/automation-files.md#what-the-pipeline-was)
-    - `docs/architecture/automation-files.md:258` — [The constraint that motivated the replacement](architecture/automation-files.md#the-constraint-that-motivated-the-replacement)
-  - `docs/architecture/automation-files.md:280` — [Evidence status at the time of deletion](architecture/automation-files.md#evidence-status-at-the-time-of-deletion)
-    - `docs/architecture/automation-files.md:299` — [The Dom0 checkout](architecture/automation-files.md#the-dom0-checkout)
-  - `docs/architecture/automation-files.md:320` — [Where the Xen guest configs live](architecture/automation-files.md#where-the-xen-guest-configs-live)
+  - `docs/architecture/automation-files.md:81` — [Facts carried out of the deleted files](architecture/automation-files.md#facts-carried-out-of-the-deleted-files)
+    - `docs/architecture/automation-files.md:87` — [The 10-second post-destroy settle](architecture/automation-files.md#the-10-second-post-destroy-settle)
+    - `docs/architecture/automation-files.md:99` — [The `ps aux | grep` wildcard defect](architecture/automation-files.md#the-ps-aux--grep-wildcard-defect)
+    - `docs/architecture/automation-files.md:119` — [The md5-keyed output directory](architecture/automation-files.md#the-md5-keyed-output-directory)
+    - `docs/architecture/automation-files.md:136` — [The compiled-in phase timers](architecture/automation-files.md#the-compiled-in-phase-timers)
+    - `docs/architecture/automation-files.md:145` — [The filename admission rule](architecture/automation-files.md#the-filename-admission-rule)
+    - `docs/architecture/automation-files.md:164` — [Untrusted filenames must never be spliced into a guest shell string](architecture/automation-files.md#untrusted-filenames-must-never-be-spliced-into-a-guest-shell-string)
+    - `docs/architecture/automation-files.md:177` — [Android traces with `-F` and `--disable-sysret`; Ubuntu did not](architecture/automation-files.md#android-traces-with--f-and---disable-sysret-ubuntu-did-not)
+    - `docs/architecture/automation-files.md:196` — [Why the APK install is not traced, and why the launch is not `monkey`](architecture/automation-files.md#why-the-apk-install-is-not-traced-and-why-the-launch-is-not-monkey)
+    - `docs/architecture/automation-files.md:210` — [The shebang, and why `automation/` is POSIX](architecture/automation-files.md#the-shebang-and-why-automation-is-posix)
+    - `docs/architecture/automation-files.md:228` — [The shellcheck baseline](architecture/automation-files.md#the-shellcheck-baseline)
+  - `docs/architecture/automation-files.md:242` — [What the pipeline was](architecture/automation-files.md#what-the-pipeline-was)
+    - `docs/architecture/automation-files.md:265` — [The constraint that motivated the replacement](architecture/automation-files.md#the-constraint-that-motivated-the-replacement)
+  - `docs/architecture/automation-files.md:287` — [Evidence status at the time of deletion](architecture/automation-files.md#evidence-status-at-the-time-of-deletion)
+    - `docs/architecture/automation-files.md:306` — [The Dom0 checkout](architecture/automation-files.md#the-dom0-checkout)
+  - `docs/architecture/automation-files.md:327` — [Where the Xen guest configs live](architecture/automation-files.md#where-the-xen-guest-configs-live)
 
 ## `docs/architecture/falco-rules.md`
 
@@ -398,11 +398,11 @@ It maps **headings, not content**: a fact stated in the middle of a section is n
 ## `docs/architecture/guest-identity.md`
 
 - `docs/architecture/guest-identity.md:1` — [Guest identity — what the analysis guests look like from inside](architecture/guest-identity.md#guest-identity--what-the-analysis-guests-look-like-from-inside)
-  - `docs/architecture/guest-identity.md:25` — [1. The evidence it answers](architecture/guest-identity.md#1-the-evidence-it-answers)
-  - `docs/architecture/guest-identity.md:58` — [2. The identity](architecture/guest-identity.md#2-the-identity)
-  - `docs/architecture/guest-identity.md:88` — [3. Where it goes](architecture/guest-identity.md#3-where-it-goes)
-  - `docs/architecture/guest-identity.md:159` — [4. Why a reinstall](architecture/guest-identity.md#4-why-a-reinstall)
-  - `docs/architecture/guest-identity.md:201` — [5. What it does not answer](architecture/guest-identity.md#5-what-it-does-not-answer)
+  - `docs/architecture/guest-identity.md:29` — [1. The evidence it answers](architecture/guest-identity.md#1-the-evidence-it-answers)
+  - `docs/architecture/guest-identity.md:74` — [2. The identity](architecture/guest-identity.md#2-the-identity)
+  - `docs/architecture/guest-identity.md:104` — [3. Where it goes](architecture/guest-identity.md#3-where-it-goes)
+  - `docs/architecture/guest-identity.md:190` — [4. Why a reinstall](architecture/guest-identity.md#4-why-a-reinstall)
+  - `docs/architecture/guest-identity.md:263` — [5. What it does not answer](architecture/guest-identity.md#5-what-it-does-not-answer)
 
 ## `docs/architecture/licensing.md`
 
@@ -451,7 +451,7 @@ It maps **headings, not content**: a fact stated in the middle of a section is n
     - `docs/architecture/networking.md:350` — [The answer: it probes, it is refused, and it does not care](architecture/networking.md#the-answer-it-probes-it-is-refused-and-it-does-not-care)
   - `docs/architecture/networking.md:391` — [Proposed containment design (not yet implemented)](architecture/networking.md#proposed-containment-design-not-yet-implemented)
     - `docs/architecture/networking.md:401` — [Partly built, 2026-08-31 — DRAFT-057 Phase 1](architecture/networking.md#partly-built-2026-08-31--draft-057-phase-1)
-  - `docs/architecture/networking.md:572` — [TLS visibility — confirmed gap, not solved](architecture/networking.md#tls-visibility--confirmed-gap-not-solved)
+  - `docs/architecture/networking.md:583` — [TLS visibility — confirmed gap, not solved](architecture/networking.md#tls-visibility--confirmed-gap-not-solved)
 
 ## `docs/architecture/platform.md`
 

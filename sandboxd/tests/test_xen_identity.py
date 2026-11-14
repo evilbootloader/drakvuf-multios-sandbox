@@ -141,3 +141,33 @@ def test_an_identity_from_before_gets_drive_details_for_its_own_models(tmp_path)
     for option in ("ide-hd.ver=", "ide-cd.ver=", "ide-cd.serial="):
         assert "'%s" % option in lines
     assert "2.5+" not in lines and "QM000" not in lines
+
+
+def test_the_display_adapter_is_a_real_card_and_reaches_the_guest_configs(tmp_path):
+    """QEMU's VGA is 1234:1111 with the subsystem 1af4:1100, which Direct3D
+    handed a stealer as the adapter's vendor (job c12bc2b5, 2026-11-13: it read
+    Enum\\PCI\\VEN_1234&DEV_1111&SUBSYS_11001AF4 and left)."""
+    module = _script()
+    for name, vendor, device, subsystem_vendor, subsystem, revision in module.GPUS:
+        assert vendor == 0x10DE, name                  # hvmloader gives an Intel one an OpRegion
+        assert (vendor, device) != (0x1234, 0x1111) and (subsystem_vendor, subsystem) != (0x1AF4, 0x1100)
+        assert all(0 < v <= 0xFFFF for v in (device, subsystem_vendor, subsystem)) and 0 < revision <= 0xFF
+
+    state = tmp_path / "xen-identity.json"
+    gpu = json.loads(_run(state, "show").stdout)["gpu"]
+    line = [l for l in _run(state, "xl-cfg", str(tmp_path)).stdout.splitlines() if l.startswith("device_model_args_hvm")][0]
+    for prop, key in (("vendor-id", "vendor"), ("device-id", "device"), ("subsystem-vendor-id", "subsystem_vendor"),
+                      ("subsystem-id", "subsystem"), ("revision", "revision")):
+        assert "'-global', 'VGA.%s=0x%04x'" % (prop, gpu[key]) in line
+
+
+def test_an_identity_from_before_gets_a_display_adapter_and_keeps_it(tmp_path):
+    state = tmp_path / "xen-identity.json"
+    _run(state, "show")
+    identity = json.loads(state.read_text())
+    del identity["gpu"]
+    state.write_text(json.dumps(identity))
+
+    first = json.loads(_run(state, "show").stdout)["gpu"]
+    assert json.loads(_run(state, "show").stdout)["gpu"] == first
+    assert first["name"] in [g[0] for g in _script().GPUS]

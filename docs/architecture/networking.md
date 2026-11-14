@@ -505,6 +505,17 @@ unusual ones. Enumerating 80, 443, 25, 21, 110, 6667 in our chains would be a
 second copy of a list that lives in `automation/fakenet.ini`, free to drift,
 with "the sample's traffic went unanswered" as the only symptom.
 
+**Bytes no listener recognises are read and not answered** (2026-11-14).
+They end at FakeNet's raw listener, which upstream makes an echo server: a
+loader that asked its server for a payload got its own 40-byte request back,
+wrote it into a memfd as the payload and waited for the rest (job `fca804a4`,
+Snowlight, 2026-11-13). `Custom:` on both raw listeners names
+`automation/fakenet-custom.ini`, whose handler
+(`automation/fakenet_raw_silent.py`) reads until the sample closes or the
+listener's timeout and sends nothing. Run against the pinned `RawListener`
+on 2026-11-14, outside Dom0: upstream returned the bytes on TCP and UDP, this
+returned none. **Not yet deployed**: `make sandboxd` installs the two files.
+
 Three things about the integration are not obvious from FakeNet's own
 documentation, and each was found by executing runbook 13 step 6:
 

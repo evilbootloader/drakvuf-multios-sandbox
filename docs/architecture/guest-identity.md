@@ -10,6 +10,10 @@
 > §1 says, never booted. Like the rest, they take effect only on guests
 > **installed after** `make xen` has run with them (§4). The red pill on a
 > reinstalled Ubuntu guest has not been run.
+>
+> **2026-11-14, CANDIDATE, never booted:** the display adapter's PCI IDs
+> (§1, §3) and `nopv` on the Ubuntu guest (§4), after a stealer left a
+> Windows clone on what Direct3D told it (job `c12bc2b5`).
 
 Malware asks the machine what it is before it does anything. Xen answers with
 its own name: SMBIOS says `Xen` and `HVM domU`, the BIOS release is Xen's
@@ -41,6 +45,18 @@ detected the sandbox, and what here answers it:
 | 9003 MAC `00:16:3E` | Xen's OUI | an Intel OUI, the e1000's |
 | 13002 Hyper-V objects | not Viridian: still detected with it off (§5) | nothing to answer |
 | 4067, 4068 CPUID hypervisor bit and vendor | hidden only by DRAKVUF's `-s` | `cpuid = 'host,hypervisor=0'` and the Xen patch |
+| not al-khaser: a sample, 2026-11-13 (below) | the display adapter is PCI `1234:1111`, subsystem `1af4:1100`: QEMU's | a real card's IDs, `automation/qemu-xen-vga-ids.patch` (2026-11-14) |
+
+**The display adapter.** Job `c12bc2b5` (MopsStealer, 2026-11-13) probed for
+VirtualBox's, VMware's and Parallels' devices, read the CPU's name and the
+memory size, loaded `d3d9.dll`, and exited 1.1 s after it started. Inside
+Direct3D's adapter enumeration the trace has the sample's process reading
+`HardwareID` of `Enum\PCI\VEN_1234&DEV_1111&SUBSYS_11001AF4&REV_02`: that is
+where `D3DADAPTER_IDENTIFIER9` gets `VendorId` and `DeviceId`, and `0x1234` is
+no card maker. **What the sample compared is not in the trace**, so the vendor
+is the likeliest reason, not a shown one. The adapter's description is the
+other candidate, and the IDs do not change it: without the card's driver
+Windows calls any adapter `Microsoft Basic Display Adapter` (§5).
 
 How the 2026-11-02 rows were found and checked. 4097: the golden LV's
 `SYSTEM` hive, read on Dom0; the patched `atapi.c` compiled with QEMU's own
@@ -114,6 +130,18 @@ DVD-ROM`. The patch reports the model there too, split as a real drive's is:
 the vendor its first word, at most 8 characters, the product the rest. A drive
 given no model answers as before.
 
+`automation/qemu-xen-vga-ids.patch` is applied after it (2026-11-14). The VGA
+device takes five properties (`VGA.vendor-id`, `device-id`,
+`subsystem-vendor-id`, `subsystem-id`, `revision`) and answers with them in
+place of `1234:1111`, revision 2, subsystem `1af4:1100`. QEMU patches the VGA
+BIOS it loads to the same IDs, so SeaBIOS still runs it. The identity draws
+the card (`GPUS` in `xen-identity.py`: discrete NVIDIA cards with a board
+maker's subsystem, as `pci.ids` lists them). Not Intel: hvmloader gives an
+Intel VGA device an IGD OpRegion, and the host CPU the guests see is an `F`
+model, which has no integrated graphics. **A QEMU built without the patch does
+not start a guest whose config has the properties**: `make xen` and the reboot
+come before any install target.
+
 **The guest configs, at the four install targets** (`ubuntu_analysis_vm`,
 `setup_hooks_ubuntu`, `windows_analysis_vm`, `setup_hooks_windows`):
 
@@ -126,7 +154,10 @@ smbios_firmware = '<repo>/state/firmware/smbios.bin'
 acpi_firmware = '<repo>/state/firmware/ssdt.aml'
 xen_platform_pci = 0
 device_model_args_hvm = [ '-global', 'ide-hd.model=...', '-global', 'ide-hd.serial=...', '-global', 'ide-hd.ver=...',
-                          '-global', 'ide-cd.model=...', '-global', 'ide-cd.serial=...', '-global', 'ide-cd.ver=...' ]
+                          '-global', 'ide-cd.model=...', '-global', 'ide-cd.serial=...', '-global', 'ide-cd.ver=...',
+                          '-global', 'VGA.vendor-id=...', '-global', 'VGA.device-id=...',
+                          '-global', 'VGA.subsystem-vendor-id=...', '-global', 'VGA.subsystem-id=...',
+                          '-global', 'VGA.revision=...' ]
 ```
 
 The tracked templates (`misc/*.cfg` and the `misc/xen-vms/` copies) carry the
@@ -180,12 +211,43 @@ In [`evasion-tests/`](../../evasion-tests/README.md) they change only `vmx.c`
 and `vmcs.h` of the tree `make xen` left on Dom0, which keeps the identity; only
 their `LOCAL_XEN` mode still uploads a tree of its own.
 
-**The Ubuntu guest still knows it runs on Xen.** Linux finds Xen's signature
-whatever the hypervisor bit, and the patch hides the leaves from user mode
-only, so the kernel keeps the `xen` clocksource and clockevent the RDTSC
-compensation was designed and measured on (`rdtsc-poc.md` §1.1). Hiding them
-from the kernel too would take that clock away; `/sys/hypervisor/type` reading
-`xen` is the cost (§5).
+**The Ubuntu guest knew it ran on Xen, and said so in files any program
+reads.** Linux finds Xen's signature whatever the hypervisor bit, and the patch
+hides the leaves from user mode only, so the kernel set itself up as a Xen
+guest: `/sys/devices/system/clocksource/clocksource0/current_clocksource` read
+`xen`, `/sys/hypervisor/type` read `xen`, `/proc/xen` existed. That was kept on
+purpose until 2026-11-14, for the `xen` clocksource and clockevent the RDTSC
+compensation was designed and measured on (`rdtsc-poc.md` §1.1).
+
+**`nopv` on the kernel's command line (2026-11-14, the operator's decision;
+CANDIDATE, never booted).** `ubuntu_analysis_vm` puts it in the installed
+system's GRUB. The kernel still finds Xen's leaves, and with `nopv` uses none
+of it (`xen_platform_hvm`, `arch/x86/xen/enlighten_hvm.c`): no `xen`
+clocksource, no `/sys/hypervisor`, no `/proc/xen`, no xenbus. The clock is the
+TSC and the timer the local APIC's, as on hardware. What that changes and has
+not been measured:
+
+- **The RDTSC compensation.** It holds a compressed value at or above the
+  guest's pvclock timestamp, and a guest with `nopv` registers no pvclock.
+  Run the red pill and the RDTSC search's ten tests on the reinstalled guest
+  before trusting either.
+- **The time of day in a clone.** A clone is an `xl restore`. A Xen-aware
+  kernel is suspended with its cooperation and reads Xen's wall clock when it
+  resumes; one with `nopv` is saved as Windows is, without being asked, and
+  resumes with the time it was saved at. Read `date` in the first clone. If
+  it is the day of the save, the clone needs its clock set before the sample
+  runs, which nothing does today.
+- **`dmesg` still says `Hypervisor detected: Xen HVM`**, and the sample runs
+  as root, which may read it (§5).
+- **Speed.** Every timer interrupt and clock read is emulated instead of
+  paravirtual. Windows already runs so.
+
+**The desktop loses its display driver.** `bochs` binds PCI `1234:1111`, which
+the adapter no longer is, and nouveau finds no chipset behind an NVIDIA ID and
+leaves. The desktop is then the firmware's framebuffer, in the mode GRUB set:
+`GRUB_GFXMODE=1280x800`, the size it had. That is what a machine whose card
+has no driver yet looks like, and it has not been seen on this guest: if GDM
+does not come up, that is where to look.
 
 What does change is the platform device. Without it Linux cannot unplug the
 emulated devices, so it is expected to run on them rather than on its PV
@@ -221,11 +283,23 @@ on the reinstalled one too.
 - **14010, RDTSC Locky**: detected in every run with Xen's RDTSC compensation
   as deployed, and in one of four with `RDTSC_USER_PURE=1`. Whether a real
   Windows 11 passes it has not been measured (`rdtsc-poc.md`).
-- **CPUID from kernel mode** still finds Xen's leaves. On Linux that is
-  visible from user mode too: `/sys/hypervisor/type` reads `xen` and `dmesg`
-  says `Hypervisor detected: Xen HVM`.
-- **QEMU's other devices keep their IDs** (the `1234:1111` VGA, the USB
-  tablet).
+- **CPUID from kernel mode** still finds Xen's leaves. On Linux `dmesg`
+  says `Hypervisor detected: Xen HVM` for it, with `nopv` too;
+  `/sys/hypervisor/type` read `xen` until `nopv` (§4).
+- **QEMU's other devices keep their IDs** (the USB tablet), and every one of
+  them keeps the subsystem `1af4:1100`: the e1000, the IDE and USB
+  controllers, the ISA bridge. The display adapter alone has a real card's
+  since 2026-11-14.
+- **What the display adapter is called.** The IDs are a real card's; the
+  name is the driver's. Without the card's driver Windows shows
+  `Microsoft Basic Display Adapter`, which a sample can compare as easily as
+  a vendor ID, and the VGA BIOS's VBE strings are still SeaBIOS's. A real
+  card also has an HDMI audio function beside it, and this one has none.
+  Before anything is done about the name, read what the guest says:
+  `Get-CimInstance Win32_VideoController | Format-List Name,PNPDeviceID,VideoProcessor,AdapterCompatibility`
+  and `dxdiag /t` on the reinstalled Windows guest. **A Windows guest that
+  reaches Windows Update will be offered NVIDIA's driver for the ID**, and
+  what that driver does on a card that is not there has not been seen.
 - **Android** is unchanged: `viridian = 1` in its configs and DRAKVUF's `-s`.
   Changing its config means re-saving the Android state, which is not done
   without an explicit instruction.
