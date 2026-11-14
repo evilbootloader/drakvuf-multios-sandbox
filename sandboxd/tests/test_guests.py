@@ -782,7 +782,7 @@ def test_windows_symbol_profiles_sit_beside_the_kernel_one_and_linux_gets_none(t
     pairs = {argv[i]: argv[i + 1] for i, a in enumerate(argv) if a.startswith("--json-")}
     assert pairs == {option: f"/anywhere/profiles/{name}"
                      for option, name in G.SYMBOL_PROFILES[TargetOs.WINDOWS]}
-    assert len(pairs) == 19
+    assert len(pairs) == 20   # --json-clr-64 since 2026-11-14
     assert not any(a.startswith("--hid-") for a in argv)   # inert off Windows 7
     # Absent because neither DLL's symbols could be produced, not forgotten.
     for os_, kind in ((TargetOs.UBUNTU, SampleKind.ELF), (TargetOs.ANDROID, SampleKind.ELF)):

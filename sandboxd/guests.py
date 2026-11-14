@@ -819,8 +819,13 @@ SYMBOL_PROFILES: dict[TargetOs, tuple[tuple[str, str], ...]] = {
         ("--json-ntdll", "ntdll.json"),
         ("--json-iphlpapi", "iphlpapi.json"),
         ("--json-ole32", "ole32.json"),
-        ("--json-clr", "clr.json"),
-        ("--json-mscorwks", "mscorwks.json"),
+        # memdump's one .NET hook, AssemblyNative::LoadImage (an assembly
+        # loaded from memory is dumped). The 32-bit runtimes' profiles and
+        # the 64-bit one's, each under the option DRAKVUF reads it from:
+        # scripts/windows-symbol-profiles.py has what was wrong before.
+        ("--json-clr", "clr32.json"),
+        ("--json-clr-64", "clr.json"),
+        ("--json-mscorwks", "mscorwks32.json"),
         ("--json-hal", "hal.json"),
         ("--json-fwpkclnt", "fwpkclnt.json"),
         ("--json-fltmgr", "fltmgr.json"),
@@ -893,6 +898,10 @@ class Job:
     # explorer.exe does not have one (stages.Config.netcfg_pids). None for the
     # guests that configure their network from `injection_pid`.
     netcfg_pid: int | None = None
+    # This job's hook list: the static one with the sample's own functions
+    # after it (sandboxd/samplehooks.py). None is the static list, which is
+    # every job before 2026-11-14 and any whose sample could not be read.
+    hooks_list: Path | None = None
 
     @property
     def drop_dir(self) -> str:
@@ -1216,6 +1225,19 @@ def sample_start_marker(job) -> tuple[bytes, ...] | None:
     return (f'"Plugin":"{plugin}"'.encode(), f'"Method":"{method}"'.encode(), name.encode())
 
 
+#: The hook list every job of a guest gets: apimon's (and memdump's, rpcmon's)
+#: on Windows, libmon's on Linux. A job's own list is this one with lines
+#: after it (`Job.hooks_list`).
+STATIC_HOOKS: dict[TargetOs, Path] = {
+    TargetOs.WINDOWS: Path(__file__).parent.absolute() / "data" / "hooks.txt",
+    TargetOs.UBUNTU: Path(__file__).parent.absolute() / "data" / "so-hooks-linux.txt",
+    TargetOs.ANDROID: Path(__file__).parent.absolute() / "data" / "so-hooks-linux.txt",
+}
+#: The plugin that reads it, per guest: no list is made for a job without it.
+HOOK_PLUGIN: dict[TargetOs, str] = {
+    TargetOs.WINDOWS: APIMON_PLUGIN, TargetOs.UBUNTU: LIBMON_PLUGIN, TargetOs.ANDROID: LIBMON_PLUGIN,
+}
+
 def _linux_launch(paths: GuestPaths, target: str,
                   words: list[str] | tuple[str, ...] = ()) -> list[str]:
     """Wait `LAUNCH_DELAY`, then become the sample.
@@ -1489,7 +1511,7 @@ def argv_trace(job: Job, component: str | None = None) -> list[str]:
     if FILEEXTRACTOR_PLUGIN in job.options.plugins:
         argv += ["--fileextractor-timeout", str(FILEEXTRACTOR_STOP_TIMEOUT), "--fileextractor-exclude-list",  (Path(__file__).parent.absolute() / "data" / "fileextractor-exclusions.txt").as_posix()]
     if MEMDUMP_PLUGIN in job.options.plugins or APIMON_PLUGIN in job.options.plugins or RPCMON_PLUGIN in job.options.plugins:
-        argv += ["--dll-hooks-list", (Path(__file__).parent.absolute() / "data" / "hooks.txt").as_posix()]
+        argv += ["--dll-hooks-list", (job.hooks_list or STATIC_HOOKS[TargetOs.WINDOWS]).as_posix()]
     # libmon's own option and its own file. **Not `--dll-hooks-list`**: the
     # grammar is the same but the first field is a shared object rather than
     # a DLL, and pointing libmon at `hooks.txt` would match nothing on a
@@ -1497,9 +1519,7 @@ def argv_trace(job: Job, component: str | None = None) -> list[str]:
     # plugin loads and does nothing at all (its README says so), so the two
     # always travel together.
     if LIBMON_PLUGIN in job.options.plugins:
-        argv += ["--so-hooks-list",
-                 (Path(__file__).parent.absolute() / "data"
-                  / "so-hooks-linux.txt").as_posix()]
+        argv += ["--so-hooks-list", (job.hooks_list or STATIC_HOOKS[job.target_os]).as_posix()]
     # The environment variables procmon prints at each exec. Without a list
     # it prints LD_PRELOAD, PWD and OLDPWD only (`configure_filter` in
     # procmon/linux.cpp), and a list REPLACES those, so the file names them

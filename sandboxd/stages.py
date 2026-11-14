@@ -42,6 +42,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import shutil
+import sys
 import threading
 import time
 from dataclasses import dataclass, field, replace
@@ -457,6 +458,7 @@ class Analysis:
                 clone = self._clone(os_, vlan, lease)
                 job = self._job(lease, os_, kind, clone, vlan, job_dir, sample,
                                 launch)
+                job = self._sample_hooks(job, sample)
 
                 # **Dialled as soon as the domain exists, not at trace start.**
                 #
@@ -764,6 +766,37 @@ class Analysis:
             kind=kind,
             launch=launch,
         )
+
+    def _sample_hooks(self, job: Job, sample: Path) -> Job:
+        """The job with its own hook list, when the sample's own functions
+        could be located (sandboxd/samplehooks.py has what and why).
+
+        A child through the Runner, as postprocessing is: the sample is
+        hostile input to an ELF and a PE parser, and this is the daemon. It
+        never fails a job -- without the list the trace is what every trace
+        was before 2026-11-14 -- and it leaves `located.json` beside the
+        sample for the report (cape_analysis reads it there).
+
+        CANDIDATE: the lines name the sample's own image, which libmon and
+        apimon do not hook until the fork's change for it is deployed; until
+        then the list reaches DRAKVUF and matches no module.
+        """
+        if (job.kind is SampleKind.APK
+                or guests.HOOK_PLUGIN[job.target_os] not in job.options.plugins):
+            return job
+        out = sample.parent / "hooks.txt"
+        result = self._runner.run(
+            [sys.executable, "-m", "sandboxd.samplehooks", str(sample),
+             "--guest-path", job.guest_sample,
+             "--static", str(guests.STATIC_HOOKS[job.target_os]),
+             "--out", str(out), "--json", str(sample.parent / "located.json")],
+            timeout=timing.SAMPLEHOOKS_BUDGET, what="samplehooks")
+        if not result.ok or not out.is_file():
+            log.warning("job %s: the sample's functions were not located (%s); "
+                        "the static hook list is used", job.job_id,
+                        "timed out" if result.timed_out else f"exit {result.returncode}")
+            return job
+        return replace(job, hooks_list=out)
 
     def _preconfig(self, job: Job, beat: Heartbeat) -> str | None:
         """Stage the sample and configure the clone. Returns an APK component.

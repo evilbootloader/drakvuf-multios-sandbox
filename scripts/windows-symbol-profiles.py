@@ -69,8 +69,13 @@ PROFILES: tuple[tuple[str, str, str], ...] = (
     ("--json-ntdll",        "ntdll.json",       "Windows/System32/ntdll.dll"),
     ("--json-iphlpapi",     "iphlpapi.json",    "Windows/System32/iphlpapi.dll"),
     ("--json-ole32",        "ole32.json",       "Windows/System32/ole32.dll"),
-    ("--json-clr",          "clr.json",         "Windows/Microsoft.NET/Framework64/v4.0.30319/clr.dll"),
-    ("--json-mscorwks",     "mscorwks.json",    "Windows/Microsoft.NET/Framework64/v2.0.50727/mscorwks.dll"),
+    # DRAKVUF's --json-clr and --json-mscorwks are the 32-bit runtimes' (memdump
+    # hooks them in WoW64 processes only) and --json-clr-64 the 64-bit one's.
+    # Until 2026-11-14 both came from Framework64 and --json-clr-64 was never
+    # passed: a 64-bit RVA in a 32-bit clr.dll, and no hook in a 64-bit one.
+    ("--json-clr",          "clr32.json",       "Windows/Microsoft.NET/Framework/v4.0.30319/clr.dll"),
+    ("--json-clr-64",       "clr.json",         "Windows/Microsoft.NET/Framework64/v4.0.30319/clr.dll"),
+    ("--json-mscorwks",     "mscorwks32.json",  "Windows/Microsoft.NET/Framework/v2.0.50727/mscorwks.dll"),
     ("--json-hal",          "hal.json",         "Windows/System32/hal.dll"),
     ("--json-fwpkclnt",     "fwpkclnt.json",    "Windows/System32/drivers/fwpkclnt.sys"),
     ("--json-fltmgr",       "fltmgr.json",      "Windows/System32/drivers/fltmgr.sys"),

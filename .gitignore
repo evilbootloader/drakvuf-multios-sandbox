@@ -110,6 +110,9 @@ samples/*
 # matches the flare-capa pin in sandboxd/requirements.txt (~1,000 YAML files).
 # Cloned onto Dom0 by the step in docs/DEVELOPING.md 6, never committed.
 sandboxd/postprocessing/data/
+# FLIRT sets made from published toolchains' libraries (scripts/fetch-flirt-sets.py):
+# data rebuilt by running it, not source
+sandboxd/data/flirt/
 
 misc/iso
 misc/Artifacts

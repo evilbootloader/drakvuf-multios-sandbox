@@ -13,12 +13,14 @@ deletion keep it out of the log index and the upload.
 from __future__ import annotations
 
 import gzip
+import json
 import re
 from collections import Counter
 from datetime import datetime, timezone
 import logging
 import shutil
 import tempfile
+import threading
 from pathlib import Path
 from typing import Optional
 
@@ -87,6 +89,14 @@ def _target(os_: TargetOs, sample: Optional[Path], yara_rules, cape_rules=None) 
         facts = file_static(sample)
         if facts:
             file["static"] = facts
+        # The sample's own functions as located before the run, and which
+        # of them were hooked (sandboxd/samplehooks.py, through stages).
+        located = sample.parent / "located.json"
+        if located.is_file():
+            try:
+                file["located"] = json.loads(located.read_text())
+            except ValueError:
+                pass
     return {"category": "file", "file": file}
 
 
@@ -260,7 +270,30 @@ def network_filter(cfg: CapeConfigSection) -> dict:
 
 def run_cape(context: PostprocessContext, cfg: CapeConfigSection,
              sample: Optional[Path] = None) -> dict:
-    """Split, process, write `cape_results.json`; return `results`."""
+    """Split, process, write `cape_results.json`; return `results`. The
+    trace is compressed meanwhile (TraceCompression), and stays as it was if
+    any of it raises."""
+    compression: list = []
+
+    def compress() -> None:
+        if cfg.compress_trace:
+            compression.append(TraceCompression(context.analysis_dir))
+
+    try:
+        results = _run_cape(context, cfg, sample, compress)
+    except BaseException:
+        for running in compression:
+            running.cancel()
+        raise
+    for running in compression:
+        running.finish()
+    return results
+
+
+def _run_cape(context: PostprocessContext, cfg: CapeConfigSection,
+              sample: Optional[Path], compress) -> dict:
+    """`compress` starts the trace's compression: called once the split's
+    first pass, which forks, is over (trace_split.split_by_process)."""
     analysis_dir = context.analysis_dir
     sample = sample or getattr(context, "sample", None)
     started, ended = _trace_times(analysis_dir)
@@ -295,7 +328,8 @@ def run_cape(context: PostprocessContext, cfg: CapeConfigSection,
         split = split_by_process(analysis_dir, logs, context.target_os,
                                  scope=cfg.scope, kernel_syscalls=cfg.kernel_syscalls,
                                  launch=(paths.shell, paths.delay, sample.name if sample is not None else None)
-                                 if cfg.skip_launcher else None)
+                                 if cfg.skip_launcher else None,
+                                 after_prelude=compress)
         s = split.stats
         log.info("trace split: %d processes (%d in the sample), %d lines, records %s, "
                  "%d syscalls paired / %d unpaired / %d kernel-mode dropped, "
@@ -357,20 +391,59 @@ def run_cape(context: PostprocessContext, cfg: CapeConfigSection,
         # Inside the `with` too: the non-call plugins' records are read from
         # trace_split's aux logs, which go with the temporary directory.
         _timeline(analysis_dir, results, split)
-    if cfg.compress_trace:
-        compress_trace(analysis_dir)
     return results
+
+
+class TraceCompression:
+    """trace.log -> trace.log.gz beside the analysis, not after it.
+
+    Compressing 3 GB took 40 s of a 246 s pass (a 20-minute Windows trace,
+    2026-11-14) with the processor idle but for it. zlib works outside the
+    interpreter's lock, so a thread does it while the trace is read for the
+    analysis: no second process, and no memory but its megabyte of buffer.
+    The raw file is removed by `finish`, once the analysis has read the last
+    of it and the copy is complete (written under a temporary name, as
+    gzip_syscalls did). `cancel` leaves the trace as it was: an analysis that
+    raised is uploaded with the raw trace, as before."""
+
+    def __init__(self, analysis_dir: Path):
+        self.src = analysis_dir / "trace.log"
+        self.tmp = analysis_dir / "trace.log.gz.tmp"
+        self.dst = analysis_dir / "trace.log.gz"
+        self._stop = threading.Event()
+        self._error: Optional[BaseException] = None
+        self._thread = threading.Thread(target=self._run, name="compress-trace", daemon=True)
+        self._thread.start()
+
+    def _run(self) -> None:
+        try:
+            with self.src.open("rb") as fin, gzip.open(self.tmp, "wb", compresslevel=6) as fout:
+                while not self._stop.is_set():
+                    block = fin.read(1 << 20)
+                    if not block:
+                        break
+                    fout.write(block)
+        except BaseException as exc:  # noqa: BLE001 - reported by finish, in the caller's thread
+            self._error = exc
+
+    def finish(self) -> None:
+        self._thread.join()
+        if self._error is not None:
+            self.tmp.unlink(missing_ok=True)
+            raise self._error
+        self.tmp.replace(self.dst)
+        self.src.unlink()
+
+    def cancel(self) -> None:
+        self._stop.set()
+        self._thread.join()
+        self.tmp.unlink(missing_ok=True)
 
 
 def compress_trace(analysis_dir: Path) -> None:
     """trace.log -> trace.log.gz, the raw file removed only once the copy is
-    complete (written under a temporary name, as gzip_syscalls did)."""
-    src = analysis_dir / "trace.log"
-    tmp = analysis_dir / "trace.log.gz.tmp"
-    with src.open("rb") as fin, gzip.open(tmp, "wb", compresslevel=6) as fout:
-        shutil.copyfileobj(fin, fout, 1 << 20)
-    tmp.replace(analysis_dir / "trace.log.gz")
-    src.unlink()
+    complete."""
+    TraceCompression(analysis_dir).finish()
 
 
 def cape_analysis(context: PostprocessContext) -> None:

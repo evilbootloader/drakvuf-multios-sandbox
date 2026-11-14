@@ -171,6 +171,10 @@ CLEANUP_BUDGET = 60.0
 # away, never the trace: the child gets SIGINT then SIGKILL, what it wrote is
 # uploaded, and the manifest's `notes` say the pass was cut short.
 POSTPROCESS_BUDGET = 1800.0
+# Locating the sample's own functions before the trace (sandboxd/samplehooks.py):
+# a second for a megabyte of code with a glibc signature set. A sample that
+# takes longer than this gets the static hook list, as every job did before.
+SAMPLEHOOKS_BUDGET = 120.0
 
 
 @dataclass(frozen=True)
