@@ -142,6 +142,16 @@ runs, preserving the agentless design.
 >   `sandboxd/data/go-hooks.txt` (hand-written), placed where the sample's own
 >   function table (`gopclntab`, read by `sandboxd/samplehooks.py` for the
 >   Go 1.2, 1.16, 1.18 and 1.20 layouts) says each function is.
+> - **A hook list may grow while the trace runs** (same date, same standing).
+>   `sandboxd/stagehooks.py` follows `extracted/` during the trace, runs the
+>   locator on each program the sample drops and adds its lines to the end of
+>   the job's list. `hook_list_tail` (`libusermode/utils.cpp`) reads what a
+>   list gained; libmon looks at every exec, fork and exit and also places
+>   the new lines in a program already running, apimon looks when an image is
+>   discovered and has every process's EXE offered again. Each set of added
+>   entries is immutable once published: hooks point into it from callbacks
+>   that run on several vCPU threads. Not reached: payloads that never touch
+>   the disk, and the calls a stage makes before its lines are read.
 > - `dl_rendezvous` now tells its consumer of every exec and exit, not only
 >   those of processes it tracked: a dynamic program that exec'd a static one
 >   used to keep its breakpoints.

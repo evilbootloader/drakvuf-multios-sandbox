@@ -569,8 +569,26 @@ def module_name(image: Image, guest_path: str) -> str:
     from the root of its volume, with no drive, and libusermode compares the
     end of that from a `\\` on; Linux has the path as it is."""
     if image.kind == "pe":
-        return re.sub(r"^[A-Za-z]:\\+", "", guest_path)
+        # `C:\\x`, and the kernel's names for the same file, as fileextractor
+        # has them: `\\Device\\HarddiskVolume2\\x`, `\\??\\C:\\x`
+        return re.sub(r"^(?:\\\?\?\\)?(?:[A-Za-z]:|\\Device\\HarddiskVolume\d+)?\\+", "", guest_path)
     return guest_path
+
+
+def append_list(lines: list, out: Path, what: str) -> list:
+    """Add lines the list does not have to its end; the ones added. The list
+    is replaced by rename and only ever grows after what it held: DRAKVUF
+    reads what was added from where it had read to (hook_list_tail)."""
+    text = out.read_text()
+    have = set(text.splitlines())
+    new = [line for line in lines if line not in have]
+    if new:
+        text = text if text.endswith("\n") else text + "\n"
+        text += f"\n# {what}\n" + "\n".join(new) + "\n"
+        tmp = out.with_name(out.name + ".tmp")
+        tmp.write_text(text)
+        os.replace(tmp, out)
+    return new
 
 
 def write_list(static_text: str, lines: list, out: Path) -> None:
@@ -610,7 +628,10 @@ def main(argv: Optional[list] = None) -> int:
     p.add_argument("sample", type=Path)
     p.add_argument("--guest-path", required=True, help="the sample's path in the guest: the list's module")
     p.add_argument("--static", type=Path, required=True, help="the hook list every job gets")
-    p.add_argument("--out", type=Path, required=True, help="the list for this job")
+    p.add_argument("--out", type=Path, help="the list for this job")
+    p.add_argument("--append-to", type=Path,
+                   help="a job's list that is in use: add this program's lines to its end "
+                        "(what the sample dropped, sandboxd/stagehooks.py)")
     p.add_argument("--json", type=Path, help="what was found, for the report")
     p.add_argument("--flirt", type=Path, default=FLIRT_DIR)
     p.add_argument("--code-signatures", type=Path, default=CODE_SIGNATURES_DIR)
@@ -632,7 +653,13 @@ def main(argv: Optional[list] = None) -> int:
     except Exception as exc:  # noqa: BLE001 - a program no parser reads gets the static list
         print(f"samplehooks: {args.sample.name}: {type(exc).__name__}: {exc}", file=sys.stderr)
         image, located, lines = None, [], []
-    write_list(static_text, lines, args.out)
+    if args.append_to:
+        # no `#` or line end reaches the comment: a name with either got no lines
+        lines = append_list(lines, args.append_to, f"Dropped during the run: {args.guest_path}") if lines else []
+    elif args.out:
+        write_list(static_text, lines, args.out)
+    else:
+        p.error("one of --out and --append-to")
     if args.json:
         args.json.write_text(json.dumps(report(image, located, lines)))
     print(f"samplehooks: {len(located)} functions located, {len(lines)} hooked")

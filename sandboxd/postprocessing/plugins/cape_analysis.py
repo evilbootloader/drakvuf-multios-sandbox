@@ -97,6 +97,15 @@ def _target(os_: TargetOs, sample: Optional[Path], yara_rules, cape_rules=None) 
                 file["located"] = json.loads(located.read_text())
             except ValueError:
                 pass
+        # And of what it dropped during the run (sandboxd/stagehooks.py)
+        stages = []
+        for found in sorted(sample.parent.glob("located.stage*.json")):
+            try:
+                stages.append(json.loads(found.read_text()))
+            except ValueError:
+                pass
+        if stages:
+            file.setdefault("located", {})["stages"] = stages
     return {"category": "file", "file": file}
 
 

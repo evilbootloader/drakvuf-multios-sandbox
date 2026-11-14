@@ -416,3 +416,69 @@ def test_every_line_of_the_go_list_is_one_drakvuf_reads():
             if kind.startswith("buffer["):
                 assert kind[7:-1] in said and said.index(kind[7:-1]) == said.index(name) + 1, line
     assert names == set(sh.go_hooks(sh.GO_HOOKS.read_text())) and len(names) > 50
+
+
+# --- what the sample drops ----------------------------------------------------
+
+def test_a_finished_file_is_known_from_the_log_on_linux_and_the_sidecar_on_windows(tmp_path):
+    from sandboxd import stagehooks as st
+
+    extracted = tmp_path / "extracted"
+    extracted.mkdir()
+    trace = tmp_path / "trace.log"
+    record = {"Plugin": "fileextractor", "FileName": "/tmp/.x/bot", "DumpFile": "/elsewhere/../00000003_tmp_.x_bot"}
+    trace.write_text('{"Plugin":"syscall","DumpFile":"no"}\n' + json.dumps(record) + "\n" + '{"Plugin":"fileextr')
+    source = st.candidates("log", trace, extracted)
+    # the directory is ours whatever the record says of it; a line still being written waits
+    assert list(source()) == [(extracted / "00000003_tmp_.x_bot", "/tmp/.x/bot")]
+    assert list(source()) == []
+    with trace.open("a") as fh:
+        fh.write('actor","FileName":"/tmp/b","DumpFile":"x/00000004_b"}\n')
+    assert list(source()) == [(extracted / "00000004_b", "/tmp/b")]
+
+    (extracted / "file.000001.metadata").write_text(json.dumps({"FileName": "\\Device\\HarddiskVolume2\\a.exe"}) + "\n")
+    source = st.candidates("sidecar", trace, extracted)
+    assert list(source()) == []         # no hash yet: still being read out of the guest
+    (extracted / "file.000001.metadata").write_text(
+        json.dumps({"FileName": "\\Device\\HarddiskVolume2\\a.exe", "FileHash": "00"}) + "\n")
+    assert list(source()) == [(extracted / "file.000001.mm", "\\Device\\HarddiskVolume2\\a.exe")]
+    assert list(source()) == []
+    assert set(G.EXTRACTED_ANNOUNCED) == set(TargetOs)
+
+
+def test_a_dropped_programs_functions_are_added_to_the_running_jobs_list(built, tmp_path):
+    """The list only grows, after what it held: DRAKVUF reads on from where
+    it had read to."""
+    from sandboxd import stagehooks as st
+    from sandboxd.runner import Runner
+
+    _, stripped, flirt_dir = built
+    static = G.STATIC_HOOKS[TargetOs.UBUNTU]
+    hooks = tmp_path / "hooks.txt"
+    sh.write_list(static.read_text(), ["/home/u/s,connect,1000,log"], hooks)
+    before = hooks.read_text()
+    extracted = tmp_path / "extracted"
+    extracted.mkdir()
+    shutil.copy(stripped, extracted / "00000001_tmp_stage2")
+    (extracted / "00000002_notes").write_text("not a program")
+
+    def run(argv, **kw):
+        # the daemon's locator with the test's pattern set and no memory limit of its own
+        return Runner().run(argv + ["--flirt", str(flirt_dir), "--max-mib", "0"], **kw)
+
+    found = [(extracted / "00000001_tmp_stage2", "/tmp/stage2"), (extracted / "00000002_notes", "/tmp/notes"),
+             (extracted / "00000009_gone", "/tmp/gone")]
+    watcher = st.StageWatcher(run, lambda: iter(found), hooks, static, tmp_path)
+    watcher.poll()
+    after = hooks.read_text()
+    assert after.startswith(before) and "/tmp/stage2,connect," in after[len(before):]
+    assert watcher.stages == 1 and json.loads((tmp_path / "located.stage01.json").read_text())["hooked"] >= 2
+    # seen again at the same size: nothing is run or added twice
+    watcher.poll()
+    assert hooks.read_text() == after and watcher.stages == 1
+
+
+def test_windows_names_from_the_kernel_are_the_modules_too():
+    pe = sh.Image("pe", 64)
+    for path in (r"C:\Users\u\a.exe", r"\Device\HarddiskVolume2\Users\u\a.exe", r"\??\C:\Users\u\a.exe"):
+        assert sh.module_name(pe, path) == r"Users\u\a.exe"

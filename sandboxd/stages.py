@@ -48,7 +48,7 @@ import time
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
-from . import config, egress, guests, screenshots, timing, vnc
+from . import config, egress, guests, screenshots, stagehooks, timing, vnc
 from .clone import CloneBuilder, CloneError, CloneSpec
 from .egress import EgressUnavailable, Exit
 from .guests import Interaction, Job, SampleKind, TargetOs, TraceOptions
@@ -767,6 +767,24 @@ class Analysis:
             launch=launch,
         )
 
+    def _watch_stages(self, job: Job):
+        """Start following what the sample drops (sandboxd/stagehooks.py), for
+        a job that has its own hook list to add to. Never fails the trace."""
+        if job.hooks_list is None:
+            return None
+        try:
+            watcher = stagehooks.StageWatcher(
+                self._runner.run,
+                stagehooks.candidates(guests.EXTRACTED_ANNOUNCED[job.target_os],
+                                      job.result_dir / TRACE_LOG, job.result_dir / EXTRACTED_DIR),
+                job.hooks_list,
+                guests.STATIC_HOOKS[job.target_os], job.hooks_list.parent)
+            watcher.start()
+            return watcher
+        except Exception as exc:  # noqa: BLE001
+            log.warning("job %s: later stages are not followed: %s", job.job_id, exc)
+            return None
+
     def _sample_hooks(self, job: Job, sample: Path) -> Job:
         """The job with its own hook list, when the sample's own functions
         could be located (sandboxd/samplehooks.py has what and why).
@@ -778,8 +796,8 @@ class Analysis:
         sample for the report (cape_analysis reads it there).
 
         CANDIDATE: the lines name the sample's own image, which libmon and
-        apimon do not hook until the fork's change for it is deployed; until
-        then the list reaches DRAKVUF and matches no module.
+        apimon hook from drakvuf 28bc7658 on; with an older build deployed
+        the list reaches DRAKVUF and matches no module. Not yet run on a guest.
         """
         if (job.kind is SampleKind.APK
                 or guests.HOOK_PLUGIN[job.target_os] not in job.options.plugins):
@@ -1005,6 +1023,7 @@ class Analysis:
         capture = job.result_dir / CAPTURE
         tcpdump = self._runner.spawn(
             guests.argv_tcpdump(job, self._cfg.bridge, capture))
+        stage_watcher = None
         # **The console is NOT started here**, and has not been since
         # 2026-09-05. It is dialled in `run()` as soon as the clone exists and
         # stopped there before teardown, so its window is the domain's lifetime
@@ -1068,6 +1087,7 @@ class Analysis:
                            stderr_path=job.result_dir / TRACE_STDERR)
             marker = guests.sample_start_marker(job)
             started = None
+            stage_watcher = self._watch_stages(job)
             if marker is None:
                 result = self._runner.run(guests.argv_trace(job, component),
                                           timeout=budgets.trace, what="drakvuf", **outputs)
@@ -1110,6 +1130,8 @@ class Analysis:
                 notes.append(caveat)
             self._trace_note = "; ".join(notes) or None
         finally:
+            if stage_watcher is not None:
+                stage_watcher.stop()
             tcpdump.stop()
 
     def _start_console(self, job: Job, beat: Heartbeat):

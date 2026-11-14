@@ -1238,6 +1238,16 @@ HOOK_PLUGIN: dict[TargetOs, str] = {
     TargetOs.WINDOWS: APIMON_PLUGIN, TargetOs.UBUNTU: LIBMON_PLUGIN, TargetOs.ANDROID: LIBMON_PLUGIN,
 }
 
+#: How fileextractor says a file is finished and what it was called in the
+#: guest, which sandboxd/stagehooks.py follows during the trace: a record in
+#: the log (linux.cpp writes no sidecar), or the `.metadata` file beside it
+#: gaining its hash (win.cpp).
+EXTRACTED_ANNOUNCED: dict[TargetOs, str] = {
+    TargetOs.UBUNTU: "log",
+    TargetOs.ANDROID: "log",
+    TargetOs.WINDOWS: "sidecar",
+}
+
 def _linux_launch(paths: GuestPaths, target: str,
                   words: list[str] | tuple[str, ...] = ()) -> list[str]:
     """Wait `LAUNCH_DELAY`, then become the sample.
