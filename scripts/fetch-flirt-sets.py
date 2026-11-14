@@ -129,6 +129,89 @@ def libraries(arch: str, name: str, into: Path) -> tuple:
     return kept, stream.sha.hexdigest()
 
 
+# --- Rust's standard library ---------------------------------------------------
+#
+# A stripped Rust program has no names left, but it does say which compiler
+# built it: panic messages carry `/rustc/<commit>/library/...` paths. The
+# standard library of exactly that compiler is published
+# (static.rust-lang.org/dist/rust-std-<version>-<target>.tar.xz, with a
+# sha256 beside it), its `.rlib` files are `ar` archives of ordinary objects,
+# and the archive names its own commit. So a set per release, recognised in a
+# sample by the commit and by nothing weaker.
+#
+# What such a set names is the non-generic part of std, core and alloc.
+# Generic code is compiled into each program anew and matches nothing. ELF
+# targets only: the patterns are made from ELF objects.
+RUST_DIST = "https://static.rust-lang.org/dist"
+RUST_TARGETS = ("x86_64-unknown-linux-gnu", "x86_64-unknown-linux-musl",
+                "i686-unknown-linux-gnu", "i686-unknown-linux-musl")
+RUST_VERSION = re.compile(r"^\d+\.\d+\.\d+$")
+RUST_COMMIT = re.compile(r"^[0-9a-f]{40}$")
+
+
+def rust_libraries(version: str, target: str, into: Path) -> tuple:
+    """(the release's .rlib files under `into`, its commit, the archive's sha256)."""
+    stream = Hashed(get(f"{RUST_DIST}/rust-std-{version}-{target}.tar.xz", timeout=900))
+    kept, commit = [], ""
+    with tarfile.open(fileobj=stream, mode="r|*") as tar:
+        for member in tar:
+            if not member.isfile() or member.size > MAX_LIBRARY:
+                continue
+            if member.name.count("/") == 1 and member.name.endswith("/git-commit-hash"):
+                commit = tar.extractfile(member).read(64).decode("ascii", "replace").strip()
+            elif member.name.endswith(".rlib") and f"/lib/rustlib/{target}/lib/" in member.name:
+                target_file = into / f"{len(kept):03d}.rlib"
+                with tar.extractfile(member) as src, target_file.open("wb") as dst:
+                    while block := src.read(1 << 20):
+                        dst.write(block)
+                kept.append(target_file)
+    while stream.read(1 << 20):
+        pass
+    return kept, commit, stream.sha.hexdigest()
+
+
+def rust_rule(name: str, commit: str) -> str:
+    identifier = "flirt_set_" + "".join(c if c.isalnum() else "_" for c in name)
+    return ('rule %s\n{\n    meta:\n        flirt_set = "%s"\n        flirt_exact = true\n'
+            '    strings:\n        $commit = "/rustc/%s/"\n    condition:\n        $commit\n}\n'
+            % (identifier, name, commit))
+
+
+def fetch_rust(versions: list, targets: list, out: Path, listing: bool) -> tuple:
+    made = failed = 0
+    for version in versions:
+        for target in targets:
+            title = f"rust-{version}-{target}"
+            if (out / f"{title}.pat.gz").exists():
+                print(f"{title}: already there")
+                continue
+            if listing:
+                print(f"{title}  <-  {RUST_DIST}/rust-std-{version}-{target}.tar.xz")
+                continue
+            with tempfile.TemporaryDirectory(prefix="flirt-") as tmp:
+                try:
+                    found, commit, digest = rust_libraries(version, target, Path(tmp))
+                    said = get(f"{RUST_DIST}/rust-std-{version}-{target}.tar.xz.sha256").read().decode().split()[0]
+                    if digest != said:
+                        raise ValueError("sha256 differs from the one published beside it")
+                    if not RUST_COMMIT.match(commit):
+                        raise ValueError("the archive does not name its commit")
+                    count = pats.write_set(title, found, out)
+                except (OSError, ValueError, tarfile.TarError) as exc:
+                    print(f"{title}: {type(exc).__name__}: {exc}", file=sys.stderr)
+                    failed += 1
+                    continue
+            if not count:
+                print(f"{title}: no function in its libraries", file=sys.stderr)
+                failed += 1
+                continue
+            # recognised by its compiler's commit, not by libc's functions
+            (out / f"{title}.yar").write_text(rust_rule(title, commit))
+            made += 1
+            print(f"{title}: {count} functions from {len(found)} libraries (rustc {commit[:12]})")
+    return made, failed
+
+
 def expected_sha256(arch: str, stem: str) -> str:
     return get(f"{INDEX}/{arch}/tarballs/{stem}.sha256").read().decode().split()[0]
 
@@ -144,7 +227,20 @@ def main(argv=None) -> int:
     p.add_argument("--newest", type=int, default=0, help="only the N newest releases of each library and architecture")
     p.add_argument("--list", action="store_true", help="print what would be fetched and stop")
     p.add_argument("--out", type=Path, default=HERE.parent / "sandboxd" / "data" / "flirt")
+    p.add_argument("--rust", default="",
+                   help="comma-separated Rust releases (1.75.0): sets from their standard library "
+                        "instead of the C libraries. A job's report says which release a sample needs")
+    p.add_argument("--rust-target", default=",".join(RUST_TARGETS[:2]),
+                   help=f"comma-separated, of {', '.join(RUST_TARGETS)}")
     args = p.parse_args(argv)
+    if args.rust:
+        versions_, targets = args.rust.split(","), args.rust_target.split(",")
+        if not all(RUST_VERSION.match(v) for v in versions_) or set(targets) - set(RUST_TARGETS):
+            p.error("unknown --rust release or --rust-target")
+        made, failed = fetch_rust(versions_, targets, args.out, args.list)
+        if not args.list:
+            print(f"{made} sets written to {args.out}" + (f", {failed} failed" if failed else ""))
+        return 1 if failed else 0
     arches, libcs = args.arch.split(","), args.libc.split(",")
     if set(arches) - set(ARCHES) or set(libcs) - set(LIBCS):
         p.error("unknown --arch or --libc")

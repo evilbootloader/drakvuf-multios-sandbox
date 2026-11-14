@@ -100,6 +100,7 @@ class Image:
     toolchain: str = ""
     compiler: str = ""                          # what the compiler wrote of itself
     sets: list = field(default_factory=list)    # signature sets tried
+    rust: dict = field(default_factory=dict)    # {"commit", "version"}, what a Rust program says
     go_version: str = ""                        # "go1.21.3", when the program says
     go_table: str = ""                          # its function table's layout: "1.2", "1.16", "1.18", "1.20"
 
@@ -197,6 +198,14 @@ def read_image(path: Path) -> Optional[Image]:
         # .comment section, which strip leaves in
         said = re.search(rb"(GCC: \([^)\x00]{0,80}\) [0-9][0-9.]{2,12}|clang version [0-9][0-9.]{2,12})", data)
         image.compiler = said.group(1).decode("ascii", "replace") if said else ""
+        if image.toolchain == "rust":
+            # The compiler's commit, in every panic path; its release, in
+            # .comment when that was left in. Either names the signature set
+            # (scripts/fetch-flirt-sets.py --rust <version>).
+            commit = re.search(rb"/rustc/([0-9a-f]{40})/", data)
+            version = re.search(rb"rustc version (\d+\.\d+\.\d+)", data)
+            image.rust = {"commit": commit.group(1).decode() if commit else None,
+                          "version": version.group(1).decode() if version else None}
     return image
 
 
@@ -373,6 +382,10 @@ def recognised_sets(directory: Path, data: bytes) -> Optional[dict]:
         name = dict(rule.metadata).get("flirt_set")
         if isinstance(name, str):
             found[name] = sum(1 for pattern in rule.patterns if pattern.matches)
+            # A set recognised by something exact (a Rust set, by its
+            # compiler's commit) is not ranked below libc's forty strings
+            if dict(rule.metadata).get("flirt_exact") is True:
+                found[name] += 1000
     return found
 
 
@@ -615,6 +628,7 @@ def report(image: Optional[Image], located: list, lines: list) -> dict:
         "analysed": True, "format": image.kind, "bits": image.bits, "static": image.static,
         "stripped": image.stripped, "toolchain": image.toolchain or None,
         "compiler": image.compiler or None, "signature_sets": image.sets,
+        "rust": image.rust or None,
         "go": {"version": image.go_version or None, "table": image.go_table,
                "arguments": go_abi(image) or None} if image.go_table else None,
         "found": by_how, "hooked": len(lines),

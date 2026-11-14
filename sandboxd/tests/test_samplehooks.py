@@ -482,3 +482,31 @@ def test_windows_names_from_the_kernel_are_the_modules_too():
     pe = sh.Image("pe", 64)
     for path in (r"C:\Users\u\a.exe", r"\Device\HarddiskVolume2\Users\u\a.exe", r"\??\C:\Users\u\a.exe"):
         assert sh.module_name(pe, path) == r"Users\u\a.exe"
+
+
+# --- Rust ---------------------------------------------------------------------
+
+def test_a_rust_program_says_which_compiler_built_it(tmp_path, built):
+    """The commit is in every panic path and survives strip: it names the
+    one signature set that can know the program's standard library."""
+    with_symbols, _, _ = built
+    commit = "82e1608dfa6e0b5569232559e3d385fea5a93112"
+    sample = tmp_path / "rusty"
+    sample.write_bytes(with_symbols.read_bytes() + f"/rustc/{commit}/library/core/src/fmt/mod.rs\0".encode()
+                       + b"rustc version 1.75.0 (82e1608df 2023-12-21)\0rust_begin_unwind\0")
+    image = sh.read_image(sample)
+    assert image.toolchain == "rust" and image.rust == {"commit": commit, "version": "1.75.0"}
+    assert sh.report(image, [], [])["rust"] == image.rust
+
+    # its set is recognised by that commit, and ranked above any libc set's count
+    spec = importlib.util.spec_from_file_location("fetch_flirt_sets", ROOT / "scripts" / "fetch-flirt-sets.py")
+    fetch = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(fetch)
+    sets = tmp_path / "flirt"
+    sets.mkdir()
+    (sets / "rust-1.75.0-x86_64-unknown-linux-musl.yar").write_text(
+        fetch.rust_rule("rust-1.75.0-x86_64-unknown-linux-musl", commit))
+    (sets / "rust-1.76.0-x86_64-unknown-linux-musl.yar").write_text(
+        fetch.rust_rule("rust-1.76.0-x86_64-unknown-linux-musl", "0" * 40))
+    found = sh.recognised_sets(sets, sample.read_bytes())
+    assert list(found) == ["rust-1.75.0-x86_64-unknown-linux-musl"] and found.popitem()[1] > 1000
