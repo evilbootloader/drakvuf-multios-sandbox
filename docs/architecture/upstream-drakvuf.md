@@ -133,6 +133,15 @@ runs, preserving the agentless design.
 > - **libusermode.** After ntdll, the process's own image VAD is looked up by
 >   the process's path and offered to the hook lists like a mapped DLL. The
 >   module is spelled as the VAD names it: no drive (`Users\u\Desktop\s.exe`).
+> - **Go's calling conventions** (same date, same standing). A hook line may
+>   carry `goabi` (arguments in RAX, RBX, RCX, RDI, RSI, R8–R11: amd64 from
+>   Go 1.17) or `goabi0` (every argument on the stack: Go before 1.17, 32-bit
+>   Go, assembly functions). Both report at entry — a goroutine's stack moves,
+>   so a return cannot be matched to its call. `read_hook_argument()` in
+>   `libusermode/utils.cpp` serves apimon and libmon. The lines come from
+>   `sandboxd/data/go-hooks.txt` (hand-written), placed where the sample's own
+>   function table (`gopclntab`, read by `sandboxd/samplehooks.py` for the
+>   Go 1.2, 1.16, 1.18 and 1.20 layouts) says each function is.
 > - `dl_rendezvous` now tells its consumer of every exec and exit, not only
 >   those of processes it tracked: a dynamic program that exec'd a static one
 >   used to keep its breakpoints.

@@ -1,0 +1,118 @@
+# Go functions worth a hook, for programs written in Go (sandboxd/samplehooks.py).
+#
+# A Go program is one statically linked file: nothing of it is an export, and
+# its calls never pass through libc or, mostly, a Windows DLL above ntdll. The
+# program's own function table names every function in it; the ones listed
+# here are hooked where that table says they are, in the sample's image.
+#
+# A line is a hook list's, with `go` where the module goes:
+#
+#   go,<function as Go's table spells it>,<goabi|goabi0>,log[,<Name>:<type>...]
+#
+# goabi   a function written in Go. Its arguments are in registers from Go
+#         1.17 on amd64 and on the stack before that and on 32-bit; the
+#         locator writes whichever the sample's version has.
+# goabi0  a function written in assembly: on the stack in every version.
+#
+# Arguments are machine words in the order of the declaration, and Go's own
+# types take more than one:
+#   string     pointer, length        Name:buffer[NameLen],NameLen:ulong
+#   []byte     pointer, length, cap   Data:buffer[DataLen],DataLen:ulong,DataCap:ulong
+#   interface  type, data             CtxType:lpvoid,Ctx:lpvoid
+#   a method   its receiver first
+# `ulong` for Go's int and uintptr (a word), `dword` for a uint32.
+# No return values: a goroutine's stack moves, see parse_entry() in DRAKVUF.
+#
+# Hand-written and hand-checked against the standard library's declarations.
+# Leave out what runs per byte or per packet ((*File).Write, (*conn).Read).
+
+# --- network ------------------------------------------------------------------
+go,net.Dial,goabi,log,Network:buffer[NetworkLen],NetworkLen:ulong,Address:buffer[AddressLen],AddressLen:ulong
+go,net.DialTimeout,goabi,log,Network:buffer[NetworkLen],NetworkLen:ulong,Address:buffer[AddressLen],AddressLen:ulong,Timeout:ulong
+go,net.(*Dialer).Dial,goabi,log,Dialer:lpvoid,Network:buffer[NetworkLen],NetworkLen:ulong,Address:buffer[AddressLen],AddressLen:ulong
+go,net.(*Dialer).DialContext,goabi,log,Dialer:lpvoid,CtxType:lpvoid,Ctx:lpvoid,Network:buffer[NetworkLen],NetworkLen:ulong,Address:buffer[AddressLen],AddressLen:ulong
+go,net.Listen,goabi,log,Network:buffer[NetworkLen],NetworkLen:ulong,Address:buffer[AddressLen],AddressLen:ulong
+go,net.(*ListenConfig).Listen,goabi,log,Config:lpvoid,CtxType:lpvoid,Ctx:lpvoid,Network:buffer[NetworkLen],NetworkLen:ulong,Address:buffer[AddressLen],AddressLen:ulong
+go,net.ListenPacket,goabi,log,Network:buffer[NetworkLen],NetworkLen:ulong,Address:buffer[AddressLen],AddressLen:ulong
+go,net.ResolveTCPAddr,goabi,log,Network:buffer[NetworkLen],NetworkLen:ulong,Address:buffer[AddressLen],AddressLen:ulong
+go,net.ResolveUDPAddr,goabi,log,Network:buffer[NetworkLen],NetworkLen:ulong,Address:buffer[AddressLen],AddressLen:ulong
+go,net.LookupHost,goabi,log,Host:buffer[HostLen],HostLen:ulong
+go,net.LookupIP,goabi,log,Host:buffer[HostLen],HostLen:ulong
+go,net.LookupAddr,goabi,log,Addr:buffer[AddrLen],AddrLen:ulong
+go,net.LookupTXT,goabi,log,Name:buffer[NameLen],NameLen:ulong
+go,net.(*Resolver).LookupHost,goabi,log,Resolver:lpvoid,CtxType:lpvoid,Ctx:lpvoid,Host:buffer[HostLen],HostLen:ulong
+go,net.(*Resolver).LookupIPAddr,goabi,log,Resolver:lpvoid,CtxType:lpvoid,Ctx:lpvoid,Host:buffer[HostLen],HostLen:ulong
+
+# --- HTTP ---------------------------------------------------------------------
+go,net/http.NewRequest,goabi,log,Method:buffer[MethodLen],MethodLen:ulong,Url:buffer[UrlLen],UrlLen:ulong,BodyType:lpvoid,Body:lpvoid
+go,net/http.NewRequestWithContext,goabi,log,CtxType:lpvoid,Ctx:lpvoid,Method:buffer[MethodLen],MethodLen:ulong,Url:buffer[UrlLen],UrlLen:ulong,BodyType:lpvoid,Body:lpvoid
+go,net/http.Get,goabi,log,Url:buffer[UrlLen],UrlLen:ulong
+go,net/http.Post,goabi,log,Url:buffer[UrlLen],UrlLen:ulong,ContentType:buffer[ContentTypeLen],ContentTypeLen:ulong,BodyType:lpvoid,Body:lpvoid
+go,net/http.(*Client).Get,goabi,log,Client:lpvoid,Url:buffer[UrlLen],UrlLen:ulong
+go,net/http.(*Client).Post,goabi,log,Client:lpvoid,Url:buffer[UrlLen],UrlLen:ulong,ContentType:buffer[ContentTypeLen],ContentTypeLen:ulong,BodyType:lpvoid,Body:lpvoid
+go,net/http.(*Client).Do,goabi,log,Client:lpvoid,Request:lpvoid
+go,net/http.ListenAndServe,goabi,log,Addr:buffer[AddrLen],AddrLen:ulong,HandlerType:lpvoid,Handler:lpvoid
+go,net/url.Parse,goabi,log,RawUrl:buffer[RawUrlLen],RawUrlLen:ulong
+
+# --- files --------------------------------------------------------------------
+go,os.OpenFile,goabi,log,Name:buffer[NameLen],NameLen:ulong,Flag:ulong,Perm:dword
+go,os.ReadFile,goabi,log,Name:buffer[NameLen],NameLen:ulong
+go,os.WriteFile,goabi,log,Name:buffer[NameLen],NameLen:ulong,Data:buffer[DataLen],DataLen:ulong,DataCap:ulong,Perm:dword
+go,os.ReadDir,goabi,log,Name:buffer[NameLen],NameLen:ulong
+go,os.Remove,goabi,log,Name:buffer[NameLen],NameLen:ulong
+go,os.RemoveAll,goabi,log,Path:buffer[PathLen],PathLen:ulong
+go,os.Rename,goabi,log,OldPath:buffer[OldPathLen],OldPathLen:ulong,NewPath:buffer[NewPathLen],NewPathLen:ulong
+go,os.Mkdir,goabi,log,Name:buffer[NameLen],NameLen:ulong,Perm:dword
+go,os.MkdirAll,goabi,log,Path:buffer[PathLen],PathLen:ulong,Perm:dword
+go,os.Chmod,goabi,log,Name:buffer[NameLen],NameLen:ulong,Mode:dword
+go,os.Chown,goabi,log,Name:buffer[NameLen],NameLen:ulong,Uid:ulong,Gid:ulong
+go,os.Truncate,goabi,log,Name:buffer[NameLen],NameLen:ulong,Size:ulong
+go,os.Symlink,goabi,log,OldName:buffer[OldNameLen],OldNameLen:ulong,NewName:buffer[NewNameLen],NewNameLen:ulong
+go,os.Readlink,goabi,log,Name:buffer[NameLen],NameLen:ulong
+go,os.Chdir,goabi,log,Dir:buffer[DirLen],DirLen:ulong
+
+# --- processes and environment ------------------------------------------------
+go,os.StartProcess,goabi,log,Name:buffer[NameLen],NameLen:ulong,Argv:lpvoid,ArgvLen:ulong,ArgvCap:ulong,Attr:lpvoid
+go,os/exec.Command,goabi,log,Name:buffer[NameLen],NameLen:ulong,Args:lpvoid,ArgsLen:ulong,ArgsCap:ulong
+go,os/exec.CommandContext,goabi,log,CtxType:lpvoid,Ctx:lpvoid,Name:buffer[NameLen],NameLen:ulong,Args:lpvoid,ArgsLen:ulong,ArgsCap:ulong
+go,os/exec.LookPath,goabi,log,File:buffer[FileLen],FileLen:ulong
+go,os/exec.(*Cmd).Start,goabi,log,Cmd:lpvoid
+go,os/exec.(*Cmd).Run,goabi,log,Cmd:lpvoid
+go,os.Getenv,goabi,log,Key:buffer[KeyLen],KeyLen:ulong
+go,os.Setenv,goabi,log,Key:buffer[KeyLen],KeyLen:ulong,Value:buffer[ValueLen],ValueLen:ulong
+go,os.Hostname,goabi,log
+go,os.Exit,goabi,log,Code:ulong
+go,time.Sleep,goabi,log,Nanoseconds:ulong
+go,syscall.Kill,goabi,log,Pid:ulong,Signal:ulong
+go,syscall.Exec,goabi,log,Argv0:buffer[Argv0Len],Argv0Len:ulong,Argv:lpvoid,ArgvLen:ulong,ArgvCap:ulong,Envv:lpvoid,EnvvLen:ulong,EnvvCap:ulong
+go,syscall.Chroot,goabi,log,Path:buffer[PathLen],PathLen:ulong
+go,syscall.Mount,goabi,log,Source:buffer[SourceLen],SourceLen:ulong,Target:buffer[TargetLen],TargetLen:ulong,Fstype:buffer[FstypeLen],FstypeLen:ulong,Flags:ulong,Data:buffer[DataLen],DataLen:ulong
+go,syscall.PtraceAttach,goabi,log,Pid:ulong
+
+# --- Windows ------------------------------------------------------------------
+go,syscall.LoadLibrary,goabi,log,Name:buffer[NameLen],NameLen:ulong
+go,syscall.LoadDLL,goabi,log,Name:buffer[NameLen],NameLen:ulong
+go,syscall.NewLazyDLL,goabi,log,Name:buffer[NameLen],NameLen:ulong
+go,syscall.GetProcAddress,goabi,log,Module:lpvoid,ProcName:buffer[ProcNameLen],ProcNameLen:ulong
+go,syscall.(*DLL).FindProc,goabi,log,Dll:lpvoid,Name:buffer[NameLen],NameLen:ulong
+go,syscall.(*LazyDLL).NewProc,goabi,log,Dll:lpvoid,Name:buffer[NameLen],NameLen:ulong
+go,syscall.StartProcess,goabi,log,Argv0:buffer[Argv0Len],Argv0Len:ulong,Argv:lpvoid,ArgvLen:ulong,ArgvCap:ulong,Attr:lpvoid
+go,golang.org/x/sys/windows.LoadLibrary,goabi,log,Name:buffer[NameLen],NameLen:ulong
+go,golang.org/x/sys/windows.NewLazyDLL,goabi,log,Name:buffer[NameLen],NameLen:ulong
+go,golang.org/x/sys/windows.NewLazySystemDLL,goabi,log,Name:buffer[NameLen],NameLen:ulong
+go,golang.org/x/sys/windows/registry.OpenKey,goabi,log,Key:lpvoid,Path:buffer[PathLen],PathLen:ulong,Access:dword
+go,golang.org/x/sys/windows/registry.DeleteKey,goabi,log,Key:lpvoid,Path:buffer[PathLen],PathLen:ulong
+go,golang.org/x/sys/windows/registry.Key.GetStringValue,goabi,log,Key:lpvoid,Name:buffer[NameLen],NameLen:ulong
+go,golang.org/x/sys/windows/registry.Key.SetStringValue,goabi,log,Key:lpvoid,Name:buffer[NameLen],NameLen:ulong,Value:buffer[ValueLen],ValueLen:ulong
+
+# --- what it hides things with ------------------------------------------------
+go,crypto/aes.NewCipher,goabi,log,Key:buffer[KeyLen],KeyLen:ulong,KeyCap:ulong
+go,crypto/des.NewCipher,goabi,log,Key:buffer[KeyLen],KeyLen:ulong,KeyCap:ulong
+go,crypto/des.NewTripleDESCipher,goabi,log,Key:buffer[KeyLen],KeyLen:ulong,KeyCap:ulong
+go,crypto/rc4.NewCipher,goabi,log,Key:buffer[KeyLen],KeyLen:ulong,KeyCap:ulong
+go,crypto/cipher.NewCBCDecrypter,goabi,log,BlockType:lpvoid,Block:lpvoid,Iv:buffer[IvLen],IvLen:ulong,IvCap:ulong
+go,crypto/cipher.NewCBCEncrypter,goabi,log,BlockType:lpvoid,Block:lpvoid,Iv:buffer[IvLen],IvLen:ulong,IvCap:ulong
+go,crypto/cipher.NewCTR,goabi,log,BlockType:lpvoid,Block:lpvoid,Iv:buffer[IvLen],IvLen:ulong,IvCap:ulong
+go,golang.org/x/crypto/chacha20poly1305.New,goabi,log,Key:buffer[KeyLen],KeyLen:ulong,KeyCap:ulong
+go,encoding/base64.(*Encoding).DecodeString,goabi,log,Encoding:lpvoid,S:buffer[SLen],SLen:ulong
+go,encoding/hex.DecodeString,goabi,log,S:buffer[SLen],SLen:ulong

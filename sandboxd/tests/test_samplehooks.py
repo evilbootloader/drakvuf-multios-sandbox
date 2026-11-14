@@ -12,6 +12,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import shutil
+import struct
 import subprocess
 import sys
 from pathlib import Path
@@ -281,3 +282,137 @@ def test_a_sample_is_matched_against_the_sets_that_recognise_it(built, tmp_path)
     image, located = sh.locate(stripped, sets, tmp_path / "none")
     summary = sh.report(image, located, [])
     assert "libc-host" in summary["signature_sets"] and summary["compiler"].startswith("GCC: (")
+
+
+# --- Go -----------------------------------------------------------------------
+
+GO_FUNCTIONS = [("runtime.text", 0x401000), ("net.Dial", 0x401040), ("net/http.(*Client).Do", 0x4010c0),
+                ("main.main", 0x401100), ("os.Getenv", 0x401180)] + [(f"main.f{i}", 0x401200 + 16 * i) for i in range(70)]
+
+
+def go_table(layout: str, size: int = 8, text: int = 0x401000) -> bytes:
+    """A function table as the Go linker of that layout's versions writes it,
+    cut down to what names a function: header, name table, (pc, offset)
+    pairs, and a _func record each."""
+    word = "<Q" if size == 8 else "<I"
+    names, name_at = b"\0", {}
+    for name, _ in GO_FUNCTIONS:
+        name_at[name] = len(names)
+        names += name.encode() + b"\0"
+    magic = {"1.2": 0xFFFFFFFB, "1.16": 0xFFFFFFFA, "1.18": 0xFFFFFFF0, "1.20": 0xFFFFFFF1}[layout]
+    head = struct.pack("<IBBBB", magic, 0, 0, 1, size)
+    count = len(GO_FUNCTIONS)
+    new = layout in ("1.18", "1.20")
+    pair = 8 if new else 2 * size
+    record = 8 if new else size + 4
+
+    def records(entry_of, table_size):
+        out = b""
+        for i, (name, address) in enumerate(GO_FUNCTIONS):
+            out += (struct.pack("<I", address - text) if new else struct.pack(word, address))
+            out += struct.pack("<i", entry_of(name))
+        return out
+
+    if layout == "1.2":
+        # names live in the table itself, after the pairs and the records
+        table_at = 8 + size
+        records_at = table_at + pair * count + size
+        names_at = records_at + record * count
+        pairs = b"".join(struct.pack(word[0] + word[1] * 2, a, records_at + record * i)
+                         for i, (_, a) in enumerate(GO_FUNCTIONS))
+        body = struct.pack(word, count) + pairs + struct.pack(word, 0)
+        body += records(lambda n: names_at + name_at[n], 0)
+        return head + body + names
+
+    fields = 7 if layout == "1.16" else 8
+    names_at = 8 + fields * size
+    table_at = names_at + len(names)
+    records_rel = pair * count + size       # from the function table, where offsets count from
+    if new:
+        pairs = b"".join(struct.pack("<II", a - text, records_rel + record * i)
+                         for i, (_, a) in enumerate(GO_FUNCTIONS))
+    else:
+        pairs = b"".join(struct.pack(word[0] + word[1] * 2, a, records_rel + record * i)
+                         for i, (_, a) in enumerate(GO_FUNCTIONS))
+    header = [count, 0] + ([text] if new else []) + [names_at, 0, 0, 0, table_at]
+    return (head + b"".join(struct.pack(word, v) for v in header) + names + pairs + b"\0" * size
+            + records(lambda n: name_at[n], 0))
+
+
+def go_image(bits: int = 64) -> sh.Image:
+    image = sh.Image("elf", bits, base=0x400000)
+    image.code = [(0x401000, 0x1000, b"\x90" * 0x2000)]
+    return image
+
+
+@pytest.mark.parametrize("layout,size", [("1.2", 8), ("1.2", 4), ("1.16", 8), ("1.16", 4), ("1.18", 8), ("1.20", 8), ("1.20", 4)])
+def test_gos_function_table_names_every_function_in_every_layout(layout, size):
+    """The table changed in Go 1.2, 1.16, 1.18 and 1.20. A sample built with
+    an old toolchain is no rarer than one built with last month's."""
+    data = b"\x00" * 64 + b"\xfb\xff\xff\xff junk that only starts like a table" + go_table(layout, size) + b"\x00" * 64
+    image = go_image(size * 8)
+    located = sh.from_gopclntab(image, data)
+    assert {(f.name, f.offset) for f in located} == set(GO_FUNCTIONS)
+    assert image.go_table == layout and all(f.how == "gopclntab" for f in located)
+
+
+def test_a_position_independent_go_program_counts_from_its_code():
+    """runtime.text is left to a relocation there, and the file has 0."""
+    image = go_image()
+    located = sh.from_gopclntab(image, go_table("1.20", text=0x401000).replace(struct.pack("<Q", 0x401000), struct.pack("<Q", 0), 1))
+    assert ("net.Dial", 0x401040) in {(f.name, f.offset) for f in located}
+
+
+@pytest.mark.parametrize("bits,table,version,abi", [
+    (64, "1.20", "go1.22.1", "goabi"), (64, "1.18", "", "goabi"),
+    (64, "1.16", "go1.17.3", "goabi"), (64, "1.16", "go1.16.15", "goabi0"),
+    (64, "1.16", "", ""),               # the one table two conventions share
+    (64, "1.2", "go1.13.8", "goabi0"), (32, "1.20", "go1.22.1", "goabi0"),
+])
+def test_where_a_go_programs_arguments_are_goes_by_its_version(bits, table, version, abi):
+    image = sh.Image("elf", bits)
+    image.go_table, image.go_version = table, version
+    assert sh.go_abi(image) == abi
+
+
+def test_the_go_version_is_read_from_the_build_information_or_the_strings():
+    assert sh.go_version(b"x" * 9 + b"\xff Go buildinf:\x08\x02" + b"\0" * 16 + b"\x08go1.21.3" + b"go1.4") == "go1.21.3"
+    assert sh.go_version(b"..go1.13.8..go1.13.8..go1.2..") == "go1.13.8"
+    assert sh.go_version(b"nothing of the kind") == ""
+
+
+def test_go_lines_carry_the_convention_and_only_listed_functions_get_one():
+    go = sh.go_hooks(sh.GO_HOOKS.read_text())
+    located = [sh.Located(name, address, "gopclntab") for name, address in GO_FUNCTIONS]
+    lines = sh.sample_lines(located, {}, "/home/u/s", 0x400000, go, "goabi")
+    assert [line.split(",")[:4] for line in lines] == [
+        ["/home/u/s", "net.Dial", "1040", "goabi"], ["/home/u/s", "net/http.(*Client).Do", "10c0", "goabi"],
+        ["/home/u/s", "os.Getenv", "1180", "goabi"]]
+    assert lines[0].endswith(",log,Network:buffer[NetworkLen],NetworkLen:ulong,Address:buffer[AddressLen],AddressLen:ulong")
+    # an old toolchain: the same words, on the stack
+    assert sh.sample_lines(located, {}, "/home/u/s", 0x400000, go, "goabi0")[0].split(",")[3] == "goabi0"
+    # no saying which: the call by name, without arguments read from the wrong place
+    assert sh.sample_lines(located, {}, "/home/u/s", 0x400000, go, "")[0] == "/home/u/s,net.Dial,1040,no-retval,log"
+    # and a C list knows no Go function by a shortened name
+    assert sh.sample_lines(located, {"main": "log", "Dial": "log"}, "/home/u/s", 0x400000) == []
+
+
+def test_every_line_of_the_go_list_is_one_drakvuf_reads():
+    names = set()
+    for line in sh.GO_HOOKS.read_text().splitlines():
+        if not line.strip() or line.startswith("#"):
+            continue
+        fields = line.split(",")
+        assert fields[0] == "go" and fields[2] in ("goabi", "goabi0") and fields[3] == "log", line
+        assert fields[1] not in names, f"twice: {fields[1]}"
+        names.add(fields[1])
+        arguments = [f.split(":") for f in fields[4:]]
+        assert all(len(a) == 2 and a[0].isidentifier() for a in arguments), line
+        said = [a[0] for a in arguments]
+        assert len(said) == len(set(said)), line
+        # nine words fit the registers; past that the stack slot is a guess
+        assert len(arguments) <= 9, line
+        for name, kind in arguments:
+            if kind.startswith("buffer["):
+                assert kind[7:-1] in said and said.index(kind[7:-1]) == said.index(name) + 1, line
+    assert names == set(sh.go_hooks(sh.GO_HOOKS.read_text())) and len(names) > 50

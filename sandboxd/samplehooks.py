@@ -58,6 +58,8 @@ from typing import Iterable, Optional
 DATA = Path(__file__).resolve().parent / "data"
 FLIRT_DIR = DATA / "flirt"
 CODE_SIGNATURES_DIR = DATA / "code-signatures"
+#: The Go functions worth a hook, and where their arguments are
+GO_HOOKS = DATA / "go-hooks.txt"
 
 #: Candidate function starts offered to FLIRT, and bytes of each: a set's
 #: longest pattern is its 32 leading bytes, a CRC over at most 255 more, and
@@ -98,6 +100,8 @@ class Image:
     toolchain: str = ""
     compiler: str = ""                          # what the compiler wrote of itself
     sets: list = field(default_factory=list)    # signature sets tried
+    go_version: str = ""                        # "go1.21.3", when the program says
+    go_table: str = ""                          # its function table's layout: "1.2", "1.16", "1.18", "1.20"
 
 
 # --- reading the program -----------------------------------------------------
@@ -163,12 +167,14 @@ def read_pe(path: Path, data: bytes) -> Optional[Image]:
         if pe.FILE_HEADER.Machine not in (0x14C, 0x8664):
             return None
         base = pe.OPTIONAL_HEADER.ImageBase
+        # Addresses as the file has them in its own code and tables: from
+        # ImageBase, which the hook lines take off again
         image = Image("pe", 64 if pe.FILE_HEADER.Machine == 0x8664 else 32, base=base,
-                      entry=pe.OPTIONAL_HEADER.AddressOfEntryPoint)
+                      entry=base + pe.OPTIONAL_HEADER.AddressOfEntryPoint)
         for section in pe.sections:
             if section.Characteristics & 0x20000000 and section.SizeOfRawData:     # MEM_EXECUTE
                 start = section.PointerToRawData
-                image.code.append((section.VirtualAddress, start, data[start:start + section.SizeOfRawData]))
+                image.code.append((base + section.VirtualAddress, start, data[start:start + section.SizeOfRawData]))
         # A PE's own symbols are its imports, which apimon hooks where they
         # live. What is linked into it has no name left.
         image.static = True
@@ -198,6 +204,123 @@ def read_image(path: Path) -> Optional[Image]:
 
 def from_symbols(image: Image) -> list:
     return [Located(name, address, "symtab") for name, address in image.symbols.items()]
+
+
+# Go keeps a table of every function for its own stack traces and garbage
+# collector, and `strip` cannot take it: the runtime reads it. Name and
+# address of everything in the program, its own code included.
+#
+#   magic        Go          functions are              names are at
+#   0xFFFFFFFB   1.2-1.15    (pc, offset) words         table + nameoff
+#   0xFFFFFFFA   1.16-1.17   (pc, offset) words         table + funcnametab + nameoff
+#   0xFFFFFFF0   1.18-1.19   (pc - text, offset) u32    the same
+#   0xFFFFFFF1   1.20-       the same                   the same
+#
+# Before Go 1.2 (2013) the table was another format; such a program is left
+# to the signatures.
+_GO_TABLES = {b"\xfb\xff\xff\xff": "1.2", b"\xfa\xff\xff\xff": "1.16",
+              b"\xf0\xff\xff\xff": "1.18", b"\xf1\xff\xff\xff": "1.20"}
+_GO_VERSION = re.compile(rb"go1\.\d{1,3}(?:\.\d{1,3}|rc\d{1,2}|beta\d{1,2})?")
+MAX_GO_FUNCTIONS = 2_000_000
+
+
+def go_version(data: bytes) -> str:
+    """What the toolchain called itself. Go 1.18 on writes it in the build
+    information; before that it is a string among the others, and the one
+    said most often is taken."""
+    at = data.find(b"\xff Go buildinf:")
+    if at != -1 and len(data) > at + 34 and data[at + 15] & 2:
+        size = data[at + 32]
+        said = data[at + 33:at + 33 + size]
+        if size < 0x80 and _GO_VERSION.fullmatch(said):
+            return said.decode()
+    count: dict = {}
+    for said in _GO_VERSION.findall(data):
+        count[said] = count.get(said, 0) + 1
+    return max(count, key=count.get).decode() if count else ""
+
+
+def _go_functions(data: bytes, at: int, layout: str, spans: list) -> Optional[dict]:
+    """address -> name from the table at `at`, None for bytes that only look
+    like one."""
+    if data[at + 4:at + 6] != b"\0\0" or data[at + 6] not in (1, 2, 4) or data[at + 7] not in (4, 8):
+        return None
+    size = data[at + 7]
+    word = "<Q" if size == 8 else "<I"
+
+    def header(n: int) -> int:
+        return struct.unpack_from(word, data, at + 8 + n * size)[0]
+
+    def name_at(start: int) -> str:
+        end = data.find(b"\0", start, start + 512)
+        return data[start:end].decode("utf-8", "replace") if end > start else ""
+
+    count = header(0)
+    if not 0 < count <= MAX_GO_FUNCTIONS:
+        return None
+    text = 0
+    if layout == "1.2":
+        table, names = at + 8 + size, at
+        records = at
+    elif layout == "1.16":
+        names, table = at + header(2), at + header(6)
+        records = table
+    else:
+        # runtime.text, which a position-independent program may have left
+        # to a relocation: the code's start then
+        text, names, table = header(2), at + header(3), at + header(7)
+        if not any(a <= text < b for a, b in spans):
+            text = min((a for a, _ in spans), default=0)
+        records = table
+    found: dict = {}
+    inside = 0
+    for i in range(count):
+        if layout in ("1.2", "1.16"):
+            entry, offset = struct.unpack_from(word[0] + word[1] * 2, data, table + 2 * size * i)
+            name_offset = struct.unpack_from("<i", data, records + offset + size)[0]
+        else:
+            entry, offset = struct.unpack_from("<II", data, table + 8 * i)
+            entry += text
+            name_offset = struct.unpack_from("<i", data, records + offset + 4)[0]
+        name = name_at(names + name_offset) if name_offset >= 0 else ""
+        if name and any(a <= entry < b for a, b in spans):
+            inside += 1
+            found.setdefault(entry, name)
+        # a table is believed when its first functions are code with names
+        if i == 63 and inside < 48:
+            return None
+    return found if inside >= min(count, 64) * 3 // 4 else None
+
+
+def from_gopclntab(image: Image, data: bytes) -> list:
+    spans = [(va, va + len(code)) for va, _, code in image.code]
+    for magic, layout in _GO_TABLES.items():
+        at = data.find(magic)
+        while at != -1:
+            try:
+                found = _go_functions(data, at, layout, spans)
+            except (struct.error, IndexError):
+                found = None
+            if found:
+                image.go_table = layout
+                image.go_version = go_version(data)
+                return [Located(name, address, "gopclntab") for address, name in sorted(found.items())]
+            at = data.find(magic, at + 1)
+    return []
+
+
+def go_abi(image: Image) -> str:
+    """The hook-list marker for where this program's Go functions take their
+    arguments: "goabi" (registers), "goabi0" (the stack), "" when the program
+    does not say which. Registers came with Go 1.17, on amd64 only."""
+    if image.bits == 32 or image.go_table == "1.2":
+        return "goabi0"
+    if image.go_table in ("1.18", "1.20"):
+        return "goabi"
+    said = re.match(r"go1\.(\d+)", image.go_version)      # the 1.16 table: Go 1.16 or 1.17
+    if not said:
+        return ""
+    return "goabi" if int(said.group(1)) >= 17 else "goabi0"
 
 
 def call_targets(image: Image) -> list:
@@ -341,8 +464,14 @@ def locate(path: Path, flirt_dir: Path = FLIRT_DIR,
     if image is None:
         return None, []
     located = from_symbols(image)
+    data = path.read_bytes()
+    if image.toolchain == "go":
+        # First of an address: the table has every function, the symbol
+        # table, when there is one, the same names
+        seen = {found.offset for found in located}
+        located += [f for f in from_gopclntab(image, data) if f.offset not in seen]
     known = {found.offset for found in located}
-    sets = load_signatures(flirt_dir, path.read_bytes())
+    sets = load_signatures(flirt_dir, data)
     image.sets = [name for name, _ in sets]
     located += [f for f in from_flirt(image, sets) if f.offset not in known]
     located += from_yara(image, path, yara_dir)
@@ -389,17 +518,44 @@ def static_hooks(text: str) -> dict:
 _MODULE_OK = re.compile(r"^[^,\r\n#]+$")
 
 
-def sample_lines(located: list, known: dict, module: str, base: Optional[int] = 0) -> list:
+def go_hooks(text: str) -> dict:
+    """Go function -> the rest of its line (`goabi,log,Network:...`) from the
+    list of Go functions, whose lines are a hook list's with `go` for a module."""
+    known: dict = {}
+    for line in text.splitlines():
+        fields = line.strip().split(",")
+        if len(fields) >= 4 and fields[0] == "go" and fields[2] in ("goabi", "goabi0"):
+            known.setdefault(fields[1], ",".join(fields[2:]))
+    return known
+
+
+def sample_lines(located: list, known: dict, module: str, base: Optional[int] = 0,
+                 go: Optional[dict] = None, abi: str = "") -> list:
     """The hook-list lines for what was located and the list knows, one per
     address. [] for a module name the list cannot spell, and for an image
-    with no base to count from."""
+    with no base to count from. A Go function's line says where its arguments
+    are (`abi`, per go_abi()); with no saying, the call is logged bare."""
     if base is None or not _MODULE_OK.match(module) or module != module.strip():
         return []
     lines, seen = [], set()
     for found in sorted(located, key=lambda f: (f.offset, f.name)):
-        name = found.name if found.name in known else plain_name(found.name)
         offset = found.offset - base
-        if name not in known or offset in seen or offset <= 0:
+        if offset in seen or offset <= 0:
+            continue
+        if found.how == "gopclntab":
+            if not go or found.name not in go:
+                continue
+            marker, rest = go[found.name].split(",", 1)
+            # a function written in assembly is on the stack in every version
+            marker = marker if marker == "goabi0" else abi
+            seen.add(offset)
+            lines.append(f"{module},{found.name},{offset:x},{marker},{rest}" if marker
+                         else f"{module},{found.name},{offset:x},no-retval,log")
+            if len(lines) >= MAX_HOOKS:
+                break
+            continue
+        name = found.name if found.name in known else plain_name(found.name)
+        if name not in known:
             continue
         seen.add(offset)
         lines.append(f"{module},{name},{offset:x},{known[name]}")
@@ -441,6 +597,8 @@ def report(image: Optional[Image], located: list, lines: list) -> dict:
         "analysed": True, "format": image.kind, "bits": image.bits, "static": image.static,
         "stripped": image.stripped, "toolchain": image.toolchain or None,
         "compiler": image.compiler or None, "signature_sets": image.sets,
+        "go": {"version": image.go_version or None, "table": image.go_table,
+               "arguments": go_abi(image) or None} if image.go_table else None,
         "found": by_how, "hooked": len(lines),
         "functions": [{"name": f.name, "address": f.offset, "how": f.how, "hooked": f.offset in hooked}
                       for f in sorted(located, key=lambda f: f.offset)[:MAX_SYMBOLS]],
@@ -456,6 +614,7 @@ def main(argv: Optional[list] = None) -> int:
     p.add_argument("--json", type=Path, help="what was found, for the report")
     p.add_argument("--flirt", type=Path, default=FLIRT_DIR)
     p.add_argument("--code-signatures", type=Path, default=CODE_SIGNATURES_DIR)
+    p.add_argument("--go-hooks", type=Path, default=GO_HOOKS)
     p.add_argument("--max-mib", type=int, default=1024, help="RLIMIT_DATA in MiB; 0 sets no limit")
     args = p.parse_args(argv)
     if args.max_mib > 0:
@@ -467,8 +626,9 @@ def main(argv: Optional[list] = None) -> int:
     try:
         image, located = locate(args.sample, args.flirt, args.code_signatures)
         if image is not None:
+            go = go_hooks(args.go_hooks.read_text()) if image.go_table and args.go_hooks.is_file() else {}
             lines = sample_lines(located, static_hooks(static_text),
-                                 module_name(image, args.guest_path), image.base)
+                                 module_name(image, args.guest_path), image.base, go, go_abi(image))
     except Exception as exc:  # noqa: BLE001 - a program no parser reads gets the static list
         print(f"samplehooks: {args.sample.name}: {type(exc).__name__}: {exc}", file=sys.stderr)
         image, located, lines = None, [], []
