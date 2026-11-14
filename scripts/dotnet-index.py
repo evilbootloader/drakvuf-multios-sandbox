@@ -17,7 +17,10 @@ into hook lines (by offset, `clrcall`).
 
 Runs on Dom0 against the mounted golden image, like
 windows-symbol-profiles.py; nothing runs in the guest. Needs `pefile` and
-`dnfile`.
+`dnfile`. `make setup_hooks_windows` runs it over the whole image, after the
+symbol profiles it takes the JIT compilers' entry from:
+
+    scripts/dotnet-index.py --image /mnt
 
 What it does not cover, and why:
 
@@ -415,11 +418,46 @@ def capa_methods(rules: Path) -> set:
     return found
 
 
+#: In a mounted Windows volume, where the precompiled framework code is
+IMAGE_ROOTS = ("Windows/assembly", "Program Files/dotnet/shared", "Program Files (x86)/dotnet/shared")
+
+
+def whole_image(args, error) -> None:
+    """`--image`: every argument a mounted volume answers for itself. The
+    roots that exist, modules named from the mount, and each JIT compiler
+    that is there and has a profile (scripts/windows-symbol-profiles.py: its
+    table of them, and its way of finding a path whatever its case)."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        "windows_symbol_profiles", Path(__file__).resolve().parent / "windows-symbol-profiles.py")
+    profiles = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(profiles)
+
+    args.roots = [found for found in (profiles.locate(args.image, root) for root in IMAGE_ROOTS) if found]
+    if not args.roots:
+        error(f"none of {', '.join(IMAGE_ROOTS)} under {args.image}: is the Windows volume mounted there?")
+    args.root = args.image
+    args.out = args.out or args.profiles / "dotnet-index.json"
+    args.hooks = args.hooks or args.profiles / "hooks-dotnet.txt"
+    for _, name, relpath in profiles.JIT:
+        dll = profiles.locate(args.image, relpath)
+        if dll is not None and (args.profiles / name).is_file():
+            args.jit.append((dll, args.profiles / name))
+        elif dll is not None:
+            print(f"  no JIT hook for {dll}: {args.profiles / name} is not made "
+                  f"(scripts/windows-symbol-profiles.py {name.removesuffix('.json')})", file=sys.stderr)
+
+
 def main(argv=None) -> int:
     p = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    p.add_argument("roots", nargs="+", type=Path,
+    p.add_argument("roots", nargs="*", type=Path,
                    help="directories (searched for *.dll) or DLLs: the image's Program Files/dotnet/shared")
-    p.add_argument("-o", "--out", type=Path, required=True)
+    p.add_argument("-o", "--out", type=Path)
+    p.add_argument("--image", type=Path,
+                   help="a mounted Windows volume: index everything in it, with no other argument. "
+                        "Writes dotnet-index.json and hooks-dotnet.txt into --profiles")
+    p.add_argument("--profiles", type=Path, default=Path(__file__).resolve().parent.parent / "profiles",
+                   help="with --image: where the symbol profiles are and the results go (default %(default)s)")
     p.add_argument("--root", type=Path,
                    help="where the Windows volume is mounted. A module is then named by its path "
                         "from there (`Program Files\\dotnet\\shared\\...\\8.0.11\\X.dll`), which "
@@ -434,6 +472,12 @@ def main(argv=None) -> int:
                    default=Path(__file__).resolve().parent.parent / "sandboxd" / "data" / "capa-rules",
                    help="the rules whose .NET methods get a hook")
     args = p.parse_args(argv)
+    if args.image:
+        if args.roots:
+            p.error("--image finds the directories itself")
+        whole_image(args, p.error)
+    elif not args.roots or not args.out:
+        p.error("directories to index and -o, or --image")
 
     files = []
     for root in args.roots:

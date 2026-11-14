@@ -175,6 +175,11 @@ POSTPROCESS_BUDGET = 1800.0
 # a second for a megabyte of code with a glibc signature set. A sample that
 # takes longer than this gets the static hook list, as every job did before.
 SAMPLEHOOKS_BUDGET = 120.0
+# Between the two runs of a job that asked for a second pass
+# (sandboxd/stagehints.py): the first run's process dumps are read through
+# gzip, a gigabyte in a few seconds, and the locators run on each image of
+# the sample in them. Over it, the job is its first run.
+STAGEHINTS_BUDGET = 300.0
 
 
 @dataclass(frozen=True)

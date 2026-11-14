@@ -23,7 +23,7 @@ import magic
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, status
 from fastapi.responses import StreamingResponse
 from psycopg.rows import dict_row
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, StrictBool, model_validator
 
 from dataclasses import field
 
@@ -233,6 +233,10 @@ class CreateJobRequest(BaseModel):
     # resolved in `create_job` -- what the submit form would have sent, not a
     # blanket True that switched return values off for every API client.
     disable_sysret: bool | None = None
+    # Run the sample again with hooks on what the first run's memory showed:
+    # what a packer unpacked (sandboxd/stagehints.py). Strict, because "0"
+    # and "no" are true to a lax bool and this can double the job's time.
+    second_pass: StrictBool = False
 
     # The second untrusted routing input (DRAFT-057), validated at this same
     # boundary and for the same reasons. Two fields rather than one because
@@ -395,6 +399,12 @@ class JobDetail(JobSummary):
     drop_location: str | None
     drop_subdir: str | None
     arguments: str | None
+
+    # The finished job this one runs again (`second_run`), or None; and
+    # whether THIS job can be run again: it completed, and left the lines its
+    # memory gave among artifacts the store still has.
+    second_run_of: UUID | None = None
+    second_run_available: bool = False
 
     # Set when the manifest could not be read. The job still renders -- state,
     # timings and sample identity are all on the row and all still true -- and
@@ -611,15 +621,15 @@ def create_job(req: CreateJobRequest,
             """
             INSERT INTO jobs (id, target_os, submitted_filename, size_bytes,
                               state, owner, egress_mode, egress_exit, plugins, timeout, disable_sysret, key_prefix,
-                              drop_location, drop_subdir, arguments)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                              drop_location, drop_subdir, arguments, second_pass)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             RETURNING id
             """,
             (job_id, req.target_os.value, req.filename, req.size_bytes,
              JobState.RECEIVED.value, owner, egress_mode, egress_exit, req.plugins,
              req.timeout, req.disable_sysret, key_prefix,
              req.drop_location.value if req.drop_location else None,
-             req.drop_subdir, req.arguments),
+             req.drop_subdir, req.arguments, req.second_pass),
         )
         job_id = cur.fetchone()[0]
 
@@ -866,7 +876,7 @@ def _detail(conn, job_id: UUID, identity: Caller) -> JobDetail:
             "      jobs.state, jobs.sha256, jobs.size_bytes, jobs.detected_type, jobs.queue_reason, "
             "      jobs.failure_stage, jobs.failure_reason, jobs.attempt, jobs.cancel_requested, "
             "      jobs.interacted, jobs.egress_mode, jobs.egress_exit, jobs.egress_applied, jobs.visibility, jobs.manifest, "
-            "      jobs.plugins::text[], jobs.drop_location, jobs.drop_subdir, jobs.arguments, "
+            "      jobs.plugins::text[], jobs.drop_location, jobs.drop_subdir, jobs.arguments, jobs.second_run_of, "
             "      jobs.malscore, jobs.malstatus, "
             # COALESCE, because since DRAFT-061 an identity provisioned by
             # `resolve_tenant` carries its address in `access_subject` and
@@ -936,7 +946,10 @@ def _detail(conn, job_id: UUID, identity: Caller) -> JobDetail:
             "interacted",
             "egress_mode", "egress_exit", "egress_applied", "visibility",
             "drop_location", "drop_subdir", "arguments", "malscore", "malstatus",
+            "second_run_of",
         )},
+        second_run_available=(row["state"] == JobState.COMPLETED.value
+                              and SECOND_RUN_HINTS in artifacts),
         # Not in the comprehension above, because this route reads `SELECT *`
         # and cannot cast one column in SQL the way `list_jobs` does. Same
         # reason as there: `jobs.owner` is `uuid` since 0009, and Pydantic
@@ -1336,6 +1349,98 @@ def cancel_job(job_id: Annotated[UUID, Path()],
     with connection() as conn:
         _visible_or_404(conn, job_id, identity)
         return CancelResponse(outcome=dal.cancel(conn, job_id))
+
+#: The artifact a run leaves when its memory showed code its file did not
+#: have (`sandboxd.stages.HINTS`): what a second run is made from.
+SECOND_RUN_HINTS = "hints.txt"
+
+
+class SecondRunResponse(BaseModel):
+    job_id: UUID
+    state: JobState
+
+
+@router.post("/{job_id}/second-run", status_code=status.HTTP_201_CREATED)
+def second_run(job_id: Annotated[UUID, Path()],
+               owner: auth.RequiredIdentity) -> SecondRunResponse:
+    """Make a new job that runs a finished job's sample again, with hooks on
+    what the first run's memory showed (`sandboxd/stagehints.py`).
+
+    For after the report has been read: a packed sample's report shows system
+    calls and little else, and its manifest lists `hints.txt` -- the library
+    functions found in its unpacked memory. The new job has the same sample
+    (copied inside the store, never through the caller), the same guest and
+    options, and `second_run_of` naming this one; the host is leased a URL
+    to the lines and runs once with them. Nothing of the first job changes.
+
+    **The owner only**, 404 otherwise, as publishing is: it spends the
+    owner's balance and copies their sample. A published job's readers
+    submit the sample themselves if they want a run of their own.
+
+    409 for a job that did not complete or left no lines (there is nothing a
+    second run would add), 410 when retention has taken the sample or the
+    lines, 402 with no balance left. Admission then runs as for an upload,
+    so the new job may come back `rejected` (no capacity, no such exit any
+    more) with the reason on it.
+    """
+    with connection() as conn, conn.cursor(row_factory=dict_row) as cur:
+        cur.execute(
+            "SELECT state, target_os, submitted_filename, size_bytes, sha256, key_prefix,"
+            "       manifest, egress_mode, egress_exit, plugins::text[] AS plugins, timeout,"
+            "       disable_sysret, drop_location, drop_subdir, arguments"
+            "  FROM jobs WHERE id = %s AND owner = %s", (job_id, owner))
+        first = cur.fetchone()
+        if first is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "no such job")
+        balance = conn.execute(
+            "SELECT balance_seconds FROM tenants WHERE owner = %s", (owner,)).fetchone()
+
+    names = {a.name for a in manifest_schema.parse(first["manifest"]).artifacts}
+    if first["state"] != JobState.COMPLETED.value or SECOND_RUN_HINTS not in names:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "a second run is made from a completed job whose memory showed "
+            f"functions its file did not have ({SECOND_RUN_HINTS} among its artifacts)",
+        )
+    if balance is None or balance[0] <= 0:
+        raise HTTPException(
+            status.HTTP_402_PAYMENT_REQUIRED,
+            f"account has {balance[0] if balance else 0} analysis seconds remaining",
+        )
+
+    sample = objects.sample_key(job_id, first["submitted_filename"], first["key_prefix"])
+    hints = f"{objects.result_prefix(job_id, first['key_prefix'])}{SECOND_RUN_HINTS}"
+    if objects.head(sample) is None or objects.head(hints) is None:
+        raise HTTPException(
+            status.HTTP_410_GONE,
+            "the sample or the first run's results are no longer stored; submit the sample again",
+        )
+
+    new_id = uuid4()
+    try:
+        key_prefix = objects.owner_prefix(new_id, owner)
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
+    objects.copy(sample, objects.sample_key(new_id, first["submitted_filename"], key_prefix))
+    with connection() as conn:
+        conn.execute(
+            """
+            INSERT INTO jobs (id, target_os, submitted_filename, size_bytes,
+                              state, owner, egress_mode, egress_exit, plugins, timeout, disable_sysret, key_prefix,
+                              drop_location, drop_subdir, arguments, second_run_of)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s::plugins[], %s, %s, %s, %s, %s, %s, %s)
+            """,
+            (new_id, first["target_os"], first["submitted_filename"], first["size_bytes"],
+             JobState.RECEIVED.value, owner, first["egress_mode"], first["egress_exit"],
+             first["plugins"], first["timeout"], first["disable_sysret"], key_prefix,
+             first["drop_location"], first["drop_subdir"], first["arguments"], job_id),
+        )
+    # The same admission an upload gets: the copy is hashed and typed again,
+    # and capacity and the exit are checked as they are today, not as they
+    # were when the first job was admitted.
+    admitted = mark_uploaded(new_id, owner)
+    return SecondRunResponse(job_id=new_id, state=admitted.state)
+
 
 @router.post("/{job_id}/console/request",
              status_code=status.HTTP_204_NO_CONTENT)

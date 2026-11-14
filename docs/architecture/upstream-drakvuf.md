@@ -178,6 +178,45 @@ runs, preserving the agentless design.
 >   that are not cached, and for library pages no other process has. Kernels
 >   with a VMA list only (before 6.1). `ideas.md` has what it does not
 >   re-check, and the notes on inlining and .NET recompilation.
+> - **Hooks that wait for their code: `when:<hex>`** (same date, same
+>   standing). A line by offset may carry `when:4883ec28??8b05`: the bytes
+>   the function starts with, `??` for one that may be anything, 32 at most.
+>   The hook is placed once those bytes are at the address and not before.
+>   For code that is in no file -- what a packer unpacks over its own image
+>   -- which a job's second run gets lines for from its first run's process
+>   dumps (`sandboxd/stagehints.py`: the submit form's "Second pass", or
+>   "Run again with them hooked" on a finished job's page, which makes a
+>   second job from the first one's `hints.txt` artifact). Until
+>   the code is there the address holds the packer's data or the packer's
+>   running code, and a breakpoint inside another instruction corrupts it,
+>   so the bytes are the condition and not a courtesy.
+>   - libmon: such an entry skips the "is it in the file's mapping" check
+>     (unpacked code is in none), is compared in `place_cold()` -- through
+>     the process's page tables, or on the page-cache frame of a program run
+>     from a memfd -- and is looked at again on *every* page fault of its
+>     process, since the code arrives by a write and becomes executable by
+>     an `mprotect`, neither of which faults there. **Cost:** while one such
+>     hook of any process is unplaced, `handle_mm_fault` keeps its
+>     breakpoint, as it does for a cold page on a kernel from 6.1 on.
+>   - libusermode: a new target state, `HOOK_WAITING`. No page is asked for;
+>     the target is compared when its image is hooked and again whenever its
+>     process enters `NtMapViewOfSection` or `NtProtectVirtualMemory` and
+>     when the latter returns, which a packer's stub does between unpacking
+>     and jumping (UPX: `VirtualProtect` on the header, last thing). A page
+>     that is not executable yet is left for the next look. A process that
+>     joins a shared image waits for its own copy: unpacked pages are private.
+>   - libmon prints `Event: executable` (`PID`, `Path`, `Base`, and `Parent`
+>     for a fork) for every program: the base a hook's offset counts from,
+>     which is how the first run's addresses become offsets. **An Ubuntu
+>     trace has these records more than before**; nothing reads them but
+>     `stagehints`.
+>   - procdump2: a Windows minidump describes 2048 memory ranges, not 256.
+>     One range is one VAD and a 64-bit process's own image comes after its
+>     heaps and stacks, so at 256 the list could end before the program.
+>   - **Not done:** code in memory the program allocates elsewhere (a
+>     reflectively loaded DLL, shellcode). No line can name such a region;
+>     `ideas.md` has the design. A hook placed and then lost because the
+>     packer remapped the page is not placed again.
 > - `dl_rendezvous` now tells its consumer of every exec and exit, not only
 >   those of processes it tracked: a dynamic program that exec'd a static one
 >   used to keep its breakpoints.

@@ -62,6 +62,10 @@ class Lease:
     drop_location: str | None = None
     drop_subdir: str | None = None
     arguments: str | None = None
+    # Run again with hooks on what the first run's memory showed (0015)
+    second_pass: bool = False
+    # The finished job this one runs again, with what its memory showed (0015)
+    second_run_of: UUID | None = None
 
 
 @dataclass(frozen=True)
@@ -123,6 +127,8 @@ def claim(
                 drop_location=row["drop_location"],
                 drop_subdir=row["drop_subdir"],
                 arguments=row["arguments"],
+                second_pass=row["second_pass"],
+                second_run_of=row["second_run_of"],
             )
 
         # Zero rows is ambiguous -- empty queue, or head does not fit -- so

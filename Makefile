@@ -95,7 +95,7 @@ INSTALLERS_MIRROR_CA ?= /etc/sandboxd/tls/ca.crt
 INSTALLERS_MIRROR_DIR := /srv/vendor/win-installers
 INSTALLERS_MIRROR_CONF := $(REPO_ROOT)/automation/win-installers-mirror.conf
 
-.PHONY: xen web_vm web_sandbox sandboxd win_installers win_installers_mirror
+.PHONY: xen web_vm web_sandbox sandboxd win_installers win_installers_mirror signature_sets
 
 xen:
 	@echo "Building and installing Xen with the altp2m deadlock fix and RDTSC compensation, then reboot into it"
@@ -585,6 +585,22 @@ sandboxd:
 
 
 
+# The FLIRT sets sandboxd/samplehooks.py names a statically linked sample's
+# library functions with (sandboxd/data/flirt/, not tracked): every stable
+# glibc, musl and uClibc-ng toolchain Bootlin publishes, x86-64 and i686, and
+# with RUST="1.75.0,1.80.1" those Rust releases' standard libraries (a job's
+# report says which release a sample was built with). Its own target, after
+# `make sandboxd` for the venv: each toolchain is a 150 MB download read off
+# the wire, an hour or more in all. Run again, it fetches only what is new.
+# Without sets a stripped static sample is hooked by its Go table or not at all.
+signature_sets:
+	set -e; \
+	cd $(REPO_ROOT); \
+	.venv-sandboxd/bin/python scripts/fetch-flirt-sets.py; \
+	if [ -n "$(RUST)" ]; then .venv-sandboxd/bin/python scripts/fetch-flirt-sets.py --rust "$(RUST)"; fi; \
+	ls sandboxd/data/flirt | wc -l
+
+
 ubuntu_analysis_vm:
 	@echo "Installing ubuntu analysis VM"; \
 	set -e; \
@@ -887,6 +903,15 @@ setup_hooks_windows:
 	# Every profile, the kernel's windows.json included, fetched over TLS: \
 	# pdbconv's own fetch is cleartext http (review M-1) \
 	python3 $(REPO_ROOT)/scripts/windows-symbol-profiles.py	--drakvuf $(REPO_ROOT)/drakvuf; \
+	# .NET, from the same mounted image and after the profiles, which have \
+	# the JIT compilers' entry (clrjit*.json): where the image's precompiled \
+	# framework methods are, and the hook list every Windows job then gets \
+	# with its own (profiles/dotnet-index.json, profiles/hooks-dotnet.txt). \
+	# A few minutes: every native image under Windows/assembly is read. \
+	# sandboxd's venv, for dnfile (make sandboxd). Not fatal: without the \
+	# list a .NET sample is traced as it was before there was one. \
+	$(REPO_ROOT)/.venv-sandboxd/bin/python $(REPO_ROOT)/scripts/dotnet-index.py --image /mnt --profiles $(REPO_ROOT)/profiles \
+	    || echo "dotnet-index failed: no profiles/hooks-dotnet.txt, .NET framework calls are not hooked" >&2; \
 	umount /mnt; \
 	kpartx -d /dev/vg-root/windows; \
 	lvcreate -s -kn -n windows_sandbox vg-root/windows; \

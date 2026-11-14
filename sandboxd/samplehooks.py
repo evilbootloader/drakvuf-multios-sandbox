@@ -30,7 +30,8 @@ nobody asked for. Everything found is reported (`--json`), hooked or not.
 **What it does not find**, said in the report rather than left to be noticed:
 a function no signature set knows (generic code a Rust or C++ compiler wrote
 for this program alone; a C library no set was built from), and anything a
-packer unpacks at run time.
+packer unpacks at run time -- which a job that asks for a second pass gets
+from its first run's memory (sandboxd/stagehints.py, `--hints`).
 
 **A child, as postprocessing is** (`postprocessing/child.py`): the sample is
 hostile input to two parsers, and a memory limit here is a `MemoryError` in
@@ -103,6 +104,10 @@ class Image:
     rust: dict = field(default_factory=dict)    # {"commit", "version"}, what a Rust program says
     go_version: str = ""                        # "go1.21.3", when the program says
     go_table: str = ""                          # its function table's layout: "1.2", "1.16", "1.18", "1.20"
+    #: Of a running image (sandboxd/stagehints.py): how far it is from where
+    #: it was linked, and the RVAs of the bytes its loader rewrote for that
+    moved: int = 0
+    relocated: set = field(default_factory=set)
 
 
 # --- reading the program -----------------------------------------------------
@@ -444,9 +449,10 @@ def from_flirt(image: Image, sets: list, candidates: Optional[Iterable[int]] = N
     return found
 
 
-def from_yara(image: Image, path: Path, directory: Path) -> list:
+def from_yara(image: Image, data: bytes, directory: Path) -> list:
     """Functions named by a code signature: a rule with `meta: hook = "name"`
-    names the function at the address its first string matched."""
+    names the function at the address its first string matched. `data` is
+    what `image.code`'s offsets count in."""
     rules = sorted(directory.rglob("*.yar")) + sorted(directory.rglob("*.yara")) if directory.is_dir() else []
     if not rules:
         return []
@@ -459,7 +465,7 @@ def from_yara(image: Image, path: Path, directory: Path) -> list:
         except Exception as exc:  # noqa: BLE001 - one bad rule file is not the others'
             print(f"samplehooks: {rule}: {exc}", file=sys.stderr)
     found = []
-    for rule in yara_x.Scanner(compiler.build()).scan(path.read_bytes()).matching_rules:
+    for rule in yara_x.Scanner(compiler.build()).scan(data).matching_rules:
         hook = dict(rule.metadata).get("hook")
         offsets = sorted(m.offset for pattern in rule.patterns for m in pattern.matches)
         if not isinstance(hook, str) or not offsets:
@@ -476,8 +482,15 @@ def locate(path: Path, flirt_dir: Path = FLIRT_DIR,
     image = read_image(path)
     if image is None:
         return None, []
+    return image, locate_in(image, path.read_bytes(), flirt_dir, yara_dir)
+
+
+def locate_in(image: Image, data: bytes, flirt_dir: Path = FLIRT_DIR,
+              yara_dir: Path = CODE_SIGNATURES_DIR) -> list:
+    """What every locator finds in an image that is read already: a file's,
+    or a running program's memory (sandboxd/stagehints.py). `data` is the
+    bytes `image.code`'s offsets count in."""
     located = from_symbols(image)
-    data = path.read_bytes()
     if image.toolchain == "go":
         # First of an address: the table has every function, the symbol
         # table, when there is one, the same names
@@ -487,8 +500,8 @@ def locate(path: Path, flirt_dir: Path = FLIRT_DIR,
     sets = load_signatures(flirt_dir, data)
     image.sets = [name for name, _ in sets]
     located += [f for f in from_flirt(image, sets) if f.offset not in known]
-    located += from_yara(image, path, yara_dir)
-    return image, located
+    located += from_yara(image, data, yara_dir)
+    return located
 
 
 # --- the hook list -----------------------------------------------------------
@@ -543,11 +556,16 @@ def go_hooks(text: str) -> dict:
 
 
 def sample_lines(located: list, known: dict, module: str, base: Optional[int] = 0,
-                 go: Optional[dict] = None, abi: str = "") -> list:
+                 go: Optional[dict] = None, abi: str = "", when=None) -> list:
     """The hook-list lines for what was located and the list knows, one per
     address. [] for a module name the list cannot spell, and for an image
     with no base to count from. A Go function's line says where its arguments
-    are (`abi`, per go_abi()); with no saying, the call is logged bare."""
+    are (`abi`, per go_abi()); with no saying, the call is logged bare.
+
+    `when`: for code that is not in the file (stagehints). Called with a
+    function's address, it gives the line's `when:<hex>` marker -- the bytes
+    the tracer waits to see there before it places the hook -- or "" for a
+    function that gets no line."""
     if base is None or not _MODULE_OK.match(module) or module != module.strip():
         return []
     lines, seen = [], set()
@@ -561,17 +579,20 @@ def sample_lines(located: list, known: dict, module: str, base: Optional[int] = 
             marker, rest = go[found.name].split(",", 1)
             # a function written in assembly is on the stack in every version
             marker = marker if marker == "goabi0" else abi
-            seen.add(offset)
-            lines.append(f"{module},{found.name},{offset:x},{marker},{rest}" if marker
-                         else f"{module},{found.name},{offset:x},no-retval,log")
-            if len(lines) >= MAX_HOOKS:
-                break
-            continue
-        name = found.name if found.name in known else plain_name(found.name)
-        if name not in known:
-            continue
+            rest = f"{marker},{rest}" if marker else "no-retval,log"
+            name = found.name
+        else:
+            name = found.name if found.name in known else plain_name(found.name)
+            if name not in known:
+                continue
+            rest = known[name]
+        if when is not None:
+            waits = when(found.offset)
+            if not waits:
+                continue
+            rest = f"{waits},{rest}"
         seen.add(offset)
-        lines.append(f"{module},{name},{offset:x},{known[name]}")
+        lines.append(f"{module},{name},{offset:x},{rest}")
         if len(lines) >= MAX_HOOKS:
             break
     return lines
@@ -604,13 +625,28 @@ def append_list(lines: list, out: Path, what: str) -> list:
     return new
 
 
-def write_list(static_text: str, lines: list, out: Path) -> None:
+#: A line sandboxd/stagehints.py writes, and nothing else: by offset, waiting
+#: for its code. What is read back may have been through the object store.
+_HINT = re.compile(r"^[^,\r\n#]+,[^,\r\n]+,[0-9a-f]{1,16},when:(?:[0-9a-f]{2}|\?\?){1,32},[\x20-\x7e]+$")
+
+
+def hint_lines(text: str) -> list:
+    """The lines of a hints file the tracer's list can take, MAX_HOOKS at
+    most: one that is not a hint would stop DRAKVUF at its start."""
+    return [line for line in text.splitlines() if _HINT.match(line)][:MAX_HOOKS]
+
+
+def write_list(static_text: str, lines: list, out: Path, hints: str = "") -> None:
     """The static list with the sample's lines after it, written beside `out`
-    and renamed over it: the tracer reads either the list before or this one."""
+    and renamed over it: the tracer reads either the list before or this one.
+    `hints`: the lines a first run's memory gave (sandboxd/stagehints.py)."""
     text = static_text if static_text.endswith("\n") else static_text + "\n"
     if lines:
         text += "\n# The sample's own functions, located before the run (sandboxd/samplehooks.py)\n"
         text += "\n".join(lines) + "\n"
+    if hint_lines(hints):
+        text += "\n# Located in the first run's memory (sandboxd/stagehints.py)\n"
+        text += "\n".join(hint_lines(hints)) + "\n"
     tmp = out.with_name(out.name + ".tmp")
     tmp.write_text(text)
     os.replace(tmp, out)
@@ -653,6 +689,9 @@ def main(argv: Optional[list] = None) -> int:
     p.add_argument("--also", type=Path, action="append", default=[],
                    help="a list made for this deployment, added to the job's when it exists "
                         "(profiles/hooks-dotnet.txt, from scripts/dotnet-index.py)")
+    p.add_argument("--hints", type=Path,
+                   help="lines from a first run's memory, added to --out when the file exists "
+                        "(sandboxd/stagehints.py)")
     p.add_argument("--max-mib", type=int, default=1024, help="RLIMIT_DATA in MiB; 0 sets no limit")
     args = p.parse_args(argv)
     if args.max_mib > 0:
@@ -677,7 +716,8 @@ def main(argv: Optional[list] = None) -> int:
         # no `#` or line end reaches the comment: a name with either got no lines
         lines = append_list(lines, args.append_to, f"Dropped during the run: {args.guest_path}") if lines else []
     elif args.out:
-        write_list(static_text, lines, args.out)
+        hints = args.hints.read_text() if args.hints and args.hints.is_file() else ""
+        write_list(static_text, lines, args.out, hints)
     else:
         p.error("one of --out and --append-to")
     if args.json:

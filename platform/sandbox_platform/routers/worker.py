@@ -68,6 +68,24 @@ WORKER_TRANSITIONS: dict[JobState, frozenset[JobState]] = {
 }
 
 
+#: The artifact a run leaves when its memory showed code its file did not
+#: have: `sandboxd.stages.HINTS`.
+HINTS = "hints.txt"
+
+
+def _hints_url(earlier: UUID | None) -> str | None:
+    """A URL to the lines of the job a second run was made from; None when
+    there is no such job any more. The host runs it as a first run then."""
+    if earlier is None:
+        return None
+    with connection() as conn:
+        row = conn.execute("SELECT key_prefix FROM jobs WHERE id = %s", (earlier,)).fetchone()
+    if row is None:
+        return None
+    return objects.presigned_get(f"{objects.result_prefix(earlier, row[0])}{HINTS}",
+                                 objects.Audience.WORKER, ttl=settings.lease_seconds)
+
+
 # --- request / response models --------------------------------------------
 
 class PipelineCapacity(BaseModel):
@@ -176,6 +194,15 @@ class LeaseResponse(BaseModel):
     drop_location: str | None = None
     drop_subdir: str | None = None
     arguments: str | None = None
+    # The sample is run twice when the first run's memory shows code no file
+    # had (sandboxd/stagehints.py). Defaulted for the same skew as `plugins`.
+    second_pass: bool = False
+    # A job made from a finished one ("Run again"): that job, and a URL to
+    # the hook-list lines its memory gave (its `hints.txt` artifact), which
+    # the host reads, checks line by line and runs this job with. None, and
+    # the job is an ordinary one.
+    second_run_of: UUID | None = None
+    hints_url: str | None = None
 
 
 class ReservedResponse(BaseModel):
@@ -396,6 +423,9 @@ def claim(req: ClaimRequest, worker_id: WorkerAuth):
                 drop_location=last.drop_location,
                 drop_subdir=last.drop_subdir,
                 arguments=last.arguments,
+                second_pass=last.second_pass,
+                second_run_of=last.second_run_of,
+                hints_url=_hints_url(last.second_run_of),
             )
 
         if time.monotonic() >= deadline:

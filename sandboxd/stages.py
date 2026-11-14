@@ -40,6 +40,7 @@ that can reach a running job, because Dom0 has no inbound listener.
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import shutil
 import sys
@@ -48,7 +49,7 @@ import time
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
-from . import config, egress, guests, screenshots, stagehooks, timing, vnc
+from . import config, egress, guests, samplehooks, screenshots, stagehooks, timing, vnc
 from .clone import CloneBuilder, CloneError, CloneSpec
 from .egress import EgressUnavailable, Exit
 from .guests import Interaction, Job, SampleKind, TargetOs, TraceOptions
@@ -127,6 +128,10 @@ TRACE_LOG = "trace.log"
 TRACE_STDERR = "trace.stderr"
 PRECONFIG_LOG = "preconfig.log"
 CAPTURE = "capture.pcap"
+#: The lines a run's memory gave for a second one, as an artifact: the
+#: platform offers "Run again" on a job whose manifest lists it, and leases
+#: the job made from that a URL to it (routers/jobs.py::second_run).
+HINTS = "hints.txt"
 
 
 class Cancelled(Exception):
@@ -398,11 +403,15 @@ class Analysis:
         # and threading it through every stage signature would change all of
         # them for one observer.
         self._screens: screenshots.Capture | None = None
+        # The live console of the clone that is up, for the same reason
+        self._console = None
         # What the manifest's `notes` will say about this run: the trace's
         # exit and launch caveat (`_trace`), and the postprocessing child's
         # outcome (`run`). Joined in `_collect`.
         self._trace_note: str | None = None
         self._postprocess_note: str | None = None
+        # What a job that asked for a second pass got (`_stage_hints`)
+        self._second_pass_note: str | None = None
 
     def run(self, lease, vlan: int) -> Outcome:
         """Drive one analysis and return its terminal outcome.
@@ -426,7 +435,7 @@ class Analysis:
         _must_stay_inside(job_dir, self._cfg.results_dir, "results")
         _must_stay_inside(sample, self._cfg.staging_dir, "staging")
         clone = None
-        console = None
+        self._console = None
         self._screens = None
         destroyed = False
         problems: list[str] = []
@@ -455,67 +464,100 @@ class Analysis:
                 launch = guests.resolve_launch(os_, lease.drop_location,
                                                lease.drop_subdir,
                                                lease.arguments)
-                clone = self._clone(os_, vlan, lease)
-                job = self._job(lease, os_, kind, clone, vlan, job_dir, sample,
-                                launch)
-                job = self._sample_hooks(job, sample)
-
-                # **Dialled as soon as the domain exists, not at trace start.**
+                # **Once, or twice for a job that asked for a second pass**
+                # (2026-11-14, sandboxd/stagehints.py): the first run's
+                # process dumps show code that is in no file -- what a packer
+                # unpacked -- and the second run is the same sample, in a new
+                # clone, with hooks on it. The second run is the job's
+                # result and the first one's files are removed: one trace on
+                # the report, and it is the one that saw more. Not run when
+                # the first run's memory had nothing to add, so asking costs
+                # a second run only where it has something to show.
                 #
-                # The console's window opens with the CLONE, not the trace
-                # (2026-09-05). The relay ends at a VNC port QEMU serves for
-                # this domain, so it can be opened the moment `_clone` returns
-                # a domid -- which lets an operator watch preconfig, where an
-                # injector failure is otherwise only visible as a log line
-                # after the fact. It closes when the trace ends, because the
-                # domain is destroyed then rather than after collection.
+                # The platform is told `preparing` and `executing` once: its
+                # state machine goes forwards only, and to it this is one
+                # execution that took twice as long.
                 #
-                # Started BEFORE egress is applied deliberately: if a rule fails
-                # to install, the screen showing what the guest is doing is
-                # exactly what is wanted, and `_start_console` never fails the
-                # analysis.
-                console = self._start_console(job, beat)
-                # The filmstrip, from the same moment and for the same reason:
-                # a guest that never got as far as running the sample is the
-                # most useful thing a screenshot can show (DRAFT-054 TEST 4).
-                self._screens = self._start_screenshots(job)
+                # **A job made from a finished one** ("Run again" on its page)
+                # is the second run on its own: the lines come with the
+                # lease, from that job's `hints.txt`, and it runs once. And
+                # every job that could have a second run leaves that file,
+                # so the page can offer one after the report has been read.
+                hints = self._given_hints(lease, sample)
+                given = hints is not None
+                unread = None if given else self._second_pass_note
+                for run_number in (1, 2):
+                    clone, destroyed = None, False
+                    try:
+                        clone = self._clone(os_, vlan, lease)
+                        job = self._job(lease, os_, kind, clone, vlan, job_dir,
+                                        sample, launch)
+                        job = self._sample_hooks(job, sample, hints)
+                        self._run_once(job, lease, vlan, beat, first=run_number == 1)
+                    except Cancelled:
+                        raise
+                    except Exception as exc:  # noqa: BLE001 - see below
+                        if run_number == 1:
+                            raise
+                        # The second run is an addition. A clone that would
+                        # not build or a preconfig that failed takes it away
+                        # and leaves the job what it was without it: the
+                        # first run, put back.
+                        log.warning("job %s: the second run failed (%s); the "
+                                    "first run is the result", lease.job_id, exc)
+                        self._stop_observers(self._console)
+                        problems += self._destroy(clone, vlan)
+                        destroyed = True
+                        self._restore_first_run(job_dir, sample)
+                        # The report is the first run's, and the lines are
+                        # still good for a job made later
+                        self._mark_hints(sample, applied=False)
+                        if hints is not None and hints.is_file() and not given:
+                            shutil.copyfile(hints, job_dir / HINTS)
+                        self._second_pass_note = (
+                            f"second pass: the second run failed "
+                            f"({type(exc).__name__}: {exc})"[:300]
+                            + "; this is the first run")
+                        break
 
-                # 2. Egress, BEFORE the guest's network is configured and long
-                #    before the sample runs. Ordered this way so that a clone
-                #    never holds an address on a VLAN whose way out has not
-                #    been decided -- the window in which it would be routed by
-                #    whatever rule happened to be there.
-                #
-                #    Deliberately AFTER the clone exists: the rules name the
-                #    VLAN, and installing them for a clone that then fails to
-                #    build would leave a permit with nothing behind it.
-                self._check(beat)
-                applied = self._apply_egress(lease, vlan)
+                    # **The domain goes BEFORE collection** (2026-10-30). The
+                    # trace is over, so nothing still needs a guest: the
+                    # observers end first -- the filmstrip must be complete
+                    # before `_collect` declares file sizes, and the console
+                    # must not outlive its domain -- and then the clone is
+                    # destroyed. A console can therefore no longer type into
+                    # a guest whose artifacts are being pulled, which
+                    # `routers/console.py` used to carry as a KNOWN GAP.
+                    #
+                    # A dirty destroy does not stop the collection. The trace
+                    # is the result; `cleanup_status` still records the
+                    # problem and `daemon._work` still withholds the VLAN on it.
+                    self._stop_observers(self._console)
+                    problems += self._destroy(clone, vlan)
+                    destroyed = True
+                    if run_number == 2 or given:
+                        break
+                    asked = getattr(lease, "second_pass", False)
+                    hints = self._stage_hints(job, sample, asked)
+                    if hints is None:
+                        break
+                    # Not now: not asked for, or a clone that did not go away
+                    # cleanly, which is not followed by another on its VLAN.
+                    # The lines are left with the results for a job made later.
+                    if not asked or problems:
+                        shutil.copyfile(hints, job_dir / HINTS)
+                        self._mark_hints(sample, applied=False)
+                        if asked:
+                            self._second_pass_note = (
+                                "second pass: not made, the first clone did not go away "
+                                f"cleanly; the lines are kept ({HINTS})")
+                        break
+                    self._check(beat)
+                    self._set_first_run_aside(job_dir, sample)
+                    self._mark_hints(sample, applied=True)
 
-                self._api.report_state(lease.job_id, "preparing",
-                                       clone_domain=clone.name, vlan=vlan,
-                                       egress=applied)
-                component = self._preconfig(job, beat)
-
-                self._check(beat)
-                self._api.report_state(lease.job_id, "executing")
-                self._trace(job, component, beat)
-
-                # **The domain goes BEFORE collection** (2026-10-30). The
-                # trace is over, so nothing still needs a guest: the
-                # observers end first -- the filmstrip must be complete before
-                # `_collect` declares file sizes, and the console must not
-                # outlive its domain -- and then the clone is destroyed. A
-                # console can therefore no longer type into a guest whose
-                # artifacts are being pulled, which `routers/console.py` used
-                # to carry as a KNOWN GAP.
-                #
-                # A dirty destroy does not stop the collection. The trace is
-                # the result; `cleanup_status` still records the problem and
-                # `daemon._work` still withholds the VLAN on it.
-                self._stop_observers(console)
-                problems += self._destroy(clone, vlan)
-                destroyed = True
+                if unread and self._second_pass_note != unread:
+                    self._second_pass_note = f"{unread}; {self._second_pass_note}"
 
                 self._check(beat)
                 self._api.report_state(lease.job_id, "collecting")
@@ -554,7 +596,7 @@ class Analysis:
                 # trace; both stops are idempotent, so this is the failure and
                 # cancellation path. Ordering here is the whole of that
                 # protection: the stop and the destroy must not be swapped.
-                self._stop_observers(console)
+                self._stop_observers(self._console)
 
                 # ALWAYS, and always before the terminal report: the server
                 # refuses every terminal state that does not arrive from
@@ -578,6 +620,55 @@ class Analysis:
         if outcome.state == "completed":
             self._remove_results(job_dir, outcome.manifest)
         return outcome
+
+    def _run_once(self, job: Job, lease, vlan: int, beat: Heartbeat, first: bool) -> None:
+        """One clone's life from the console's first frame to the trace's end:
+        observers, egress, preconfig, trace.
+
+        `first`: the platform hears of `preparing` and `executing` from the
+        first run only (see `run`)."""
+        # **Dialled as soon as the domain exists, not at trace start.**
+        #
+        # The console's window opens with the CLONE, not the trace
+        # (2026-09-05). The relay ends at a VNC port QEMU serves for
+        # this domain, so it can be opened the moment `_clone` returns
+        # a domid -- which lets an operator watch preconfig, where an
+        # injector failure is otherwise only visible as a log line
+        # after the fact. It closes when the trace ends, because the
+        # domain is destroyed then rather than after collection.
+        #
+        # Started BEFORE egress is applied deliberately: if a rule fails
+        # to install, the screen showing what the guest is doing is
+        # exactly what is wanted, and `_start_console` never fails the
+        # analysis.
+        self._console = self._start_console(job, beat)
+        # The filmstrip, from the same moment and for the same reason:
+        # a guest that never got as far as running the sample is the
+        # most useful thing a screenshot can show (DRAFT-054 TEST 4).
+        self._screens = self._start_screenshots(job)
+
+        # 2. Egress, BEFORE the guest's network is configured and long
+        #    before the sample runs. Ordered this way so that a clone
+        #    never holds an address on a VLAN whose way out has not
+        #    been decided -- the window in which it would be routed by
+        #    whatever rule happened to be there.
+        #
+        #    Deliberately AFTER the clone exists: the rules name the
+        #    VLAN, and installing them for a clone that then fails to
+        #    build would leave a permit with nothing behind it.
+        self._check(beat)
+        applied = self._apply_egress(lease, vlan)
+
+        if first:
+            self._api.report_state(lease.job_id, "preparing",
+                                   clone_domain=job.clone_domain, vlan=vlan,
+                                   egress=applied)
+        component = self._preconfig(job, beat)
+
+        self._check(beat)
+        if first:
+            self._api.report_state(lease.job_id, "executing")
+        self._trace(job, component, beat)
 
     # -- stages -------------------------------------------------------------
 
@@ -785,7 +876,128 @@ class Analysis:
             log.warning("job %s: later stages are not followed: %s", job.job_id, exc)
             return None
 
-    def _sample_hooks(self, job: Job, sample: Path) -> Job:
+    #: Where the first of two runs waits for the second to succeed: beside
+    #: the sample, so it goes with the staging directory either way
+    FIRST_RUN = "first-run"
+
+    def _given_hints(self, lease, sample: Path) -> Path | None:
+        """The lines an earlier job's memory gave, for a job made from it to
+        run its sample again. None for any other job, and for one whose lines
+        could not be had: it then runs as a first run does, and says so."""
+        url = getattr(lease, "hints_url", None)
+        if not url:
+            return None
+        out = sample.parent / "hints.txt"
+        earlier = getattr(lease, "second_run_of", None) or "an earlier job"
+        try:
+            self._api.fetch_hints(url, out, timeout=timing.FETCH_BUDGET)
+            count = len(samplehooks.hint_lines(out.read_text(errors="replace")))
+        except Exception as exc:  # noqa: BLE001 - a first run, as every job was
+            log.warning("job %s: the hints of %s were not read: %s", lease.job_id, earlier, exc)
+            count = 0
+        if not count:
+            out.unlink(missing_ok=True)
+            self._second_pass_note = (f"second run of {earlier}: its hints could not be read; "
+                                      "this ran as a first run")
+            return None
+        (sample.parent / "hints.json").write_text(
+            json.dumps({"hooked": count, "from_job": earlier, "applied": True}))
+        self._second_pass_note = (f"second run of {earlier}, with {count} "
+                                  f"function{'s' if count != 1 else ''} found in its memory hooked")
+        return out
+
+    @staticmethod
+    def _mark_hints(sample: Path, applied: bool) -> None:
+        """Say in what the report reads (`hints.json`, cape_analysis) whether
+        the trace it describes ran with the lines hooked. Never raises."""
+        path = sample.parent / "hints.json"
+        try:
+            found = json.loads(path.read_text())
+            found["applied"] = applied
+            path.write_text(json.dumps(found))
+        except (OSError, ValueError, TypeError):
+            pass
+
+    def _stage_hints(self, job: Job, sample: Path, asked: bool = True) -> Path | None:
+        """Hook-list lines for a second run, from the process dumps of the
+        run that just ended (sandboxd/stagehints.py has what and why). None
+        when there is no second run to make: the guest has no dumps to read,
+        the job had no hook list of its own, or the memory showed nothing the
+        list did not have. Never raises.
+
+        Made for every job that can have them, `asked` or not: one that did
+        not ask keeps them as an artifact, which is what the job page offers
+        a second run from. Only a job that asked is told why there is none."""
+        how = guests.PROCESS_DUMPS.get(job.target_os)
+        if how is None or job.hooks_list is None or guests.PROCDUMP2_PLUGIN not in job.options.plugins:
+            self._second_pass_note = ("second pass: not made, it needs this guest's hook plugin "
+                                      "and procdump2 among the job's plugins") if asked else None
+            return None
+        out = sample.parent / "hints.txt"
+        try:
+            out.unlink(missing_ok=True)
+            result = self._runner.run(
+                [sys.executable, "-m", "sandboxd.stagehints",
+                 "--procdumps", str(job.result_dir / PROCDUMPS_DIR),
+                 "--trace-log", str(job.result_dir / TRACE_LOG),
+                 "--sample", str(sample), "--guest-path", job.guest_sample,
+                 "--list", str(job.hooks_list), "--how", how,
+                 "--out", str(out), "--json", str(sample.parent / "hints.json")],
+                timeout=timing.STAGEHINTS_BUDGET, what="stagehints")
+        except Exception as exc:  # noqa: BLE001 - one run, as every job was
+            log.warning("job %s: no second pass: %s", job.job_id, exc)
+            if asked:
+                self._second_pass_note = "second pass: not made, the first run's memory could not be read"
+            return None
+        if not result.ok:
+            if asked:
+                self._second_pass_note = (
+                    "second pass: not made, reading the first run's memory "
+                    + ("timed out" if result.timed_out else f"failed (exit {result.returncode})"))
+            return None
+        if not out.is_file():
+            if asked:
+                self._second_pass_note = ("second pass: not made, the first run's memory showed no "
+                                          "function the hook list knows that the file did not")
+            return None
+        count = len(samplehooks.hint_lines(out.read_text(errors="replace")))
+        if not count:
+            return None
+        self._second_pass_note = (
+            f"second pass: this is the second run, with {count} "
+            f"function{'s' if count != 1 else ''} found in the first run's memory hooked"
+            if asked else
+            f"second run available: {count} function{'s' if count != 1 else ''} found in this "
+            f"run's memory that the file did not have ({HINTS})")
+        return out
+
+    def _set_first_run_aside(self, job_dir: Path, sample: Path) -> None:
+        """Empty the job directory for a second run, keeping what the first
+        left until the second has ended (`_restore_first_run`)."""
+        aside = sample.parent / self.FIRST_RUN
+        shutil.rmtree(aside, ignore_errors=True)
+        aside.mkdir(parents=True)
+        for entry in job_dir.iterdir():
+            shutil.move(str(entry), str(aside / entry.name))
+
+    def _restore_first_run(self, job_dir: Path, sample: Path) -> None:
+        """The first run's files back in the job directory, in place of
+        whatever a failed second run left there. Never raises."""
+        aside = sample.parent / self.FIRST_RUN
+        if not aside.is_dir():
+            return
+        try:
+            for entry in job_dir.iterdir():
+                if entry.is_dir() and not entry.is_symlink():
+                    shutil.rmtree(entry, ignore_errors=True)
+                else:
+                    entry.unlink(missing_ok=True)
+            for entry in aside.iterdir():
+                shutil.move(str(entry), str(job_dir / entry.name))
+        except OSError as exc:
+            log.warning("the first run's files were not put back in %s: %s", job_dir, exc)
+
+    def _sample_hooks(self, job: Job, sample: Path, hints: Path | None = None) -> Job:
         """The job with its own hook list, when the sample's own functions
         could be located (sandboxd/samplehooks.py has what and why).
 
@@ -809,7 +1021,9 @@ class Analysis:
              "--static", str(guests.STATIC_HOOKS[job.target_os]),
              "--out", str(out), "--json", str(sample.parent / "located.json")]
             + [arg for name in guests.DEPLOYMENT_HOOKS[job.target_os]
-               for arg in ("--also", str(self._cfg.profile(job.target_os).parent / name))],
+               for arg in ("--also", str(self._cfg.profile(job.target_os).parent / name))]
+            # A second run: what the first one's memory showed (`_stage_hints`)
+            + (["--hints", str(hints)] if hints is not None else []),
             timeout=timing.SAMPLEHOOKS_BUDGET, what="samplehooks")
         if not result.ok or not out.is_file():
             log.warning("job %s: the sample's functions were not located (%s); "
@@ -1315,7 +1529,8 @@ class Analysis:
         # The platform bounds `notes` at 4096 characters (result-schema.md
         # 4.2); every part is a short sentence, the postprocessing one at
         # most a list of plugin names.
-        notes = [n for n in (self._trace_note, self._postprocess_note, procdump_note) if n]
+        notes = [n for n in (self._trace_note, self._second_pass_note,
+                             self._postprocess_note, procdump_note) if n]
         if notes:
             manifest["notes"] = "; ".join(notes)[:4096]
         return Outcome(

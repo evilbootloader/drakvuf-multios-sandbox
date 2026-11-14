@@ -476,11 +476,11 @@ It maps **headings, not content**: a fact stated in the middle of a section is n
     - `docs/architecture/platform.md:504` — [Untrusted input](architecture/platform.md#untrusted-input)
     - `docs/architecture/platform.md:523` — [Trust boundaries, stated](architecture/platform.md#trust-boundaries-stated)
   - `docs/architecture/platform.md:631` — [API surface](architecture/platform.md#api-surface)
-  - `docs/architecture/platform.md:694` — [Schema sketch](architecture/platform.md#schema-sketch)
-  - `docs/architecture/platform.md:736` — [Why not Redis, and what would change the answer](architecture/platform.md#why-not-redis-and-what-would-change-the-answer)
-  - `docs/architecture/platform.md:763` — [What this changes in `automation/`](architecture/platform.md#what-this-changes-in-automation)
-  - `docs/architecture/platform.md:802` — [Open questions](architecture/platform.md#open-questions)
-  - `docs/architecture/platform.md:834` — [Prerequisites this design assumes but does not provide](architecture/platform.md#prerequisites-this-design-assumes-but-does-not-provide)
+  - `docs/architecture/platform.md:695` — [Schema sketch](architecture/platform.md#schema-sketch)
+  - `docs/architecture/platform.md:737` — [Why not Redis, and what would change the answer](architecture/platform.md#why-not-redis-and-what-would-change-the-answer)
+  - `docs/architecture/platform.md:764` — [What this changes in `automation/`](architecture/platform.md#what-this-changes-in-automation)
+  - `docs/architecture/platform.md:803` — [Open questions](architecture/platform.md#open-questions)
+  - `docs/architecture/platform.md:835` — [Prerequisites this design assumes but does not provide](architecture/platform.md#prerequisites-this-design-assumes-but-does-not-provide)
 
 ## `docs/architecture/rdtsc-poc.md`
 
@@ -561,9 +561,9 @@ It maps **headings, not content**: a fact stated in the middle of a section is n
 
 - `docs/architecture/upstream-drakvuf.md:1` — [Upstream DRAKVUF — comparison, provenance, and repository strategy](architecture/upstream-drakvuf.md#upstream-drakvuf--comparison-provenance-and-repository-strategy)
   - `docs/architecture/upstream-drakvuf.md:10` — [Upstream `dirwatch.c` — direct comparison](architecture/upstream-drakvuf.md#upstream-dirwatchc--direct-comparison)
-  - `docs/architecture/upstream-drakvuf.md:209` — [`lfreijo/drakvuf`, `memdump` branch — provenance](architecture/upstream-drakvuf.md#lfreijodrakvuf-memdump-branch--provenance)
-  - `docs/architecture/upstream-drakvuf.md:231` — [Repository strategy recommendation](architecture/upstream-drakvuf.md#repository-strategy-recommendation)
-  - `docs/architecture/upstream-drakvuf.md:271` — [DRAKVUF Sandbox (CERT-Polska) — what's reusable](architecture/upstream-drakvuf.md#drakvuf-sandbox-cert-polska--whats-reusable)
+  - `docs/architecture/upstream-drakvuf.md:248` — [`lfreijo/drakvuf`, `memdump` branch — provenance](architecture/upstream-drakvuf.md#lfreijodrakvuf-memdump-branch--provenance)
+  - `docs/architecture/upstream-drakvuf.md:270` — [Repository strategy recommendation](architecture/upstream-drakvuf.md#repository-strategy-recommendation)
+  - `docs/architecture/upstream-drakvuf.md:310` — [DRAKVUF Sandbox (CERT-Polska) — what's reusable](architecture/upstream-drakvuf.md#drakvuf-sandbox-cert-polska--whats-reusable)
 
 ## `docs/checklists/android.md`
 

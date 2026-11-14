@@ -107,6 +107,15 @@ def _target(os_: TargetOs, sample: Optional[Path], yara_rules, cape_rules=None) 
                 pass
         if stages:
             file.setdefault("located", {})["stages"] = stages
+        # And in a run's memory (sandboxd/stagehints.py): `applied` says
+        # whether this trace is a second run's, with those `hooked`
+        # functions hooked, or the run they were found in
+        hints = sample.parent / "hints.json"
+        if hints.is_file():
+            try:
+                file.setdefault("located", {})["second_pass"] = json.loads(hints.read_text())
+            except ValueError:
+                pass
     return {"category": "file", "file": file}
 
 

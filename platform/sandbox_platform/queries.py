@@ -81,7 +81,7 @@ UPDATE jobs
 RETURNING id, target_os, sha256, submitted_filename, required_mib,
           lease_expires_at, attempt, egress_mode, egress_exit, key_prefix,
           plugins::text[], timeout, disable_sysret,
-          drop_location, drop_subdir, arguments
+          drop_location, drop_subdir, arguments, second_pass, second_run_of
 """
 
 # --------------------------------------------------------------------------

@@ -311,16 +311,42 @@
     check, which is the cost this lookup was written to avoid: measure
     first (`[TRAP-STATS]` in a debug build).
 
-- **A second pass for payloads that never touch the disk ("stage hints")** --
-  2-3 days, not started (2026-11-14). `stagehooks` follows files; a payload
-  mapped from a memfd, loaded reflectively or unpacked in place has no file,
-  and by the time a dump shows its code the calls are over. The first run's
-  process dumps and memory dumps do hold that code at the addresses it ran
-  at, so: run the locator over them after run 1, write lines keyed by the
-  region (`<process image>,<name>,<offset from the region's base>`), and
-  trace the same sample again with them. What it needs that is not there: a
-  job option that reruns with a hint file (platform API, lease, UI), a hook
-  line that names an anonymous region rather than a module (libmon and
-  libusermode match files), and the two runs laying memory out the same way
-  -- ASLR off in the guest or the hint expressed relative to the allocation
-  that the sample itself makes, which only holds for deterministic loaders.
+- **Second pass: what it does not reach** (the pass itself is written,
+  2026-11-14, not run on a guest: `sandboxd/stagehints.py`, the `when:`
+  marker in the fork, "Second pass" on the submit form). It hooks code that
+  appears in the sample's *own image* -- unpacked in place, or a program run
+  from a memfd. Left out:
+
+  - **Memory the program allocates elsewhere**: a reflectively loaded DLL,
+    shellcode in a `VirtualAlloc`/`mmap` region, a hollowed process. 3-4
+    days. A hook line names a module and such a region has none. What would
+    carry it: a line keyed by the process and the bytes alone
+    (`<process image>,<name>,*,when:<hex>`, the page offset of the function
+    known from the dump), placed on any executable private page of that
+    process whose bytes match at that page offset. The work is the trigger.
+    Linux: `mprotect(PROT_EXEC)` and `mmap(PROT_EXEC)` returning, plus the
+    page-fault hook already there. Windows: `NtProtectVirtualMemory` and the
+    thread-start family (`NtCreateThreadEx`, `NtResumeThread`,
+    `NtQueueApcThread`, `NtSetContextThread`); memory allocated RWX, written
+    and jumped to with no system call in between has no trigger short of an
+    execute trap on the region (the `codemon` plugin's way, a VM exit per
+    first execution of a page). On Windows the gain is smaller than it
+    sounds: a reflectively loaded PE still calls the system DLLs, which
+    apimon hooks in every process -- only code linked *into* the payload
+    (a Go or Rust payload, a static CRT) is unseen.
+  - **A hook lost to a remap.** A packer that unmaps and maps again after
+    the hook was placed takes the frame away; libmon does not place it a
+    second time. Keep `when:` entries in the cold list after placing, and
+    re-check them on `munmap`/`mremap` of their address. A day.
+  - **The first run's trace is not kept** by a job that asked for both
+    runs on the submit form: one trace on the report. ("Run again" from a
+    finished job's page is a second job, and keeps both.) A sample that only does its work once (a C2 that
+    serves a payload once) shows less in the second run than the first
+    had. Keeping `first-run/trace.log.gz` as an artifact is an hour; whether
+    the report should merge the two is the real question.
+  - **zstd dumps** are not read (sandboxd asks procdump2 for gzip), and a
+    dump whose image is over 256 MiB is cut there.
+  - **32-bit PE under ASLR with its relocations stripped from memory**: the
+    bytes a loader rewrote cannot be told from the rest, so a hint whose
+    first 16 bytes hold an absolute address never matches in a run that
+    loads elsewhere. Seen as hooks that are in the list and never placed.

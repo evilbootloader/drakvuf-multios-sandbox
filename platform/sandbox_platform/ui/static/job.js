@@ -174,6 +174,46 @@
     confirmThenPublish(button);
   });
 
+  // A second run (routers/jobs.py::second_run): a new job made from this
+  // one, opened when the server has made it. Delegated on `root` for the
+  // reason above, and with the header every unsafe method needs.
+  var spawning = false;
+
+  root.addEventListener("click", function (event) {
+    var button = event.target.closest("[data-second-run]");
+    if (!button || spawning) return;
+    spawning = true;
+    button.disabled = true;
+
+    fetch("/api/v1/jobs/" + encodeURIComponent(jobId) + "/second-run", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Sandbox-Request": "1"
+      }
+    })
+      .then(function (r) {
+        if (!r.ok) {
+          throw new Error(
+            r.status === 402 ? "no analysis time left"
+              : r.status === 410 ? "the sample is no longer stored — submit it again"
+              : r.status === 409 ? "nothing to run again with"
+              : "failed (" + r.status + ")"
+          );
+        }
+        return r.json();
+      })
+      .then(function (made) {
+        window.location.assign("/ui/jobs/" + encodeURIComponent(made.job_id));
+      })
+      .catch(function (err) {
+        button.disabled = false;
+        spawning = false;
+        var note = root.querySelector("[data-second-run-error]");
+        if (note) note.textContent = err.message;
+      });
+  });
+
   function confirmThenPublish(button) {
     // Looked up per click, never cached: refresh() replaces this region's
     // innerHTML, so a reference taken at load time points at a detached node.

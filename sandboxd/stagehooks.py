@@ -13,7 +13,8 @@ What this does not reach, and the job is not told otherwise by it: a payload
 that never touches the disk (memfd, a reflective load), code a packer unpacks
 in place, and the calls a second stage makes before its lines are read --
 the locator takes about a second, and a file may be run the moment it is
-closed.
+closed. The first two, where the code ends up in the program's own image,
+are what a job's second pass is for (sandboxd/stagehints.py).
 
 How a finished file and its guest path are known is the extractor's, per OS:
 

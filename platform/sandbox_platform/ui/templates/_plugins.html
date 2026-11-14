@@ -57,6 +57,18 @@
     <input type="checkbox" name="disable_sysret">
     <code>--disable-sysret</code> — It was faster, now is not needed
   </label>
+  <label>
+    <input type="checkbox" name="second_pass">
+    Second pass — run it again with hooks on what the first run unpacked
+  </label>
+  <p class="note">
+    For a packed sample, or one that runs a program from memory: the first
+    run's process dumps are read for library functions that were in no file,
+    and the sample is traced again in a new clone with those hooked. The
+    report is the second run's. Up to twice the time; a sample whose memory
+    shows nothing new is run once. Needs the guest's hook plugin
+    (<code>libmon</code> or <code>apimon</code>) and <code>procdump2</code>.
+  </p>
   <p class="note">
     With this on you see that the sample called <code>openat</code> and with
     what arguments, but not whether it succeeded. Android needs it to finish

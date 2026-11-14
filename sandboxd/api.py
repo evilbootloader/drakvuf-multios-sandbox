@@ -100,6 +100,15 @@ class Lease:
     drop_location: str | None = None
     drop_subdir: str | None = None
     arguments: str | None = None
+    # Run the sample again with hooks on what the first run's memory showed
+    # (2026-11-14, sandboxd/stagehints.py). False from a platform that does
+    # not send it: one run, as every job was.
+    second_pass: bool = False
+    # A job made from a finished one, to run its sample again ("Run again"
+    # on the job page): that job's id, and where to read the lines its
+    # memory gave -- its `hints.txt` artifact. None for every other job.
+    second_run_of: str | None = None
+    hints_url: str | None = None
 
 
 @dataclass(frozen=True)
@@ -370,6 +379,10 @@ class WorkerAPI:
                 drop_location=body.get("drop_location"),
                 drop_subdir=body.get("drop_subdir"),
                 arguments=body.get("arguments"),
+                # `is True`: anything else a skewed platform sends is one run
+                second_pass=body.get("second_pass") is True,
+                second_run_of=body.get("second_run_of"),
+                hints_url=body.get("hints_url"),
             )
         if status == "reserved":
             return Reserved(blocking_job_id=str(body["blocking_job_id"]),
@@ -505,6 +518,23 @@ class WorkerAPI:
                 f"changed after admission, so the trace and the report would "
                 f"describe a different file than the one that ran."
             )
+        return written
+
+    def fetch_hints(self, url: str, dest: Path, *, limit: int = 1 << 20,
+                    timeout: float | None = None) -> int:
+        """Download an earlier job's `hints.txt` (stages._given_hints), at
+        most `limit` bytes of it: hook-list lines, a few hundred at most.
+        Raises on a refusal and on anything longer."""
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        written = 0
+        with self._store.stream("GET", url, timeout=timeout or DEFAULT_TIMEOUT) as r:
+            r.raise_for_status()
+            with open(dest, "wb") as fh:
+                for chunk in r.iter_bytes():
+                    written += len(chunk)
+                    if written > limit:
+                        raise ProtocolError(f"hints longer than {limit} bytes")
+                    fh.write(chunk)
         return written
 
     def upload_artifact(self, ticket: Ticket, name: str, path: Path) -> None:

@@ -1258,6 +1258,16 @@ EXTRACTED_ANNOUNCED: dict[TargetOs, str] = {
     TargetOs.WINDOWS: "sidecar",
 }
 
+#: What procdump2 writes of a process for this guest, which
+#: sandboxd/stagehints.py reads between the two runs of a job that asked for
+#: a second pass: an ELF core (linux.cpp), a minidump (win.cpp). A guest with
+#: no row has no second pass. Android: its programs are an app's, in a
+#: runtime's memory, which a hook-list line by offset does not name.
+PROCESS_DUMPS: dict[TargetOs, str] = {
+    TargetOs.UBUNTU: "core",
+    TargetOs.WINDOWS: "minidump",
+}
+
 def _linux_launch(paths: GuestPaths, target: str,
                   words: list[str] | tuple[str, ...] = ()) -> list[str]:
     """Wait `LAUNCH_DELAY`, then become the sample.

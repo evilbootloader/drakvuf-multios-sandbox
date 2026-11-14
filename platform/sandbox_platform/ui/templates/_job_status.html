@@ -89,6 +89,29 @@
     <span class="mono" data-publish-error></span>
   </dd>
   </div>
+  {#
+    A second run (routers/jobs.py::second_run), offered when this run's
+    memory showed library functions its file did not have -- a packed sample
+    -- and to its owner only: the route answers anyone else 404, and a
+    control that looks available and does nothing reads as a fault.
+  #}
+  {% if job.second_run_of %}
+  <div>
+  <dt>Second run of</dt>
+  <dd><a class="mono" href="/ui/jobs/{{ job.second_run_of }}">{{ job.second_run_of }}</a></dd>
+  </div>
+  {% endif %}
+  {% if job.second_run_available and job.owner != 'REDACTED' %}
+  <div>
+  <dt>Unpacked code</dt>
+  <dd>
+    This run's memory showed functions the file did not have.
+    <button type="button" data-second-run
+      title="A new job: the same sample and options, traced with those functions hooked. This job stays as it is.">Run again with them hooked</button>
+    <span class="mono" data-second-run-error></span>
+  </dd>
+  </div>
+  {% endif %}
 </dl>
 
 {#
