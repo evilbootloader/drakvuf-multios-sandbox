@@ -241,3 +241,86 @@
     before frame 1 and the pointer or thunk it goes through: about four small
     reads. If it shows, cache "frame 1 calls the stub" per (process, frame 1,
     frame 0) for frames in files.
+- **Calls the compiler removed: inlining and recompilation (2026-11-14).**
+  A hook sits at a function's entry, and a compiler may leave no entry to
+  reach. Noted here, not fixed (operator, 2026-11-14); the report should not
+  be read as "the sample never called X" for any of these.
+
+  - **Go, Rust, C with LTO: a listed function that is absent was inlined or
+    dropped.** In `gh` 38 of the 79 functions of `go-hooks.txt` exist. The
+    call is still made further down, so the fix is to list what the wrapper
+    calls and cannot be inlined into it (`os.rename` under `os.Rename`,
+    `syscall.connect` under `net.Dial`, anything marked `//go:noinline` or
+    written in assembly) -- hours per family of calls, by reading the
+    standard library. The system call is the floor either way.
+
+  - **.NET: the sample's JIT-compiled code inlines small framework methods.**
+    The JIT inlines across assemblies whenever the callee's IL is small
+    (property getters, thin wrappers such as `File.ReadAllText` over an
+    internal reader), and then the framework's precompiled entry -- where
+    `scripts/dotnet-index.py` put the hook -- is never called. Framework
+    4.x compiles every method optimised at once, so this is always on
+    there. Two ways round it, neither built:
+    - Hook one level down, at the internal method the wrappers share, which
+      is too large to inline. Needs a table "public method -> the internal
+      one that does the work"; the index has every internal method already.
+    - Stop the inlining in the guest: `COMPlus_JITMinOpts=1` (Framework) /
+      `DOTNET_JITMinOpts=1`, or keep .NET 8 code at tier 0 (below), which
+      never inlines. A machine-wide environment variable is a registry edit
+      on the golden image and a thing a sample can read: an image decision.
+
+  - **.NET 8 recompiles a method after about 30 calls** (tiered compilation:
+    call counting, then a background tier-1 compile, 100 ms after start-up
+    settles). The new code is elsewhere, the precompiled entry is no longer
+    called, and tier 1 may also inline the method into its callers. A
+    method is therefore seen for its first calls only -- enough for "did it
+    download and from where", not for counting. Options, cheapest first:
+    - Keep code in its first tier: `DOTNET_TC_CallCounting=0` (to be
+      confirmed on a release runtime; `DOTNET_TieredCompilation=0` is the
+      wrong knob, it compiles everything optimised at once, inlining included):
+      methods stay in their first tier for ever, precompiled entries stay in
+      use and tier-0 code never inlines. Loops still leave tier 0 through
+      on-stack replacement (`DOTNET_TC_OnStackReplacement=0` with
+      `DOTNET_TC_QuickJitForLoops=1` keeps them), and
+      `[MethodImpl(AggressiveOptimization)]` methods skip tiering always.
+    - Follow the recompilation. The hook on `CILJit::compileMethod` already
+      sees every tier-1 compile with the IL's address and where the new code
+      went. A hook line that names a method by its IL (`module,name,il:<rva>`,
+      which the index can write: it has every method's IL RVA) would let
+      apimon breakpoint each new native entry as it is produced -- for the
+      sample's own methods too, which is the "see every call with arguments"
+      step the plan left for later. 2-3 days: the address is known only at
+      the compiler's return, JIT pages are written to (each write to a page
+      with a breakpoint costs a VM pause), and inlining at tier 1 defeats it
+      for small methods regardless.
+    Both together are the complete answer; the first alone is nearly it.
+
+  - **.NET Framework 32-bit native images are not indexed.** The 64-bit ones
+    are (`index_native_image`, checked method by method). The 32-bit ones
+    have no PE exception table; their function starts are in the image's own
+    runtime-function section (virtual section type 0x21). A day, with the
+    same cross-check, once a 32-bit .NET sample matters.
+
+  - **A hook placed through the page cache is not re-checked.** libmon puts
+    a breakpoint on the page-cache frame of code the program has not touched
+    yet (`drakvuf_linux_file_page_frame`). If the kernel evicts that page
+    before the program runs it, the code is read back into another frame and
+    the hook is gone, silently; DRAKVUF's copy-on-write handling keeps the
+    old frame harmless. Unlikely in a two-minute run on a guest with free
+    memory. The certain way is to keep the page-fault hook installed as a
+    check, which is the cost this lookup was written to avoid: measure
+    first (`[TRAP-STATS]` in a debug build).
+
+- **A second pass for payloads that never touch the disk ("stage hints")** --
+  2-3 days, not started (2026-11-14). `stagehooks` follows files; a payload
+  mapped from a memfd, loaded reflectively or unpacked in place has no file,
+  and by the time a dump shows its code the calls are over. The first run's
+  process dumps and memory dumps do hold that code at the addresses it ran
+  at, so: run the locator over them after run 1, write lines keyed by the
+  region (`<process image>,<name>,<offset from the region's base>`), and
+  trace the same sample again with them. What it needs that is not there: a
+  job option that reruns with a hint file (platform API, lease, UI), a hook
+  line that names an anonymous region rather than a module (libmon and
+  libusermode match files), and the two runs laying memory out the same way
+  -- ASLR off in the guest or the hint expressed relative to the allocation
+  that the sample itself makes, which only holds for deterministic loaders.

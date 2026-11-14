@@ -561,9 +561,9 @@ It maps **headings, not content**: a fact stated in the middle of a section is n
 
 - `docs/architecture/upstream-drakvuf.md:1` — [Upstream DRAKVUF — comparison, provenance, and repository strategy](architecture/upstream-drakvuf.md#upstream-drakvuf--comparison-provenance-and-repository-strategy)
   - `docs/architecture/upstream-drakvuf.md:10` — [Upstream `dirwatch.c` — direct comparison](architecture/upstream-drakvuf.md#upstream-dirwatchc--direct-comparison)
-  - `docs/architecture/upstream-drakvuf.md:199` — [`lfreijo/drakvuf`, `memdump` branch — provenance](architecture/upstream-drakvuf.md#lfreijodrakvuf-memdump-branch--provenance)
-  - `docs/architecture/upstream-drakvuf.md:221` — [Repository strategy recommendation](architecture/upstream-drakvuf.md#repository-strategy-recommendation)
-  - `docs/architecture/upstream-drakvuf.md:261` — [DRAKVUF Sandbox (CERT-Polska) — what's reusable](architecture/upstream-drakvuf.md#drakvuf-sandbox-cert-polska--whats-reusable)
+  - `docs/architecture/upstream-drakvuf.md:209` — [`lfreijo/drakvuf`, `memdump` branch — provenance](architecture/upstream-drakvuf.md#lfreijodrakvuf-memdump-branch--provenance)
+  - `docs/architecture/upstream-drakvuf.md:231` — [Repository strategy recommendation](architecture/upstream-drakvuf.md#repository-strategy-recommendation)
+  - `docs/architecture/upstream-drakvuf.md:271` — [DRAKVUF Sandbox (CERT-Polska) — what's reusable](architecture/upstream-drakvuf.md#drakvuf-sandbox-cert-polska--whats-reusable)
 
 ## `docs/checklists/android.md`
 

@@ -21,9 +21,9 @@ windows-symbol-profiles.py; nothing runs in the guest. Needs `pefile` and
 
 What it does not cover, and why:
 
-- **.NET Framework 4.x.** Its precompiled images (`C:\\Windows\\assembly\\
-  NativeImages_v4.0.30319_*`, made by ngen on the machine) are an older,
-  undocumented format with no such table. They are skipped and counted.
+- **32-bit .NET Framework native images.** The 64-bit ones are read (below);
+  the 32-bit ones have no exception table to take function starts from and
+  were not worked out. They are skipped and counted.
 - **Generic instantiations**, which live in a separate hash table keyed by
   signature, and methods the image has no code for (the JIT compiles those).
 - **A method the runtime re-compiles.** Tiered compilation replaces a
@@ -35,6 +35,17 @@ The format is the runtime's `docs/design/coreclr/botr/readytorun-format.md`:
 a `READYTORUN_HEADER` (`RTR\\0`) reached from the CLI header's
 ManagedNativeHeader directory, section 103 (MethodDefEntryPoints, a
 NativeArray indexed by method row) and section 102 (RuntimeFunctions).
+
+**.NET Framework 4.x** (`C:\\Windows\\assembly\\NativeImages_v4.0.30319_64`,
+made by ngen on the machine) is an older format nobody documents; what is
+read of it was worked out on this project's guest image, 4.8, 2026-11-14,
+and is checked on every image it reads (see `index_native_image`). The
+header (`NGE\\0`) has a code manager entry naming the hot and the unprofiled
+code range, and a table of the image's "virtual sections". For each code
+range one of those sections is an array of 32-bit entries, one per function
+of the range in the order of the PE's exception table: 0, or the RVA of the
+method's descriptor (two flag bits low). A descriptor gives the method's
+metadata row: 14 bits in its own first word, 10 in its chunk's header.
 """
 from __future__ import annotations
 
@@ -194,6 +205,98 @@ def read_signature(blob: bytes, at: int = 0) -> tuple:
     return bool(convention & 0x20), kinds, names, at
 
 
+NGEN_SIGNATURE = 0x0045474E      # "NGE\0"
+#: A method descriptor's chunk header on x64: method table, next chunk
+#: (pointers), size, count (bytes), flags and token range (a word); padded
+CHUNK_HEADER = 24
+DESCRIPTOR_ALIGNMENT = 8
+TOKEN_REMAINDER_BITS = 14
+
+
+def index_native_image(pe, path: Path, module: str, header_rva: int) -> tuple:
+    """([entry], reason it has none) for a .NET Framework native image.
+
+    Nothing documents this layout, so no method is taken on its word alone.
+    A descriptor's chunk points at the method table of the type the method
+    belongs to, and a method table carries its type's metadata row: a method
+    is indexed only when that row is the one the metadata says owns the
+    method. On this project's image every plain method of both images tried
+    passed (23,025 and 15,586) and the ones that did not were what should
+    not: stubs, and instantiations of another assembly's generic types,
+    whose rows are that assembly's. An image whose layout differs fails the
+    check throughout and yields nothing."""
+    if pe.FILE_HEADER.Machine != 0x8664:
+        return [], "a 32-bit .NET Framework native image (not read)"
+    image = pe.get_memory_mapped_image()
+    manager_rva = struct.unpack_from("<I", image, header_rva + 72)[0]
+    sections_rva, sections_size = struct.unpack_from("<II", image, header_rva + 96)
+    exceptions = pe.OPTIONAL_HEADER.DATA_DIRECTORY[3]
+    if not manager_rva or not sections_rva or not exceptions.VirtualAddress:
+        return [], "a native image without the tables read here"
+    starts = [struct.unpack_from("<I", image, exceptions.VirtualAddress + 12 * n)[0]
+              for n in range(exceptions.Size // 12)]
+    sections = [struct.unpack_from("<III", image, sections_rva + 12 * n) for n in range(sections_size // 12)]
+
+    tables = pe.net.mdtables
+    rows = tables.MethodDef.num_rows
+    owner, owner_row = {}, {}
+    for type_row, row in enumerate(tables.TypeDef.rows, start=1):
+        name = f"{row.TypeNamespace}.{row.TypeName}" if row.TypeNamespace else str(row.TypeName)
+        for method in row.MethodList or ():
+            owner[method.row_index] = name
+            owner_row[method.row_index] = type_row
+
+    entries, seen = [], set()
+    for n in range(2):                          # HotCode, Code (unprofiled)
+        range_rva, range_size = struct.unpack_from("<II", image, manager_rva + 8 * n)
+        if not range_size:
+            continue
+        functions = [s for s in starts if range_rva <= s < range_rva + range_size]
+        arrays = [rva for rva, size, _ in sections if size == 4 * len(functions) and rva != range_rva]
+        if len(arrays) != 1:
+            raise Unreadable(f"{len(arrays)} sections could be the methods of the code at 0x{range_rva:x}")
+        for start, value in zip(functions, struct.unpack_from(f"<{len(functions)}I", image, arrays[0])):
+            descriptor = value & ~3
+            if not descriptor:
+                continue                        # a funclet, or a stub
+            if not 0x1000 <= descriptor < len(image) - 8:
+                continue
+            word, chunk_index = struct.unpack_from("<HB", image, descriptor)
+            if struct.unpack_from("<H", image, descriptor + 6)[0] & 7:
+                continue                        # not IL: a P/Invoke, a generic method's instantiation, a stub
+            chunk = descriptor - CHUNK_HEADER - chunk_index * DESCRIPTOR_ALIGNMENT
+            if chunk < 0x1000:
+                continue
+            token_range = struct.unpack_from("<H", image, chunk + 18)[0] & ((1 << (24 - TOKEN_REMAINDER_BITS)) - 1)
+            rid = token_range << TOKEN_REMAINDER_BITS | word & ((1 << TOKEN_REMAINDER_BITS) - 1)
+            # The chunk's method table: an offset from the field itself, odd
+            # when it goes through an import (another assembly's type)
+            relative = struct.unpack_from("<q", image, chunk)[0]
+            table = chunk + relative
+            if relative & 1 or not 0x1000 <= table < len(image) - 16:
+                continue
+            # MethodTable: flags, base size (dwords), flags2, the type's row (words)
+            type_row = struct.unpack_from("<H", image, table + 10)[0]
+            if not 0 < rid <= rows or owner_row.get(rid, 0) & 0xFFFF != type_row:
+                continue
+            if (rid, start) in seen:
+                continue
+            seen.add((rid, start))
+            method = tables.MethodDef.rows[rid - 1]
+            try:
+                has_this, kinds, names, _ = read_signature(method.Signature.value)
+                returns, names = names[0], names[1:]
+            except (Unreadable, IndexError, AttributeError):
+                has_this, kinds, names, returns = not method.Flags.mdStatic, None, None, None
+            entries.append({
+                "name": f"{owner.get(rid, '?')}::{method.Name}",
+                "module": module, "rva": start, "bits": 64,
+                "this": has_this, "args": kinds, "returns": returns,
+                "signature": "(" + ", ".join(names) + ")" if names is not None else None,
+            })
+    return entries, ""
+
+
 def index_assembly(path: Path, module: str) -> tuple:
     """([entry], reason it has none) for one DLL, `module` being how a hook
     list names it."""
@@ -211,8 +314,10 @@ def index_assembly(path: Path, module: str) -> tuple:
             return [], "no precompiled code"
         image = pe.get_memory_mapped_image()
         signature, _major, _minor, _flags, sections = struct.unpack_from("<IHHII", image, header_rva)
+        if signature == NGEN_SIGNATURE:
+            return index_native_image(pe, path, module, header_rva)
         if signature != RTR_SIGNATURE:
-            return [], "a native image that is not ReadyToRun (.NET Framework's ngen)"
+            return [], "a native image of no known kind"
         found = {}
         for n in range(sections):
             kind, rva, size = struct.unpack_from("<III", image, header_rva + 16 + 12 * n)

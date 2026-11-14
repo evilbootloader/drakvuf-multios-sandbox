@@ -28,7 +28,7 @@ import orjson
 
 from ...guests import PATHS, TargetOs
 from .. import clrjit
-from ..paths import CAPE_RESULTS
+from ..paths import CAPE_RESULTS, DUMPS_DIR, EXTRACTED_DIR
 from .cape_plugin import (
     CapeOptions, RunProcessing, RunSignatures, load_signatures, split_by_process,
 )
@@ -408,7 +408,7 @@ def _run_cape(context: PostprocessContext, cfg: CapeConfigSection,
                 RunSignatures(context=context, results=results).run()
 
         write_results(analysis_dir / CAPE_RESULTS, results, sample=split.sample,
-                      jit=clrjit.Timeline(sample))
+                      jit=clrjit.Timeline(sample, (analysis_dir / EXTRACTED_DIR, analysis_dir / DUMPS_DIR)))
         # Inside the `with` too: the non-call plugins' records are read from
         # trace_split's aux logs, which go with the temporary directory.
         _timeline(analysis_dir, results, split)

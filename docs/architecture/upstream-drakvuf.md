@@ -160,14 +160,24 @@ runs, preserving the agentless design.
 >     gives method -> entry RVA; the methods capa's rules name get a line by
 >     offset. `clrcall` reads arguments the CLR's way (x86: ECX, EDX, then
 >     the stack left to right), `clrstring` and `clrbytes` print a String
->     and a byte[] object. **.NET Framework 4.x is not indexed**: its ngen
->     images have no documented method table.
+>     and a byte[] object. **.NET Framework 4.x**: the 64-bit ngen images
+>     are indexed too, from a layout worked out on this guest's image and
+>     checked per method against the owning type's row; 32-bit ones are not.
 >   - The sample's own methods: a line on `CILJit::compileMethod` (address
 >     from the `clrjit*.json` profiles, new rows in
 >     `windows-symbol-profiles.py`) with the `pcorinfo_method_info` printer,
 >     which prints each compiled method's IL size and first bytes.
 >     `sandboxd/postprocessing/clrjit.py` names the method by finding that
 >     body in the sample's metadata; the report has it as `dotnet_jit`.
+> - **Hooks before the first instruction** (same date, same standing).
+>   `drakvuf_linux_file_page_frame()` finds the frame the page cache holds
+>   for a file-backed address nobody has faulted in (VMA -> file -> i_pages
+>   xarray -> struct page -> frame, believed only when the page names the
+>   same mapping and index, up to date and unlocked). libmon uses it for the
+>   executable's hooks at exec, so the page-fault hook is only held for pages
+>   that are not cached, and for library pages no other process has. Kernels
+>   with a VMA list only (before 6.1). `ideas.md` has what it does not
+>   re-check, and the notes on inlining and .NET recompilation.
 > - `dl_rendezvous` now tells its consumer of every exec and exit, not only
 >   those of processes it tracked: a dynamic program that exec'd a static one
 >   used to keep its breakpoints.

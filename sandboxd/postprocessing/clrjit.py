@@ -15,10 +15,14 @@ runtime mapped the assembly (as an image, as a flat file, from a byte array),
 which an address would not. Two methods with identical bodies (empty
 constructors, one-line getters) are both named, as candidates.
 
-Not named: methods of an assembly that is not the sample file -- one it
-decrypts and loads from memory is in the job's memory dumps
-(`AssemblyNative::LoadImage`), and reading those is not done yet -- and
-dynamic methods (Reflection.Emit), which have no metadata.
+The sample is not the only assembly a sample runs. One it downloads or
+unpacks to disk is in the job's `extracted/`, and one it decrypts and loads
+from a byte array is in `dumps/` (memdump's `AssemblyNative::LoadImage` hook
+writes the array). Every managed PE found in either is read the same way, and
+a method named from one of them says which file.
+
+Not named: dynamic methods (Reflection.Emit), which have no metadata, and the
+methods of an assembly that reached memory by a path nothing dumped.
 """
 from __future__ import annotations
 
@@ -27,6 +31,9 @@ from pathlib import Path
 from typing import Optional
 
 JIT_API = "CILJit::compileMethod"
+#: Other assemblies read per job, and the largest one read
+MAX_ASSEMBLIES = 64
+MAX_ASSEMBLY_BYTES = 64 << 20
 #: IL bytes the hook prints of each method (printers.cpp, CorinfoMethodInfoPrinter)
 PREFIX_BYTES = 32
 MAX_METHODS = 20_000
@@ -72,14 +79,47 @@ def method_bodies(path: Path) -> dict:
         pe.close()
 
 
-class Timeline:
-    """Collects the compiler's calls as the report's calls are written."""
+def assemblies(directories) -> list:
+    """The files under the directories that start like a PE, smallest first:
+    what a job dropped or loaded from memory is seldom its largest file."""
+    found = []
+    for directory in directories:
+        if not directory.is_dir():
+            continue
+        for path in directory.iterdir():
+            try:
+                if path.is_symlink() or not path.is_file() or not 0 < path.stat().st_size <= MAX_ASSEMBLY_BYTES:
+                    continue
+                with path.open("rb") as fh:
+                    if fh.read(2) == b"MZ":
+                        found.append(path)
+            except OSError:
+                continue
+    return sorted(found, key=lambda p: p.stat().st_size)[:MAX_ASSEMBLIES]
 
-    def __init__(self, sample: Optional[Path]) -> None:
+
+class Timeline:
+    """Collects the compiler's calls as the report's calls are written.
+    `directories`: where the job's other assemblies may be (extracted/, dumps/)."""
+
+    def __init__(self, sample: Optional[Path], directories=()) -> None:
         self._sample = sample
+        self._directories = tuple(directories)
         self._bodies: Optional[dict] = None
         self.methods: list = []
         self.dropped = 0
+
+    def _read_bodies(self) -> dict:
+        """(size, prefix) -> [(method, file it is from, None for the sample)]"""
+        bodies: dict = {}
+        sources = [(self._sample, None)] if self._sample is not None else []
+        sources += [(path, path.name) for path in assemblies(self._directories)]
+        for path, origin in sources:
+            for key, names in method_bodies(path).items():
+                known = {name for name, _ in bodies.get(key, ())}
+                # the same assembly dumped twice names a method once
+                bodies.setdefault(key, []).extend((n, origin) for n in names if n not in known)
+        return bodies
 
     def add(self, pid, row: dict) -> None:
         if row.get("api") != JIT_API:
@@ -92,14 +132,17 @@ class Timeline:
         if not said:
             return
         if self._bodies is None:
-            self._bodies = method_bodies(self._sample) if self._sample is not None else {}
+            self._bodies = self._read_bodies()
         size, prefix = int(said.group(2)), said.group(3).lower()
-        names = self._bodies.get((size, prefix), [])
+        found = self._bodies.get((size, prefix), [])
+        names = [name for name, _ in found]
         self.methods.append({
             "time": row.get("ts"), "pid": pid, "tid": row.get("tid"),
             "il": "0x" + said.group(1), "il_size": size,
             "method": names[0] if len(names) == 1 else None,
             "candidates": names if len(names) > 1 else None,
+            # which dropped or dumped file it is in; None: the sample itself
+            "assembly": found[0][1] if len(found) == 1 else None,
             "native": arguments.get("NativeEntry"), "native_size": arguments.get("NativeSize"),
         })
 

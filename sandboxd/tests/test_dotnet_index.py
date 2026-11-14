@@ -111,8 +111,12 @@ def test_a_compiled_method_is_named_by_its_il_body(tmp_path, monkeypatch):
 
     bodies = {(7, "02280a00000a2a"): ["Stealer.Program::Main"],
               (1, "2a"): ["Stealer.A::.ctor", "Stealer.B::Dispose"]}
-    monkeypatch.setattr(clrjit, "method_bodies", lambda path: bodies)
-    timeline = clrjit.Timeline(tmp_path / "s.exe")
+    stage = {(9, "0011223344"): ["Loader.Stage2::Run"], (7, "02280a00000a2a"): ["Stealer.Program::Main"]}
+    (tmp_path / "dumps").mkdir()
+    (tmp_path / "dumps" / "memdump.000003").write_bytes(b"MZ" + b"\0" * 64)
+    (tmp_path / "dumps" / "notes.txt").write_bytes(b"not a PE")
+    monkeypatch.setattr(clrjit, "method_bodies", lambda path: stage if path.name == "memdump.000003" else bodies)
+    timeline = clrjit.Timeline(tmp_path / "s.exe", (tmp_path / "dumps", tmp_path / "no-such-directory"))
 
     def call(info, api=clrjit.JIT_API):
         return {"api": api, "ts": 1.5, "tid": 7, "arguments": [
@@ -121,11 +125,16 @@ def test_a_compiled_method_is_named_by_its_il_body(tmp_path, monkeypatch):
 
     timeline.add(4, call("0x1f0:{ftn=0x1,scope=0x2,il=0x20001050,size=7,code=02280A00000A2A}"))
     timeline.add(4, call("0x1f0:{ftn=0x1,scope=0x2,il=0x20001060,size=1,code=2a}"))
-    timeline.add(4, call("0x1f0:{ftn=0x1,scope=0x2,il=0x7ffa0000,size=9,code=0011223344}"))   # the framework's
+    timeline.add(4, call("0x1f0:{ftn=0x1,scope=0x2,il=0x7ffa0000,size=9,code=0011223344}"))   # loaded from memory
+    timeline.add(4, call("0x1f0:{ftn=0x1,scope=0x2,il=0x7ffb0000,size=5,code=aabbccddee}"))   # the framework's
     timeline.add(4, call("whatever", api="kernel32.CreateFileW"))
     result = timeline.result()
-    assert (result["compiled"], result["named"]) == (3, 2)
-    first, second, third = result["methods"]
+    assert (result["compiled"], result["named"]) == (4, 3)
+    first, second, staged, third = result["methods"]
+    # the sample's own method is named once though the dump has it too, and
+    # a method of the assembly it loaded from memory says where it was found
+    assert first["assembly"] is None
+    assert staged["method"] == "Loader.Stage2::Run" and staged["assembly"] == "memdump.000003"
     assert first["method"] == "Stealer.Program::Main" and first["native"] == "0x7ff0" and first["pid"] == 4
     assert second["method"] is None and second["candidates"] == ["Stealer.A::.ctor", "Stealer.B::Dispose"]
     assert third["method"] is None and third["candidates"] is None
@@ -144,3 +153,21 @@ def test_a_real_assemblys_method_bodies_are_read():
     # a body is IL: it ends in ret, throw, a branch or a tail of one, never in zero padding only
     assert all(size > 0 and len(prefix) == 2 * min(size, clrjit.PREFIX_BYTES) for size, prefix in bodies)
     assert clrjit.method_bodies(Path(__file__)) == {}
+
+
+def test_a_framework_native_image_names_only_methods_its_types_vouch_for(tmp_path):
+    """.NET Framework's ngen format is undocumented: what is read of it is
+    checked method by method against a second field (the owning type's row
+    in the method table). Run on real images when a directory of them is
+    given (`DOTNET_NGEN_DIR`: a copy of NativeImages_v4.0.30319_64)."""
+    where = os.environ.get("DOTNET_NGEN_DIR")
+    if not where:
+        pytest.skip("DOTNET_NGEN_DIR is not set: no .NET Framework native image to read")
+    out = tmp_path / "index.json"
+    assert di.main([where, "--root", where, "-o", str(out)]) == 0
+    index = json.loads(out.read_text())["methods"]
+    system = [e for e in index["System.Net.WebClient::DownloadString"] if e["module"].endswith("System.ni.dll")]
+    assert sorted(e["signature"] for e in system) == ["(class)", "(string)"]
+    assert len({e["rva"] for e in system}) == 2 and all(e["bits"] == 64 for e in system)
+    # a method of another assembly's generic type is in no image under its own name
+    assert all(e["module"].endswith("mscorlib.ni.dll") for e in index["System.IO.File::ReadAllBytes"])
