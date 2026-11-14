@@ -45,6 +45,7 @@ detected the sandbox, and what here answers it:
 | 9003 MAC `00:16:3E` | Xen's OUI | an Intel OUI, the e1000's |
 | 13002 Hyper-V objects | not Viridian: still detected with it off (§5) | nothing to answer |
 | 4067, 4068 CPUID hypervisor bit and vendor | hidden only by DRAKVUF's `-s` | `cpuid = 'host,hypervisor=0'` and the Xen patch |
+| 4099 ACPI tables, the two parts of it that are real (§5) | a `WAET` table, no `WSMT` | hvmloader writes no WAET; a WSMT in `acpi_firmware` (2026-11-14, CANDIDATE) |
 | not al-khaser: a sample, 2026-11-13 (below) | the display adapter is PCI `1234:1111`, subsystem `1af4:1100`: QEMU's | a real card's IDs, `automation/qemu-xen-vga-ids.patch` (2026-11-14) |
 
 **The display adapter.** Job `c12bc2b5` (MopsStealer, 2026-11-13) probed for
@@ -270,10 +271,15 @@ on the reinstalled one too.
   plugin at once trips `NtYieldExecution` (2029).
 - **4099, ACPI tables**: al-khaser wants five PNP device IDs in every ACPI
   table, which no real machine has either: FACP, APIC and the rest never
-  carry them, so it fires on real hardware too. Two things it reads besides
-  are real tells, but the PNP test fails first on any machine: a `WAET`
-  table, which hvmloader always writes, and no `WSMT`, which current real
-  firmware has.
+  carry them, so it fires on real hardware too, and al-khaser's verdict
+  stays as it is. Two things it reads besides are real tells, which any
+  other reader of the tables can use: a `WAET` table, which hvmloader always
+  wrote, and no `WSMT`, which current real firmware has. Since 2026-11-14
+  (CANDIDATE, never booted) the identity patch stops hvmloader writing the
+  WAET, and `xen-identity.py guest-files` appends a WSMT to `ssdt.aml`, the
+  file `acpi_firmware` names. A guest has them from its next cold boot on a
+  Xen built by `make xen` after that, and a clone once its state is saved
+  again.
 - **13002, `\GLOBAL??` objects**: still detected with `viridian = 0`, so not
   `VMBUS#` or `VmGid`, and not `VmGenerationCounter`: Xen's generation counter
   device has `_STA` 0 without `ms_vm_genid`, and the guest's `Enum\ACPI` has no

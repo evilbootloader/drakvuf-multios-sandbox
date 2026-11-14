@@ -171,3 +171,20 @@ def test_an_identity_from_before_gets_a_display_adapter_and_keeps_it(tmp_path):
     first = json.loads(_run(state, "show").stdout)["gpu"]
     assert json.loads(_run(state, "show").stdout)["gpu"] == first
     assert first["name"] in [g[0] for g in _script().GPUS]
+
+
+def test_the_wsmt_is_a_table_firmware_would_accept(tmp_path):
+    """al-khaser's ACPI check reads two things a guest of Xen gives away: a
+    WAET, which hvmloader no longer writes, and no WSMT (job aa879b03)."""
+    module = _script()
+    state = tmp_path / "xen-identity.json"
+    identity = json.loads(_run(state, "show").stdout)
+    table = module.wsmt_table(identity)
+
+    assert table[:4] == b"WSMT" and len(table) == 40 == int.from_bytes(table[4:8], "little")
+    assert sum(table) & 0xFF == 0                           # the checksum hvmloader also redoes
+    assert table[10:16].decode() == identity["acpi_oem_id"][:6].ljust(6)
+    assert table[16:24].decode() == identity["acpi_table_id"][:8].ljust(8)
+    assert int.from_bytes(table[36:40], "little") == 0x7
+    patch = (ROOT / "automation" / "xen-guest-identity.patch").read_text()
+    assert "-    config->table_flags |= (ACPI_HAS_IOAPIC | ACPI_HAS_WAET |" in patch

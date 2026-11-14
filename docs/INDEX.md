@@ -399,10 +399,10 @@ It maps **headings, not content**: a fact stated in the middle of a section is n
 
 - `docs/architecture/guest-identity.md:1` — [Guest identity — what the analysis guests look like from inside](architecture/guest-identity.md#guest-identity--what-the-analysis-guests-look-like-from-inside)
   - `docs/architecture/guest-identity.md:29` — [1. The evidence it answers](architecture/guest-identity.md#1-the-evidence-it-answers)
-  - `docs/architecture/guest-identity.md:74` — [2. The identity](architecture/guest-identity.md#2-the-identity)
-  - `docs/architecture/guest-identity.md:104` — [3. Where it goes](architecture/guest-identity.md#3-where-it-goes)
-  - `docs/architecture/guest-identity.md:190` — [4. Why a reinstall](architecture/guest-identity.md#4-why-a-reinstall)
-  - `docs/architecture/guest-identity.md:263` — [5. What it does not answer](architecture/guest-identity.md#5-what-it-does-not-answer)
+  - `docs/architecture/guest-identity.md:75` — [2. The identity](architecture/guest-identity.md#2-the-identity)
+  - `docs/architecture/guest-identity.md:105` — [3. Where it goes](architecture/guest-identity.md#3-where-it-goes)
+  - `docs/architecture/guest-identity.md:191` — [4. Why a reinstall](architecture/guest-identity.md#4-why-a-reinstall)
+  - `docs/architecture/guest-identity.md:264` — [5. What it does not answer](architecture/guest-identity.md#5-what-it-does-not-answer)
 
 ## `docs/architecture/licensing.md`
 
@@ -489,7 +489,7 @@ It maps **headings, not content**: a fact stated in the middle of a section is n
     - `docs/architecture/rdtsc-poc.md:53` — [1.1 Why the kernel keeps the real TSC](architecture/rdtsc-poc.md#11-why-the-kernel-keeps-the-real-tsc)
   - `docs/architecture/rdtsc-poc.md:71` — [2. Evidence](architecture/rdtsc-poc.md#2-evidence)
   - `docs/architecture/rdtsc-poc.md:98` — [3. Known gaps](architecture/rdtsc-poc.md#3-known-gaps)
-  - `docs/architecture/rdtsc-poc.md:120` — [4. Operating it](architecture/rdtsc-poc.md#4-operating-it)
+  - `docs/architecture/rdtsc-poc.md:142` — [4. Operating it](architecture/rdtsc-poc.md#4-operating-it)
 
 ## `docs/architecture/result-schema.md`
 

@@ -19,14 +19,33 @@ clockevent fires every timer early when its kernel TSC lags, and
 freezes. RDTSC_USER_PURE (off) would return the guest's own work for a
 pair with no exit between, for al-khaser's Locky check.
 
+Added 2026-11-14, both off, for the al-khaser search to measure (job
+aa879b03 failed both of its RDTSC checks):
+
+RDTSC_USER_XVCPU: a program read that is not close on its own vCPU
+continues the timeline of the domain's last program read when another
+vCPU made it for the same CR3 at most RDTSC_USER_XVCPU_MAX host cycles
+ago. The guest moved al-khaser's thread from vCPU 1 to vCPU 3 inside
+the first RDTSC, CPUID, RDTSC pair of ten, and the read on vCPU 3 got
+the real TSC.
+
+RDTSC_USER_WORK: a close read in a Windows executable returns the
+previous one plus the run time less the cost of each VM exit between,
+at most RDTSC_USER_WORK_MAX. CloseHandle(0) is a system call on Windows
+11, which DRAKVUF traps, so Locky's second pair has exits in it and the
+fixed step made it no longer than the first.
+
+Compiled on Dom0 with Xen's flags in every combination of the three
+switches. Never booted.
+
 ---
  xen/arch/x86/hvm/vmx/vmcs.c             |   18 +
- xen/arch/x86/hvm/vmx/vmx.c              | 1088 ++++++++++++++++++++++++++++++-
- xen/arch/x86/include/asm/hvm/vmx/vmcs.h |  216 ++++++
- 3 files changed, 1316 insertions(+), 6 deletions(-)
+ xen/arch/x86/hvm/vmx/vmx.c              | 1172 ++++++++++++++++++++++++++++++-
+ xen/arch/x86/include/asm/hvm/vmx/vmcs.h |  228 ++++++
+ 3 files changed, 1412 insertions(+), 6 deletions(-)
 
 diff --git a/xen/arch/x86/hvm/vmx/vmcs.c b/xen/arch/x86/hvm/vmx/vmcs.c
-index f9538063da..9f9e64bd55 100644
+index f953806..9f9e64b 100644
 --- a/xen/arch/x86/hvm/vmx/vmcs.c
 +++ b/xen/arch/x86/hvm/vmx/vmcs.c
 @@ -1120,6 +1120,12 @@ static int construct_vmcs(struct vcpu *v)
@@ -62,10 +81,10 @@ index f9538063da..9f9e64bd55 100644
      __vmwrite(VM_ENTRY_CONTROLS, vmentry_ctl);
  
 diff --git a/xen/arch/x86/hvm/vmx/vmx.c b/xen/arch/x86/hvm/vmx/vmx.c
-index 1373ef2787..979c1850fd 100644
+index 1373ef2..30e1fe3 100644
 --- a/xen/arch/x86/hvm/vmx/vmx.c
 +++ b/xen/arch/x86/hvm/vmx/vmx.c
-@@ -50,9 +50,455 @@
+@@ -50,9 +50,460 @@
  #include <asm/spec_ctrl.h>
  #include <public/arch-x86/cpuid.h>
  
@@ -287,6 +306,7 @@ index 1373ef2787..979c1850fd 100644
 +        struct rdtsc_pair_entry pair_log[RDTSC_PAIR_LOG] = {};
 +        struct {
 +            uint64_t reads, compressed, far, slept, lag, pvclock, max_hidden, pure;
++            uint64_t work, moved;
 +        } prog[RDTSC_PAIR_VCPUS] = {};
 +        unsigned int samples = 0, ge_100k = 0, ge_1m = 0, ge_10m = 0, i;
 +        bool ready = false;
@@ -337,6 +357,8 @@ index 1373ef2787..979c1850fd 100644
 +                prog[i].pvclock = t->pvclock;
 +                prog[i].max_hidden = t->max_hidden;
 +                prog[i].pure = t->pure;
++                prog[i].work = t->work;
++                prog[i].moved = t->moved;
 +            }
 +        }
 +
@@ -486,7 +508,7 @@ index 1373ef2787..979c1850fd 100644
 +                    "RDTSC_POC: dom=%u vcpu=%u prog_reads=%llu "
 +                    "prog_compressed=%llu prog_far=%llu prog_slept=%llu "
 +                    "prog_lag=%llu prog_pvclock=%llu prog_max_hidden=%llu "
-+                    "prog_pure=%llu\n",
++                    "prog_pure=%llu prog_work=%llu prog_moved=%llu\n",
 +                    d->domain_id, v->vcpu_id,
 +                    (unsigned long long)prog[v->vcpu_id].reads,
 +                    (unsigned long long)prog[v->vcpu_id].compressed,
@@ -495,7 +517,9 @@ index 1373ef2787..979c1850fd 100644
 +                    (unsigned long long)prog[v->vcpu_id].lag,
 +                    (unsigned long long)prog[v->vcpu_id].pvclock,
 +                    (unsigned long long)prog[v->vcpu_id].max_hidden,
-+                    (unsigned long long)prog[v->vcpu_id].pure);
++                    (unsigned long long)prog[v->vcpu_id].pure,
++                    (unsigned long long)prog[v->vcpu_id].work,
++                    (unsigned long long)prog[v->vcpu_id].moved);
 +        }
 +    }
 +
@@ -521,7 +545,7 @@ index 1373ef2787..979c1850fd 100644
  static void cf_check vmx_ctxt_switch_from(struct vcpu *v);
  static void cf_check vmx_ctxt_switch_to(struct vcpu *v);
  
-@@ -566,22 +1012,55 @@ static int cf_check vmx_domain_initialise(struct domain *d)
+@@ -566,22 +1017,55 @@ static int cf_check vmx_domain_initialise(struct domain *d)
      };
      int rc;
  
@@ -578,7 +602,7 @@ index 1373ef2787..979c1850fd 100644
      vmx_free_vlapic_mapping(d);
  }
  
-@@ -1494,14 +1973,38 @@ static void cf_check vmx_set_tsc_offset(struct vcpu *v, u64 offset, u64 at_tsc)
+@@ -1494,14 +1978,38 @@ static void cf_check vmx_set_tsc_offset(struct vcpu *v, u64 offset, u64 at_tsc)
      vmx_vmcs_exit(v);
  }
  
@@ -621,7 +645,7 @@ index 1373ef2787..979c1850fd 100644
  }
  
  static void cf_check vmx_set_descriptor_access_exiting(
-@@ -2997,6 +3500,17 @@ const struct hvm_function_table * __init start_vmx(void)
+@@ -2997,6 +3505,17 @@ const struct hvm_function_table * __init start_vmx(void)
          return NULL;
      }
  
@@ -639,7 +663,7 @@ index 1373ef2787..979c1850fd 100644
      vmx_function_table.caps.singlestep = cpu_has_monitor_trap_flag;
  
      if ( cpu_has_vmx_dt_exiting )
-@@ -4058,6 +4572,541 @@ static void undo_nmis_unblocked_by_iret(void)
+@@ -4058,6 +4577,620 @@ static void undo_nmis_unblocked_by_iret(void)
                guest_info | VMX_INTR_SHADOW_NMI);
  }
  
@@ -720,6 +744,39 @@ index 1373ef2787..979c1850fd 100644
 + */
 +#define RDTSC_USER_PURE 0
 +
++/*
++ * 1: a program read that is not close on its own vCPU's timeline continues the
++ * timeline of the domain's last program read, when another vCPU made that one
++ * for the same process (CR3) at most RDTSC_USER_XVCPU_MAX host cycles ago. A
++ * thread the guest moves between two reads of a pair is otherwise "far" on the
++ * vCPU it lands on (or that vCPU "slept") and gets the real TSC: al-khaser's
++ * RDTSC around CPUID, job aa879b03, 2026-11-14 -- cpuidmon has the first CPUID
++ * of ten on vCPU 1 and the other nine on vCPU 3, 0.15 ms after it, and the
++ * check wants the mean of the ten pairs under 1000 cycles. 6000000: 2 ms at
++ * 3 GHz, the move and the vm_event pause it happened under.
++ */
++#define RDTSC_USER_XVCPU 0
++#define RDTSC_USER_XVCPU_MAX 6000000ULL
++
++/*
++ * 1: a close read in a Windows executable returns the previous one plus the
++ * guest's own work in between, with VM exits between as well: the run time less
++ * the cost of each exit (run_min, as RDTSC_USER_PURE measures it for a pair with
++ * none), at most RDTSC_USER_WORK_MAX. Supersedes RDTSC_USER_PURE there.
++ *
++ * al-khaser's Locky check wants CloseHandle(0) to take 10 times
++ * GetProcessHeap(). On Windows 11 CloseHandle(0) is a system call (ten
++ * NtClose(0) in that job's trace), which DRAKVUF traps: a pair with exits
++ * between, given the fixed step, is no longer than the PEB read before it.
++ * The cap keeps one interrupt inside a pair of ten from raising the mean of
++ * a CPUID check over its 1000 cycles (10 * 2000 would; 1 * 2000 does not).
++ *
++ * Not for Linux programs: the red pill's SIDT is emulated for UMIP by the
++ * guest kernel, exits and all, and must stay under 100 cycles.
++ */
++#define RDTSC_USER_WORK 0
++#define RDTSC_USER_WORK_MAX 2000ULL
++
 +static bool rdtsc_program_rip(uint64_t rip)
 +{
 +    return rip < RDTSC_USER_RIP_MAX ||
@@ -743,33 +800,51 @@ index 1373ef2787..979c1850fd 100644
 +static uint64_t rdtsc_poc_user(
 +    struct vcpu *v,
 +    struct rdtsc_user_timeline *t,
++    struct rdtsc_user_last *last,
 +    uint64_t blocked,
 +    uint64_t host_tsc,
-+    uint64_t normal_tsc)
++    uint64_t normal_tsc,
++    uint64_t rip,
++    uint64_t cr3)
 +{
 +    struct rdtsc_poc_vcpu *a = &v->arch.hvm.vmx.rdtsc_poc;
 +    uint64_t result = normal_tsc;
++    uint64_t candidate = 0;
++    /* Close on this vCPU's own timeline: the same thread, most likely */
++    bool own = t->valid && blocked == t->blocked_ns &&
++               a->run_tsc - t->run_tsc <= RDTSC_USER_CLOSE;
++    /* Or the thread of the domain's last program read, moved here since */
++    bool moved = RDTSC_USER_XVCPU && !own && last->valid &&
++                 last->vcpu != v->vcpu_id && last->cr3 == cr3 &&
++                 host_tsc >= last->host_tsc &&
++                 host_tsc - last->host_tsc <= RDTSC_USER_XVCPU_MAX;
 +
 +    t->reads++;
 +
-+    if ( !t->valid )
-+        a->why = RDTSC_WHY_NO_BASELINE;
-+    else if ( blocked != t->blocked_ns )
++    if ( own )
 +    {
-+        a->why = RDTSC_WHY_SLEPT;
-+        t->slept++;
-+    }
-+    else if ( a->run_tsc - t->run_tsc > RDTSC_USER_CLOSE )
-+    {
-+        a->why = RDTSC_WHY_FAR;
-+        t->far++;
-+    }
-+    else
-+    {
-+        uint64_t candidate = t->last_returned + TSC_STEP + (host_tsc & 0xf);
++        candidate = t->last_returned + TSC_STEP + (host_tsc & 0xf);
 +
++        if ( RDTSC_USER_WORK &&
++             rip >= RDTSC_USER_EXE_LO && rip < RDTSC_USER_EXE_HI )
++        {
++            uint64_t run = a->run_tsc - t->run_tsc;
++            /* This RDTSC's own exit, and every other since the previous read */
++            uint64_t exits = a->exits - t->exits;
++            uint64_t work = 0;
++
++            if ( exits == 1 && run < t->run_min )
++                t->run_min = run;
++            if ( exits && t->run_min != RDTSC_POC_U64_MAX &&
++                 run / exits > t->run_min )
++                work = run - exits * t->run_min;
++            if ( work > RDTSC_USER_WORK_MAX )
++                work = RDTSC_USER_WORK_MAX;
++            candidate = t->last_returned + 1 + work;
++            t->work++;
++        }
 +        /* Only this RDTSC's own exit since the previous read */
-+        if ( RDTSC_USER_PURE && a->exits - t->exits == 1 )
++        else if ( RDTSC_USER_PURE && a->exits - t->exits == 1 )
 +        {
 +            uint64_t run = a->run_tsc - t->run_tsc;
 +
@@ -778,7 +853,28 @@ index 1373ef2787..979c1850fd 100644
 +            candidate = t->last_returned + 1 + (run - t->run_min);
 +            t->pure++;
 +        }
++    }
++    else if ( moved )
++    {
++        /* What ran between the two reads ran on another vCPU: the fixed step */
++        candidate = last->returned + TSC_STEP + (host_tsc & 0xf);
++        t->moved++;
++    }
++    else if ( !t->valid )
++        a->why = RDTSC_WHY_NO_BASELINE;
++    else if ( blocked != t->blocked_ns )
++    {
++        a->why = RDTSC_WHY_SLEPT;
++        t->slept++;
++    }
++    else
++    {
++        a->why = RDTSC_WHY_FAR;
++        t->far++;
++    }
 +
++    if ( own || moved )
++    {
 +        if ( candidate > normal_tsc ||
 +             normal_tsc - candidate > RDTSC_USER_LAG_MAX )
 +        {
@@ -814,6 +910,12 @@ index 1373ef2787..979c1850fd 100644
 +    t->blocked_ns = blocked;
 +    t->exits = a->exits;
 +    t->valid = true;
++
++    last->returned = result;
++    last->host_tsc = host_tsc;
++    last->cr3 = cr3;
++    last->vcpu = v->vcpu_id;
++    last->valid = true;
 +
 +    return result;
 +}
@@ -1151,7 +1253,8 @@ index 1373ef2787..979c1850fd 100644
 +        if ( user && rdtsc_program_rip(rip) && vmx->rdtsc_window &&
 +             v->vcpu_id < RDTSC_PAIR_VCPUS )
 +            result = rdtsc_poc_user(v, &vmx->rdtsc_window->user[v->vcpu_id],
-+                                    blocked, entry_tsc, result);
++                                    &vmx->rdtsc_window->user_last,
++                                    blocked, entry_tsc, result, rip, cr3);
 +        else if ( RDTSC_KERNEL_ADJUST )
 +            result = rdtsc_poc_adjust(v, have_gap, gap, off_tsc,
 +                                      entry_tsc, result);
@@ -1181,7 +1284,7 @@ index 1373ef2787..979c1850fd 100644
  void asmlinkage vmx_vmexit_handler(struct cpu_user_regs *regs)
  {
      unsigned long exit_qualification, exit_reason, idtv_info, intr_info = 0;
-@@ -4066,6 +5115,21 @@ void asmlinkage vmx_vmexit_handler(struct cpu_user_regs *regs)
+@@ -4066,6 +5199,21 @@ void asmlinkage vmx_vmexit_handler(struct cpu_user_regs *regs)
      struct vcpu *v = current;
      struct domain *currd = v->domain;
  
@@ -1203,7 +1306,7 @@ index 1373ef2787..979c1850fd 100644
      __vmread(GUEST_RIP,    &regs->rip);
      __vmread(GUEST_RSP,    &regs->rsp);
      __vmread(GUEST_RFLAGS, &regs->rflags);
-@@ -4486,7 +5550,15 @@ void asmlinkage vmx_vmexit_handler(struct cpu_user_regs *regs)
+@@ -4486,7 +5634,15 @@ void asmlinkage vmx_vmexit_handler(struct cpu_user_regs *regs)
          /* fall through */
      case EXIT_REASON_RDTSC:
          update_guest_eip(); /* Safe: RDTSC, RDTSCP */
@@ -1220,7 +1323,7 @@ index 1373ef2787..979c1850fd 100644
          break;
  
      case EXIT_REASON_VMCALL:
-@@ -4904,6 +5976,10 @@ bool asmlinkage vmx_vmenter_helper(const struct cpu_user_regs *regs)
+@@ -4904,6 +6060,10 @@ bool asmlinkage vmx_vmenter_helper(const struct cpu_user_regs *regs)
      __vmwrite(GUEST_RSP,    regs->rsp);
      __vmwrite(GUEST_RFLAGS, regs->rflags | X86_EFLAGS_MBS);
  
@@ -1232,7 +1335,7 @@ index 1373ef2787..979c1850fd 100644
  }
  
 diff --git a/xen/arch/x86/include/asm/hvm/vmx/vmcs.h b/xen/arch/x86/include/asm/hvm/vmx/vmcs.h
-index e1d3398141..da8207a47c 100644
+index e1d3398..a521abd 100644
 --- a/xen/arch/x86/include/asm/hvm/vmx/vmcs.h
 +++ b/xen/arch/x86/include/asm/hvm/vmx/vmcs.h
 @@ -8,6 +8,9 @@
@@ -1245,7 +1348,7 @@ index e1d3398141..da8207a47c 100644
  
  extern void vmcs_dump_vcpu(struct vcpu *v);
  extern int vmx_vmcs_init(void);
-@@ -44,6 +47,210 @@ struct ept_data {
+@@ -44,6 +47,222 @@ struct ept_data {
      cpumask_var_t invalidate;
  };
  
@@ -1341,6 +1444,17 @@ index e1d3398141..da8207a47c 100644
 +    uint64_t pvclock;       /* raised to the guest's pvclock timestamp */
 +    uint64_t max_hidden;
 +    uint64_t pure;          /* compressed to the guest's own work, RDTSC_USER_PURE */
++    uint64_t work;          /* likewise with exits between, RDTSC_USER_WORK */
++    uint64_t moved;         /* continued another vCPU's timeline, RDTSC_USER_XVCPU */
++};
++
++/* The domain's last user RDTSC in a program's own code, whichever vCPU made it */
++struct rdtsc_user_last {
++    uint64_t returned;
++    uint64_t host_tsc;      /* host TSC at its VM exit */
++    uint64_t cr3;
++    unsigned int vcpu;
++    bool valid;
 +};
 +
 +/*
@@ -1371,6 +1485,7 @@ index e1d3398141..da8207a47c 100644
 +    struct rdtsc_pair_entry pair_log[RDTSC_PAIR_LOG];
 +    struct rdtsc_pair_chain chain[RDTSC_PAIR_VCPUS];
 +    struct rdtsc_user_timeline user[RDTSC_PAIR_VCPUS];
++    struct rdtsc_user_last user_last;
 +};
 +
 +/* Lives in struct vcpu, which must stay below PAGE_SIZE. */
@@ -1456,7 +1571,7 @@ index e1d3398141..da8207a47c 100644
  #define _VMX_DOMAIN_PML_ENABLED    0
  #define VMX_DOMAIN_PML_ENABLED     (1ul << _VMX_DOMAIN_PML_ENABLED)
  struct vmx_domain {
-@@ -56,6 +263,12 @@ struct vmx_domain {
+@@ -56,6 +275,12 @@ struct vmx_domain {
       * around CVE-2018-12207 as appropriate.
       */
      bool exec_sp;
@@ -1469,7 +1584,7 @@ index e1d3398141..da8207a47c 100644
  };
  
  /*
-@@ -93,6 +306,7 @@ struct pi_blocking_vcpu {
+@@ -93,6 +318,7 @@ struct pi_blocking_vcpu {
      spinlock_t           *lock;
  };
  
@@ -1477,7 +1592,7 @@ index e1d3398141..da8207a47c 100644
  struct vmx_vcpu {
      /* Physical address of VMCS. */
      paddr_t              vmcs_pa;
-@@ -179,6 +393,8 @@ struct vmx_vcpu {
+@@ -179,6 +405,8 @@ struct vmx_vcpu {
       * pCPU and wakeup the related vCPU.
       */
      struct pi_blocking_vcpu pi_blocking;

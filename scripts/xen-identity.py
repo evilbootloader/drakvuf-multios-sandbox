@@ -467,6 +467,22 @@ DefinitionBlock ("ssdt.aml", "SSDT", 2, "%s", "%s", 0x%08x)
 """ % (identity["acpi_oem_id"], identity["acpi_table_id"], identity["acpi_oem_revision"])
 
 
+def wsmt_table(identity):
+    """The Windows SMM Security Mitigations Table, which firmware since 2016 has and
+    Xen's does not: its absence is one of the things a guest's ACPI tables are read for.
+    The three protections every such firmware claims; nothing in the guest acts on them."""
+    def field(text, width):
+        return text.encode("ascii")[:width].ljust(width, b" ")
+
+    table = bytearray(struct.pack(
+        "<4sIBB6s8sI4sII", b"WSMT", 40, 1, 0, field(identity["acpi_oem_id"], 6),
+        field(identity["acpi_table_id"], 8), identity["acpi_oem_revision"],
+        field(identity["acpi_creator_id"], 4), identity["acpi_creator_revision"],
+        0x7))   # FIXED_COMM_BUFFERS | COMM_BUFFER_NESTED_PTR_PROTECTION | SYSTEM_RESOURCE_PROTECTION
+    table[9] = -sum(table) & 0xFF
+    return bytes(table)
+
+
 def guest_files(identity, out_dir):
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
@@ -477,7 +493,11 @@ def guest_files(identity, out_dir):
         sys.exit("No iasl to compile %s (apt-get install acpica-tools)" % (out / "ssdt.asl"))
     subprocess.run([iasl, "-p", str(out / "ssdt"), str(out / "ssdt.asl")], check=True,
                    stdout=subprocess.DEVNULL)
-    print("Wrote %s/smbios.bin and %s/ssdt.aml" % (out, out))
+    # acpi_firmware is one file of tables, each as long as its header says: the WSMT
+    # goes after the SSDT iasl has just written
+    with open(out / "ssdt.aml", "ab") as tables:
+        tables.write(wsmt_table(identity))
+    print("Wrote %s/smbios.bin and %s/ssdt.aml (SSDT, WSMT)" % (out, out))
 
 
 def xl_cfg(identity, out_dir):

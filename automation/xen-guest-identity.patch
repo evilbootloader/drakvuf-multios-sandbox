@@ -21,13 +21,18 @@ vendor's, which fills the field, builds under GCC's stringop-truncation.
 The FADT says the guest is a desktop (preferred PM profile 1), not
 unspecified (0): QEMU's tables say 0 and real firmware does not.
 
+hvmloader writes no WAET (2026-11-14): only a hypervisor's firmware has
+that table, and its presence is read as one (al-khaser's ACPI check).
+The WSMT real firmware has comes in through acpi_firmware.
+
 ---
  docs/man/xl.cfg.5.pod.in          |  6 ++++--
  tools/firmware/hvmloader/smbios.c | 20 +++++++++++++++++++-
+ tools/firmware/hvmloader/util.c   |  7 ++++++-
  tools/libacpi/build.c             | 11 ++++++++++-
  tools/libacpi/static_tables.c     |  6 ++++++
  xen/arch/x86/cpuid.c              | 18 +++++++++++++++++-
- 5 files changed, 56 insertions(+), 5 deletions(-)
+ 6 files changed, 62 insertions(+), 6 deletions(-)
 
 diff --git a/docs/man/xl.cfg.5.pod.in b/docs/man/xl.cfg.5.pod.in
 index 8e1422104e..a68d52b3f3 100644
@@ -84,6 +89,23 @@ index 97a054e9e3..68d6243f61 100644
          {
              /* Vendor/OEM table, copy it in. Note the handle values cannot
               * be changed since it is unknown what is in each of these tables
+diff --git a/tools/firmware/hvmloader/util.c b/tools/firmware/hvmloader/util.c
+--- a/tools/firmware/hvmloader/util.c
++++ b/tools/firmware/hvmloader/util.c
+@@ -909,7 +909,12 @@ void hvmloader_acpi_build_tables(struct acpi_config *config,
+     if ( !strncmp(xenstore_read("platform/acpi_laptop_slate", "0"), "1", 1)  )
+         config->table_flags |= ACPI_HAS_SSDT_LAPTOP_SLATE;
+ 
+-    config->table_flags |= (ACPI_HAS_IOAPIC | ACPI_HAS_WAET |
++    /*
++     * No WAET: the Windows ACPI Emulated devices Table is one only a
++     * hypervisor's firmware writes, and finding it is how a guest is told
++     * it has one. Windows runs without it, as on hardware.
++     */
++    config->table_flags |= (ACPI_HAS_IOAPIC |
+                             ACPI_HAS_PMTIMER | ACPI_HAS_BUTTONS |
+                             ACPI_HAS_VGA | ACPI_HAS_8042 |
+                             ACPI_HAS_CMOS_RTC);
 diff --git a/tools/libacpi/build.c b/tools/libacpi/build.c
 index 2f29863db1..0c06bb2fcc 100644
 --- a/tools/libacpi/build.c

@@ -8,5 +8,15 @@ baseline
 # Measured: Locky detected in 1 run of 4
 pure                     RDTSC_USER_PURE=1
 #
+# 2026-11-14, after job aa879b03 (the platform's plugin set, upstream al-khaser) failed both
+# checks. 14011: the guest moved the thread from vCPU 1 to vCPU 3 inside the first of the ten
+# RDTSC, CPUID, RDTSC pairs, and timelines are per vCPU. 14010: CloseHandle(0) is a system call
+# on Windows 11 (ten NtClose(0) in that trace), so Locky's second pair has DRAKVUF's exits in
+# it and got the fixed step, as its first did.
+# A program read continues the timeline of the vCPU its thread came from:
+xvcpu                    RDTSC_USER_XVCPU=1
+# and a close pair in a Windows executable returns its own run time, exits between or not:
+xvcpu_work               RDTSC_USER_XVCPU=1 RDTSC_USER_WORK=1
+#
 # Only the timing checks, a test in minutes instead of half an hour:
 #   ALKHASER_ARGS='--check TIMING_ATTACKS --sleep 1' DRAKVUF_TIMEOUT=300 TESTS=6 ./alkhaser_search.sh

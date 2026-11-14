@@ -98,12 +98,34 @@ detects.
 ## 3. Known gaps
 
 - **al-khaser's Locky check (14010) detects on Windows.** It wants
-  `CloseHandle(0)` to take 10 times `GetProcessHeap()`; neither makes a syscall
-  on Windows 11, they differ by 40–90 cycles of run time, and a compressed
-  pair returns 10–25 cycles either way. `RDTSC_USER_PURE` (in the patch, **off**)
-  returns the guest's own work for a pair with no exit between; a model with
-  the measured run times passes Locky 972/1000 and keeps the CPUID check and
-  the red pill. Not yet measured on the guests.
+  `CloseHandle(0)` to take 10 times `GetProcessHeap()`, and a compressed pair
+  returns 10–25 cycles either way. `RDTSC_USER_PURE` (in the patch, **off**)
+  returns the guest's own work for a pair with no exit between; measured
+  2026-11-02, Locky was still detected in 1 run of 4.
+  **`CloseHandle(0)` is a system call on Windows 11** (corrected 2026-11-14:
+  this said neither call made one). The trace of job `aa879b03` has ten
+  `NtClose(Handle=0)` from al-khaser at the check, 0.15 ms apart. So on
+  hardware the second interval is a system call against a read of the PEB,
+  and the check passes there; under DRAKVUF the system call is trapped, the
+  pair has exits in it, and neither the fixed step nor `RDTSC_USER_PURE`
+  gives it its length. `RDTSC_USER_WORK` (in the patch, **off**, never
+  booted) returns a close pair's run time less the cost of each exit, at most
+  2000 cycles, in Windows executables only: the red pill's SIDT on Linux has
+  the kernel's UMIP emulation and its exits between the reads, and must stay
+  under 100.
+- **A thread the guest moves to another vCPU between two reads gets the real
+  TSC** (found 2026-11-14). Timelines are per vCPU. In job `aa879b03`
+  cpuidmon has the first CPUID of al-khaser's ten RDTSC, CPUID, RDTSC pairs
+  (14011) on vCPU 1 and the other nine on vCPU 3, 0.15 ms later where the
+  rest are 0.03 ms apart: one pair of real length, and the check's mean went
+  over its 1000 cycles. The same check passed in the searches of
+  2026-11-02; under the platform's full plugin set the guest moves threads
+  more. `RDTSC_USER_XVCPU` (in the patch, **off**, never booted) lets a
+  program read that is not close on its own vCPU continue the timeline of
+  the domain's last program read, when another vCPU made it for the same CR3
+  within 6M host cycles. Two threads of one process timing themselves on two
+  vCPUs can then share a timeline for as long as `RDTSC_USER_LAG_MAX` allows.
+  `evasion-tests/variants/alkhaser.txt` has both as variants to measure.
 - **A program timing up to ~0.33 ms of its own work with RDTSC sees almost no
   time pass**, and a busy wait on RDTSC runs up to 10 ms late. Compression
   cannot tell a red pill from a short benchmark.
