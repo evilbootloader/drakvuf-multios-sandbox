@@ -1238,6 +1238,16 @@ HOOK_PLUGIN: dict[TargetOs, str] = {
     TargetOs.WINDOWS: APIMON_PLUGIN, TargetOs.UBUNTU: LIBMON_PLUGIN, TargetOs.ANDROID: LIBMON_PLUGIN,
 }
 
+#: Hook lists made for one deployment's guest image, beside its profiles, and
+#: added to a job's list when they exist. Windows: the .NET framework methods
+#: capa's rules name, by offset in that image's precompiled assemblies
+#: (scripts/dotnet-index.py). Untracked, like the profiles.
+DEPLOYMENT_HOOKS: dict[TargetOs, tuple[str, ...]] = {
+    TargetOs.WINDOWS: ("hooks-dotnet.txt",),
+    TargetOs.UBUNTU: (),
+    TargetOs.ANDROID: (),
+}
+
 #: How fileextractor says a file is finished and what it was called in the
 #: guest, which sandboxd/stagehooks.py follows during the trace: a record in
 #: the log (linux.cpp writes no sidecar), or the `.metadata` file beside it

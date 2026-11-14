@@ -152,6 +152,22 @@ runs, preserving the agentless design.
 >   entries is immutable once published: hooks point into it from callbacks
 >   that run on several vCPU threads. Not reached: payloads that never touch
 >   the disk, and the calls a stage makes before its lines are read.
+> - **.NET** (same date, same standing). No new plugin: managed methods are
+>   hook lines like any other, made per deployment by
+>   `scripts/dotnet-index.py` into `profiles/hooks-dotnet.txt`, which
+>   `guests.DEPLOYMENT_HOOKS` adds to every Windows job's list.
+>   - Framework methods: the ReadyToRun table of each .NET (Core) assembly
+>     gives method -> entry RVA; the methods capa's rules name get a line by
+>     offset. `clrcall` reads arguments the CLR's way (x86: ECX, EDX, then
+>     the stack left to right), `clrstring` and `clrbytes` print a String
+>     and a byte[] object. **.NET Framework 4.x is not indexed**: its ngen
+>     images have no documented method table.
+>   - The sample's own methods: a line on `CILJit::compileMethod` (address
+>     from the `clrjit*.json` profiles, new rows in
+>     `windows-symbol-profiles.py`) with the `pcorinfo_method_info` printer,
+>     which prints each compiled method's IL size and first bytes.
+>     `sandboxd/postprocessing/clrjit.py` names the method by finding that
+>     body in the sample's metadata; the report has it as `dotnet_jit`.
 > - `dl_rendezvous` now tells its consumer of every exec and exit, not only
 >   those of processes it tracked: a dynamic program that exec'd a static one
 >   used to keep its breakpoints.

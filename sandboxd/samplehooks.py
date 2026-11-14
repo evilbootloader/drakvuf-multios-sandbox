@@ -636,6 +636,9 @@ def main(argv: Optional[list] = None) -> int:
     p.add_argument("--flirt", type=Path, default=FLIRT_DIR)
     p.add_argument("--code-signatures", type=Path, default=CODE_SIGNATURES_DIR)
     p.add_argument("--go-hooks", type=Path, default=GO_HOOKS)
+    p.add_argument("--also", type=Path, action="append", default=[],
+                   help="a list made for this deployment, added to the job's when it exists "
+                        "(profiles/hooks-dotnet.txt, from scripts/dotnet-index.py)")
     p.add_argument("--max-mib", type=int, default=1024, help="RLIMIT_DATA in MiB; 0 sets no limit")
     args = p.parse_args(argv)
     if args.max_mib > 0:
@@ -643,6 +646,9 @@ def main(argv: Optional[list] = None) -> int:
         resource.setrlimit(resource.RLIMIT_DATA, (limit, limit))
 
     static_text = args.static.read_text()
+    for also in args.also:
+        if also.is_file():
+            static_text = static_text.rstrip("\n") + f"\n\n# {also.name}\n" + also.read_text()
     image, located, lines = None, [], []
     try:
         image, located = locate(args.sample, args.flirt, args.code_signatures)

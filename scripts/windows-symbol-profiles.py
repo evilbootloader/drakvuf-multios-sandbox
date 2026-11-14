@@ -89,6 +89,16 @@ PROFILES: tuple[tuple[str, str, str], ...] = (
 #: which test_guests.py holds equal to guests.py's `--json-*` table.
 KERNEL: tuple[str, str, str] = ("-r", "windows.json", "Windows/System32/ntoskrnl.exe")
 
+#: The JIT compilers, for `scripts/dotnet-index.py --jit`: no DRAKVUF option
+#: takes these, the address of `CILJit::compileMethod` is read from them into
+#: a hook line. `*` is the newest version directory of the shared runtime.
+JIT: tuple[tuple[str, str, str], ...] = (
+    ("(dotnet-index)", "clrjit.json",        "Windows/Microsoft.NET/Framework64/v4.0.30319/clrjit.dll"),
+    ("(dotnet-index)", "clrjit32.json",      "Windows/Microsoft.NET/Framework/v4.0.30319/clrjit.dll"),
+    ("(dotnet-index)", "clrjit-core.json",   "Program Files/dotnet/shared/Microsoft.NETCore.App/*/clrjit.dll"),
+    ("(dotnet-index)", "clrjit-core32.json", "Program Files (x86)/dotnet/shared/Microsoft.NETCore.App/*/clrjit.dll"),
+)
+
 #: Where the PDBs come from, over TLS with the certificate verified, and no
 #: unverified retry. volatility3's own PdbRetreiver fetches in the clear from
 #: http://msdl.microsoft.com, and where it does use TLS, resources.py retries
@@ -108,6 +118,17 @@ def locate(mount: Path, relpath: str) -> Path | None:
     """`mount/relpath`, matching each component without regard to case."""
     here = mount
     for part in relpath.split("/"):
+        if part == "*":
+            # the newest of a directory of versions, compared as numbers
+            try:
+                versions = [c for c in here.iterdir() if c.is_dir()]
+            except OSError:
+                return None
+            if not versions:
+                return None
+            here = max(versions, key=lambda c: [int(n) if n.isdigit() else -1
+                                                for n in c.name.replace("-", ".").split(".")])
+            continue
         exact = here / part
         if exact.exists():
             here = exact
@@ -264,11 +285,11 @@ def main(argv: list[str] | None = None) -> int:
                         help="print the commands without running them")
     args = parser.parse_args(argv)
 
-    known = {row[1].removesuffix(".json"): row for row in (KERNEL, *PROFILES)}
+    known = {row[1].removesuffix(".json"): row for row in (KERNEL, *PROFILES, *JIT)}
     unknown = [n for n in args.names if n not in known]
     if unknown:
         parser.error(f"not in the table: {', '.join(unknown)}; rows are {', '.join(known)}")
-    rows = [known[n] for n in args.names] if args.names else [KERNEL, *PROFILES]
+    rows = [known[n] for n in args.names] if args.names else [KERNEL, *PROFILES, *JIT]
 
     for tool in (PDBGUID, PDBCONV):
         if not (args.drakvuf / tool).is_file():

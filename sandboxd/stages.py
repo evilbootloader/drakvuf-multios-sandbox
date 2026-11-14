@@ -807,7 +807,9 @@ class Analysis:
             [sys.executable, "-m", "sandboxd.samplehooks", str(sample),
              "--guest-path", job.guest_sample,
              "--static", str(guests.STATIC_HOOKS[job.target_os]),
-             "--out", str(out), "--json", str(sample.parent / "located.json")],
+             "--out", str(out), "--json", str(sample.parent / "located.json")]
+            + [arg for name in guests.DEPLOYMENT_HOOKS[job.target_os]
+               for arg in ("--also", str(self._cfg.profile(job.target_os).parent / name))],
             timeout=timing.SAMPLEHOOKS_BUDGET, what="samplehooks")
         if not result.ok or not out.is_file():
             log.warning("job %s: the sample's functions were not located (%s); "

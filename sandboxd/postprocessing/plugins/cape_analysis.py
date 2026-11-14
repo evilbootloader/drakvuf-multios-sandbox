@@ -27,6 +27,7 @@ from typing import Optional
 import orjson
 
 from ...guests import PATHS, TargetOs
+from .. import clrjit
 from ..paths import CAPE_RESULTS
 from .cape_plugin import (
     CapeOptions, RunProcessing, RunSignatures, load_signatures, split_by_process,
@@ -180,6 +181,8 @@ class _CallsLog:
         self.directory = directory
         self.offset = 0
         self.processes: dict = {}
+        # clrjit.Timeline, when the caller wants the sample's compiled methods
+        self.jit = None
 
     def add(self, proc: dict, calls) -> int:
         """Write a process's calls; their count. A call's position is CAPE's
@@ -199,6 +202,8 @@ class _CallsLog:
 
         for call in calls:
             row = _call_row(call)
+            if self.jit is not None:
+                self.jit.add(proc.get("process_id"), row)
             batch.append(orjson.dumps(row, default=_json_default))
             batch_categories[row["category"]] += 1
             categories[row["category"]] += 1
@@ -225,7 +230,7 @@ class _CallsLog:
              "processes": self.processes}))
 
 
-def write_results(path: Path, results: dict, sample: Optional[set] = None) -> None:
+def write_results(path: Path, results: dict, sample: Optional[set] = None, jit=None) -> None:
     """`results` as JSON, each process's `calls` replaced by `call_count`;
     the calls of the processes in `sample` (seqids) beside it, in CALLS_LOG.
     Only the sample's: the guest's other processes are not the report's
@@ -233,6 +238,8 @@ def write_results(path: Path, results: dict, sample: Optional[set] = None) -> No
     behavior = results.get("behavior") or {}
     processes = []
     calls_log = _CallsLog(path.parent) if sample is not None else None
+    if calls_log is not None:
+        calls_log.jit = jit
     try:
         for proc in behavior.get("processes", []):
             calls = proc.get("calls")
@@ -247,6 +254,10 @@ def write_results(path: Path, results: dict, sample: Optional[set] = None) -> No
         if calls_log is not None:
             calls_log.close()
     doc = {**results, "behavior": {**behavior, "processes": processes}}
+    # The sample's managed methods in the order the runtime compiled them
+    compiled = jit.result() if jit is not None else None
+    if compiled:
+        doc["dotnet_jit"] = compiled
     path.write_bytes(orjson.dumps(doc, default=_json_default,
                                   option=orjson.OPT_NON_STR_KEYS | orjson.OPT_INDENT_2))
 
@@ -396,7 +407,8 @@ def _run_cape(context: PostprocessContext, cfg: CapeConfigSection,
             if loaded["signatures"]:
                 RunSignatures(context=context, results=results).run()
 
-        write_results(analysis_dir / CAPE_RESULTS, results, sample=split.sample)
+        write_results(analysis_dir / CAPE_RESULTS, results, sample=split.sample,
+                      jit=clrjit.Timeline(sample))
         # Inside the `with` too: the non-call plugins' records are read from
         # trace_split's aux logs, which go with the temporary directory.
         _timeline(analysis_dir, results, split)
