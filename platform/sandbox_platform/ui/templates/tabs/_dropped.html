@@ -6,7 +6,8 @@
   A run from before the archive has the file on its own, and links it.
   Either way it is a file the sample made: live content.
 #}
-{% from "tabs/_macros.html" import head, proc, toggle, xrow, hits, nothing, no_report with context %}
+{% from "tabs/_macros.html" import head, proc, toggle, xrow, hits, nothing, no_report, second_run with context %}
+{{ second_run() }}
 {% if not report %}{{ no_report() }}{% else %}
 <section class="section">
 {{ head('Dropped files', report.dropped | length, 'Written by the sample\'s processes and extracted from the guest.') }}

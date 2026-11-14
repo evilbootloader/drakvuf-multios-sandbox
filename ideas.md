@@ -313,7 +313,8 @@
 
 - **Second pass: what it does not reach** (the pass itself is written,
   2026-11-14, not run on a guest: `sandboxd/stagehints.py`, the `when:`
-  marker in the fork, "Second pass" on the submit form). It hooks code that
+  marker in the fork, "Run again with unpacked code hooked" in a finished report's Memory
+  and Dropped tabs). It hooks code that
   appears in the sample's *own image* -- unpacked in place, or a program run
   from a memfd. Left out:
 
@@ -339,8 +340,9 @@
     second time. Keep `when:` entries in the cold list after placing, and
     re-check them on `munmap`/`mremap` of their address. A day.
   - **The first run's trace is not kept** by a job that asked for both
-    runs on the submit form: one trace on the report. ("Run again" from a
-    finished job's page is a second job, and keeps both.) A sample that only does its work once (a C2 that
+    runs through the API (`second_pass`; the submit form does not offer
+    it): one trace on the report. ("Run again" from a finished report is a
+    second job, and keeps both.) A sample that only does its work once (a C2 that
     serves a payload once) shows less in the second run than the first
     had. Keeping `first-run/trace.log.gz` as an artifact is an hour; whether
     the report should merge the two is the real question.

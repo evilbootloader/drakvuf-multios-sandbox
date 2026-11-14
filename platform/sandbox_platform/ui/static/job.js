@@ -175,11 +175,12 @@
   });
 
   // A second run (routers/jobs.py::second_run): a new job made from this
-  // one, opened when the server has made it. Delegated on `root` for the
-  // reason above, and with the header every unsafe method needs.
+  // one, opened when the server has made it. The control is in the Memory
+  // and Dropped tabs, outside `root` and swapped with their tab, so the
+  // listener is the document's. With the header every unsafe method needs.
   var spawning = false;
 
-  root.addEventListener("click", function (event) {
+  document.addEventListener("click", function (event) {
     var button = event.target.closest("[data-second-run]");
     if (!button || spawning) return;
     spawning = true;
@@ -209,7 +210,7 @@
       .catch(function (err) {
         button.disabled = false;
         spawning = false;
-        var note = root.querySelector("[data-second-run-error]");
+        var note = button.parentNode.querySelector("[data-second-run-error]");
         if (note) note.textContent = err.message;
       });
   });

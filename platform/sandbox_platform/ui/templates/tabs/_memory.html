@@ -3,7 +3,8 @@
   the regions memdump took and why. The sample's processes only; the dumps
   themselves are in the job's artifacts.
 #}
-{% from "tabs/_macros.html" import head, proc, toggle, xrow, hits, nothing, no_report with context %}
+{% from "tabs/_macros.html" import head, proc, toggle, xrow, hits, nothing, no_report, second_run with context %}
+{{ second_run() }}
 {% if not report %}{{ no_report() }}{% else %}
 {% set dumps_zip = job.artifacts.get('dumps.zip') %}
 {% if dumps_zip %}<section class="section"><p class="downloads"><a class="button danger" href="{{ dumps_zip }}" rel="noopener nofollow">dumps.zip</a>

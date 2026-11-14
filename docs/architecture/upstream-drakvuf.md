@@ -184,9 +184,10 @@ runs, preserving the agentless design.
 >   The hook is placed once those bytes are at the address and not before.
 >   For code that is in no file -- what a packer unpacks over its own image
 >   -- which a job's second run gets lines for from its first run's process
->   dumps (`sandboxd/stagehints.py`: the submit form's "Second pass", or
->   "Run again with them hooked" on a finished job's page, which makes a
->   second job from the first one's `hints.txt` artifact). Until
+>   dumps (`sandboxd/stagehints.py`: "Run again with unpacked
+>   code hooked" in a finished report's Memory and Dropped tabs, which
+>   makes a second job from the first one's `hints.txt` artifact; or
+>   `second_pass` through the API, both runs in one job). Until
 >   the code is there the address holds the packer's data or the packer's
 >   running code, and a breakpoint inside another instruction corrupts it,
 >   so the bytes are the condition and not a courtesy.

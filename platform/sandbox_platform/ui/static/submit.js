@@ -92,7 +92,6 @@
         form.querySelectorAll('input[name="plugins"]:checked').forEach((element) => checked_plugins.push(element.value));
         var timeout = form.querySelector('input[name="timeout"]').value;
         var disable_sysret = form.querySelector('input[name="disable_sysret"]:checked') != null;
-        var second_pass = form.querySelector('input[name="second_pass"]:checked') != null;
         if (!file) { say("Choose a file first.", true); return; }
 
         var button = form.querySelector('button[type="submit"]');
@@ -112,8 +111,7 @@
                 size_bytes: file.size,
                 plugins: checked_plugins,
                 timeout: timeout,
-                disable_sysret: disable_sysret,
-                second_pass: second_pass
+                disable_sysret: disable_sysret
             };
             /* Where to drop it and what to pass it (launch.py). The location
              * is the select's KEY, never the path shown beside it; empty

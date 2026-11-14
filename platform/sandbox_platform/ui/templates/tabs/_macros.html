@@ -125,3 +125,27 @@
   <button type="button" class="ghost" data-disclose="close">collapse all</button>
 </span>
 {%- endmacro %}
+
+{#
+  A second run (routers/jobs.py::second_run), beside what it is made from:
+  the memory this run left (Memory) and the files it wrote (Dropped). Offered
+  after the report, never on the submit form (operator, 2026-11-14): whether
+  a sample is worth tracing again is read off its first run. Only when this
+  run's memory showed library functions its file did not have -- the lines
+  are the `hints.txt` artifact, linked so they can be read first -- and to
+  the job's owner only: the route answers anyone else 404, and a control
+  that looks available and does nothing reads as a fault.
+#}
+{% macro second_run() %}
+{% if job.second_run_available and job.owner != 'REDACTED' %}
+<section class="section"><p class="downloads">
+  <button type="button" class="button" data-second-run data-job-id="{{ job.id }}"
+    title="A new job: the same sample and options, traced with those functions hooked. This job stays as it is.">Run again with unpacked code hooked</button>
+  <a class="button" href="{{ job.artifacts['hints.txt'] }}" rel="noopener nofollow">hints.txt</a>
+  <span class="note">This run's memory showed library functions the file did not have: a packed
+  sample, or a program run from memory. A second run is a new job that traces the same sample with
+  those functions hooked; <span class="mono">hints.txt</span> lists them.</span>
+  <span class="mono" data-second-run-error></span>
+</p></section>
+{% endif %}
+{% endmacro %}

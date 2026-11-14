@@ -11,12 +11,14 @@ that code, at the addresses it ran at. So the locators are run over those
 dumps after every run that has them, and the sample can be run again with
 what they found, in one of two ways:
 
-- a job that asked beforehand (`second_pass` on the submit form) runs twice,
-  and its report is the second run's;
-- any other job keeps the lines as an artifact, `hints.txt`, and its page
-  offers "Run again with them hooked": a new job, made by the platform from
+- any job keeps the lines as an artifact, `hints.txt`, and its report
+  offers "Run again with unpacked code hooked" beside its memory dumps and
+  dropped files, where the first run can be read before a second is spent
+  (operator, 2026-11-14): a new job, made by the platform from
   this one, leased a URL to that file (`stages._given_hints`). Both reports
-  stay.
+  stay;
+- a job submitted through the API with `second_pass` runs twice itself, and
+  its report is the second run's. The submit form does not offer it.
 
 **What a hint is.** A hook-list line by offset in the program's own image,
 like the ones `samplehooks` writes, with one marker more:

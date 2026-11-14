@@ -47,10 +47,11 @@ def test_the_worker_is_leased_the_choice(client, worker_headers, put_object, wan
     assert lease["status"] == "leased" and lease["second_pass"] is wanted
 
 
-def test_the_form_offers_it_unticked(client):
-    page = client.get("/").text
-    assert 'name="second_pass"' in page
-    assert 'name="second_pass" checked' not in page
+def test_the_form_does_not_offer_it(client):
+    """Whether a sample is worth a second run is read off its first: the
+    option is in the first run's report (operator, 2026-11-14). The API
+    field stays for a client that knows beforehand."""
+    assert "second_pass" not in client.get("/").text
 
 
 # --- "Run again", from a finished job ----------------------------------------
@@ -156,10 +157,18 @@ def test_no_balance_and_no_sample_are_said(client, conn, put_object, worker_head
     assert client.post(f"/api/v1/jobs/{first['job_id']}/second-run").status_code == 410
 
 
-def test_the_page_offers_it_to_the_owner_of_such_a_job(client, conn, put_object, worker_headers):
+def test_the_report_offers_it_beside_the_memory_and_the_dropped_files(client, conn, put_object, worker_headers):
     first = finished(client, conn, put_object, worker_headers)
-    assert "data-second-run" in client.get(f"/ui/jobs/{first['job_id']}").text
+    for tab in ("memory", "dropped"):
+        page = client.get(f"/ui/jobs/{first['job_id']}?tab={tab}").text
+        assert "data-second-run " in page and "hints.txt" in page, tab
+    # not in the header, and not on a tab that is about something else
+    assert "data-second-run " not in client.get(f"/ui/jobs/{first['job_id']}?tab=overview").text
+
     second = client.post(f"/api/v1/jobs/{first['job_id']}/second-run").json()
-    page = client.get(f"/ui/jobs/{second['job_id']}").text
-    assert "data-second-run" not in page.replace("data-second-run-error", "")
+    page = client.get(f"/ui/jobs/{second['job_id']}?tab=memory").text
+    assert "data-second-run " not in page
     assert f'href="/ui/jobs/{first["job_id"]}"' in page
+
+    plain = finished(client, conn, put_object, worker_headers, hints=False)
+    assert "data-second-run " not in client.get(f"/ui/jobs/{plain['job_id']}?tab=memory").text
