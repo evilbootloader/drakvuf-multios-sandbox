@@ -1321,3 +1321,27 @@ def test_summary_lists_a_device_by_the_dos_name_it_was_asked_for(tmp_path):
         rec("filetracer", 0x15, 100, method="NtOpenFile", FileName="\\Device\\Nsi", DesiredAccess="0x80000000"))["summary"]
     assert s["files"] == ["\\??\\VBoxMiniRdrDN", "\\??\\HGFS", "\\??\\PhysicalDrive0", "C:\\x.txt"]
     assert s["read_files"] == ["C:\\x.txt"]
+
+
+def test_a_file_looked_for_and_not_found_is_in_the_read_list(tmp_path):
+    """al-khaser asked for dozens of VirtualBox and VMware files (job
+    aa879b03) and the summary had none of them: GetFileAttributes is
+    NtQueryAttributesFile, which no list took. Not found, it is a file the
+    process tried to read; found, a file of the process and no more."""
+    vbox = "C:\\Windows\\System32\\drivers\\VBoxMouse.sys"
+    s = behaviour(
+        tmp_path, *BASE,
+        rec("filetracer", 0x10, 100, method="NtQueryAttributesFile", FileName="\\??\\" + vbox,
+            Status="0xc0000034"),
+        rec("filetracer", 0x11, 100, method="NtQueryFullAttributesFile",
+            FileName="\\??\\C:\\Windows\\System32\\vboxhook.dll", Status="0xc0000034"),
+        rec("filetracer", 0x12, 100, method="NtQueryAttributesFile",
+            FileName="\\??\\C:\\Windows\\System32\\kernel32.dll", Status="0x0"),
+        rec("filetracer", 0x13, 100, method="NtOpenFile", FileName="\\??\\C:\\Users\\u\\gone.txt",
+            Status="0xc0000034", DesiredAccess="0x80000000"),
+        # not a file: an object asked about by another name
+        rec("filetracer", 0x14, 100, method="NtQueryAttributesFile", FileName="\\Device\\Nsi",
+            Status="0xc0000034"))["summary"]
+    assert s["read_files"] == [vbox, "C:\\Windows\\System32\\vboxhook.dll", "C:\\Users\\u\\gone.txt"]
+    assert s["files"] == [vbox, "C:\\Windows\\System32\\vboxhook.dll", "C:\\Windows\\System32\\kernel32.dll",
+                          "C:\\Users\\u\\gone.txt"]

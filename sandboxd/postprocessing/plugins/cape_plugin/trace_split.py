@@ -32,7 +32,7 @@ import shlex
 from collections import Counter, OrderedDict, deque
 from dataclasses import dataclass, field
 from pathlib import Path, PureWindowsPath
-from typing import Dict, Iterable, Iterator, List, Optional, Set, Tuple
+from typing import Callable, Dict, Iterable, Iterator, List, Optional, Set, Tuple
 
 import mslex
 import orjson
@@ -42,6 +42,7 @@ from ...drakvuf_records import DRAKVUF_STRING_ARG, unescape_drakvuf
 from ...process_tree import Process, ProcessTree, split_commandline, tree_from_log
 from .api_kernel import OBJECT_NAME_KEYS, VALUE_SERVICES, kernel_services
 from .api_tables import canonical
+from ... import linescan
 from .launch import is_handoff, launch_seqids
 
 log = logging.getLogger(__name__)
@@ -87,6 +88,13 @@ MAX_OPEN_FILES = 256
 # The Plugin name of a raw line, without decoding it. DRAKVUF writes most
 # lines compact but some spaced (`{ "Plugin": "apimon", ...`).
 _PLUGIN = re.compile(rb'"Plugin":\s*"([A-Za-z0-9_]+)"')
+# A sysret record anywhere in a stretch of the trace (linescan's flag)
+_SYSRET_PLUGIN = rb'"Plugin":\s*"sysret"'
+# A record's own PID and EventUID, read off the line without decoding it
+# (_records_of). The first `"PID":` of a line is the record's key: a quote
+# inside a string value is escaped, and `"DumpPID"` has no quote before `PID`.
+_LINE_PID = re.compile(rb'"PID":\s*(\d+)')
+_LINE_UID = re.compile(rb'"EventUID":\s*(?:"(0x[0-9a-fA-F]+)"|(\d+))')
 # How every record begins. A line that does not is the rest of a record cut
 # by a raw newline inside one of its strings: regmon prints a REG_SZ as it
 # is, and a JSON document stored in the registry is a value of twenty lines
@@ -563,7 +571,7 @@ class _WindowsEvidence:
 _EVIDENCE = {TargetOs.WINDOWS: _WindowsEvidence}
 
 
-def read_prelude(trace: Path, os_: TargetOs) -> TracePrelude:
+def read_prelude(trace: Path, os_: TargetOs, workers: Optional[int] = None) -> TracePrelude:
     """The process tree from the trace's procmon lines, the injected PIDs,
     whether DRAKVUF ran with sysret, and every process making another run
     code. procmon lines go to `tree_from_log` in file order, exactly as
@@ -574,11 +582,16 @@ def read_prelude(trace: Path, os_: TargetOs) -> TracePrelude:
     evidence = _EVIDENCE[os_]() if os_ in _EVIDENCE else None
     hints = _TRANSFER_HINTS + (evidence.HINTS if evidence is not None else ())
     coarse = evidence.COARSE if evidence is not None else _TRANSFER_HINTS
+    # What a line this pass has a use for contains: the tests below, as the
+    # workers of linescan make them. A sysret that is none of these says one
+    # thing, that the trace has sysrets, which a stretch's flag says.
+    needles = (b"procmon", b"inject") + tuple(hints)
 
     def procmon_lines() -> Iterator[str]:
         nonlocal has_sysret
-        with trace.open("rb") as f:
-            for line in f:
+        for kept, sysrets in linescan.matching(trace, needles, _SYSRET_PLUGIN, workers):
+            has_sysret = has_sysret or sysrets
+            for line in linescan.lines(kept):
                 hint = any(h in line for h in coarse) and any(h in line for h in hints)
                 if b"procmon" not in line and b"inject" not in line and not hint and (
                         has_sysret or b"sysret" not in line):
@@ -757,17 +770,28 @@ def descendants(roots: Iterable[Process]) -> Set[int]:
 # -- pass 2 -------------------------------------------------------------------
 
 def _records(trace: Path, stats: SplitStats,
-             aux_dir: Optional[Path] = None) -> Iterator[Tuple[int, int, dict]]:
+             aux_dir: Optional[Path] = None,
+             skip_pids: Optional[frozenset] = None) -> Iterator[Tuple[int, int, dict]]:
     """(uid, rank, record) for every record of `SOURCES`, in file order.
 
     A record without a usable EventUID takes the previous record's key --
     its UID and its rank, or a lower-ranked plugin would sort ahead of the
     record it followed -- so it stays where DRAKVUF wrote it: apimon's
-    `dll_loaded`/`dll_discovered` have none, and cpuidmon's is always `0x0`."""
+    `dll_loaded`/`dll_discovered` have none, and cpuidmon's is always `0x0`.
+
+    **A record of a PID in `skip_pids` is counted and not decoded** (since
+    2026-11-14). They are the PIDs every instance of which is outside the
+    sample, when only the sample is wanted: the caller would attribute the
+    record to one of them and drop it. On a 20-minute Windows trace that is
+    98 of every 100 records (9.8 million lines, 0.2 million of the sample's),
+    and decoding them was half of this pass. The record still gives the next
+    one its key, so its PID and EventUID are read off the line. What is not
+    known of a line never decoded: whether it was valid JSON and UTF-8
+    (`bad_json`, `bad_utf8` count the sample's lines and the unknown PIDs')."""
     last_uid, last_rank = 0, 0
     aux: Dict[str, object] = {}
     try:
-        yield from _records_of(trace, stats, aux_dir, aux, last_uid, last_rank)
+        yield from _records_of(trace, stats, aux_dir, aux, last_uid, last_rank, skip_pids)
     finally:
         for handle in aux.values():
             handle.close()
@@ -808,7 +832,15 @@ def _whole_lines(f, stats: SplitStats) -> Iterator[bytes]:
     yield from held
 
 
-def _records_of(trace, stats, aux_dir, aux, last_uid, last_rank):
+def _line_uid(line: bytes) -> int:
+    """_event_uid of a record not decoded."""
+    m = _LINE_UID.search(line)
+    if m is None:
+        return -1
+    return int(m.group(1), 16) if m.group(1) else int(m.group(2))
+
+
+def _records_of(trace, stats, aux_dir, aux, last_uid, last_rank, skip_pids=None):
     with trace.open("rb") as f:
         for line in _whole_lines(f, stats):
             m = _PLUGIN.search(line)
@@ -825,6 +857,15 @@ def _records_of(trace, stats, aux_dir, aux, last_uid, last_rank):
             rank = SOURCES.get(plugin)
             if rank is None:
                 continue
+            if skip_pids:
+                m = _LINE_PID.search(line)
+                if m is not None and int(m.group(1)) in skip_pids and b'"RunningProcess"' not in line:
+                    uid = _line_uid(line)
+                    if uid > 0 and plugin != "cpuidmon":
+                        last_uid, last_rank = uid, rank
+                    stats.records[plugin] += 1
+                    stats.out_of_scope += 1
+                    continue
             rec = _decode(line, stats)
             if rec is None:
                 continue
@@ -1309,6 +1350,7 @@ class SplitResult:
 def split_by_process(analysis_dir: Path, out_dir: Path, os_: TargetOs,
                      scope: str = "sample", kernel_syscalls: bool = False,
                      launch: Optional[Tuple[Optional[str], Optional[str], Optional[str]]] = None,
+                     after_prelude: Optional[Callable[[], None]] = None,
                      ) -> SplitResult:
     """Write `<out_dir>/<seqid>.log` for every process in `scope` ("sample":
     the injected processes and their descendants, and the processes they
@@ -1323,6 +1365,10 @@ def split_by_process(analysis_dir: Path, out_dir: Path, os_: TargetOs,
     trace = analysis_dir / TRACE_LOG
     out_dir.mkdir(parents=True, exist_ok=True)
     prelude = read_prelude(trace, os_)
+    # The first pass forks workers (linescan), which a caller with threads
+    # must not: this is where it may start one.
+    if after_prelude is not None:
+        after_prelude()
     stats = SplitStats()
 
     found, pending_roots = sample_roots(prelude)
@@ -1352,9 +1398,19 @@ def split_by_process(analysis_dir: Path, out_dir: Path, os_: TargetOs,
     def in_scope(proc: Process) -> bool:
         return scope == "all" or proc.seqid in sample
 
+    # PIDs no instance of which is the sample's or may become it: their
+    # records are counted and not decoded (_records). A PID the tree does not
+    # know is decoded -- its first record makes its node, under a sample
+    # parent maybe -- and so is every record when all processes are wanted.
+    skip_pids = None
+    if scope == "sample":
+        skip_pids = frozenset(
+            pid for pid, nodes in attribute.by_pid.items()
+            if pid not in pending_roots and not any(p.seqid in sample for p in nodes))
+
     try:
         aux_dir = out_dir.parent / "aux"
-        for uid, _, rec in _windowed(_records(trace, stats, aux_dir), REORDER_WINDOW):
+        for uid, _, rec in _windowed(_records(trace, stats, aux_dir, skip_pids), REORDER_WINDOW):
             proc = attribute(rec, uid)
             if proc is None:
                 continue

@@ -24,7 +24,7 @@ from sandboxd.tests.test_cape_signatures_linux import (  # noqa: F401  (fresh_lo
 
 # Numbers pair a syscall with its sysret; the x64 table's where it has the
 # call, any unused one for i386's own.
-NR.update({"recvfrom": 45, "write": 1, "socket": 41, "read": 0, "rename": 82, "renameat2": 316, "execve": 59, "exit": 60, "getdents64": 217, "readlink": 89,
+NR.update({"access": 21, "recvfrom": 45, "write": 1, "socket": 41, "read": 0, "rename": 82, "renameat2": 316, "execve": 59, "exit": 60, "getdents64": 217, "readlink": 89,
            "readlinkat": 267, "stat": 4, "openat": 257, "fchmodat": 268, "sendfile64": 40, "mprotect": 10,
            "newfstatat": 262, "unlinkat": 263, "openat2": 437, "faccessat2": 439, "fchmodat2": 452,
            "mmap2": 1192, "truncate64": 1193, "stat64": 1195, "lstat64": 1196, "chown32": 1212})
@@ -623,3 +623,19 @@ def test_network_data_written_to_a_memfd(tmp_path, fresh_loader):
     # a file on disk, a unix socket, and a receive that brought nothing
     for i, near_miss in enumerate((loader(into="0x5"), loader(domain="0x1"), loader(received="0x0"))):
         assert "linux_network_payload_to_memory" not in run(near_miss, tmp_path / f"miss{i}")
+
+
+def test_a_file_tried_and_not_read_is_in_the_read_list(tmp_path, fresh_loader):
+    """Snowlight's `access("/tmp/log_de.log")` (job fca804a4) is what it looks
+    for before anything else, and was in no list: nor is a failed open."""
+    t = Trace()
+    t.syscall("access", ret=ENOENT, filetracer={"FileName": "/tmp/log_de.log"}, pathname="/tmp/log_de.log",
+              mode="0x0")
+    t.syscall("access", ret="0x0", filetracer={"FileName": "/etc/hostname"}, pathname="/etc/hostname", mode="0x4")
+    t.open("/home/u/.aws/credentials", flags="0x0", ret=ENOENT)
+    t.open("/tmp/new.txt", flags="0x41", ret="0x3")
+    (tmp_path / "j").mkdir()
+    summary = t.run(tmp_path / "j")["behavior"]["summary"]
+    assert summary["read_files"] == ["/tmp/log_de.log", "/home/u/.aws/credentials"]
+    assert "/etc/hostname" in summary["files"] and "/etc/hostname" not in summary["read_files"]
+    assert summary["write_files"] == ["/tmp/new.txt"]

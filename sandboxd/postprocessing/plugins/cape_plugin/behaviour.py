@@ -2312,6 +2312,11 @@ class Summary:
     _LINUX_FILE_READ = frozenset(("read", "pread64", "readv", "preadv", "preadv2"))
     _LINUX_FILE_OPEN = frozenset(("open", "openat", "openat2"))
     _LINUX_FILE_DELETE = frozenset(("unlink", "unlinkat", "rmdir"))
+    # Asking whether a file is there, or what it is, without opening it
+    _LINUX_FILE_PROBE = frozenset((
+        "access", "faccessat", "faccessat2", "stat", "lstat", "newfstatat", "stat64", "lstat64",
+        "fstatat64", "statx", "readlink", "readlinkat"))
+    _WIN_FILE_PROBE = frozenset(("NtQueryAttributesFile", "NtQueryFullAttributesFile"))
     # Pseudo-filesystems and caches every process touches; not behaviour.
     _LINUX_EXCLUDED = ("/proc", "/sys", "/dev", "/run", "/var/cache", "/var/log")
 
@@ -2345,7 +2350,16 @@ class Summary:
         `newname` (the record's `newpath`) the new one; hooked at the VFS
         function, a rename's FileName is the new name and `old_name` the old
         one, a link's FileName the file linked to and `link_name` the new
-        name. A call that failed touched the file and changed nothing."""
+        name. A call that failed touched the file and changed nothing.
+
+        **A file the process tried to read and could not is in the read
+        list** (2026-11-14, operator): an open that failed and was not to
+        create the file, a read that failed, a probe (access, stat) that
+        found nothing. What a sample looks for and does not find -- a
+        hypervisor's driver, another infection's marker, a config -- is what
+        it was looking for; left out, a run of nothing but failed checks had
+        an empty list. A probe that succeeded is in `files` only: nothing of
+        the file was read."""
         failed = call.get("status") is False
         new = call.get("newname")
         if api in self._LINUX_FILE_RENAME:
@@ -2360,6 +2374,10 @@ class Summary:
         if api in self._LINUX_FILE_LINK:
             new = self.get_argument(call, "link_name") or new
             return [(new, ("write_files",))] if isinstance(new, str) and new and not failed else []
+        if api in self._LINUX_FILE_PROBE:
+            return [(filename, ("read_files",) if failed else ())]
+        if failed and api in self._LINUX_FILE_READ:
+            return [(filename, ("read_files",))]
         if failed and api not in self._LINUX_FILE_OPEN:
             return [(filename, ())]
         if api in self._LINUX_FILE_DELETE:
@@ -2370,7 +2388,11 @@ class Summary:
             kinds = ("read_files",)
         elif api in self._LINUX_FILE_OPEN:
             flags = _parse_int(self.get_argument(call, "flags")) or 0
-            kinds = ("write_files",) if flags & (os.O_CREAT | os.O_TRUNC) else ()
+            if flags & (os.O_CREAT | os.O_TRUNC):
+                kinds = ("write_files",)
+            else:
+                # opened and read is the read's record; not opened is this one
+                kinds = ("read_files",) if failed else ()
         else:
             return []
         return [(filename, kinds)]
@@ -2434,6 +2456,13 @@ class Summary:
                 if not self._deletes(call):
                     return
                 kinds = ("delete_files",)
+            elif api in self._WIN_FILE_PROBE:
+                # GetFileAttributes, PathFileExists: is it there. Found or not
+                # it is a file of the process; not found, one it tried to read
+                # (_linux_files has why).
+                if len(filename) < 3 or filename[1] != ":":
+                    return
+                kinds = ("read_files",) if call.get("status") is False else ()
             elif api in ("NtCreateFile", "NtOpenFile"):
                 # Hex from the syscall or from flags.symbolic_to_hex; the
                 # names themselves from a filetracer value nothing converted.
