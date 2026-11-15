@@ -53,8 +53,7 @@ case "$GUEST" in
         # The workload is started from explorer.exe, the restored guest always has the same PIDs:
         # setup_hooks_windows records it in sandboxd/config.py when it saves the state
         default_workload=workload-windows.cmd
-        default_workload_pid=$(sed -n 's/^INJECTION_PID_WINDOWS = \([1-9][0-9]*\)$/\1/p' \
-                               "$SANDBOX/sandboxd/config.py" 2>/dev/null)
+        default_workload_pid=$(sed -n 's/^SANDBOXD_INJECTION_PID_WINDOWS=\([1-9][0-9]*\)$/\1/p' "/etc/sandboxd/sandboxd.env" 2>/dev/null)
         default_workload_dst='C:\Users\Public\drakvuf-workload.cmd'
         ;;
     linux)
