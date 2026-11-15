@@ -7,7 +7,10 @@
     a <mark> made with textContent -- the sample's text never passes through
     an HTML parser here.
   - Brings the row a search or a row number landed on (`data-target`) to the
-    top of the window.
+    top of the window -- once, when its block arrives. Rows loading as the
+    reader scrolls away from it, a panel opening and a search's progress
+    line settle here too, and each pulled the view back to that row until
+    2026-11-15.
   - Keeps the view still when "earlier" rows load above it: they arrive
     above what the reader is looking at, and without this the window would
     jump by their height (scroll anchoring does not hold at scrollTop 0).
@@ -59,7 +62,12 @@
     return head ? head.getBoundingClientRect().height : 0;
   }
 
+  // A block the server sends has no `data-placed`: a search that lands, a
+  // row number, a process chosen, the tab itself. Everything else swaps in
+  // inside a block already placed, and leaves the view where the reader is.
   function toTarget(block, page) {
+    if (block.dataset.placed) return;
+    block.dataset.placed = "1";
     var win = block.querySelector(".tl-window");
     var row = win && win.querySelector("tr[data-target]");
     if (!row) return;
@@ -98,13 +106,9 @@
 
   document.addEventListener("htmx:afterSettle", function (event) {
     var target = event.detail.target;
+    // An outerHTML swap leaves the target detached: the block now in its place
     if (!target || !target.isConnected) target = document.getElementById("timeline") || document.body;
-    var fromFind = event.detail.requestConfig && /\/timeline(\/find)?\?/.test(event.detail.requestConfig.path || "");
     settle(target.closest && target.closest("#timeline") ? target.closest("#timeline") : target, false);
-    if (fromFind) {
-      var block = document.getElementById("timeline");
-      if (block) toTarget(block, false);
-    }
   });
 
   document.addEventListener("DOMContentLoaded", function () {

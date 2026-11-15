@@ -991,6 +991,65 @@ def test_panels_open_below_their_row_close_and_hide_nothing(strict_page, server,
     assert page.fired == []
 
 
+def test_timeline_view_stays_where_the_reader_scrolls(strict_page, server, seed):
+    """A row number or a search brings its row to the top of the window once;
+    after that the view is the reader's (operator, 2026-11-15). Rows loading
+    as they scroll away, and a panel opening there, pulled the window back to
+    the landed row every time."""
+    import cape_fixture as F
+    job_id = seed("x.exe", target_os="windows")
+    _seed_report(job_id, F.document())
+    page = strict_page
+    win = "#timeline .tl-window"
+
+    def top_row():
+        """The first row below the sticky header. Within a few pixels: rows
+        loaded above keep the view by whole pixels (scrollHeight), so a row
+        brought to the top can sit a pixel under the header line."""
+        return page.evaluate("""(sel) => {
+            const win = document.querySelector(sel);
+            const top = win.getBoundingClientRect().top + win.querySelector('thead').getBoundingClientRect().height;
+            for (const r of win.querySelectorAll('tr.tl-row'))
+                if (r.getBoundingClientRect().bottom > top + 4) return Number(r.dataset.i);
+        }""", win)
+
+    def scroll_down_twice(landed):
+        """To the "later" edge, twice: each load is a swap that used to jump."""
+        for _ in range(2):
+            last = page.evaluate("(sel) => { const w = document.querySelector(sel);"
+                                 " w.scrollTop = w.scrollHeight;"
+                                 " const rows = w.querySelectorAll('tr.tl-row');"
+                                 " return Number(rows[rows.length - 1].dataset.i); }", win)
+            page.locator(f"tr.tl-row[data-i='{last + 20}']").wait_for(state="attached")
+            page.wait_for_timeout(200)
+        assert top_row() > landed + 10, (landed, top_row())
+
+    page.goto(f"{server}/ui/jobs/{job_id}?tab=timeline&at=100")
+    assert top_row() == 100
+    scroll_down_twice(100)
+
+    # A panel opened down here leaves the view where it is
+    here = top_row()
+    row = page.locator(f"#timeline tr.tl-row[data-i='{here + 1}'] .xbtn")
+    row.click()
+    page.locator(f"#x-tl-{here + 1} .onecall").wait_for()
+    page.wait_for_timeout(200)
+    assert top_row() == here
+
+    # A search lands on its row, and then lets go of it the same way
+    name = page.locator(f"#timeline tr.tl-row[data-i='{here + 5}'] .tl-name").inner_text()
+    page.locator("form.tl-search input[name='q']").fill(name)
+    page.locator("form.tl-search input[name='q']").press("Enter")
+    page.wait_for_function("(at) => { const t = document.querySelector('#timeline tr[data-target]');"
+                           " return t && Number(t.dataset.i) !== at; }", arg=100)
+    landed = int(page.locator("#timeline tr[data-target]").get_attribute("data-i"))
+    assert here <= landed <= here + 5
+    page.wait_for_timeout(200)
+    assert top_row() == landed
+    scroll_down_twice(landed)
+    assert page.fired == []
+
+
 # --- the Screenshots tab (DRAFT-054) -----------------------------------------
 
 def _seed_frames(job_id: uuid.UUID, ticks, **index_kw) -> None:
