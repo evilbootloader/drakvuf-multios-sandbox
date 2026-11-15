@@ -601,7 +601,8 @@ sandboxd:
 # toolchain is a 150 MB download read off the wire, an hour or more in all.
 # Run again, it fetches only what is new. Without sets a stripped static
 # sample is hooked by its Go table or not at all.
-GO_SETS ?= newest:8
+GO_SETS ?= newest:50
+RUST ?= 1.102.0,1.101.0,1.100.0,1.99.1,1.99.0,1.98.1,1.98.0,1.97.1,1.97.0,1.96.1,1.96.0,1.95.0,1.94.1,1.94.0,1.93.1,1.93.0,1.92.0,1.91.1,1.91.0,1.90.0,1.89.0,1.88.0,1.87.0,1.86.0,1.85.1,1.85.0,1.84.1,1.84.0,1.83.0,1.82.0,1.81.0,1.80.1,1.80.0,1.79.0,1.78.0,1.77.2,1.77.1,1.77.0,1.76.0,1.75.0,1.74.1,1.74.0,1.73.0,1.72.1,1.72.0,1.71.1,1.71.0,1.70.0,1.69.0,1.68.2,1.68.1,1.68.0,1.67.1,1.67.0
 signature_sets:
 	set -e; \
 	cd $(REPO_ROOT); \
