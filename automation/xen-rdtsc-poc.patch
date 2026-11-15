@@ -19,8 +19,11 @@ clockevent fires every timer early when its kernel TSC lags, and
 freezes. RDTSC_USER_PURE (off) would return the guest's own work for a
 pair with no exit between, for al-khaser's Locky check.
 
-Added 2026-11-14, both off, for the al-khaser search to measure (job
-aa879b03 failed both of its RDTSC checks):
+Added 2026-11-14 (job aa879b03 failed both of al-khaser's RDTSC
+checks), both on since 2026-11-15: in the al-khaser search's timing
+checks (alkhaser-search/20261115-175722, 6 tests each) the two together
+were clean in 12 runs of 12; without them Locky was detected in 11 of
+12, and with RDTSC_USER_XVCPU alone in 12 of 12.
 
 RDTSC_USER_XVCPU: a program read that is not close on its own vCPU
 continues the timeline of the domain's last program read when another
@@ -36,7 +39,7 @@ at most RDTSC_USER_WORK_MAX. CloseHandle(0) is a system call on Windows
 fixed step made it no longer than the first.
 
 Compiled on Dom0 with Xen's flags in every combination of the three
-switches. Never booted.
+switches; booted by that search.
 
 ---
  xen/arch/x86/hvm/vmx/vmcs.c             |   18 +
@@ -755,7 +758,7 @@ index 1373ef2..30e1fe3 100644
 + * check wants the mean of the ten pairs under 1000 cycles. 6000000: 2 ms at
 + * 3 GHz, the move and the vm_event pause it happened under.
 + */
-+#define RDTSC_USER_XVCPU 0
++#define RDTSC_USER_XVCPU 1
 +#define RDTSC_USER_XVCPU_MAX 6000000ULL
 +
 +/*
@@ -774,7 +777,7 @@ index 1373ef2..30e1fe3 100644
 + * Not for Linux programs: the red pill's SIDT is emulated for UMIP by the
 + * guest kernel, exits and all, and must stay under 100 cycles.
 + */
-+#define RDTSC_USER_WORK 0
++#define RDTSC_USER_WORK 1
 +#define RDTSC_USER_WORK_MAX 2000ULL
 +
 +static bool rdtsc_program_rip(uint64_t rip)
