@@ -214,3 +214,24 @@ def test_nothing_here_asks_the_store_to_copy():
     offenders = [str(p.relative_to(root)) for p in root.rglob("*.py")
                  if any(word in p.read_text() for word in ("copy_object", "CopySource", "upload_part_copy"))]
     assert offenders == []
+
+
+def test_a_second_run_may_be_traced_for_another_number_of_seconds(client, conn, put_object, worker_headers):
+    """The first job's duration unless the request says another, within the
+    submit form's bounds."""
+    first = finished(client, conn, put_object, worker_headers)
+    same = client.post(f"/api/v1/jobs/{first['job_id']}/second-run").json()
+    longer = client.post(f"/api/v1/jobs/{first['job_id']}/second-run", json={"timeout": 600})
+    assert longer.status_code == 201, longer.text
+    timeouts = [conn.execute("SELECT timeout FROM jobs WHERE id = %s", (j,)).fetchone()[0]
+                for j in (same["job_id"], longer.json()["job_id"])]
+    assert timeouts == [90, 600]
+
+    from sandbox_platform.catalogue import MAX_TRACE_TIMEOUT
+    for bad in (0, -5, MAX_TRACE_TIMEOUT + 1, "x"):
+        assert client.post(f"/api/v1/jobs/{first['job_id']}/second-run", json={"timeout": bad}).status_code == 422
+    assert conn.execute("SELECT count(*) FROM jobs WHERE second_run_of = %s", (first["job_id"],)).fetchone()[0] == 2
+
+    # the page offers it, starting from the first job's seconds
+    page = client.get(f"/ui/jobs/{first['job_id']}?tab=memory").text
+    assert 'name="second_run_timeout" value="90"' in page and f'max="{MAX_TRACE_TIMEOUT}"' in page

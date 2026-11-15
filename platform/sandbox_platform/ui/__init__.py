@@ -487,6 +487,8 @@ def _job_context(job_id: UUID, tab: str, identity, timeline_at: tuple = (None, N
                                     job.drop_subdir,
                                     settings.analysis_username),
         "tabs": tabs,
+        # The longest trace a job may ask for, for the second run's control
+        "max_timeout": catalogue.MAX_TRACE_TIMEOUT,
         "active": active,
         "tab": next(t for t in tabs if t.slug == active),
         "body_template": _tab_body(active),

@@ -141,6 +141,9 @@
 <section class="section"><p class="downloads">
   <button type="button" class="button" data-second-run data-job-id="{{ job.id }}"
     title="A new job: the same sample and options, traced with those functions hooked. This job stays as it is.">Run again with unpacked code hooked</button>
+  <label>for
+    <input type="number" name="second_run_timeout" value="{{ job.timeout or 120 }}" min="10"
+      max="{{ max_timeout }}" step="10" data-second-run-timeout> seconds</label>
   <a class="button" href="{{ job.artifacts['hints.txt'] }}" rel="noopener nofollow">hints.txt</a>
   <span class="note">This run's memory showed library functions the file did not have: a packed
   sample, or a program run from memory. A second run is a new job that traces the same sample with

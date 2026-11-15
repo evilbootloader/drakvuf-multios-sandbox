@@ -186,17 +186,25 @@
     spawning = true;
     button.disabled = true;
 
+    // How long to trace it: the number beside the button, the server's
+    // bounds deciding (a value out of them is a 422, said below)
+    var seconds = button.parentNode.querySelector("[data-second-run-timeout]");
+    var body = {};
+    if (seconds && seconds.value) body.timeout = Number(seconds.value);
+
     fetch("/api/v1/jobs/" + encodeURIComponent(jobId) + "/second-run", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
         "X-Sandbox-Request": "1"
-      }
+      },
+      body: JSON.stringify(body)
     })
       .then(function (r) {
         if (!r.ok) {
           throw new Error(
             r.status === 402 ? "no analysis time left"
+              : r.status === 422 ? "seconds out of range"
               : r.status === 410 ? "the sample is no longer stored — submit it again"
               : r.status === 409 ? "nothing to run again with"
               : "failed (" + r.status + ")"

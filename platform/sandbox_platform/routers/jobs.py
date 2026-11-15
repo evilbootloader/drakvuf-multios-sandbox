@@ -405,6 +405,8 @@ class JobDetail(JobSummary):
     # memory gave among artifacts the store still has.
     second_run_of: UUID | None = None
     second_run_available: bool = False
+    # Seconds the trace runs for, as asked (the second run's form starts there)
+    timeout: int | None = None
 
     # Set when the manifest could not be read. The job still renders -- state,
     # timings and sample identity are all on the row and all still true -- and
@@ -878,6 +880,7 @@ def _detail(conn, job_id: UUID, identity: Caller) -> JobDetail:
             "      jobs.failure_stage, jobs.failure_reason, jobs.attempt, jobs.cancel_requested, "
             "      jobs.interacted, jobs.egress_mode, jobs.egress_exit, jobs.egress_applied, jobs.visibility, jobs.manifest, "
             "      jobs.plugins::text[], jobs.drop_location, jobs.drop_subdir, jobs.arguments, jobs.second_run_of, "
+            "      jobs.timeout, "
             "      jobs.malscore, jobs.malstatus, "
             # COALESCE, because since DRAFT-061 an identity provisioned by
             # `resolve_tenant` carries its address in `access_subject` and
@@ -947,7 +950,7 @@ def _detail(conn, job_id: UUID, identity: Caller) -> JobDetail:
             "interacted",
             "egress_mode", "egress_exit", "egress_applied", "visibility",
             "drop_location", "drop_subdir", "arguments", "malscore", "malstatus",
-            "second_run_of",
+            "second_run_of", "timeout",
         )},
         second_run_available=(row["state"] == JobState.COMPLETED.value
                               and SECOND_RUN_HINTS in artifacts),
@@ -1356,6 +1359,12 @@ def cancel_job(job_id: Annotated[UUID, Path()],
 SECOND_RUN_HINTS = "hints.txt"
 
 
+class SecondRunRequest(BaseModel):
+    # How long to trace it, in seconds; the first job's when absent. The
+    # submit form's bounds: a second run is a job like any other.
+    timeout: int | None = Field(default=None, gt=0, le=MAX_TRACE_TIMEOUT)
+
+
 class SecondRunResponse(BaseModel):
     job_id: UUID
     state: JobState
@@ -1363,16 +1372,18 @@ class SecondRunResponse(BaseModel):
 
 @router.post("/{job_id}/second-run", status_code=status.HTTP_201_CREATED)
 def second_run(job_id: Annotated[UUID, Path()],
-               owner: auth.RequiredIdentity) -> SecondRunResponse:
+               owner: auth.RequiredIdentity,
+               req: SecondRunRequest | None = None) -> SecondRunResponse:
     """Make a new job that runs a finished job's sample again, with hooks on
     what the first run's memory showed (`sandboxd/stagehints.py`).
 
     For after the report has been read: a packed sample's report shows system
     calls and little else, and its manifest lists `hints.txt` -- the library
-    functions found in its unpacked memory. The new job has the same sample
-    (copied inside the store, never through the caller), the same guest and
-    options, and `second_run_of` naming this one; the host is leased a URL
-    to the lines and runs once with them. Nothing of the first job changes.
+    functions found in its unpacked memory. The new job has the same sample,
+    the same guest and options -- but for how long it is traced, which the
+    request may choose (`timeout`, seconds) -- and `second_run_of` naming
+    this one; the host is leased a URL to the lines and runs once with them.
+    Nothing of the first job changes.
 
     **The sample is the first job's object, not a copy** (`jobs.sample_key`,
     migration 0016): the store's front refuses CopyObject to every caller,
@@ -1439,7 +1450,8 @@ def second_run(job_id: Annotated[UUID, Path()],
             """,
             (new_id, first["target_os"], first["submitted_filename"], first["size_bytes"],
              JobState.RECEIVED.value, owner, first["egress_mode"], first["egress_exit"],
-             first["plugins"], first["timeout"], first["disable_sysret"], key_prefix,
+             first["plugins"], (req.timeout if req and req.timeout else first["timeout"]),
+             first["disable_sysret"], key_prefix,
              first["drop_location"], first["drop_subdir"], first["arguments"], job_id, sample),
         )
     # The same admission an upload gets: the copy is hashed and typed again,
