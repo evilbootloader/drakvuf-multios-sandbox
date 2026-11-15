@@ -1462,6 +1462,21 @@ PROCDUMP_STOP_WAIT = 120
 PROCDUMP_STOP_TIMEOUT = 100
 
 
+#: hidsim's own clicks, per guest, on top of the buttons it reads off the
+#: screen. Windows: `--hid-random-clicks`, a click (one in two a double)
+#: every few movements, at the top edge of the screen where on a desktop it
+#: presses nothing (the fork's `hid_injection.cpp`). Samples check that a
+#: hand is on the mouse: pafish waits three seconds each for a click and for
+#: two within the double-click time, and without clicks of its own hidsim
+#: gave neither (job 831d5f4c, 2026-11-15). Linux guests unchanged: GNOME's
+#: top bar is where such a click would land.
+HIDSIM_CLICKS: dict[TargetOs, list[str]] = {
+    TargetOs.WINDOWS: ["--hid-random-clicks"],
+    TargetOs.UBUNTU: [],
+    TargetOs.ANDROID: [],
+}
+
+
 def plugin_stop_wait(plugins) -> int:
     """`--wait-stop-plugins` for a job with these plugins."""
     return PROCDUMP_STOP_WAIT if PROCDUMP2_PLUGIN in plugins else PLUGIN_STOP_WAIT
@@ -1604,9 +1619,12 @@ def argv_trace(job: Job, component: str | None = None) -> list[str]:
     # trace. Upstream's monitor ran on Windows 7 only and turned itself off
     # elsewhere without a word; ours is `gui/screen_buttons.cpp` in the fork.
     # A DRAKVUF built without the OCR library says so and moves the mouse.
-    # CANDIDATE (2026-11-14): not yet run on Dom0.
+    # Run on Dom0 2026-11-15 (job 831d5f4c, pafish): the pointer moved, but
+    # bold button text was unreadable to the OCR mask and a console's "OK"
+    # lines were pressed instead -- fixed in the fork the same day, not yet
+    # re-run on a guest.
     if HIDSIM_PLUGIN in job.options.plugins:
-        argv += ["--hid-monitor-gui"]
+        argv += ["--hid-monitor-gui"] + HIDSIM_CLICKS[job.target_os]
     for option, name in SYMBOL_PROFILES[job.target_os]:
         argv += [option, str(job.profile.parent / name)]
     return argv

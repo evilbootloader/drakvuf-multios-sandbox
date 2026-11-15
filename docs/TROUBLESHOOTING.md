@@ -1670,6 +1670,40 @@ keep the name their bytes give. On that bot it dropped `net/http.Get`,
 `os.Rename` and `os/exec.(*Cmd).Run`; on a Go 1.22 program whose names are
 known it kept 24 of its 26 listed functions, as before.
 
+### pafish reports mouse clicks, double clicks and both dialog checks "traced!" with hidsim selected
+
+**Symptom.** Mouse presence, movement and speed pass; click activity, double
+click activity, dialog confirmation and plausible dialog confirmation are
+"traced!" (job 831d5f4c, 2026-11-15). `trace.stderr` has
+`[HIDSIM] [MONITOR] "ok" at …` a dozen times at line ends of pafish's console,
+and the console's title reads "Select …" at the end. pafish's own output is in
+the trace: its `NtWriteFile` buffers to `\Device\ConDrv\Output`.
+
+**Cause.** Three, all in the fork's hidsim. No click of its own
+(`--hid-random-clicks` was not passed), and pafish waits 3 s for one and for
+two within the double-click time. Its dialog's bold "OK" reached OCR as a
+solid block: the text mask took the light inside of bold letters for ink. And
+a console's repeated "… OK" was pressed instead, which starts a selection that
+stops the program's output.
+
+**Fix.** 2026-11-15: polarity-aware text mask, repeated labels are text,
+frames every second and a found button interrupts a movement, random clicks
+at the top edge for Windows (`guests.HIDSIM_CLICKS`). pafish's dialogs share
+one timeout flag: the first must be pressed within 3 s or both checks fail.
+
+### A sample still running at the end of a Windows analysis has no procdump
+
+**Symptom.** Every `procdump` record in the trace is `DumpReason":"TerminateProcess"`;
+none is `FinishAnalysis`, whatever `--procdump-new-processes-on-finish` says
+(jobs 295f5786, 831d5f4c).
+
+**Cause.** DRAKVUF stops the wrapper plug-in `procdump2`, which did not pass
+the stop to `win_procdump2` (upstream since #1769): the end-of-run dumps never
+started.
+
+**Fix.** The fork's `procdump2.h` passes the stop on (2026-11-15). Linux is not
+changed yet; see `ideas.md`.
+
 # The platform, TLS and the tunnel
 
 ### `Empty reply from server` from a listener that is running

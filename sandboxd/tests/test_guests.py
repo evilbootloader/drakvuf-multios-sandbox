@@ -1361,3 +1361,16 @@ def test_hidsim_reads_the_screen_for_buttons_when_a_job_selects_it(tmp_path, os_
     chosen = job(tmp_path, os_, kind, options=TraceOptions(plugins=("syscalls", G.HIDSIM_PLUGIN), timeout=120))
     argv = G.argv_trace(chosen)
     assert argv[argv.index("-a") + 1:].count("hidsim") == 1 and "--hid-monitor-gui" in argv
+
+
+@pytest.mark.parametrize("os_,kind", [(TargetOs.UBUNTU, SampleKind.ELF), (TargetOs.WINDOWS, SampleKind.PE)])
+def test_hidsim_clicks_on_its_own_on_windows_only(tmp_path, os_, kind):
+    """pafish waits three seconds for a click and for two within the
+    double-click time; with nothing but the screen's buttons hidsim gave
+    neither (job 831d5f4c). Linux keeps what it had: GNOME's top bar is where
+    hidsim's own clicks land."""
+    chosen = job(tmp_path, os_, kind, options=TraceOptions(plugins=("syscalls", G.HIDSIM_PLUGIN), timeout=120))
+    argv = G.argv_trace(chosen)
+    assert ("--hid-random-clicks" in argv) is (os_ is TargetOs.WINDOWS)
+    assert "--hid-random-clicks" not in G.argv_trace(job(tmp_path, os_, kind))
+    assert set(G.HIDSIM_CLICKS) == set(TargetOs)

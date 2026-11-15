@@ -211,6 +211,25 @@ runs, preserving the agentless design.
 >     which is how the first run's addresses become offsets. **An Ubuntu
 >     trace has these records more than before**; nothing reads them but
 >     `stagehints`.
+>   - procdump2 (2026-11-15, later): **the end-of-run dumps never ran.**
+>     DRAKVUF stops the wrapper class `procdump2`, which holds the OS part
+>     (`wp`, `lp`) and did not pass the stop on (upstream #1769, 2024-02), so
+>     `win_procdump2::stop_impl` -- the injected process's dump and
+>     `--procdump-new-processes-on-finish` -- never ran: in jobs 295f5786 and
+>     831d5f4c every dump is a `TerminateProcess` one and a sample still
+>     running at the end has none. The wrapper now passes the stop to the
+>     Windows part. **Not to the Linux part**: that would add end-of-run dumps
+>     to every Ubuntu job, the operator's call.
+>   - hidsim (2026-11-15): `--hid-monitor-gui` read bold button text as
+>     blocks (the OCR mask took any pixel 40 off its neighbourhood's mean, and
+>     a bold letter's hole is) and pressed a console's "... OK" lines instead,
+>     which puts the console in selection mode and stops its program's output.
+>     The mask now takes ink on the side away from the background only; a
+>     label read three or more times on a screen is text; frames come every
+>     second, a wander gives way to a found button, the way there is capped
+>     at 0.6 s. `--hid-random-clicks` clicks at the top edge of the screen,
+>     about once a second, one in two double, held ~80 ms. Measured on job
+>     831d5f4c's frames: the one press is pafish's OK, at its centre.
 >   - procdump2 (2026-11-15): the processes still running when the trace
 >     stops are dumped oldest first, not lowest PID first. Every process the
 >     analysis started is queued then and DRAKVUF waits a bounded time; the
