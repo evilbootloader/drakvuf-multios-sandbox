@@ -375,7 +375,10 @@
     (`crypto/cipher.NewCBCEncrypter` and `...Decrypter`) are named neither.
   - **zstd dumps** are not read (sandboxd asks procdump2 for gzip), and a
     dump whose image is over 256 MiB is cut there.
-  - **32-bit PE under ASLR with its relocations stripped from memory**: the
-    bytes a loader rewrote cannot be told from the rest, so a hint whose
-    first 16 bytes hold an absolute address never matches in a run that
-    loads elsewhere. Seen as hooks that are in the list and never placed.
+  - **A PE image's addresses of itself, without a relocation table**
+    (fixed 2026-11-15, job 3a17acfb): a packed image's own directory is the
+    packer's, so stagehints also treats any 4 bytes (8 in a 64-bit image)
+    holding an address inside the image as moving. Left: an address of
+    another module in a hint's first 16 bytes (none seen in Go or C
+    prologues), and a value that merely looks like an image address, which
+    only costs the marker a few bytes of precision.

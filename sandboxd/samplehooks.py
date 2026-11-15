@@ -113,6 +113,8 @@ class Image:
     #: it was linked, and the RVAs of the bytes its loader rewrote for that
     moved: int = 0
     relocated: set = field(default_factory=set)
+    #: How far from `base` a running PE image reaches (its SizeOfImage)
+    extent: int = 0
 
 
 # --- reading the program -----------------------------------------------------
@@ -472,21 +474,32 @@ def from_flirt(image: Image, sets: list, candidates: Optional[Iterable[int]] = N
                     undecided.append((target, window, set_name, matched))
                 break       # ambiguous in this set: another set does not settle it
 
-    def calls_check(target: int, window: bytes, names: list) -> bool:
-        """At least one of the calls the set has the function make lands on
-        that callee as named in the sample, and none on another named one.
-        A callee nothing named yet says neither."""
+    def verdict(target: int, window: bytes, names) -> tuple:
+        """(calls landing on the callee the set says, calls landing on
+        another named function or not being calls at all, calls looked at)
+        of the function at `target` under `names`. A callee nothing named
+        yet says neither; nor does the stack-growth call every Go function
+        makes, which is hand-written and seldom named."""
         said = next((calls[n] for n in names if n in calls), None)
-        agreed = False
+        agreed = against = looked = 0
         for operand, callees in said or ():
+            if any(c.startswith("runtime.morestack") for c in callees):
+                continue
+            looked += 1
             if operand < 1 or operand + 4 > len(window) or window[operand - 1] != 0xE8:
-                return False
+                against += 1
+                continue
             callee = target + operand + 4 + int.from_bytes(window[operand:operand + 4], "little", signed=True)
             if callee in named:
-                if not named[callee] & set(callees):
-                    return False
-                agreed = True
-        return agreed
+                if named[callee] & set(callees):
+                    agreed += 1
+                else:
+                    against += 1
+        return agreed, against, looked
+
+    def calls_check(target: int, window: bytes, names: list) -> bool:
+        agreed, against, _ = verdict(target, window, names)
+        return agreed > 0 and not against
 
     for _ in range(4):
         settled = []
@@ -500,7 +513,36 @@ def from_flirt(image: Image, sets: list, candidates: Optional[Iterable[int]] = N
         if not settled:
             break
         undecided = [item for item in undecided if item not in settled]
-    return found
+    return _backed_by_calls(image, found, named, verdict) if calls else found
+
+
+def _window(image: Image, target: int) -> bytes:
+    for va, _, code in image.code:
+        if va <= target < va + len(code):
+            return code[target - va:target - va + MATCH_BYTES]
+    return b""
+
+
+def _backed_by_calls(image: Image, found: list, named: dict, verdict) -> list:
+    """Of what a Go set named by bytes, what whom it calls bears out.
+
+    A function that calls nothing keeps the name its bytes gave it. One
+    that does keeps it only if at least one of its calls lands on the
+    function the set says, named in the sample, and none on another: its
+    own bytes are mostly a shape, and a wrapper's shape -- "pass the string
+    to a method of a global" -- is other functions' too (job b2c2771a,
+    2026-11-15: `net/http.Get` was named at a function called 300 times
+    with method names, and `os.Rename` at one calling another than
+    `os.rename`). A name the evidence does not reach is left off: a wrong
+    one is a wrong record on every call, a missing one a call seen below."""
+    verdicts = {target: verdict(target, _window(image, target), names) for target, names in named.items()}
+    kept = []
+    for f in found:
+        agreed, against, looked = verdicts.get(f.offset, (0, 0, 0))
+        if against or (looked and not agreed):
+            continue
+        kept.append(f)
+    return kept
 
 
 #: Function starts each Go set is tried on to choose between them, and the

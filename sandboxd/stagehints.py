@@ -413,15 +413,35 @@ def minidump_image(base: int, data: bytes, sample: dict, header: Optional[dict] 
     image.static = True
     image.moved = base - sample["base"]
     image.relocated = relocated(data, header)
+    image.extent = header["size"]
     return image if image.code else None
 
 
 # --- from an image to lines ---------------------------------------------------
 
+def pointers_into(raw: bytes, low: int, high: int, width: int) -> set:
+    """Offsets in `raw` of the bytes of every `width`-byte little-endian
+    value in [low, high): an address of the image itself, which the loader
+    rewrites when the image is elsewhere."""
+    found: set = set()
+    for at in range(len(raw) - width + 1):
+        if low <= int.from_bytes(raw[at:at + width], "little") < high:
+            found.update(range(at, at + width))
+    return found
+
+
 def when(image: sh.Image, data: bytes) -> Callable[[int], str]:
     """The `when:` marker of the function at an address: its first bytes as
     the memory has them. "" for what cannot be told from anything else: too
-    short, or nothing in it that is the same in every run."""
+    short, or nothing in it that is the same in every run.
+
+    In a PE image, the bytes the loader rewrites for where the image is are
+    `??`: those its relocation directory lists, and -- for an image whose
+    directory is a packer's, or gone -- any 4 or 8 bytes that hold an
+    address inside the image. 32-bit Go reaches its thread's state through
+    one such address in the first instruction of every function (job
+    3a17acfb, 2026-11-15: run 1 at 0xA70000, run 2 at 0x1D0000, and none of
+    38 hints was placed)."""
     moving = image.relocated
 
     def marker(address: int) -> str:
@@ -431,7 +451,11 @@ def when(image: sh.Image, data: bytes) -> Callable[[int], str]:
                 break
         else:
             return ""
-        fixed = [address - image.base + i not in moving for i in range(len(raw))]
+        absolute: set = set()
+        if image.kind == "pe" and image.extent:
+            for width in ((4, 8) if image.bits == 64 else (4,)):
+                absolute |= pointers_into(raw, image.base, image.base + image.extent, width)
+        fixed = [address - image.base + i not in moving and i not in absolute for i in range(len(raw))]
         if sum(fixed) < MIN_FIXED or not any(byte for byte, keep in zip(raw, fixed) if keep):
             return ""
         return "when:" + "".join(f"{byte:02x}" if keep else "??" for byte, keep in zip(raw, fixed))

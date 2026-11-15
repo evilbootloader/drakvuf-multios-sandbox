@@ -319,6 +319,24 @@ def test_a_dump_without_the_samples_image_and_a_sample_that_is_no_program(tmp_pa
     assert hints.hints("minidump", dumps, tmp_path / "t", script, "C:\\s.ps1", *args) == ([], [])
 
 
+def test_an_address_of_the_image_in_its_code_is_left_out_of_the_marker():
+    """32-bit Go: `mov ecx, [tls_g]` with the slot's absolute address, at
+    the start of every function. A packer leaves no relocation directory to
+    say so, and the image is elsewhere in the next run."""
+    base = 0xA70000
+    code = bytes.fromhex("8b0dc0b8e200" "648b09" "8b09" "3b6108" "0f86") + bytes(48)
+    image = sh.Image("pe", 32, base=base, code=[(base + 0x1000, 0, code)], extent=0x400000)
+    assert hints.when(image, code)(base + 0x1000) == "when:8b0d????????648b098b093b61080f86"
+    # the same bytes in the next run, at 0x1D0000, match it
+    pattern = hints.when(image, code)(base + 0x1000).removeprefix("when:")
+    moved = (0x1D0000 + 0x3BB8C0).to_bytes(4, "little")
+    there = bytes.fromhex("8b0d") + moved + code[6:16]
+    assert all(p == "??" or int(p, 16) == b for p, b in zip((pattern[i:i + 2] for i in range(0, 32, 2)), there))
+    # a value outside the image is the code's own, kept
+    image.extent = 0x100000
+    assert hints.when(image, code)(base + 0x1000) == "when:8b0dc0b8e200648b098b093b61080f86"
+
+
 def test_code_that_is_the_same_nowhere_gets_no_marker():
     image = sh.Image("pe", 64, base=0x1000, code=[(0x2000, 0, bytes(64) + BODY)],
                      relocated=set(range(0x1040 + 2, 0x1040 + 16)))

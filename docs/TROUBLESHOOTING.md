@@ -1635,6 +1635,41 @@ commands' replies are read past until the one with that id comes, or 10 s
 pass. The rename message now carries `strerror`. `qmp/qmp_connection_test.cpp`
 is a standalone test against a fake server (how to build it is at its top).
 
+### A second run lists its hints but places none of them (32-bit Windows)
+
+**Symptom.** The job's notes say "second run of …, with N functions … hooked"
+and `located.second_pass.applied` is true, but apimon's `dll_loaded` for the
+sample has `"Rva": { }` and no `api_called` record names a hinted function
+(job 3a17acfb, a UPX-packed 32-bit Go program, 2026-11-15).
+
+**Cause.** A hint's `when:` bytes are the function's first 16 as the first run
+had them. 32-bit Go's functions begin `mov ecx, [tls_g]` with the slot's
+absolute address; the image was at 0xA70000 in the first run and 0x1D0000 in
+the second, so those 4 bytes differed and the code was never "there". The
+packed file has no relocation table for the code it unpacks, so stagehints did
+not know they move.
+
+**Fix.** `stagehints.when()` marks as `??` any 4 (or 8) bytes holding an
+address inside the image. Hints already stored keep the old bytes: submit the
+sample again for a first run with new ones, then "Run again".
+
+### A Go function named by signature is called with nonsense arguments
+
+**Symptom.** `net/http.Get` in a garbled Go bot's second run, called 300 times
+from one place with `Url="WriteTo"`, `"Int63"`, `"bxVErU"` -- method names, not
+URLs (job b2c2771a, 2026-11-15).
+
+**Cause.** The Go set's `net/http.Get` is "pass the string to a method of a
+global", and another function of the program has those bytes. The callee check
+only broke ties, and this match had no tie.
+
+**Fix.** A Go-set name of a function that calls others now stands only if one
+of those calls lands on the function the set says, named in the sample, and
+none on another (`samplehooks._backed_by_calls`); functions that call nothing
+keep the name their bytes give. On that bot it dropped `net/http.Get`,
+`os.Rename` and `os/exec.(*Cmd).Run`; on a Go 1.22 program whose names are
+known it kept 24 of its 26 listed functions, as before.
+
 # The platform, TLS and the tunnel
 
 ### `Empty reply from server` from a listener that is running
