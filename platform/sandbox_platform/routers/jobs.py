@@ -674,7 +674,7 @@ def mark_uploaded(job_id: Annotated[UUID, Path()],
         with conn.cursor(row_factory=dict_row) as cur:
             cur.execute(
                 "SELECT id, state, target_os, submitted_filename,"
-                "       egress_mode, egress_exit, key_prefix FROM jobs"
+                "       egress_mode, egress_exit, key_prefix, sample_key FROM jobs"
                 f" WHERE id = %s AND {scope}",
                 (job_id, *scope_params),
             )
@@ -688,7 +688,8 @@ def mark_uploaded(job_id: Annotated[UUID, Path()],
                 f"job is {job['state']}; admission runs once, from received",
             )
 
-        key = objects.sample_key(job_id, job["submitted_filename"], job["key_prefix"])
+        key = objects.job_sample_key(job_id, job["submitted_filename"], job["key_prefix"],
+                                     job["sample_key"])
 
         # Missing or empty. Checked first because everything below reads bytes.
         stored = objects.head(key)
@@ -1373,6 +1374,11 @@ def second_run(job_id: Annotated[UUID, Path()],
     options, and `second_run_of` naming this one; the host is leased a URL
     to the lines and runs once with them. Nothing of the first job changes.
 
+    **The sample is the first job's object, not a copy** (`jobs.sample_key`,
+    migration 0016): the store's front refuses CopyObject to every caller,
+    this API included (garage/objects.conf), and downloading it here to
+    upload it again would put live malware on this domain's disk.
+
     **The owner only**, 404 otherwise, as publishing is: it spends the
     owner's balance and copies their sample. A published job's readers
     submit the sample themselves if they want a run of their own.
@@ -1387,7 +1393,7 @@ def second_run(job_id: Annotated[UUID, Path()],
         cur.execute(
             "SELECT state, target_os, submitted_filename, size_bytes, sha256, key_prefix,"
             "       manifest, egress_mode, egress_exit, plugins::text[] AS plugins, timeout,"
-            "       disable_sysret, drop_location, drop_subdir, arguments"
+            "       disable_sysret, drop_location, drop_subdir, arguments, sample_key"
             "  FROM jobs WHERE id = %s AND owner = %s", (job_id, owner))
         first = cur.fetchone()
         if first is None:
@@ -1408,7 +1414,9 @@ def second_run(job_id: Annotated[UUID, Path()],
             f"account has {balance[0] if balance else 0} analysis seconds remaining",
         )
 
-    sample = objects.sample_key(job_id, first["submitted_filename"], first["key_prefix"])
+    # A second run of a second run runs the same object again
+    sample = objects.job_sample_key(job_id, first["submitted_filename"], first["key_prefix"],
+                                    first["sample_key"])
     hints = f"{objects.result_prefix(job_id, first['key_prefix'])}{SECOND_RUN_HINTS}"
     if objects.head(sample) is None or objects.head(hints) is None:
         raise HTTPException(
@@ -1421,19 +1429,18 @@ def second_run(job_id: Annotated[UUID, Path()],
         key_prefix = objects.owner_prefix(new_id, owner)
     except ValueError as exc:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
-    objects.copy(sample, objects.sample_key(new_id, first["submitted_filename"], key_prefix))
     with connection() as conn:
         conn.execute(
             """
             INSERT INTO jobs (id, target_os, submitted_filename, size_bytes,
                               state, owner, egress_mode, egress_exit, plugins, timeout, disable_sysret, key_prefix,
-                              drop_location, drop_subdir, arguments, second_run_of)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s::plugins[], %s, %s, %s, %s, %s, %s, %s)
+                              drop_location, drop_subdir, arguments, second_run_of, sample_key)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s::plugins[], %s, %s, %s, %s, %s, %s, %s, %s)
             """,
             (new_id, first["target_os"], first["submitted_filename"], first["size_bytes"],
              JobState.RECEIVED.value, owner, first["egress_mode"], first["egress_exit"],
              first["plugins"], first["timeout"], first["disable_sysret"], key_prefix,
-             first["drop_location"], first["drop_subdir"], first["arguments"], job_id),
+             first["drop_location"], first["drop_subdir"], first["arguments"], job_id, sample),
         )
     # The same admission an upload gets: the copy is hashed and typed again,
     # and capacity and the exit are checked as they are today, not as they

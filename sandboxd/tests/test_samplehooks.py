@@ -625,6 +625,9 @@ def test_go_releases_are_chosen_from_the_index():
     assert fetch.go_releases(index, "1.24,1.25.0") == ["go1.24.13", "go1.25.0"]
     with pytest.raises(ValueError):
         fetch.go_releases(index, "1.28")
+    # `newest:N` past the oldest release is every release there is
+    assert fetch.go_releases(index, "newest:50")[0] == "go1.24.13"
+    assert fetch.GO_OLDEST == (1, 11)
 
 
 def test_the_probe_refers_to_each_exported_go_function_once():

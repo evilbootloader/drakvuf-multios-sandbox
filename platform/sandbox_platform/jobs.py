@@ -66,6 +66,8 @@ class Lease:
     second_pass: bool = False
     # The finished job this one runs again, with what its memory showed (0015)
     second_run_of: UUID | None = None
+    # Where its sample is, when another job's (objects.job_sample_key, 0016)
+    sample_key: str | None = None
 
 
 @dataclass(frozen=True)
@@ -129,6 +131,7 @@ def claim(
                 arguments=row["arguments"],
                 second_pass=row["second_pass"],
                 second_run_of=row["second_run_of"],
+                sample_key=row["sample_key"],
             )
 
         # Zero rows is ambiguous -- empty queue, or head does not fit -- so

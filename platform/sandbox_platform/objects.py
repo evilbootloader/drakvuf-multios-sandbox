@@ -150,14 +150,11 @@ def presigned_upload(job_id: UUID, filename: str, max_bytes: int, key_prefix: st
     )
 
 
-def copy(source: str, destination: str) -> None:
-    """One object to another key of the bucket, inside the store. For a job
-    made from a finished one (routers/jobs.py::second_run): its sample is
-    the first job's, and is never downloaded to be uploaded again."""
-    _client(Audience.WORKER).copy_object(
-        Bucket=settings.s3_bucket, Key=destination,
-        CopySource={"Bucket": settings.s3_bucket, "Key": source},
-    )
+def job_sample_key(job_id: UUID, filename: str, key_prefix: str, stored: str | None) -> str:
+    """Where a job's sample is: `jobs.sample_key` when the row has one -- a
+    second run, which runs the sample of the job it was made from, never a
+    copy (migration 0016) -- and where its upload put it otherwise."""
+    return stored or sample_key(job_id, filename, key_prefix)
 
 
 def presigned_get(key: str, audience: Audience, ttl: int | None = None) -> str:

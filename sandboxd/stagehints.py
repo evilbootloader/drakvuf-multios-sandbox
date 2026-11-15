@@ -451,7 +451,11 @@ def locate(image: sh.Image, data: bytes, flirt_dir: Path, yara_dir: Path) -> lis
         seen = {found.offset for found in located}
         located += [sh.Located(found.name, found.offset + moved, found.how)
                     for found in sh.from_gopclntab(linked, data) if found.offset + moved not in seen]
-        image.go_table, image.go_version = linked.go_table, linked.go_version
+        # Only a table that was read says the release: else what a Go set
+        # said stands (job a900801c, 2026-11-15: garble, UPX, its lines
+        # written without Go's convention)
+        if linked.go_table:
+            image.go_table, image.go_version = linked.go_table, linked.go_version
     return located
 
 

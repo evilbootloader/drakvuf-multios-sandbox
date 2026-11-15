@@ -11,6 +11,8 @@ import pytest
 from test_launch import ELF, REGISTRATION, create
 from test_tenancy import as_a, as_b  # noqa: F401 - fixtures
 
+from sandbox_platform import objects
+
 
 def asked(conn, job_id) -> bool:
     return conn.execute("SELECT second_pass FROM jobs WHERE id = %s", (job_id,)).fetchone()[0]
@@ -95,6 +97,14 @@ def test_a_finished_job_with_hints_spawns_its_second_run(client, conn, put_objec
     second = made.json()
     assert second["job_id"] != first["job_id"] and second["state"] == "queued"
 
+    # the first job's object, never a copy: the store's front refuses
+    # CopyObject (garage/objects.conf), and nothing is written under the new id
+    first_key = conn.execute("SELECT key_prefix FROM jobs WHERE id = %s", (first["job_id"],)).fetchone()[0] \
+        + f"samples/{first['job_id']}/sample.bin"
+    assert conn.execute("SELECT sample_key FROM jobs WHERE id = %s", (second["job_id"],)).fetchone()[0] == first_key
+    assert objects.head(objects.sample_key(second["job_id"], "sample.bin", conn.execute(
+        "SELECT key_prefix FROM jobs WHERE id = %s", (second["job_id"],)).fetchone()[0])) is None
+
     # the same sample, admitted again, and the same options
     row = conn.execute(
         "SELECT sha256, target_os, timeout, plugins::text[], drop_location, arguments, second_run_of::text,"
@@ -109,10 +119,29 @@ def test_a_finished_job_with_hints_spawns_its_second_run(client, conn, put_objec
     # and the host is leased the lines of the first run
     lease = client.post("/api/v1/worker/claim", headers=worker_headers, json={
         "free_mib": 8192, "free_vlans": 6, "free_slots": 2}).json()
+    # the claim reads the first job's object, and finds it the one admitted
     assert lease["job_id"] == second["job_id"] and lease["second_run_of"] == first["job_id"]
+    assert f"samples/{first['job_id']}/sample.bin" in lease["sample_url"]
     assert f"results/{first['job_id']}/hints.txt" in lease["hints_url"]
     import httpx
     assert httpx.get(lease["hints_url"]).content == HINTS
+
+
+def test_a_second_run_of_a_second_run_runs_the_same_object(client, conn, put_object, worker_headers):
+    first = finished(client, conn, put_object, worker_headers)
+    second = client.post(f"/api/v1/jobs/{first['job_id']}/second-run").json()
+    prefix = conn.execute("SELECT key_prefix FROM jobs WHERE id = %s", (second["job_id"],)).fetchone()[0]
+    put_object(f"{prefix}results/{second['job_id']}/hints.txt", HINTS)
+    from psycopg.types.json import Jsonb
+    conn.execute("UPDATE jobs SET state = 'completed', manifest = %s WHERE id = %s",
+                 (Jsonb({"schema_version": 1, "documents": [], "truncated": False,
+                         "artifacts": [{"name": "hints.txt", "size_bytes": len(HINTS),
+                                        "sha256": hashlib.sha256(HINTS).hexdigest()}]}), second["job_id"]))
+    third = client.post(f"/api/v1/jobs/{second['job_id']}/second-run")
+    assert third.status_code == 201, third.text
+    keys = [conn.execute("SELECT sample_key FROM jobs WHERE id = %s", (j,)).fetchone()[0]
+            for j in (second["job_id"], third.json()["job_id"])]
+    assert keys[0] == keys[1] and f"samples/{first['job_id']}/" in keys[0]
 
 
 def test_an_ordinary_lease_carries_no_hints(client, worker_headers, put_object):
@@ -172,3 +201,16 @@ def test_the_report_offers_it_beside_the_memory_and_the_dropped_files(client, co
 
     plain = finished(client, conn, put_object, worker_headers, hints=False)
     assert "data-second-run " not in client.get(f"/ui/jobs/{plain['job_id']}?tab=memory").text
+
+
+def test_nothing_here_asks_the_store_to_copy():
+    """The deployed store's front answers 403 to every request carrying
+    x-amz-copy-source (garage/objects.conf, DECISION A2), and the test store
+    has no front: a copy passes here and fails there, as second_run's did on
+    2026-11-15."""
+    from pathlib import Path
+    import sandbox_platform
+    root = Path(sandbox_platform.__file__).parent
+    offenders = [str(p.relative_to(root)) for p in root.rglob("*.py")
+                 if any(word in p.read_text() for word in ("copy_object", "CopySource", "upload_part_copy"))]
+    assert offenders == []

@@ -365,7 +365,8 @@ def claim(req: ClaimRequest, worker_id: WorkerAuth):
             )
 
         if isinstance(last, dal.Lease):
-            key = objects.sample_key(last.job_id, last.submitted_filename, last.key_prefix)
+            key = objects.job_sample_key(last.job_id, last.submitted_filename, last.key_prefix,
+                                         last.sample_key)
 
             # The sample must be the one admission looked at.
             #

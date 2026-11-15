@@ -1617,6 +1617,24 @@ boot without the drive, then a new saved state.
 
 ---
 
+### `[HIDSIM] [INJECTOR] Error renaming screen dump /run/xen/hidsim-N.ppm.part` on nearly every tick, and `--hid-monitor-gui` presses nothing
+
+**Symptom.** A job's `trace.stderr` has the line above every second or so,
+and dialogs stay on screen; once in a while `[HIDSIM] [MONITOR] "yes" at …`
+shows a frame did get through (jobs a900801c, 27bd6c98, e5049989, 2026-11-15).
+
+**Cause.** hidsim's QMP client sent a command and took whatever one `read()`
+returned as its reply. QEMU also sends lines nobody asked for (events), and a
+read may hold half a reply or two; once out of step, the screendump got the
+previous mouse move's `{"return": {}}` at once, and hidsim renamed a frame
+QEMU had not yet written.
+
+**Fix.** In the fork's `hidsim/qmp/qmp_connection.cpp` (2026-11-15): each
+command carries an `id`, replies are read as whole lines, and events and other
+commands' replies are read past until the one with that id comes, or 10 s
+pass. The rename message now carries `strerror`. `qmp/qmp_connection_test.cpp`
+is a standalone test against a fake server (how to build it is at its top).
+
 # The platform, TLS and the tunnel
 
 ### `Empty reply from server` from a listener that is running
@@ -3746,6 +3764,24 @@ image base added. The sections' addresses beside it are RVAs, as CAPE's own
 rather than trust the signature.
 
 ---
+
+### "Run again with unpacked code hooked" answers 500; the API's journal says `CopyObject operation: Forbidden`
+
+**Symptom.** `POST /api/v1/jobs/<id>/second-run` returns 500, and
+`journalctl -u sandbox-api` shows `botocore.exceptions.ClientError: An error
+occurred (403) when calling the CopyObject operation: Forbidden` from
+`objects.copy` (2026-11-15).
+
+**Cause.** The route copied the first job's sample to the new job's key inside
+the store. The store's front, `platform/garage/objects.conf`, answers 403 to
+every request carrying `x-amz-copy-source`, by design (DECISION A2): a copy
+reads one key and writes another in a single request, which the API's key is
+not to be able to do. The test store has no front, so the platform suite passed.
+
+**Fix.** Nothing is copied: the second job records the first job's object in
+`jobs.sample_key` (migration 0016), and admission and the claim read the sample
+from there. `platform/tests/test_second_pass.py` fails if platform code names
+`copy_object` again. Do not loosen `objects.conf` for it.
 
 # The object store — Garage
 

@@ -189,6 +189,22 @@ def test_go_functions_are_found_where_a_moved_program_was_linked(tmp_path, monke
     assert located == [sh.Located("net.Dial", 0x555555555040, "gopclntab")]
 
 
+def test_a_go_set_says_the_release_when_the_table_is_not_found_where_linked(tmp_path, monkeypatch):
+    """A moved Go program whose table is unreadable either way -- garble --
+    keeps the release its signature set said, which decides the convention."""
+    def named_by_set(image, data, flirt_dir, yara_dir):
+        image.go_set, image.go_version = "go-1.26.11-amd64", "go1.26.11"
+        return [sh.Located("os.Rename", 0x400040, "flirt:go-1.26.11-amd64")]
+    monkeypatch.setattr(sh, "locate_in", named_by_set)
+    monkeypatch.setattr(sh, "toolchain", lambda data: "go")
+    image = sh.Image("elf", 64, base=0x3D92000, code=[(0x400000, 0, CODE)], moved=0x3992000)
+    located = hints.locate(image, CODE, tmp_path / "none", tmp_path / "none")
+    assert image.go_version == "go1.26.11" and sh.go_abi(image) == "goabi"
+    go = {"os.Rename": "goabi,log,From:buffer[FromLen],FromLen:ulong"}
+    line, = sh.sample_lines(located, {}, "/s", image.base, go, sh.go_abi(image), hints.when(image, CODE))
+    assert ",goabi,log,From:buffer[FromLen]" in line
+
+
 # --- Windows ----------------------------------------------------------------
 
 def pe_page(base: int, stamp: int = 0x12345678, dll: bool = False) -> bytes:

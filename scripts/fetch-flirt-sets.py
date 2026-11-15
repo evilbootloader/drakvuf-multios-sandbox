@@ -239,6 +239,9 @@ GO_RELEASE = re.compile(r"^go(\d+)\.(\d+)(?:\.(\d+))?$")
 GO_NAME = re.compile(r"^([a-z0-9_]+(?:/[a-z0-9_.]+)*)\.(?:\((\*?)([A-Z]\w*)\)\.|([A-Z]\w*)\.)?([A-Z]\w*)$")
 #: Compile errors the probe is trimmed of before giving up on a release
 GO_ATTEMPTS = 8
+#: The oldest release the probe is built with: modules came in Go 1.11, and
+#: an older one is said and passed over, not counted as a failure
+GO_OLDEST = (1, 11)
 
 
 def go_releases(index: list, wanted: str) -> list:
@@ -307,17 +310,24 @@ def _trim(source: str, errors: str) -> str:
     return "\n".join(kept) + "\n"
 
 
+def go_version(goroot: Path, home: Path) -> str:
+    """`go1.22.2`, from `go version` (`go env GOVERSION` is Go 1.16's)."""
+    said = subprocess.run([str(goroot / "bin" / "go"), "version"], capture_output=True, text=True,
+                          env={"PATH": "/usr/bin:/bin", "GOROOT": str(goroot), "HOME": str(home)},
+                          check=True).stdout.split()
+    return said[2] if len(said) > 2 else ""
+
+
 def build_go_set(goroot: Path, title: str, out: Path, tmp: Path, names) -> int:
     """`title`'s set from the Go at `goroot`: the probe, linked externally,
     and gen-flirt-pats over the `go.o` its linker leaves. The number of
     functions; raises on a build that does not succeed."""
     go = goroot / "bin" / "go"
-    version = subprocess.run([str(go), "env", "GOVERSION"], capture_output=True, text=True,
-                             env={"PATH": "/usr/bin:/bin", "GOROOT": str(goroot), "HOME": str(tmp)},
-                             check=True).stdout.strip()
-    found = GO_RELEASE.match(version.split(" ")[0])
+    version = go_version(goroot, tmp)
+    found = GO_RELEASE.match(version)
     if not found:
         raise ValueError(f"{goroot} says it is {version!r}")
+    minor = (int(found[1]), int(found[2]))
     probe, link = tmp / "probe", tmp / "link"
     probe.mkdir()
     link.mkdir()
@@ -326,21 +336,28 @@ def build_go_set(goroot: Path, title: str, out: Path, tmp: Path, names) -> int:
            "GOCACHE": str(tmp / "cache"), "GOPATH": str(tmp / "gopath"), "GOTOOLCHAIN": "local",
            "GOPROXY": "off", "GOSUMDB": "off", "GOFLAGS": "", "GO111MODULE": "on",
            "GOOS": "linux", "GOARCH": "amd64", "GOAMD64": "v1", "CGO_ENABLED": "1"}
+    # -trimpath is Go 1.13's, and changes file names, not code
+    trim = ["-trimpath"] if minor >= (1, 13) else []
     source = go_probe(names)
     for _ in range(GO_ATTEMPTS):
         (probe / "main.go").write_text(source)
         for stale in link.iterdir():
             stale.unlink()
         built = subprocess.run(
-            [str(go), "build", "-trimpath", "-tags", "netgo,osusergo",
+            [str(go), "build", *trim, "-tags", "netgo,osusergo",
              "-ldflags", f"-linkmode=external -tmpdir={link}", "-o", str(tmp / "probe.bin"), "."],
             cwd=probe, env=env, capture_output=True, text=True, timeout=900)
         if built.returncode == 0:
             break
         trimmed = _trim(source, built.stderr)
-        if trimmed == source:
-            raise ValueError(f"the probe does not build: {built.stderr.strip()[-400:]}")
-        source = trimmed
+        if trimmed != source:
+            source = trimmed
+            continue
+        # The system linker refusing an old Go's object (a PIE default it
+        # predates) comes after go.o is written, and go.o is all that is read
+        if (link / "go.o").is_file() and "main.go:" not in built.stderr:
+            break
+        raise ValueError(f"the probe does not build: {built.stderr.strip()[-400:]}")
     else:
         raise ValueError("the probe does not build")
     if not (link / "go.o").is_file():
@@ -356,9 +373,7 @@ def fetch_go(wanted: str, out: Path, listing: bool, goroot: Path | None = None) 
     names = go_hook_names()
     if goroot is not None:
         with tempfile.TemporaryDirectory(prefix="flirt-go-") as tmp:
-            version = subprocess.run([str(goroot / "bin" / "go"), "env", "GOVERSION"], capture_output=True,
-                                     text=True, env={"PATH": "/usr/bin:/bin", "GOROOT": str(goroot), "HOME": tmp},
-                                     check=True).stdout.strip().split(" ")[0]
+            version = go_version(goroot, Path(tmp))
             title = f"go-{version.removeprefix('go')}-amd64"
             count = build_go_set(goroot, title, out, Path(tmp), names)
         print(f"{title}: {count} functions (from {goroot})")
@@ -367,6 +382,10 @@ def fetch_go(wanted: str, out: Path, listing: bool, goroot: Path | None = None) 
     made = failed = 0
     for version in go_releases(index, wanted):
         title = f"go-{version.removeprefix('go')}-amd64"
+        found = GO_RELEASE.match(version)
+        if (int(found[1]), int(found[2])) < GO_OLDEST:
+            print(f"{title}: older than Go {GO_OLDEST[0]}.{GO_OLDEST[1]}, which the probe needs; passed over")
+            continue
         if (out / f"{title}.pat.gz").exists():
             print(f"{title}: already there")
             continue
