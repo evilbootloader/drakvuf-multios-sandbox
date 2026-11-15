@@ -137,7 +137,7 @@ It maps **headings, not content**: a fact stated in the middle of a section is n
     - `docs/TROUBLESHOOTING.md:1638` — [A second run lists its hints but places none of them (32-bit Windows)](TROUBLESHOOTING.md#a-second-run-lists-its-hints-but-places-none-of-them-32-bit-windows)
     - `docs/TROUBLESHOOTING.md:1656` — [A Go function named by signature is called with nonsense arguments](TROUBLESHOOTING.md#a-go-function-named-by-signature-is-called-with-nonsense-arguments)
     - `docs/TROUBLESHOOTING.md:1673` — [pafish reports mouse clicks, double clicks and both dialog checks "traced!" with hidsim selected](TROUBLESHOOTING.md#pafish-reports-mouse-clicks-double-clicks-and-both-dialog-checks-traced-with-hidsim-selected)
-    - `docs/TROUBLESHOOTING.md:1694` — [A sample still running at the end of a Windows analysis has no procdump](TROUBLESHOOTING.md#a-sample-still-running-at-the-end-of-a-windows-analysis-has-no-procdump)
+    - `docs/TROUBLESHOOTING.md:1694` — [A sample still running at the end of an analysis has no procdump](TROUBLESHOOTING.md#a-sample-still-running-at-the-end-of-an-analysis-has-no-procdump)
 - `docs/TROUBLESHOOTING.md:1707` — [The platform, TLS and the tunnel](TROUBLESHOOTING.md#the-platform-tls-and-the-tunnel)
     - `docs/TROUBLESHOOTING.md:1709` — [`Empty reply from server` from a listener that is running](TROUBLESHOOTING.md#empty-reply-from-server-from-a-listener-that-is-running)
     - `docs/TROUBLESHOOTING.md:1740` — [`openssl s_client` reported `Verify return code: 0 (ok)` against plain HTTP](TROUBLESHOOTING.md#openssl-s_client-reported-verify-return-code-0-ok-against-plain-http)
@@ -567,9 +567,9 @@ It maps **headings, not content**: a fact stated in the middle of a section is n
 
 - `docs/architecture/upstream-drakvuf.md:1` — [Upstream DRAKVUF — comparison, provenance, and repository strategy](architecture/upstream-drakvuf.md#upstream-drakvuf--comparison-provenance-and-repository-strategy)
   - `docs/architecture/upstream-drakvuf.md:10` — [Upstream `dirwatch.c` — direct comparison](architecture/upstream-drakvuf.md#upstream-dirwatchc--direct-comparison)
-  - `docs/architecture/upstream-drakvuf.md:274` — [`lfreijo/drakvuf`, `memdump` branch — provenance](architecture/upstream-drakvuf.md#lfreijodrakvuf-memdump-branch--provenance)
-  - `docs/architecture/upstream-drakvuf.md:296` — [Repository strategy recommendation](architecture/upstream-drakvuf.md#repository-strategy-recommendation)
-  - `docs/architecture/upstream-drakvuf.md:336` — [DRAKVUF Sandbox (CERT-Polska) — what's reusable](architecture/upstream-drakvuf.md#drakvuf-sandbox-cert-polska--whats-reusable)
+  - `docs/architecture/upstream-drakvuf.md:275` — [`lfreijo/drakvuf`, `memdump` branch — provenance](architecture/upstream-drakvuf.md#lfreijodrakvuf-memdump-branch--provenance)
+  - `docs/architecture/upstream-drakvuf.md:297` — [Repository strategy recommendation](architecture/upstream-drakvuf.md#repository-strategy-recommendation)
+  - `docs/architecture/upstream-drakvuf.md:337` — [DRAKVUF Sandbox (CERT-Polska) — what's reusable](architecture/upstream-drakvuf.md#drakvuf-sandbox-cert-polska--whats-reusable)
 
 ## `docs/checklists/android.md`
 

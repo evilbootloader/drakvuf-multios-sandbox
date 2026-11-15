@@ -347,12 +347,11 @@
     had. Keeping `first-run/trace.log.gz` as an artifact is an hour; whether
     the report should merge the two is the real question.
   - **End-of-run dumps never ran, until 2026-11-15** (jobs 295f5786,
-    831d5f4c). procdump2's wrapper did not pass DRAKVUF's stop to its
-    Windows part, so a sample still running at the end was never dumped;
-    fixed in the fork for Windows. **Open, the operator's call:** the same
-    for Linux, which adds end-of-run dumps to every Ubuntu job (one line in
-    `procdump2.h`). Also open, for a guest run: whether a process blocked in
-    a hard-error dialog suspends for the dump.
+    831d5f4c). procdump2's wrapper did not pass DRAKVUF's stop to its OS
+    part, so a sample still running at the end was never dumped; fixed in
+    the fork for Windows and Linux (operator's decision for Ubuntu). Open,
+    for a guest run: whether a Windows process blocked in a hard-error
+    dialog suspends for the dump.
   - **Obfuscated Go is named by signatures since 2026-11-15**
     (`fetch-flirt-sets.py --go`, `samplehooks.go_sets`). Measured with Go
     1.22.2 on a stripped program built as malware is: 4,067 of its 5,168

@@ -1691,7 +1691,7 @@ frames every second and a found button interrupts a movement, random clicks
 at the top edge for Windows (`guests.HIDSIM_CLICKS`). pafish's dialogs share
 one timeout flag: the first must be pressed within 3 s or both checks fail.
 
-### A sample still running at the end of a Windows analysis has no procdump
+### A sample still running at the end of an analysis has no procdump
 
 **Symptom.** Every `procdump` record in the trace is `DumpReason":"TerminateProcess"`;
 none is `FinishAnalysis`, whatever `--procdump-new-processes-on-finish` says
@@ -1701,8 +1701,8 @@ none is `FinishAnalysis`, whatever `--procdump-new-processes-on-finish` says
 the stop to `win_procdump2` (upstream since #1769): the end-of-run dumps never
 started.
 
-**Fix.** The fork's `procdump2.h` passes the stop on (2026-11-15). Linux is not
-changed yet; see `ideas.md`.
+**Fix.** The fork's `procdump2.h` passes the stop on to both parts
+(2026-11-15). Ubuntu traces get end-of-run dumps from then on too.
 
 # The platform, TLS and the tunnel
 

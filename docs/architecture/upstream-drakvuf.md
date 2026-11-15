@@ -217,9 +217,10 @@ runs, preserving the agentless design.
 >     `win_procdump2::stop_impl` -- the injected process's dump and
 >     `--procdump-new-processes-on-finish` -- never ran: in jobs 295f5786 and
 >     831d5f4c every dump is a `TerminateProcess` one and a sample still
->     running at the end has none. The wrapper now passes the stop to the
->     Windows part. **Not to the Linux part**: that would add end-of-run dumps
->     to every Ubuntu job, the operator's call.
+>     running at the end has none. The wrapper now passes the stop to both
+>     parts. **An Ubuntu trace now has end-of-run dumps too** (operator,
+>     2026-11-15): of the injected process and of every process started
+>     since the plug-in, uploaded for the sample's only.
 >   - hidsim (2026-11-15): `--hid-monitor-gui` read bold button text as
 >     blocks (the OCR mask took any pixel 40 off its neighbourhood's mean, and
 >     a bold letter's hole is) and pressed a console's "... OK" lines instead,
