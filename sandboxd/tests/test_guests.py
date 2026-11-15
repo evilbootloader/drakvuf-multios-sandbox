@@ -21,7 +21,10 @@ import pytest
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
+from dataclasses import replace  # noqa: E402
+
 from sandboxd import guests as G  # noqa: E402
+from sandboxd import timing as T  # noqa: E402
 from sandboxd.guests import Interaction, SampleKind, TargetOs, TraceOptions  # noqa: E402
 
 
@@ -620,8 +623,28 @@ def test_every_trace_waits_for_plugins_with_a_call_in_flight(tmp_path):
                                  (TargetOs.ANDROID, SampleKind.APK, "com.x/.Main"),
                                  (TargetOs.ANDROID, SampleKind.ELF, None),
                                  (TargetOs.WINDOWS, SampleKind.PE, None)):
-        argv = G.argv_trace(job(tmp_path, os_, kind), component)
-        assert argv[argv.index("--wait-stop-plugins") + 1] == str(G.PLUGIN_STOP_WAIT), os_.value
+        j = job(tmp_path, os_, kind)
+        argv = G.argv_trace(j, component)
+        assert argv[argv.index("--wait-stop-plugins") + 1] == str(G.plugin_stop_wait(j.options.plugins)), os_.value
+
+
+def test_procdump2_is_given_time_to_dump_whats_still_running(tmp_path):
+    """At the end procdump2 dumps every process the analysis started that is
+    still running, the sample's among them, one at a time and seconds each:
+    30 s was none of them (job 295f5786). Its own deadline comes first, so it
+    resumes what it suspended before DRAKVUF stops waiting for it."""
+    assert G.plugin_stop_wait(["syscalls"]) == G.PLUGIN_STOP_WAIT
+    assert G.plugin_stop_wait(["syscalls", G.PROCDUMP2_PLUGIN]) == G.PROCDUMP_STOP_WAIT
+    assert G.FILEEXTRACTOR_STOP_TIMEOUT < G.PROCDUMP_STOP_TIMEOUT < G.PROCDUMP_STOP_WAIT
+    j = job(tmp_path, TargetOs.WINDOWS, SampleKind.PE)
+    j = replace(j, options=replace(j.options, plugins=tuple(j.options.plugins) + (G.PROCDUMP2_PLUGIN,)))
+    argv = G.argv_trace(j)
+    assert argv[argv.index("--wait-stop-plugins") + 1] == str(G.PROCDUMP_STOP_WAIT)
+    assert argv[argv.index("--procdump-timeout") + 1] == str(G.PROCDUMP_STOP_TIMEOUT)
+    # and the trace phase is guarded past that wait, not inside it
+    plain = T.budgets(TargetOs.WINDOWS, SampleKind.PE, 120)
+    longer = T.budgets(TargetOs.WINDOWS, SampleKind.PE, 120, stop_wait=G.PROCDUMP_STOP_WAIT)
+    assert longer.trace - plain.trace == G.PROCDUMP_STOP_WAIT - G.PLUGIN_STOP_WAIT
 
 
 def test_fileextractor_ends_its_extractions_before_drakvuf_stops_waiting(tmp_path):

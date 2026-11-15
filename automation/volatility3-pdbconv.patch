@@ -1,0 +1,41 @@
+volatility3 pdbconv (PR #650, 7fe200e5f4611a676299dd67fd435a8dd9bec6e7): PDBs it could not convert.
+
+- LF_VFTABLE records are skipped like the other method-list records.
+- LF_QUADWORD and LF_UQUADWORD values (64-bit enum constants) are read.
+- An unexpected value type names itself, its record and its offset.
+
+Made on Dom0 on 2026-11-15 for windows-symbol-profiles.py clrjit-core32
+(.NET 8's 32-bit clrjit.pdb), which stopped at "Unexpected extended value
+type". Applied by `make sandboxd` after it switches the checkout.
+
+diff --git a/volatility3/framework/symbols/windows/pdbconv.py b/volatility3/framework/symbols/windows/pdbconv.py
+index 95ee0441..5d7f4f8c 100644
+--- a/volatility3/framework/symbols/windows/pdbconv.py
++++ b/volatility3/framework/symbols/windows/pdbconv.py
+@@ -784,7 +784,7 @@ class PdbReader:
+     }
+ 
+     # Skipping these types won't effect the parsing of fieldlists.
+-    types_to_skip = ["LF_METHODLIST", "LF_SUBSTR_LIST", "LF_VTSHAPE"]
++    types_to_skip = ["LF_METHODLIST", "LF_SUBSTR_LIST", "LF_VTSHAPE", "LF_VFTABLE"]
+ 
+     def consume_type(
+         self, module: interfaces.context.ModuleInterface, offset: int, length: int
+@@ -1005,8 +1005,16 @@ class PdbReader:
+                 value = module.object(object_type="long", offset=offset)
+             elif sub_leaf_type in [leaf_type.LF_ULONG]:
+                 value = module.object(object_type="unsigned long", offset=offset)
++            elif sub_leaf_type in [leaf_type.LF_QUADWORD]:
++                value = module.object(object_type="long long", offset=offset)
++            elif sub_leaf_type in [leaf_type.LF_UQUADWORD]:
++                value = module.object(object_type="unsigned long long", offset=offset)
+             else:
+-                raise TypeError("Unexpected extended value type")
++                raise TypeError(
++                    f"Unexpected extended value type: {sub_leaf_type.lookup()} "
++                    f"in record {leaf_type.lookup()} "
++                    f"at offset 0x{value.vol.offset:x}"
++                )
+             excess = value.vol.data_format.length
+             # Updated the consume/offset counters
+         name = module.object(

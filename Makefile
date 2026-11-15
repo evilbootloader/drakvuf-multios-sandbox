@@ -488,6 +488,10 @@ sandboxd:
 	cd $(REPO_ROOT)/drakvuf/volatility3; \
 	git fetch origin $(VOLATILITY3_PR650); \
 	git switch -C pr-650 $(VOLATILITY3_PR650); \
+	# pdbconv on the PDBs PR 650 cannot convert (.NET 8's 32-bit clrjit, \
+	# 2026-11-15): automation/volatility3-pdbconv.patch, once. \
+	git apply --reverse --check $(REPO_ROOT)/automation/volatility3-pdbconv.patch 2>/dev/null \
+	    || git apply $(REPO_ROOT)/automation/volatility3-pdbconv.patch; \
 	# Not installed (review L-7, 2026-11-04): scripts/windows-symbol-profiles.py \
 	# runs pdbconv.py out of this checkout with PYTHONPATH set to it, and a \
 	# system-wide install of a pull-request branch was what it had to work \
@@ -589,14 +593,20 @@ sandboxd:
 # library functions with (sandboxd/data/flirt/, not tracked): every stable
 # glibc, musl and uClibc-ng toolchain Bootlin publishes, x86-64 and i686, and
 # with RUST="1.75.0,1.80.1" those Rust releases' standard libraries (a job's
-# report says which release a sample was built with). Its own target, after
-# `make sandboxd` for the venv: each toolchain is a 150 MB download read off
-# the wire, an hour or more in all. Run again, it fetches only what is new.
-# Without sets a stripped static sample is hooked by its Go table or not at all.
+# report says which release a sample was built with). And Go's standard
+# library for the GO_SETS releases (default the newest patch of the 8 newest
+# minor versions): what names a Go program garble built, whose own function
+# table names nothing; each release is a 70 MB download and a build that
+# needs gcc. Its own target, after `make sandboxd` for the venv: each
+# toolchain is a 150 MB download read off the wire, an hour or more in all.
+# Run again, it fetches only what is new. Without sets a stripped static
+# sample is hooked by its Go table or not at all.
+GO_SETS ?= newest:8
 signature_sets:
 	set -e; \
 	cd $(REPO_ROOT); \
 	.venv-sandboxd/bin/python scripts/fetch-flirt-sets.py; \
+	if [ -n "$(GO_SETS)" ]; then .venv-sandboxd/bin/python scripts/fetch-flirt-sets.py --go "$(GO_SETS)"; fi; \
 	if [ -n "$(RUST)" ]; then .venv-sandboxd/bin/python scripts/fetch-flirt-sets.py --rust "$(RUST)"; fi; \
 	ls sandboxd/data/flirt | wc -l
 

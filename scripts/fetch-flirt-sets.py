@@ -27,6 +27,22 @@ versions are already a set is skipped, so a second run fetches only what is
 new. Each archive is checked against the index's sha256 before its set is
 kept.
 
+**Go** (`--go newest:6`, `--go 1.24,1.25.3`). A Go program carries its
+standard library compiled into it, and a stripped one still has its function
+table -- unless garble built it: then every name in that table but the
+runtime's is a hash, and the table's magic is random, so the names that
+`go-hooks.txt` lists are found by their bytes or not at all. Go publishes
+no compiled library to read, so each release is downloaded (go.dev/dl, its
+sha256 from the same index) and made to compile a probe program that refers
+to every function `go-hooks.txt` names, linked externally: the linker then
+leaves `go.o`, one ELF object with every function the probe has and its
+relocations, which is what `gen-flirt-pats.py` reads. Built as a malware
+author builds Go, without cgo's own code (`netgo`, `osusergo`) and for the
+baseline amd64. A set is named `go-<version>-amd64` and has no rule: Go's
+sets are tried on Go programs only, all of them, and the one that names
+most is used (samplehooks.go_sets). Needs gcc, for the external link.
+`--go-root` builds one set from a Go that is installed instead.
+
 **What this does not have:** uClibc 0.9.x, the library of the IoT bots of
 2016-2018 -- Bootlin starts at uClibc-ng 1.0, in 2017 -- and any vendor's
 own build (a distribution's glibc is compiled with its own flags and
@@ -42,7 +58,9 @@ import csv
 import hashlib
 import importlib.util
 import io
+import json
 import re
+import subprocess
 import sys
 import tarfile
 import tempfile
@@ -212,6 +230,180 @@ def fetch_rust(versions: list, targets: list, out: Path, listing: bool) -> tuple
     return made, failed
 
 
+GO_INDEX = "https://go.dev/dl/?mode=json&include=all"
+GO_DL = "https://go.dev/dl"
+GO_HOOKS = HERE.parent / "sandboxd" / "data" / "go-hooks.txt"
+GO_RELEASE = re.compile(r"^go(\d+)\.(\d+)(?:\.(\d+))?$")
+#: `net.Dial`, `net/http.(*Client).Do`, `registry.Key.GetStringValue`: an
+#: exported function or method of a package, as Go's table spells it
+GO_NAME = re.compile(r"^([a-z0-9_]+(?:/[a-z0-9_.]+)*)\.(?:\((\*?)([A-Z]\w*)\)\.|([A-Z]\w*)\.)?([A-Z]\w*)$")
+#: Compile errors the probe is trimmed of before giving up on a release
+GO_ATTEMPTS = 8
+
+
+def go_releases(index: list, wanted: str) -> list:
+    """The stable releases `wanted` names, oldest first: `newest:N` (the
+    newest patch of each of the N newest minor versions), `1.24` (its newest
+    patch), `1.25.3`. Comma-separated."""
+    stable: dict = {}
+    for release in index:
+        found = GO_RELEASE.match(str(release.get("version", "")))
+        if release.get("stable") and found:
+            stable[(int(found[1]), int(found[2]), int(found[3] or 0))] = release["version"]
+    minors: dict = {}
+    for key in sorted(stable):
+        minors[key[:2]] = key
+    chosen = set()
+    for spec in filter(None, (w.strip() for w in wanted.split(","))):
+        if spec.startswith("newest:"):
+            chosen.update(sorted(minors.values())[-int(spec.split(":", 1)[1]):])
+            continue
+        parts = tuple(int(n) for n in spec.removeprefix("go").split("."))
+        if len(parts) == 2 and parts in minors:
+            chosen.add(minors[parts])
+        elif len(parts) == 3 and parts in stable:
+            chosen.add(parts)
+        else:
+            raise ValueError(f"no stable Go release {spec}")
+    return [stable[key] for key in sorted(chosen)]
+
+
+def go_archive(index: list, version: str) -> dict:
+    return next(f for release in index if release["version"] == version for f in release["files"]
+                if f["os"] == "linux" and f["arch"] == "amd64" and f["kind"] == "archive")
+
+
+def go_probe(names) -> str:
+    """A Go program referring to each exported function or method of the
+    standard library that `names` has, as a value: the linker keeps a
+    function a program refers to, and with it everything it calls. Packages
+    outside it (golang.org/x/...) are left out: nothing is downloaded."""
+    imports: dict = {}
+    lines = []
+    for name in sorted(set(names)):
+        found = GO_NAME.match(name)
+        if not found:
+            continue
+        path, star, pointer_type, value_type, function = found.groups()
+        if path.startswith("vendor/") or path == "internal" or path.startswith("internal/") or "/internal/" in path:
+            continue
+        alias = imports.setdefault(path, f"p{len(imports)}")
+        if pointer_type:
+            lines.append(f"\t({star}{alias}.{pointer_type}).{function}, // {name}")
+        elif value_type:
+            lines.append(f"\t{alias}.{value_type}.{function}, // {name}")
+        else:
+            lines.append(f"\t{alias}.{function}, // {name}")
+    head = "".join(f'\t{alias} "{path}"\n' for path, alias in imports.items())
+    return ("package main\n\nimport (\n" + head + ")\n\nvar probe = []interface{}{\n"
+            + "\n".join(lines) + "\n}\n\nfunc main() { println(len(probe)) }\n")
+
+
+def _trim(source: str, errors: str) -> str:
+    """The probe without the lines the compiler refused: a function this
+    release does not have, an import nothing is left to use."""
+    bad = {int(n) for n in re.findall(r"main\.go:(\d+):\d+:", errors)}
+    kept = [line for n, line in enumerate(source.splitlines(), 1) if n not in bad]
+    return "\n".join(kept) + "\n"
+
+
+def build_go_set(goroot: Path, title: str, out: Path, tmp: Path, names) -> int:
+    """`title`'s set from the Go at `goroot`: the probe, linked externally,
+    and gen-flirt-pats over the `go.o` its linker leaves. The number of
+    functions; raises on a build that does not succeed."""
+    go = goroot / "bin" / "go"
+    version = subprocess.run([str(go), "env", "GOVERSION"], capture_output=True, text=True,
+                             env={"PATH": "/usr/bin:/bin", "GOROOT": str(goroot), "HOME": str(tmp)},
+                             check=True).stdout.strip()
+    found = GO_RELEASE.match(version.split(" ")[0])
+    if not found:
+        raise ValueError(f"{goroot} says it is {version!r}")
+    probe, link = tmp / "probe", tmp / "link"
+    probe.mkdir()
+    link.mkdir()
+    (probe / "go.mod").write_text(f"module probe\n\ngo {found[1]}.{found[2]}\n")
+    env = {"PATH": f"{goroot}/bin:/usr/bin:/bin", "GOROOT": str(goroot), "HOME": str(tmp),
+           "GOCACHE": str(tmp / "cache"), "GOPATH": str(tmp / "gopath"), "GOTOOLCHAIN": "local",
+           "GOPROXY": "off", "GOSUMDB": "off", "GOFLAGS": "", "GO111MODULE": "on",
+           "GOOS": "linux", "GOARCH": "amd64", "GOAMD64": "v1", "CGO_ENABLED": "1"}
+    source = go_probe(names)
+    for _ in range(GO_ATTEMPTS):
+        (probe / "main.go").write_text(source)
+        for stale in link.iterdir():
+            stale.unlink()
+        built = subprocess.run(
+            [str(go), "build", "-trimpath", "-tags", "netgo,osusergo",
+             "-ldflags", f"-linkmode=external -tmpdir={link}", "-o", str(tmp / "probe.bin"), "."],
+            cwd=probe, env=env, capture_output=True, text=True, timeout=900)
+        if built.returncode == 0:
+            break
+        trimmed = _trim(source, built.stderr)
+        if trimmed == source:
+            raise ValueError(f"the probe does not build: {built.stderr.strip()[-400:]}")
+        source = trimmed
+    else:
+        raise ValueError("the probe does not build")
+    if not (link / "go.o").is_file():
+        raise ValueError("the linker left no go.o")
+    return pats.write_set(title, [link / "go.o"], out, local=True)
+
+
+def go_hook_names(path: Path = GO_HOOKS) -> list:
+    return [line.split(",")[1] for line in path.read_text().splitlines() if line.startswith("go,")]
+
+
+def fetch_go(wanted: str, out: Path, listing: bool, goroot: Path | None = None) -> tuple:
+    names = go_hook_names()
+    if goroot is not None:
+        with tempfile.TemporaryDirectory(prefix="flirt-go-") as tmp:
+            version = subprocess.run([str(goroot / "bin" / "go"), "env", "GOVERSION"], capture_output=True,
+                                     text=True, env={"PATH": "/usr/bin:/bin", "GOROOT": str(goroot), "HOME": tmp},
+                                     check=True).stdout.strip().split(" ")[0]
+            title = f"go-{version.removeprefix('go')}-amd64"
+            count = build_go_set(goroot, title, out, Path(tmp), names)
+        print(f"{title}: {count} functions (from {goroot})")
+        return (1, 0) if count else (0, 1)
+    index = json.load(get(GO_INDEX))
+    made = failed = 0
+    for version in go_releases(index, wanted):
+        title = f"go-{version.removeprefix('go')}-amd64"
+        if (out / f"{title}.pat.gz").exists():
+            print(f"{title}: already there")
+            continue
+        archive = go_archive(index, version)
+        if listing:
+            print(f"{title}  <-  {GO_DL}/{archive['filename']}")
+            continue
+        with tempfile.TemporaryDirectory(prefix="flirt-go-") as tmp:
+            try:
+                digest = hashlib.sha256()
+                tarball = Path(tmp) / archive["filename"]
+                with get(f"{GO_DL}/{archive['filename']}", timeout=600) as response, tarball.open("wb") as fh:
+                    for chunk in iter(lambda: response.read(1 << 20), b""):
+                        digest.update(chunk)
+                        fh.write(chunk)
+                if digest.hexdigest() != archive["sha256"]:
+                    raise ValueError("sha256 differs from go.dev's index")
+                with tarfile.open(tarball) as tar:
+                    tar.extractall(Path(tmp) / "root", filter="data")
+                tarball.unlink()
+                work = Path(tmp) / "work"
+                work.mkdir()
+                count = build_go_set(Path(tmp) / "root" / "go", title, out, work, names)
+            except (OSError, ValueError, KeyError, StopIteration, tarfile.TarError,
+                    subprocess.SubprocessError) as exc:
+                print(f"{title}: {type(exc).__name__}: {exc}", file=sys.stderr)
+                failed += 1
+                continue
+        if count:
+            made += 1
+            print(f"{title}: {count} functions")
+        else:
+            print(f"{title}: no function in its go.o", file=sys.stderr)
+            failed += 1
+    return made, failed
+
+
 def expected_sha256(arch: str, stem: str) -> str:
     return get(f"{INDEX}/{arch}/tarballs/{stem}.sha256").read().decode().split()[0]
 
@@ -232,7 +424,19 @@ def main(argv=None) -> int:
                         "instead of the C libraries. A job's report says which release a sample needs")
     p.add_argument("--rust-target", default=",".join(RUST_TARGETS[:2]),
                    help=f"comma-separated, of {', '.join(RUST_TARGETS)}")
+    p.add_argument("--go", default="",
+                   help="Go releases to build sets of, instead of the C libraries: newest:N, "
+                        "a minor version (1.24) or a release (1.25.3), comma-separated")
+    p.add_argument("--go-root", type=Path, help="build one Go set from this installed Go (its GOROOT)")
     args = p.parse_args(argv)
+    if args.go or args.go_root:
+        try:
+            made, failed = fetch_go(args.go, args.out, args.list, args.go_root)
+        except (OSError, ValueError, subprocess.SubprocessError) as exc:
+            p.error(f"Go: {exc}")
+        if not args.list:
+            print(f"{made} Go sets written to {args.out}" + (f", {failed} failed" if failed else ""))
+        return 1 if failed else 0
     if args.rust:
         versions_, targets = args.rust.split(","), args.rust_target.split(",")
         if not all(RUST_VERSION.match(v) for v in versions_) or set(targets) - set(RUST_TARGETS):

@@ -346,6 +346,33 @@
     serves a payload once) shows less in the second run than the first
     had. Keeping `first-run/trace.log.gz` as an artifact is an hour; whether
     the report should merge the two is the real question.
+  - **The sample's own process may still go undumped on Windows** (job
+    295f5786, 2026-11-15). It was not, as first written here, ended by its
+    last thread: its main thread was still in `NtRaiseHardError` when the
+    trace stopped. procdump2 then queues every process the analysis started
+    for a dump, and DRAKVUF waited 30 s; dumps take 6-35 s each and were
+    taken by PID. Since 2026-11-15 they are taken oldest first (drakvuf
+    procdump2 `dispatcher`) and a job with procdump2 waits up to 120 s
+    (`guests.PROCDUMP_STOP_WAIT`, procdump2's own deadline 100 s). Still
+    open, for a guest run to settle: whether a process blocked in a hard
+    error suspends for the dump at all, and a sample whose memory runs to
+    gigabytes, which 100 s does not copy. A process that really ends by its
+    last thread calls `NtTerminateProcess` from `RtlExitUserThread` and is
+    dumped there; only one whose last thread another process kills with
+    `NtTerminateThread` is not.
+  - **Obfuscated Go is named by signatures since 2026-11-15**
+    (`fetch-flirt-sets.py --go`, `samplehooks.go_sets`). Measured with Go
+    1.22.2 on a stripped program built as malware is: 4,067 of its 5,168
+    functions named, 24 of the 26 `go-hooks.txt` functions it has, none of
+    those wrong (5 wrong names, all compiler-made type-equality helpers).
+    Not measured on a garble build: garble leaves the standard library's
+    code as it is unless `-literals`, which rewrites the functions that
+    have string literals; a release's set names what the build left alone.
+    Left: Windows Go programs get Linux sets (a Windows set needs Go's COFF
+    object read, `go.o` is COFF for windows/amd64): the functions whose code
+    is the same on both are named, the system-facing ones not. 32-bit Go
+    has no sets. Two functions alike in bytes and in whom they call
+    (`crypto/cipher.NewCBCEncrypter` and `...Decrypter`) are named neither.
   - **zstd dumps** are not read (sandboxd asks procdump2 for gzip), and a
     dump whose image is over 256 MiB is cut there.
   - **32-bit PE under ASLR with its relocations stripped from memory**: the

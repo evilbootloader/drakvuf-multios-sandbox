@@ -49,19 +49,24 @@ def sidecar(directory: Path, pid: int, data: bytes, n: int = 0, **extra) -> None
 
 # --- Linux ------------------------------------------------------------------
 
-def core(ranges: list) -> bytes:
-    """[(virtual address, flags, bytes)] as procdump2 writes a process."""
+def core(ranges: list, files: tuple = ()) -> bytes:
+    """[(virtual address, flags, bytes)] as procdump2 writes a process, and
+    its NT_FILE note of [(start, end, file)] after the memory."""
     count = len(ranges) + 1
     out = bytearray(b"\x7fELF\x02\x01\x01" + bytes(9) + struct.pack("<HHIQQQIHHHHHH", 4, 62, 1, 0, 64, 0, 0, 64, 56,
                                                                      count, 64, 0, 0))
     offset = 64 + 56 * count
-    out += struct.pack("<IIQQQQQQ", 4, 0, 0, 0, 0, 0, 0, 0)        # PT_NOTE, written after the memory
+    desc = struct.pack("<QQ", len(files), 8) + b"".join(struct.pack("<QQQ", a, b, 0) for a, b, _ in files) \
+        + b"".join(name.encode() + b"\0" for _, _, name in files)
+    note = struct.pack("<III", 5, len(desc), 0x46494C45) + b"CORE\0\0\0\0" + desc
+    note_at = offset + sum(len(data) for _, _, data in ranges)
+    out += struct.pack("<IIQQQQQQ", 4, 0, note_at, 0, 0, len(note), 0, 0)        # PT_NOTE, after the memory
     for vaddr, flags, data in ranges:
         out += struct.pack("<IIQQQQQQ", 1, flags, offset, vaddr, 0, len(data), len(data), 0x1000)
         offset += len(data)
     for _, _, data in ranges:
         out += data
-    return bytes(out)
+    return bytes(out + note)
 
 
 def elf_page(kind: int = 2) -> bytes:
@@ -90,6 +95,43 @@ def test_unpacked_code_in_a_core_becomes_lines_that_wait_for_it(tmp_path):
     # by offset from the executable's base as libmon said it, with the bytes to wait for
     assert lines == ["/root/sample,connect,1040,when:" + BODY[:16].hex() + ",log,Fd:int,SockAddr:lpsockaddr,AddrLen:int"]
     assert report[0]["pid"] == 77 and report[0]["hooked"] == 1 and report[0]["found"] == {"flirt": 1}
+
+
+def test_code_unpacked_below_the_packed_file_is_found_and_counted_backwards(tmp_path):
+    """UPX: the packed file is loaded high (its AT_PHDR page is the base
+    libmon reports), unmaps itself and writes the program at 0x400000, in
+    memory no file backs (job ac66493d, 2026-11-15). The offset wraps: the
+    tracer adds it to the base in 64 bits."""
+    base = 0x3D92000
+    dumps = tmp_path / "procdumps"
+    sidecar(dumps, 77, core([(0x400000, 5, CODE), (0x401000, 4, b"rodata".ljust(0x1000, b"\0")),
+                             # a library's code below LOW_MEMORY, in a 32-bit process: its own file
+                             (0x8000000, 5, CODE), (0x7FFE00000000, 5, CODE)],
+                            files=[(0x8000000, 0x8001000, "/usr/lib/libc.so.6")]))
+    trace = tmp_path / "trace.log"
+    trace.write_text(json.dumps({"Plugin": "libmon", "Event": "executable", "PID": 77,
+                                 "Path": "/root/sample", "Base": hex(base)}) + "\n")
+    sample = tmp_path / "sample"
+    sample.write_bytes(b"packed")
+    lines, report = hints.hints("core", dumps, trace, sample, "/root/sample", LIST, sh.static_hooks(LIST), {},
+                                signatures(tmp_path), tmp_path / "none")
+    offset = (0x400040 - base) & ((1 << 64) - 1)
+    assert lines == [f"/root/sample,connect,{offset:x},when:{BODY[:16].hex()},log,Fd:int,SockAddr:lpsockaddr,AddrLen:int"]
+    assert (base + offset) & ((1 << 64) - 1) == 0x400040
+    # and the line is one the second run's list takes
+    assert sh.hint_lines(lines[0]) == lines
+
+
+def test_the_samples_dumps_are_read_however_many_others_are_newer(tmp_path):
+    """procdump2 dumps every process that exits: a hundred of the guest's
+    services came after the sample's one dump, and a cap on all of them
+    read none of the sample's (job ac66493d)."""
+    dumps, trace, sample = linux_job(tmp_path, 0x400000)
+    for n in range(1, hints.MAX_DUMPS + 5):
+        sidecar(dumps, 1000 + n, b"not read", n=n)
+    lines, report = hints.hints("core", dumps, trace, sample, "/root/sample", LIST, sh.static_hooks(LIST), {},
+                                signatures(tmp_path), tmp_path / "none")
+    assert len(lines) == 1 and [entry["pid"] for entry in report] == [77]
 
 
 def test_a_function_the_list_has_already_is_no_hint(tmp_path):
@@ -207,6 +249,47 @@ def test_the_image_with_the_samples_header_is_read_out_of_a_minidump(tmp_path):
     waits = BODY[:4].hex() + "??" * 8 + BODY[12:16].hex()
     assert lines == [f"Users\\u\\Desktop\\s.exe,connect,1040,when:{waits},log,Fd:int,SockAddr:lpsockaddr,AddrLen:int"]
     assert report[0]["base"] == 0x7FF600000000 and report[0]["pid"] == 4321
+
+
+def windows_trace(tmp_path, base, pid=4321):
+    """apimon's word for where each process has the sample's image, and the
+    process names that say which processes are the sample."""
+    module = "\\Users\\u\\Desktop\\s.exe"
+    records = [
+        {"Plugin": "syscall", "PID": pid, "ProcessName": "\\Device\\HarddiskVolume2" + module, "Method": "NtClose"},
+        {"Plugin": "apimon", "Event": "dll_discovered", "DllName": module, "DllBase": hex(base), "PID": pid},
+        # explorer maps the file for its icon: not the sample
+        {"Plugin": "syscall", "PID": 2624, "ProcessName": "\\Device\\HarddiskVolume2\\Windows\\explorer.exe"},
+        {"Plugin": "apimon", "Event": "dll_discovered", "DllName": module, "DllBase": "0x8080000", "PID": 2624},
+    ]
+    trace = tmp_path / "trace.log"
+    trace.write_text("\n".join(json.dumps(r) for r in records) + "\n")
+    return trace
+
+
+def test_the_samples_image_is_found_by_where_apimon_saw_it(tmp_path):
+    """A packer that wipes its header, or writes the payload's over it, leaves
+    no header to match: the image is the range at the base apimon reported,
+    and the sample's own layout stands in for a wiped header."""
+    base = 0x7FF600000000
+    dumps, sample = windows_job(tmp_path, base)
+    trace = windows_trace(tmp_path, base)
+    assert hints.windows_images(trace, "Users\\u\\Desktop\\s.exe") == {4321: base}
+
+    # the header wiped in memory
+    raw = gzip.decompress((dumps / "procdump.0").read_bytes())
+    at = raw.index(pe_page(base))
+    (dumps / "procdump.0").write_bytes(gzip.compress(raw[:at] + bytes(0x1000) + raw[at + 0x1000:]))
+    lines, report = hints.hints("minidump", dumps, trace, sample, "C:\\Users\\u\\Desktop\\s.exe",
+                                LIST, sh.static_hooks(LIST), {}, signatures(tmp_path), tmp_path / "none")
+    assert [line.split(",")[:3] for line in lines] == [["Users\\u\\Desktop\\s.exe", "connect", "1040"]]
+    assert report[0]["base"] == base
+
+    # a dump of another process, or one without that range, is said and not guessed at
+    lines, report = hints.hints("minidump", dumps, windows_trace(tmp_path, 0x7FF700000000), sample,
+                                "C:\\Users\\u\\Desktop\\s.exe", LIST, sh.static_hooks(LIST), {},
+                                signatures(tmp_path), tmp_path / "none")
+    assert lines == [] and report[0]["skipped"] == "the image is not in the dump"
 
 
 def test_a_dump_without_the_samples_image_and_a_sample_that_is_no_program(tmp_path):

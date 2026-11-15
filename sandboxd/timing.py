@@ -264,7 +264,8 @@ def _trace_waits(os_: TargetOs, kind: SampleKind,
 
 def budgets(os_: TargetOs, kind: SampleKind, trace_timeout: int,
             waits: Waits = DEFAULT_WAITS, *,
-            makes_drop_dir: bool = False, launch_slack: int = 0) -> PhaseBudgets:
+            makes_drop_dir: bool = False, launch_slack: int = 0,
+            stop_wait: float = PLUGIN_STOP_WAIT) -> PhaseBudgets:
     """Phase guards for one job, derived rather than tabulated.
 
     **The preconfig and trace budgets are computed from what they contain**,
@@ -298,7 +299,8 @@ def budgets(os_: TargetOs, kind: SampleKind, trace_timeout: int,
         # Plus the ceiling DRAKVUF may wait past -t for plugins with a call
         # still injected (`--wait-stop-plugins`): a guard firing inside that
         # wait kills DRAKVUF with the call in flight, the crash it prevents.
-        trace=trace_floor + PLUGIN_STOP_WAIT + 30.0,
+        # `stop_wait`: the job's (guests.plugin_stop_wait).
+        trace=trace_floor + stop_wait + 30.0,
         collect=COLLECT_BUDGET,
         cleanup=CLEANUP_BUDGET,
     )

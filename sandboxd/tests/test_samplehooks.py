@@ -9,6 +9,7 @@ lost. Skipped, loudly, where there is no compiler or no static libc.
 """
 from __future__ import annotations
 
+import gzip
 import importlib.util
 import json
 import shutil
@@ -510,3 +511,132 @@ def test_a_rust_program_says_which_compiler_built_it(tmp_path, built):
         fetch.rust_rule("rust-1.76.0-x86_64-unknown-linux-musl", "0" * 40))
     found = sh.recognised_sets(sets, sample.read_bytes())
     assert list(found) == ["rust-1.75.0-x86_64-unknown-linux-musl"] and found.popitem()[1] > 1000
+
+
+# --- Go's standard library by its bytes (fetch-flirt-sets.py --go) ----------------------
+#
+# Go's own object is stood in for by one gcc compiles: static functions in one
+# section, whose calls to each other the assembler resolves and leaves no
+# relocation for -- which is what Go's linker does in the `go.o` it hands the
+# system linker.
+
+GO_LIKE = r"""
+#include <unistd.h>
+__attribute__((noinline)) static long statnolog(long a) { return syscall(4, a, 1, 2) + 7; }
+__attribute__((noinline)) static long getenvsys(long a) { return syscall(39, a, 3) * 5; }
+__attribute__((noinline)) static long testlog(long a) { return a ^ 0x5a5a; }
+/* the same bytes but for whom they call */
+__attribute__((noinline)) static long os_stat(long a) { return statnolog(testlog(a)) + 1; }
+__attribute__((noinline)) static long os_getenv(long a) { return getenvsys(testlog(a)) + 1; }
+long (*keep[])(long) = { os_stat, os_getenv };
+int main(int c, char **v) { return (int)(os_stat(c) + os_getenv(c)); }
+"""
+
+
+@pytest.fixture(scope="module")
+def go_like(tmp_path_factory):
+    """(object with resolved calls, the program it links into, stripped)."""
+    if not shutil.which("gcc") or not shutil.which("strip"):
+        pytest.skip("no gcc or strip: the Go set tests were not run")
+    tmp = tmp_path_factory.mktemp("golike")
+    (tmp / "g.c").write_text(GO_LIKE)
+    subprocess.run(["gcc", "-O1", "-fno-pie", "-fcf-protection=none", "-c", "-o", str(tmp / "g.o"), str(tmp / "g.c")],
+                   check=True, capture_output=True)
+    subprocess.run(["gcc", "-static", "-no-pie", "-o", str(tmp / "g"), str(tmp / "g.o")], check=True, capture_output=True)
+    subprocess.run(["strip", str(tmp / "g")], check=True)
+    return tmp / "g.o", tmp / "g"
+
+
+def test_calls_that_leave_a_function_are_wildcarded_by_their_shape():
+    code = bytes.fromhex("55" "e8 10000000" "e8 fbffffff" "90" "e9 00010000" "c3")
+    # the first call lands at 0x15, outside; the second on itself; the jump outside
+    assert sorted(pats.outbound_branches(code, 0x100)) == [0x102, 0x103, 0x104, 0x105, 0x10d, 0x10e, 0x10f, 0x110]
+
+
+def test_a_go_set_is_made_from_local_functions_with_their_callees(go_like, tmp_path):
+    obj, _ = go_like
+    assert pats.write_set("go-1.0.0-amd64", [obj], tmp_path / "flirt", local=True) >= 4
+    lines = gzip.decompress((tmp_path / "flirt" / "go-1.0.0-amd64.pat.gz").read_bytes()).decode()
+    assert ":0000 os_stat" in lines and ":0000 os_getenv" in lines
+    calls = json.loads(gzip.decompress((tmp_path / "flirt" / "go-1.0.0-amd64.calls.json.gz").read_bytes()))
+    assert {"statnolog", "testlog"} <= {c for _, callees in calls["os_stat"] for c in callees}
+    # no rule: Go's sets are tried on Go programs, not recognised by libc's functions
+    assert not (tmp_path / "flirt" / "go-1.0.0-amd64.yar").exists()
+    # and without `local`, a C library's file-local functions are not taken
+    assert pats.write_set("c", [obj], tmp_path / "c") == 1         # main
+
+
+def test_a_go_programs_functions_are_named_by_the_set_that_names_most(go_like, tmp_path):
+    obj, program = go_like
+    directory = tmp_path / "flirt"
+    pats.write_set("go-1.0.0-amd64", [obj], directory, local=True)
+    # another release's set, which names nothing here
+    (directory / "go-1.1.0-amd64.pat").write_text("%s 00 0000 0040 :0000 other\n---\n" % ("CC" * 32))
+    image = sh.read_image(program)
+    image.toolchain = "go"
+    sh.GO_MIN_NAMED, saved = 1, sh.GO_MIN_NAMED
+    try:
+        found = {f.name: f for f in sh.go_sets(image, directory)}
+    finally:
+        sh.GO_MIN_NAMED = saved
+    assert image.go_set == "go-1.0.0-amd64" and image.go_version == "go1.0.0"
+    assert image.sets == ["go-1.0.0-amd64", "go-1.1.0-amd64"]
+    # told apart by whom they call
+    assert {"os_stat", "os_getenv", "statnolog", "getenvsys"} <= set(found)
+    assert found["os_stat"].offset != found["os_getenv"].offset
+    assert found["os_stat"].how == "flirt:go-1.0.0-amd64"
+
+
+def test_without_its_callees_two_functions_alike_are_named_neither(go_like, tmp_path):
+    obj, program = go_like
+    directory = tmp_path / "flirt"
+    pats.write_set("go-1.0.0-amd64", [obj], directory, local=True)
+    (directory / "go-1.0.0-amd64.calls.json.gz").unlink()
+    image = sh.read_image(program)
+    sh.GO_MIN_NAMED, saved = 1, sh.GO_MIN_NAMED
+    try:
+        names = {f.name for f in sh.go_sets(image, directory)}
+    finally:
+        sh.GO_MIN_NAMED = saved
+    assert "statnolog" in names and not {"os_stat", "os_getenv"} & names
+
+
+def test_go_sets_are_kept_from_other_programs_and_go_lines_use_their_release(tmp_path):
+    directory = tmp_path / "flirt"
+    directory.mkdir()
+    pattern = "%s 00 0000 0040 :0000 f\n---\n" % ("55" * 32)
+    for name in ("go-1.22.2-amd64", "musl-1.2.5-gcc-13.3.0-x86-64"):
+        (directory / f"{name}.pat").write_text(pattern)
+    assert [n for n, _ in sh.load_signatures(directory)] == ["musl-1.2.5-gcc-13.3.0-x86-64"]
+    assert [n for n, _ in sh.load_signatures(directory, go=True)] == ["go-1.22.2-amd64"]
+    image = sh.Image("elf", 64, base=0x400000, go_version="go1.22.2", go_set="go-1.22.2-amd64")
+    go = {"net.Dial": "goabi,log,Network:buffer[NetworkLen],NetworkLen:ulong"}
+    located = [sh.Located("net.Dial", 0x401000, "flirt:go-1.22.2-amd64"), sh.Located("net.dial", 0x402000, "flirt:go-1.22.2-amd64")]
+    assert sh.sample_lines(located, {}, "/s", image.base, go, sh.go_abi(image)) == \
+        ["/s,net.Dial,1000,goabi,log,Network:buffer[NetworkLen],NetworkLen:ulong"]
+    assert sh.report(image, located, [])["go"]["signature_set"] == "go-1.22.2-amd64"
+
+
+def test_go_releases_are_chosen_from_the_index():
+    index = [{"version": v, "stable": True} for v in
+             ("go1.24", "go1.24.1", "go1.24.13", "go1.25.0", "go1.25.14", "go1.26.11", "go1.27.4")]
+    index.append({"version": "go1.28rc1", "stable": False})
+    assert fetch.go_releases(index, "newest:2") == ["go1.26.11", "go1.27.4"]
+    assert fetch.go_releases(index, "1.24,1.25.0") == ["go1.24.13", "go1.25.0"]
+    with pytest.raises(ValueError):
+        fetch.go_releases(index, "1.28")
+
+
+def test_the_probe_refers_to_each_exported_go_function_once():
+    source = fetch.go_probe(["net.Dial", "net/http.(*Client).Do", "golang.org/x/sys/windows/registry.Key.GetStringValue",
+                             "syscall.connect", "internal/poll.(*FD).Read", "net.Dial"])
+    assert source.count("p0.Dial,") == 1 and "(*p1.Client).Do," in source
+    # the standard library only: nothing is downloaded to build it, and an
+    # unexported or internal function cannot be named from outside
+    assert 'p1 "net/http"' in source and "registry" not in source
+    assert "connect" not in source and "internal/poll" not in source
+    assert "p0.Key.GetStringValue," in fetch.go_probe(["text/template.Key.GetStringValue"])
+    # a function this release has not is trimmed by the compiler's own word
+    line = next(n for n, text in enumerate(source.splitlines(), 1) if "p1.Client" in text)
+    trimmed = fetch._trim(source, f"./main.go:{line}:2: undefined: p1.Client\n")
+    assert "(*p1.Client)" not in trimmed and len(trimmed.splitlines()) == len(source.splitlines()) - 1

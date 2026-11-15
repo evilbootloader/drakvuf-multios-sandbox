@@ -35,6 +35,7 @@ from __future__ import annotations
 import argparse
 import gzip
 import io
+import json
 import sys
 from pathlib import Path
 
@@ -103,8 +104,27 @@ def members(path: Path):
             yield name.rstrip(b"/").decode("utf-8", "replace"), body
 
 
-def patterns(obj: bytes):
-    """One pattern line per function of a relocatable object."""
+def outbound_branches(code: bytes, start: int) -> set:
+    """Offsets (from the section's start) of the operand of every `call
+    rel32` and `jmp rel32` in a function's bytes that goes outside it. An E8
+    or E9 that is part of another instruction gives a target that is
+    anywhere, mostly outside too: its four bytes are left out as well, which
+    costs a pattern a little of its precision and nothing else."""
+    holes = set()
+    for at in range(len(code) - 4):
+        if code[at] in (0xE8, 0xE9):
+            target = at + 5 + int.from_bytes(code[at + 1:at + 5], "little", signed=True)
+            if not 0 <= target < len(code):
+                holes.update(range(start + at + 1, start + at + 5))
+    return holes
+
+
+def patterns(obj: bytes, local: bool = False):
+    """One pattern line per function of a relocatable object. `local`: Go's
+    object (scripts/fetch-flirt-sets.py --go) -- every Go function in it is
+    file-local, and its linker has already resolved the calls between them,
+    leaving no relocation to say where a program's linker puts other bytes:
+    the calls and jumps that leave a function are left out by their shape."""
     elf = ELFFile(io.BytesIO(obj))
     if elf["e_type"] != "ET_REL" or elf["e_machine"] not in ("EM_X86_64", "EM_386"):
         return
@@ -130,7 +150,9 @@ def patterns(obj: bytes):
     for symbol in symtab.iter_symbols():
         if (symbol["st_info"]["type"] == "STT_FUNC" and isinstance(symbol["st_shndx"], int)
                 and symbol["st_size"] >= MIN_BYTES and symbol.name
-                and symbol["st_info"]["bind"] in ("STB_GLOBAL", "STB_WEAK")):
+                # a line's fields are cut at spaces: Go's `type:.eq.struct { ... }`
+                and not any(c.isspace() for c in symbol.name)
+                and (local or symbol["st_info"]["bind"] in ("STB_GLOBAL", "STB_WEAK"))):
             functions.setdefault((symbol["st_shndx"], symbol["st_value"], symbol["st_size"]), []).append(symbol.name)
 
     for (index, start, size), names in sorted(functions.items()):
@@ -141,6 +163,8 @@ def patterns(obj: bytes):
         if len(code) != size:
             continue
         holes = masked.get(index, set())
+        if local:
+            holes = holes | outbound_branches(code, start)
         text = ["%02X" % b if start + i not in holes else ".." for i, b in enumerate(code)]
         # A pattern that is wildcards but for a few bytes matches every stub
         # of its shape (`sub rsp,8; lea rdi,[rip+..]; call ..` is half of
@@ -157,6 +181,38 @@ def patterns(obj: bytes):
         tail = "".join(text[LEAD + covered:])
         names_text = " ".join(":0000 " + name for name in sorted(set(names)))
         yield "%s %02X %04X %04X %s%s" % (lead, covered, crc, size, names_text, " " + tail if tail else "")
+
+
+def outbound_calls(obj: bytes) -> dict:
+    """function name -> [[offset of a call's operand in it, [names of the
+    function it calls]], ...] for Go's object, whose linker resolved the
+    calls between its functions. What tells apart two functions with the
+    same bytes but for whom they call -- `os.Getenv` and `os.Stat` are each
+    a frame around one call (samplehooks.from_flirt)."""
+    elf = ELFFile(io.BytesIO(obj))
+    symtab = next((s for s in elf.iter_sections() if isinstance(s, SymbolTableSection)), None)
+    if symtab is None:
+        return {}
+    starts: dict = {}
+    for symbol in symtab.iter_symbols():
+        if (symbol["st_info"]["type"] == "STT_FUNC" and isinstance(symbol["st_shndx"], int)
+                and symbol["st_size"] >= MIN_BYTES and symbol.name
+                and not any(c.isspace() for c in symbol.name)):
+            starts.setdefault((symbol["st_shndx"], symbol["st_value"]), (symbol["st_size"], []))[1].append(symbol.name)
+    found: dict = {}
+    for (index, start), (size, names) in starts.items():
+        code = elf.get_section(index).data()[start:start + size]
+        calls = []
+        for at in range(len(code) - 4):
+            if code[at] == 0xE8:
+                target = start + at + 5 + int.from_bytes(code[at + 1:at + 5], "little", signed=True)
+                callee = starts.get((index, target))
+                if callee and not start <= target < start + size:
+                    calls.append([at + 1, sorted(callee[1])])
+        if calls:
+            for name in names:
+                found[name] = calls
+    return found
 
 
 #: Functions nearly every static program has from its C library, whatever it
@@ -205,7 +261,7 @@ def identity_rule(name: str, lines) -> str:
             '    condition:\n        3 of them\n}\n' % (identifier, name, body))
 
 
-def write_set(name: str, libraries, out: Path) -> int:
+def write_set(name: str, libraries, out: Path, local: bool = False) -> int:
     """`<out>/<name>.pat.gz` and `<name>.yar` from the libraries; the number
     of functions, 0 (and nothing written) when there is none."""
     lines = set()
@@ -214,7 +270,7 @@ def write_set(name: str, libraries, out: Path) -> int:
             if not body.startswith(b"\x7fELF"):
                 continue
             try:
-                lines.update(patterns(body))
+                lines.update(patterns(body, local))
             except Exception as exc:  # noqa: BLE001 - one object nobody can read is not the library
                 print(f"{library}({member}): {type(exc).__name__}: {exc}", file=sys.stderr)
     if not lines:
@@ -222,6 +278,13 @@ def write_set(name: str, libraries, out: Path) -> int:
     out.mkdir(parents=True, exist_ok=True)
     ordered = sorted(lines)
     (out / f"{name}.pat.gz").write_bytes(gzip.compress(("\n".join(ordered) + "\n---\n").encode()))
+    if local:
+        calls: dict = {}
+        for library in libraries:
+            for _, body in members(library):
+                if body.startswith(b"\x7fELF"):
+                    calls.update(outbound_calls(body))
+        (out / f"{name}.calls.json.gz").write_bytes(gzip.compress(json.dumps(calls, separators=(",", ":")).encode()))
     rule = identity_rule(name, ordered)
     if rule:
         (out / f"{name}.yar").write_text(rule)

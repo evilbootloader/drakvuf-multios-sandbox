@@ -211,6 +211,12 @@ runs, preserving the agentless design.
 >     which is how the first run's addresses become offsets. **An Ubuntu
 >     trace has these records more than before**; nothing reads them but
 >     `stagehints`.
+>   - procdump2 (2026-11-15): the processes still running when the trace
+>     stops are dumped oldest first, not lowest PID first. Every process the
+>     analysis started is queued then and DRAKVUF waits a bounded time; the
+>     sample is among the oldest, and in job 295f5786 it was never reached.
+>     sandboxd waits up to 120 s for a job with procdump2
+>     (`guests.PROCDUMP_STOP_WAIT`) and passes `--procdump-timeout 100`.
 >   - procdump2: a Windows minidump describes 2048 memory ranges, not 256.
 >     One range is one VAD and a 64-bit process's own image comes after its
 >     heaps and stacks, so at 256 the list could end before the program.

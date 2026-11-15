@@ -66,7 +66,13 @@ from . import samplehooks as sh
 #: executable's own memory is looked for (its libraries are further)
 MAX_IMAGE = 256 << 20
 SPAN = 1 << 30
-#: Dumps looked at per job, and bytes of a function a hint waits for
+#: Below this a 64-bit Linux process has its executable, its heap and what it
+#: maps at an address of its own choosing -- where UPX puts the program it
+#: unpacks (0x400000, below the packed file). Libraries, other mmaps, the
+#: stack and the vDSO are above.
+LOW_MEMORY = 0x7F0000000000
+#: Dumps of the sample's processes read per job, and bytes of a function a
+#: hint waits for
 MAX_DUMPS = 16
 WHEN_BYTES = 16
 #: Of those, how many must be the same in every run for a hint to be written
@@ -99,7 +105,8 @@ def _skip_to(stream, position: int, at: int) -> bool:
 
 def sidecars(directory: Path) -> Iterator[tuple]:
     """(pid, dump file, compression) of each finished dump, newest first: a
-    process dumped twice is read as it was last."""
+    process dumped twice is read as it was last. Every process the guest
+    dumped, the sample's among a hundred others: `hints` picks."""
     found = []
     for sidecar in directory.glob("*.metadata"):
         try:
@@ -146,24 +153,86 @@ def linux_executables(trace_log: Path) -> dict:
     return found
 
 
-def read_core(stream, base: int) -> tuple:
-    """(data, [(virtual address, offset in data, size, executable)]) of the
-    memory a core has from `base` up, SPAN at most. procdump2 writes ELF64
-    whatever the process, its memory in the order of its program headers."""
+def _core_headers(stream) -> Optional[tuple]:
+    """(program headers as (type, flags, offset, vaddr, filesz), where the
+    stream is) of an ELF64 core read from its start."""
     header = stream.read(64)
     if len(header) < 64 or header[:5] != b"\x7fELF\x02":
-        return b"", []
+        return None
     phoff, = struct.unpack_from("<Q", header, 0x20)
     entsize, count = struct.unpack_from("<HH", header, 0x36)
     if entsize < 56 or not _skip_to(stream, phoff, 64):
-        return b"", []
+        return None
     table = stream.read(entsize * count)
-    at = phoff + len(table)
+    rows = [struct.unpack_from("<IIQQ8xQ", table, i * entsize) for i in range(len(table) // entsize)]
+    return rows, phoff + len(table)
+
+
+def core_files(stream) -> list:
+    """[(start, end, file)] of the core's NT_FILE note: which of the memory
+    is mapped from which file. procdump2 writes the note after the memory,
+    so this is a pass of its own over a stream read forwards."""
+    found = _core_headers(stream)
+    if found is None:
+        return []
+    rows, at = found
+    note = next(((offset, size) for kind, _, offset, _, size in rows if kind == 4 and size), None)
+    if note is None or note[1] > 16 << 20 or not _skip_to(stream, note[0], at):
+        return []
+    raw = stream.read(note[1])
+    try:
+        namesz, descsz, kind = struct.unpack_from("<III", raw, 0)
+        desc = 12 + ((namesz + 3) & ~3)
+        if kind != 0x46494C45:                                   # NT_FILE
+            return []
+        count, _ = struct.unpack_from("<QQ", raw, desc)
+        count = min(count, 1 << 16)
+        spans = [struct.unpack_from("<QQ", raw, desc + 16 + 24 * i) for i in range(count)]
+        names = raw[desc + 16 + 24 * count:desc + descsz].split(b"\0")
+    except struct.error:
+        return []
+    return [(start, end, name.decode("utf-8", "replace")) for (start, end), name in zip(spans, names)]
+
+
+def _same_file(a: str, b: str) -> bool:
+    return a.removesuffix(" (deleted)") == b.removesuffix(" (deleted)")
+
+
+def program_ranges(rows: list, files: list, base: int, path: str) -> list:
+    """The program's own memory in a core, as (offset in the core, vaddr,
+    size, executable): from its base up, and what lies low (LOW_MEMORY) --
+    neither part mapped from a file that is not its own. Low anonymous memory
+    is where a packer like UPX writes the program it unpacks."""
     wanted = []
-    for i in range(len(table) // entsize):
-        kind, flags, offset, vaddr, _, filesz = struct.unpack_from("<IIQQQQ", table, i * entsize)
-        if kind == 1 and filesz and base <= vaddr < base + SPAN:
-            wanted.append((offset, vaddr, filesz, bool(flags & 1)))
+    for kind, flags, offset, vaddr, filesz in rows:
+        if kind != 1 or not filesz:
+            continue
+        if not (base <= vaddr < base + SPAN or vaddr < LOW_MEMORY):
+            continue
+        mapped = next((name for start, end, name in files if start <= vaddr < end), None)
+        if mapped is not None and not _same_file(mapped, path):
+            continue
+        wanted.append((offset, vaddr, filesz, bool(flags & 1)))
+    return sorted(wanted)
+
+
+def read_core(opener: Callable, base: int, path: str = "") -> tuple:
+    """(data, [(virtual address, offset in data, size, executable)]) of the
+    program's memory in a core (program_ranges). `opener` gives the dump
+    from its start, once for its file map and once for its memory. procdump2
+    writes ELF64 whatever the process, its memory in program-header order."""
+    with opener() as stream:
+        files = core_files(stream)
+    with opener() as stream:
+        return _read_ranges(stream, base, path, files)
+
+
+def _read_ranges(stream, base: int, path: str, files: list) -> tuple:
+    found = _core_headers(stream)
+    if found is None:
+        return b"", []
+    rows, at = found
+    wanted = program_ranges(rows, files, base, path)
     data, ranges = bytearray(), []
     for offset, vaddr, size, executable in sorted(wanted):
         if len(data) + size > MAX_IMAGE or not _skip_to(stream, offset, at):
@@ -233,44 +302,87 @@ def pe_header(page: bytes) -> Optional[dict]:
         return None
 
 
-def read_minidump(stream, sample: dict) -> tuple:
-    """(base, the mapped image) of the sample in a procdump2 minidump: the
-    range that starts with the sample's own header. Its memory list has one
-    range a VAD, and the memory follows the header in that order (win.cpp)."""
+def windows_images(trace_log: Path, module: str) -> dict:
+    """pid -> base of the sample's image in each process whose image it is:
+    apimon's `dll_discovered` for the module (the EXE is offered to the hook
+    lists like a DLL), in a process the trace names after the sample. Other
+    processes map the file as an image too -- explorer for its icon, the
+    antivirus to scan it -- and are not the sample. {} without apimon."""
+    want = module.lower()
+    needle = module.rsplit("\\", 1)[-1].encode()
+    bases: dict = {}
+    pids: set = set()
+    try:
+        with trace_log.open("rb") as fh:
+            for line in fh:
+                if needle not in line:
+                    continue
+                try:
+                    record = json.loads(line)
+                    pid = int(record["PID"])
+                except (ValueError, KeyError, TypeError):
+                    continue
+                name = record.get("ProcessName")
+                if isinstance(name, str) and sh.module_name(sh.Image("pe", 64), name).lower() == want:
+                    pids.add(pid)
+                if (record.get("Plugin") == "apimon" and record.get("Event") == "dll_discovered"
+                        and str(record.get("DllName", "")).lstrip("\\").lower() == want):
+                    try:
+                        bases.setdefault(pid, int(str(record["DllBase"]), 16))
+                    except (KeyError, ValueError):
+                        continue
+    except OSError:
+        pass
+    return {pid: base for pid, base in bases.items() if pid in pids}
+
+
+def read_minidump(stream, sample: dict, base: Optional[int] = None) -> tuple:
+    """(base, the mapped image, its header) of the sample in a procdump2
+    minidump. With `base` (windows_images), the range there, whatever its
+    first page holds: a packer may wipe its header or put the payload's in
+    its place; the sample's own layout then stands in for a wiped one.
+    Without, the range that starts with the sample's own header. The memory
+    list has one range a VAD, the memory following in that order (win.cpp)."""
+    nothing = (0, b"", None)
     head = stream.read(32)
     if len(head) < 32 or head[:4] != b"MDMP":
-        return 0, b""
+        return nothing
     nstreams, directory = struct.unpack_from("<II", head, 8)
     if not _skip_to(stream, directory, 32):
-        return 0, b""
+        return nothing
     entries = stream.read(12 * min(nstreams, 64))
     at = directory + len(entries)
     where = next((struct.unpack_from("<III", entries, i)[2] for i in range(0, len(entries) - 11, 12)
                   if struct.unpack_from("<I", entries, i)[0] == 5), None)      # MemoryListStream
     if where is None or not _skip_to(stream, where, at):
-        return 0, b""
+        return nothing
     raw = stream.read(4)
     if len(raw) < 4:
-        return 0, b""
+        return nothing
     count = min(struct.unpack("<I", raw)[0], 1 << 16)
     table = stream.read(16 * count)
     at = where + 4 + len(table)
     if len(table) < 16:
-        return 0, b""
+        return nothing
     # The descriptors' own offsets are 32 bits and a dump is not: counted here
     offset = struct.unpack_from("<I", table, 12)[0]
     for i in range(len(table) // 16):
         start, size = struct.unpack_from("<QI", table, 16 * i)
-        if size >= 0x1000 and size >= sample["size"] and _skip_to(stream, offset, at):
+        if base is not None:
+            if start == base and size >= 0x1000 and _skip_to(stream, offset, at):
+                page = stream.read(0x1000)
+                header = pe_header(page) or sample
+                return start, page + stream.read(min(header["size"], size, MAX_IMAGE) - len(page)), header
+        elif size >= 0x1000 and size >= sample["size"] and _skip_to(stream, offset, at):
             page = stream.read(0x1000)
             at = offset + len(page)
             header = pe_header(page)
             # A sample that is a DLL is some host's module, and found the same way
             if (header and header["dll"] == sample["dll"] and header["stamp"] == sample["stamp"]
                     and header["size"] == sample["size"]):
-                return start, page + stream.read(min(header["size"], size, MAX_IMAGE) - len(page))
+                return start, page + stream.read(min(header["size"], size, MAX_IMAGE) - len(page)), header
         offset += size
-    return 0, b""
+    return nothing
 
 
 def relocated(data: bytes, header: dict) -> set:
@@ -291,8 +403,8 @@ def relocated(data: bytes, header: dict) -> set:
     return found
 
 
-def minidump_image(base: int, data: bytes, sample: dict) -> Optional[sh.Image]:
-    header = pe_header(data[:0x1000])
+def minidump_image(base: int, data: bytes, sample: dict, header: Optional[dict] = None) -> Optional[sh.Image]:
+    header = header or pe_header(data[:0x1000])
     if header is None:
         return None
     image = sh.Image("pe", header["bits"], base=base)
@@ -379,30 +491,44 @@ def hints(how: str, procdumps: Path, trace_log: Path, sample: Path, guest_path: 
     lines, report, have = [], [], {}
     if how == "minidump" and facts is None:
         return lines, report        # not a program whose image a dump could hold
-    for n, (pid, dump, compression) in enumerate(sidecars(procdumps)):
-        if n >= MAX_DUMPS:
-            break
+    images = (windows_images(trace_log, sh.module_name(sh.Image("pe", facts["bits"]), guest_path))
+              if how == "minidump" else {})
+
+    # The sample's dumps, picked before any is read: procdump2 dumps every
+    # process that exits, and a job's hundred dumps of the guest's services
+    # are newer than the sample's own (job ac66493d, 2026-11-15: its one
+    # dump was the 118th). Linux: a process libmon saw running the sample.
+    # Windows: one apimon saw with the sample as its image, else every dump,
+    # looked into for the sample's header.
+    def wanted(pid: int) -> bool:
+        if how == "core":
+            path, base = executables.get(pid, ("", 0))
+            return bool(base) and is_module(path, guest_path) is not None
+        return not images or pid in images
+    picked = [dump for dump in sidecars(procdumps) if wanted(dump[0])][:MAX_DUMPS]
+
+    for pid, dump, compression in picked:
         entry = {"pid": pid, "dump": dump.name}
         stream = _open(dump, compression)
         if stream is None:
             report.append({**entry, "skipped": f"{compression} is not read"})
             continue
-        with stream:
-            if how == "core":
-                path, base = executables.get(pid, ("", 0))
-                module = is_module(path, guest_path) if base else None
-                if module is None:
-                    continue
-                data, ranges = read_core(stream, base)
-                image = core_image(data, ranges, base, own if module == guest_path else None)
-            elif facts is not None:
-                base, data = read_minidump(stream, facts)
-                if not data:
-                    continue
-                module = sh.module_name(sh.Image("pe", facts["bits"]), guest_path)
-                image = minidump_image(base, data, facts)
-            else:
+        stream.close()
+        if how == "core":
+            path, base = executables[pid]
+            module = is_module(path, guest_path)
+            data, ranges = read_core(lambda: _open(dump, compression), base, path)
+            image = core_image(data, ranges, base, own if module == guest_path else None)
+        else:
+            module = sh.module_name(sh.Image("pe", facts["bits"]), guest_path)
+            with _open(dump, compression) as stream:
+                base, data, header = read_minidump(stream, facts, images.get(pid))
+            if not data:
+                if pid in images:
+                    report.append({**entry, "module": module, "base": images[pid],
+                                   "skipped": "the image is not in the dump"})
                 continue
+            image = minidump_image(base, data, facts, header)
         entry.update(module=module, base=base)
         if image is None:
             report.append({**entry, "skipped": "no code of the program in the dump"})

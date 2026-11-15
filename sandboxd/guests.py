@@ -1446,6 +1446,26 @@ def _launch(job: Job) -> list[str]:
 # running, which is real behaviour rather than noise.
 PLUGIN_STOP_WAIT = 30
 
+# The same wait when `procdump2` is selected, and procdump2's own deadline
+# inside it (`--procdump-timeout`: seconds after it began stopping, at which
+# it gives up what it has not started and cuts short what it is copying, then
+# resumes what it suspended). At the end procdump2 dumps every process
+# started during the analysis that is still running, one after another: a
+# dump took 6 to 35 s on the Windows guest (job 295f5786, 2026-11-15), and in
+# 30 s it finished none of them -- the sample, still running, was never
+# dumped, so a report had no memory of it and a second run nothing to read.
+# It takes the oldest first since drakvuf 2026-11-15 (the sample is), and
+# this is time for the sample's and a few more. A ceiling again: a job whose
+# dumps finish sooner ends sooner, and Linux's procdump2 copies without
+# injecting and is done in seconds. The trace goes on during it (above).
+PROCDUMP_STOP_WAIT = 120
+PROCDUMP_STOP_TIMEOUT = 100
+
+
+def plugin_stop_wait(plugins) -> int:
+    """`--wait-stop-plugins` for a job with these plugins."""
+    return PROCDUMP_STOP_WAIT if PROCDUMP2_PLUGIN in plugins else PLUGIN_STOP_WAIT
+
 # `--fileextractor-timeout`: "Timeout (in seconds) to finish file extractions".
 # Once fileextractor has been stopping this long it ends a Windows extraction at
 # the return of its current injected call instead of injecting the next one, so
@@ -1508,7 +1528,7 @@ def argv_trace(job: Job, component: str | None = None) -> list[str]:
     # With a launch slack, `-t` is the ceiling: sandboxd ends the trace
     # `timeout` seconds after the sample started (stages._await_trace).
     argv += ["-o", "json", "-t", str(job.options.timeout + job.options.launch_slack)]
-    argv += ["--wait-stop-plugins", str(PLUGIN_STOP_WAIT)]
+    argv += ["--wait-stop-plugins", str(plugin_stop_wait(job.options.plugins))]
     for plugin in job.options.plugins:
         argv += ["-a", plugin]
     # The names are the postprocessing package's, not literals: process_dumps
@@ -1567,7 +1587,8 @@ def argv_trace(job: Job, component: str | None = None) -> list[str]:
     # 4 GiB result budget. `stages._trace` creates the directory.
     #
     if PROCDUMP2_PLUGIN in job.options.plugins:
-        argv += ["--procdump-dir", str(job.result_dir / PROCDUMPS_DIR), "--compress-procdumps"]
+        argv += ["--procdump-dir", str(job.result_dir / PROCDUMPS_DIR), "--compress-procdumps",
+                 "--procdump-timeout", str(PROCDUMP_STOP_TIMEOUT)]
         # Also what started during the trace and is still running when it
         # ends ("Dump new processes on finish", `drakvuf --help`): the sample
         # is the injected shell's CHILD on Windows, and a bot's workers

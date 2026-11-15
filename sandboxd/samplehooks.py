@@ -22,6 +22,10 @@ offset in place of an export --
 3. **YARA code signatures** under `sandboxd/data/code-signatures/`: a rule
    with `meta: hook = "<name>"` names the function its match starts at.
 
+A Go program is read through its own function table, and when that names
+nothing -- garble hashes every name in it -- through the signature sets of
+Go's standard library, one per release, the one that names most (go_sets).
+
 Of what is found, a function the static hook list already has a line for is
 hooked, with that line's arguments: the list is where argument types are
 written down, and a breakpoint on every named function of a binary is a cost
@@ -104,6 +108,7 @@ class Image:
     rust: dict = field(default_factory=dict)    # {"commit", "version"}, what a Rust program says
     go_version: str = ""                        # "go1.21.3", when the program says
     go_table: str = ""                          # its function table's layout: "1.2", "1.16", "1.18", "1.20"
+    go_set: str = ""                            # the Go signature set that named its functions (go_sets)
     #: Of a running image (sandboxd/stagehints.py): how far it is from where
     #: it was linked, and the RVAs of the bytes its loader rewrote for that
     moved: int = 0
@@ -394,15 +399,21 @@ def recognised_sets(directory: Path, data: bytes) -> Optional[dict]:
     return found
 
 
-def load_signatures(directory: Path, data: Optional[bytes] = None) -> list:
+#: The sets of Go's standard library (scripts/fetch-flirt-sets.py --go), by
+#: name: tried on Go programs only (go_sets), never with the others
+GO_SET = re.compile(r"^go-(\d+\.\d+(?:\.\d+)?)-amd64$")
+
+
+def load_signatures(directory: Path, data: Optional[bytes] = None, go: bool = False) -> list:
     """[(set name, matcher)] of the `.sig` and `.pat` sets under `directory`
     (gzipped or not) worth trying on a sample: a set with a rule beside it
     only if the rule recognised the sample -- the MAX_SETS that matched most
     of their strings, a library's neighbouring versions sharing many -- and a
-    set with no rule always. A set that does not parse is skipped and said."""
+    set with no rule always. A set that does not parse is skipped and said.
+    `go`: Go's sets instead, every one of them."""
     import flirt
 
-    recognised = recognised_sets(directory, data) if data is not None else None
+    recognised = recognised_sets(directory, data) if data is not None and not go else None
     best = set(sorted(recognised, key=lambda n: (-recognised[n], n))[:MAX_SETS]) if recognised else set()
     sets = []
     for path in sorted(directory.rglob("*")) if directory.is_dir() else ():
@@ -411,6 +422,8 @@ def load_signatures(directory: Path, data: Optional[bytes] = None) -> list:
         if not path.is_file() or not plain.endswith((".sig", ".pat")):
             continue
         stem = plain.rsplit(".", 1)[0]
+        if bool(GO_SET.match(stem)) != go:
+            continue
         if recognised is not None and path.with_name(stem + ".yar").is_file() and stem not in best:
             continue
         try:
@@ -422,10 +435,19 @@ def load_signatures(directory: Path, data: Optional[bytes] = None) -> list:
     return sets
 
 
-def from_flirt(image: Image, sets: list, candidates: Optional[Iterable[int]] = None) -> list:
+def from_flirt(image: Image, sets: list, candidates: Optional[Iterable[int]] = None,
+               calls: Optional[dict] = None) -> list:
+    """Functions named by the signature sets, at the candidate starts.
+
+    `calls` (a Go set's, name -> where it calls whom): two functions whose
+    bytes are the same but for whom they call are told apart by whom the
+    sample's function calls, once that callee is named itself -- a few
+    rounds, as each settles others."""
     if not sets:
         return []
     found = []
+    named: dict = {}            # address -> names, of what one signature named
+    undecided = []              # (address, its bytes, set name, [names of each signature])
     for target in call_targets(image) if candidates is None else candidates:
         for va, _, code in image.code:
             if va <= target < va + len(code):
@@ -443,10 +465,100 @@ def from_flirt(image: Image, sets: list, candidates: Optional[Iterable[int]] = N
             matched = [names for names in matched if names]
             if len({tuple(sorted({plain_name(n) for n in names})) for names in matched}) == 1:
                 found += [Located(name, target, f"flirt:{set_name}") for name in matched[0]]
+                named[target] = set(matched[0])
                 break
             if matched:
+                if calls:
+                    undecided.append((target, window, set_name, matched))
                 break       # ambiguous in this set: another set does not settle it
+
+    def calls_check(target: int, window: bytes, names: list) -> bool:
+        """At least one of the calls the set has the function make lands on
+        that callee as named in the sample, and none on another named one.
+        A callee nothing named yet says neither."""
+        said = next((calls[n] for n in names if n in calls), None)
+        agreed = False
+        for operand, callees in said or ():
+            if operand < 1 or operand + 4 > len(window) or window[operand - 1] != 0xE8:
+                return False
+            callee = target + operand + 4 + int.from_bytes(window[operand:operand + 4], "little", signed=True)
+            if callee in named:
+                if not named[callee] & set(callees):
+                    return False
+                agreed = True
+        return agreed
+
+    for _ in range(4):
+        settled = []
+        for item in undecided:
+            target, window, set_name, matched = item
+            fits = [names for names in matched if calls_check(target, window, names)]
+            if len(fits) == 1:
+                found += [Located(name, target, f"flirt:{set_name}") for name in fits[0]]
+                named[target] = set(fits[0])
+                settled.append(item)
+        if not settled:
+            break
+        undecided = [item for item in undecided if item not in settled]
     return found
+
+
+#: Function starts each Go set is tried on to choose between them, and the
+#: names the best must give to be taken at all
+GO_TRIAL = 20_000
+GO_MIN_NAMED = 10
+
+
+def go_starts(image: Image) -> list:
+    """Where Go's functions start that nothing calls directly -- methods
+    reached through an interface, functions passed as values: Go's linker
+    starts every function on 32 bytes and fills the gap before it with
+    INT3, so an aligned address after a 0xCC is one."""
+    found = []
+    for va, _, code in image.code:
+        first = (-va) % 32
+        for at in range(first or 32, len(code), 32):
+            if code[at - 1] == 0xCC and code[at] != 0xCC:
+                found.append(va + at)
+                if len(found) >= MAX_CANDIDATES:
+                    return found
+    return found
+
+
+def go_sets(image: Image, directory: Path) -> list:
+    """The functions of a Go program whose table names nothing it lists --
+    garble's: its names are hashes and its table's magic random -- named by
+    their bytes with the set of the Go release that built it. Which release
+    the program does not say, so each set is tried on a spread of its
+    function starts and the one that names most is used, alone: two
+    releases' names mixed would be two guesses. Sets the program is not
+    built with name little, because a function's bytes change from one
+    release to the next."""
+    sets = load_signatures(directory, go=True)
+    if not sets:
+        return []
+    candidates = sorted(set(call_targets(image)) | set(go_starts(image)))
+    trial = candidates[::max(1, len(candidates) // GO_TRIAL)]
+    scored = sorted(((len(from_flirt(image, [one], trial)), one[0], one) for one in sets),
+                    key=lambda s: (-s[0], s[1]))
+    named, name, best = scored[0]
+    image.sets = [n for _, n, _ in scored]
+    if named < GO_MIN_NAMED * len(trial) // max(1, GO_TRIAL):
+        return []
+    image.go_set = name
+    image.go_version = "go" + GO_SET.match(name).group(1)
+    return from_flirt(image, [best], candidates, go_calls(directory, name))
+
+
+def go_calls(directory: Path, name: str) -> dict:
+    """A Go set's record of whom each of its functions calls
+    (`<set>.calls.json.gz`, gen-flirt-pats.outbound_calls); {} without."""
+    for path in directory.rglob(f"{name}.calls.json.gz") if directory.is_dir() else ():
+        try:
+            return json.loads(gzip.decompress(path.read_bytes()))
+        except (OSError, ValueError, EOFError) as exc:
+            print(f"samplehooks: {path}: {exc}", file=sys.stderr)
+    return {}
 
 
 def from_yara(image: Image, data: bytes, directory: Path) -> list:
@@ -491,14 +603,19 @@ def locate_in(image: Image, data: bytes, flirt_dir: Path = FLIRT_DIR,
     or a running program's memory (sandboxd/stagehints.py). `data` is the
     bytes `image.code`'s offsets count in."""
     located = from_symbols(image)
+    go_tried: list = []
     if image.toolchain == "go":
         # First of an address: the table has every function, the symbol
         # table, when there is one, the same names
         seen = {found.offset for found in located}
         located += [f for f in from_gopclntab(image, data) if f.offset not in seen]
+        if not image.go_table:
+            # No table read: garble's, or one torn by a packer
+            located += [f for f in go_sets(image, flirt_dir) if f.offset not in seen]
+            go_tried = image.sets
     known = {found.offset for found in located}
     sets = load_signatures(flirt_dir, data)
-    image.sets = [name for name, _ in sets]
+    image.sets = [name for name, _ in sets] + go_tried
     located += [f for f in from_flirt(image, sets) if f.offset not in known]
     located += from_yara(image, data, yara_dir)
     return located
@@ -571,9 +688,14 @@ def sample_lines(located: list, known: dict, module: str, base: Optional[int] = 
     lines, seen = [], set()
     for found in sorted(located, key=lambda f: (f.offset, f.name)):
         offset = found.offset - base
+        # Code a program unpacks may lie below where it was loaded (UPX puts
+        # it at 0x400000, under the packed file): counted backwards, as the
+        # tracer's 64-bit sum of base and offset wraps to it
+        if when is not None and offset < 0:
+            offset &= (1 << 64) - 1
         if offset in seen or offset <= 0:
             continue
-        if found.how == "gopclntab":
+        if found.how == "gopclntab" or GO_SET.match(found.how.removeprefix("flirt:")):
             if not go or found.name not in go:
                 continue
             marker, rest = go[found.name].split(",", 1)
@@ -665,8 +787,9 @@ def report(image: Optional[Image], located: list, lines: list) -> dict:
         "stripped": image.stripped, "toolchain": image.toolchain or None,
         "compiler": image.compiler or None, "signature_sets": image.sets,
         "rust": image.rust or None,
-        "go": {"version": image.go_version or None, "table": image.go_table,
-               "arguments": go_abi(image) or None} if image.go_table else None,
+        "go": {"version": image.go_version or None, "table": image.go_table or None,
+               "signature_set": image.go_set or None,
+               "arguments": go_abi(image) or None} if image.go_table or image.go_set else None,
         "found": by_how, "hooked": len(lines),
         "functions": [{"name": f.name, "address": f.offset, "how": f.how, "hooked": f.offset in hooked}
                       for f in sorted(located, key=lambda f: f.offset)[:MAX_SYMBOLS]],
@@ -706,7 +829,8 @@ def main(argv: Optional[list] = None) -> int:
     try:
         image, located = locate(args.sample, args.flirt, args.code_signatures)
         if image is not None:
-            go = go_hooks(args.go_hooks.read_text()) if image.go_table and args.go_hooks.is_file() else {}
+            go = (go_hooks(args.go_hooks.read_text())
+                  if (image.go_table or image.go_set) and args.go_hooks.is_file() else {})
             lines = sample_lines(located, static_hooks(static_text),
                                  module_name(image, args.guest_path), image.base, go, go_abi(image))
     except Exception as exc:  # noqa: BLE001 - a program no parser reads gets the static list

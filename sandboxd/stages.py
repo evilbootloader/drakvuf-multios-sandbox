@@ -1223,7 +1223,8 @@ class Analysis:
         """Run DRAKVUF with the capture alongside it."""
         budgets = timing.budgets(job.target_os, job.kind,
                                  job.options.timeout, self._cfg.waits,
-                                 launch_slack=job.options.launch_slack)
+                                 launch_slack=job.options.launch_slack,
+                                 stop_wait=guests.plugin_stop_wait(job.options.plugins))
 
         if job.options.interaction is not Interaction.NONE:
             # DRAFT-055 (hidsim) and DRAFT-056 (VNC). Nothing supplies this
