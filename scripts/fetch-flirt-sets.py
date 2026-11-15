@@ -343,8 +343,9 @@ def build_go_set(goroot: Path, title: str, out: Path, tmp: Path, names) -> int:
         (probe / "main.go").write_text(source)
         for stale in link.iterdir():
             stale.unlink()
+        tags = "netgo osusergo" if minor < (1, 13) else "netgo,osusergo"
         built = subprocess.run(
-            [str(go), "build", *trim, "-tags", "netgo,osusergo",
+            [str(go), "build", *trim, "-tags", tags,
              "-ldflags", f"-linkmode=external -tmpdir={link}", "-o", str(tmp / "probe.bin"), "."],
             cwd=probe, env=env, capture_output=True, text=True, timeout=900)
         if built.returncode == 0:
