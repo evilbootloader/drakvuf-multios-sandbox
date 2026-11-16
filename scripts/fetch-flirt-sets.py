@@ -165,7 +165,9 @@ def libraries(arch: str, name: str, into: Path) -> tuple:
 # targets only: the patterns are made from ELF objects.
 RUST_DIST = "https://static.rust-lang.org/dist"
 RUST_TARGETS = ("x86_64-unknown-linux-gnu", "x86_64-unknown-linux-musl",
-                "i686-unknown-linux-gnu", "i686-unknown-linux-musl")
+                "i686-unknown-linux-gnu", "i686-unknown-linux-musl",
+                "x86_64-pc-windows-gnu", "x86_64-pc-windows-gnullvm", "x86_64-pc-windows-msvc",
+                "i686-pc-windows-gnu", "i686-pc-windows-gnullvm", "i686-pc-windows-msvc")
 RUST_VERSION = re.compile(r"^\d+\.\d+\.\d+$")
 RUST_COMMIT = re.compile(r"^[0-9a-f]{40}$")
 
@@ -548,7 +550,7 @@ def main(argv=None) -> int:
     p.add_argument("--rust", default="",
                    help="comma-separated Rust releases (1.75.0): sets from their standard library "
                         "instead of the C libraries. A job's report says which release a sample needs")
-    p.add_argument("--rust-target", default=",".join(RUST_TARGETS[:2]),
+    p.add_argument("--rust-target", default=",".join(RUST_TARGETS),
                    help=f"comma-separated, of {', '.join(RUST_TARGETS)}")
     p.add_argument("--go", default="",
                    help="Go releases to build sets of, instead of the C libraries: newest:N, "

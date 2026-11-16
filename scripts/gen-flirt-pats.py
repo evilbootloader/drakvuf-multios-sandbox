@@ -286,16 +286,22 @@ COFF_RELOC_WIDTHS = {
 }
 
 
-def coff_object(obj: bytes):
+def coff_object(obj: bytes, local: bool = False):
     """COFF object metadata or None. Symbol sizes come from auxiliary records
     when present, otherwise from adjacent function starts/section end. The
     latter is an upper bound: section-end padding may remain in patterns.
 
     All section and relocation offsets are checked against the input length.
     COFF *image* (PE executable) files are deliberately not accepted.
+
+    Go 1.11 Windows external-link objects record defined functions with COFF
+    type 0 (rather than IMAGE_SYM_DTYPE_FUNCTION). Only for local=True and
+    the legacy PE-optional-header object layout, infer function starts from
+    non-section symbols in executable code. Other COFF files stay strict.
     """
     import struct
 
+    has_optional_header = False
     if len(obj) < 20 or obj[:2] == b"MZ":
         return None
     if obj[:4] == b"\0\0\xff\xff" and len(obj) >= 56 and obj[12:28] == COFF_BIGOBJ_ID:
@@ -310,6 +316,7 @@ def coff_object(obj: bytes):
             if (optlen < 2 or 20 + optlen > len(obj)
                     or struct.unpack_from("<H", obj, 20)[0] not in (0x10B, 0x20B)):
                 return None
+        has_optional_header = bool(optlen)
         header, sym_size, section_field, sym_type_field = 20 + optlen, 18, "<h", 14
 
     if machine not in COFF_MACHINES or not nsec or header + nsec * 40 > len(obj):
@@ -371,12 +378,30 @@ def coff_object(obj: bytes):
         }
         at_index += aux_count + 1
 
+    # Go 1.11's Windows external linker deliberately writes type 0 for its
+    # defined text symbols. Its go.o has a PE optional header but is still a
+    # relocatable COFF object. Do not allow this inference for regular .obj,
+    # .lib or Rust .rlib members (whose symbol types must be trustworthy).
+    typed_text = any(
+        sym["type"] & 0x20 and (sec := sections.get(sym["section"]))
+        and sec["flags"] & COFF_EXECUTE
+        for sym in symbols.values()
+    )
+    legacy_go = local and has_optional_header and not typed_text
+
     # For each executable section, collect function start locations and infer
     # sizes only from other functions (not arbitrary data/section symbols).
     funcs = {}
     for idx, sym in symbols.items():
         sec = sections.get(sym["section"])
-        if not sec or not sec["flags"] & COFF_EXECUTE or not sym["type"] & 0x20:
+        if not sec or not sec["flags"] & COFF_EXECUTE:
+            continue
+        typed_func = bool(sym["type"] & 0x20)
+        legacy_func = (legacy_go and sym["type"] == 0
+                       and sym["storage"] in (2, 3)
+                       and sym["name"] and not sym["name"].startswith(".")
+                       and sym["name"] != "go.buildid")
+        if not typed_func and not legacy_func:
             continue
         if sym["start"] >= len(sec["code"]):
             continue
@@ -419,7 +444,7 @@ def coff_object(obj: bytes):
 
 
 def coff_patterns(obj: bytes, local: bool = False):
-    coff = coff_object(obj)
+    coff = coff_object(obj, local=local)
     if coff is None:
         return
     masked = {}
@@ -454,8 +479,8 @@ def coff_patterns(obj: bytes, local: bool = False):
         yield f"{lead} {covered:02X} {crc:04X} {size:04X} {names_text}" + (" " + tail if tail else "")
 
 
-def coff_outbound_calls(obj: bytes) -> dict:
-    coff = coff_object(obj)
+def coff_outbound_calls(obj: bytes, local: bool = False) -> dict:
+    coff = coff_object(obj, local=local)
     if coff is None:
         return {}
     starts = {}
@@ -477,7 +502,7 @@ def coff_outbound_calls(obj: bytes) -> dict:
             if width != 4 or at <= start or at + 4 > start + size or code[at - start - 1] != 0xE8:
                 continue
             symbol = coff["symbols"].get(symindex)
-            if symbol and symbol["name"] and symbol["type"] & 0x20:
+            if symbol and symbol["name"] and (symbol["type"] & 0x20 or symindex in coff["funcs"]):
                 calls[at - start] = [symbol["name"]]
         if calls:
             for name in names:
@@ -556,7 +581,7 @@ def write_set(name: str, libraries, out: Path, local: bool = False) -> int:
                     if body.startswith(b"\x7fELF"):
                         calls.update(outbound_calls(body))
                     else:
-                        calls.update(coff_outbound_calls(body))
+                        calls.update(coff_outbound_calls(body, local=local))
                 except Exception as exc:
                     print(f"{library}({member}): calls: {type(exc).__name__}: {exc}", file=sys.stderr)
         (out / f"{name}.calls.json.gz").write_bytes(gzip.compress(json.dumps(calls, separators=(",", ":")).encode()))
