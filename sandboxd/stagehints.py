@@ -508,7 +508,8 @@ def is_module(path: str, guest_path: str) -> Optional[str]:
 
 
 def hints(how: str, procdumps: Path, trace_log: Path, sample: Path, guest_path: str,
-          list_text: str, known: dict, go: dict, flirt_dir: Path, yara_dir: Path) -> tuple:
+          list_text: str, known: dict, go: dict, flirt_dir: Path, yara_dir: Path,
+          rust: Optional[dict] = None) -> tuple:
     """(lines, report) from every dump that is a process of the sample."""
     try:
         own = sh.read_image(sample)
@@ -564,7 +565,8 @@ def hints(how: str, procdumps: Path, trace_log: Path, sample: Path, guest_path: 
         located = locate(image, data, flirt_dir, yara_dir)
         offsets = have.setdefault(module, listed(list_text, module))
         new = [line for line in sh.sample_lines(located, known, module, image.base, go, sh.go_abi(image),
-                                                when(image, data))
+                                                when(image, data),
+                                                rust=rust if image.toolchain == "rust" else None)
                if int(line.split(",")[2], 16) not in offsets]
         offsets.update(int(line.split(",")[2], 16) for line in new)
         lines += new
@@ -592,6 +594,7 @@ def main(argv: Optional[list] = None) -> int:
     p.add_argument("--flirt", type=Path, default=sh.FLIRT_DIR)
     p.add_argument("--code-signatures", type=Path, default=sh.CODE_SIGNATURES_DIR)
     p.add_argument("--go-hooks", type=Path, default=sh.GO_HOOKS)
+    p.add_argument("--rust-hooks", type=Path, default=sh.RUST_HOOKS)
     p.add_argument("--max-mib", type=int, default=2048, help="RLIMIT_DATA in MiB; 0 sets no limit")
     args = p.parse_args(argv)
     if args.max_mib > 0:
@@ -600,10 +603,12 @@ def main(argv: Optional[list] = None) -> int:
 
     list_text = args.list.read_text()
     go = sh.go_hooks(args.go_hooks.read_text()) if args.go_hooks.is_file() else {}
+    rust = sh.rust_hooks(args.rust_hooks.read_text()) if args.rust_hooks.is_file() else {}
     lines, report = [], []
     try:
         lines, report = hints(args.how, args.procdumps, args.trace_log, args.sample, args.guest_path,
-                              list_text, sh.static_hooks(list_text), go, args.flirt, args.code_signatures)
+                              list_text, sh.static_hooks(list_text), go, args.flirt, args.code_signatures,
+                              rust=rust)
     except Exception as exc:  # noqa: BLE001 - no hints is one run, as every job was
         print(f"stagehints: {type(exc).__name__}: {exc}", file=sys.stderr)
         lines = []

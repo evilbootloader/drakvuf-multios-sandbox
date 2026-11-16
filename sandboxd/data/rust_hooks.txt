@@ -1,0 +1,74 @@
+# Rust standard-library functions worth an entry-only hook, for Linux ELF
+# and Windows PE samples (sandboxd/samplehooks.py, sandboxd/stagehints.py).
+#
+# A line is a template, NOT a directly loadable apimon/libmon entry:
+#   rust,<demangled Rust path>,no-retval,log
+#
+# `samplehooks` locates raw (mangled) function symbols via ELF symbol tables
+# or Rust FLIRT sets, demangles Rust v0/legacy names with `c++filt -s rust`
+# (GNU binutils), and matches the paths below. It then emits an offset hook
+# in the sample's own module; the `rust` pseudo-module is never sent to DRAKVUF.
+# `no-retval,log` records the call only: Rust's own ABI is not stable, and
+# argument types can differ between compiler versions / monomorphizations.
+#
+# Do NOT hook high-frequency read/write/alloc, memcpy, or panic functions:
+# enormous event volumes. Prefer OS-level API/syscall tracing for detailed
+# filenames, network endpoints, buffers, and process arguments.
+#
+# Some std functions below are generic (e.g. `read<P>`): their copies are
+# generated inside each sample, not present in compiler std `.rlib` sets.
+# They can still be found when its symbol table is present, or if separate
+# project-specific FLIRT signatures identify them. An entry is NOT a promise
+# that every stripped Rust binary contains a matching symbol or bytes.
+
+# --- network ---------------------------------------------------------------
+rust,std::net::TcpStream::connect,no-retval,log
+rust,std::net::TcpStream::connect_timeout,no-retval,log
+rust,std::net::TcpListener::bind,no-retval,log
+rust,std::net::UdpSocket::bind,no-retval,log
+rust,std::net::UdpSocket::connect,no-retval,log
+rust,std::net::UdpSocket::send_to,no-retval,log
+rust,std::net::UdpSocket::recv_from,no-retval,log
+rust,std::net::UdpSocket::set_broadcast,no-retval,log
+
+# --- file system -----------------------------------------------------------
+rust,std::fs::read,no-retval,log
+rust,std::fs::read_to_string,no-retval,log
+rust,std::fs::write,no-retval,log
+rust,std::fs::copy,no-retval,log
+rust,std::fs::rename,no-retval,log
+rust,std::fs::remove_file,no-retval,log
+rust,std::fs::remove_dir,no-retval,log
+rust,std::fs::remove_dir_all,no-retval,log
+rust,std::fs::create_dir,no-retval,log
+rust,std::fs::create_dir_all,no-retval,log
+rust,std::fs::set_permissions,no-retval,log
+rust,std::fs::metadata,no-retval,log
+rust,std::fs::symlink_metadata,no-retval,log
+rust,std::fs::File::open,no-retval,log
+rust,std::fs::File::create,no-retval,log
+rust,std::fs::OpenOptions::open,no-retval,log
+
+# --- processes -------------------------------------------------------------
+rust,std::process::Command::new,no-retval,log
+rust,std::process::Command::spawn,no-retval,log
+rust,std::process::Command::status,no-retval,log
+rust,std::process::Command::output,no-retval,log
+rust,std::process::Command::exec,no-retval,log
+rust,std::process::exit,no-retval,log
+
+# --- environment and directory --------------------------------------------
+rust,std::env::var,no-retval,log
+rust,std::env::var_os,no-retval,log
+rust,std::env::set_var,no-retval,log
+rust,std::env::remove_var,no-retval,log
+rust,std::env::current_dir,no-retval,log
+rust,std::env::set_current_dir,no-retval,log
+rust,std::env::temp_dir,no-retval,log
+rust,std::env::current_exe,no-retval,log
+rust,std::env::args_os,no-retval,log
+
+# --- platform-independent security-relevant operations ---------------------
+rust,std::os::unix::fs::symlink,no-retval,log
+rust,std::os::windows::fs::symlink_file,no-retval,log
+rust,std::os::windows::fs::symlink_dir,no-retval,log

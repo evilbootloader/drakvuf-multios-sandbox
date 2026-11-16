@@ -67,6 +67,9 @@ import tempfile
 import urllib.request
 from pathlib import Path
 
+import struct
+
+
 HERE = Path(__file__).resolve().parent
 _spec = importlib.util.spec_from_file_location("gen_flirt_pats", HERE / "gen-flirt-pats.py")
 pats = importlib.util.module_from_spec(_spec)
@@ -271,9 +274,9 @@ def go_releases(index: list, wanted: str) -> list:
     return [stable[key] for key in sorted(chosen)]
 
 
-def go_archive(index: list, version: str) -> dict:
+def go_archive(index: list, version: str, platform: str, arch: str) -> dict:
     return next(f for release in index if release["version"] == version for f in release["files"]
-                if f["os"] == "linux" and f["arch"] == "amd64" and f["kind"] == "archive")
+                if f["os"] == platform and f["arch"] == arch and f["kind"] == "archive")
 
 
 def go_probe(names) -> str:
@@ -318,7 +321,7 @@ def go_version(goroot: Path, home: Path) -> str:
     return said[2] if len(said) > 2 else ""
 
 
-def build_go_set(goroot: Path, title: str, out: Path, tmp: Path, names) -> int:
+def build_go_set(goroot: Path, title: str, out: Path, tmp: Path, names, goos: str, goarch: str) -> int:
     """`title`'s set from the Go at `goroot`: the probe, linked externally,
     and gen-flirt-pats over the `go.o` its linker leaves. The number of
     functions; raises on a build that does not succeed."""
@@ -335,7 +338,11 @@ def build_go_set(goroot: Path, title: str, out: Path, tmp: Path, names) -> int:
     env = {"PATH": f"{goroot}/bin:/usr/bin:/bin", "GOROOT": str(goroot), "HOME": str(tmp),
            "GOCACHE": str(tmp / "cache"), "GOPATH": str(tmp / "gopath"), "GOTOOLCHAIN": "local",
            "GOPROXY": "off", "GOSUMDB": "off", "GOFLAGS": "", "GO111MODULE": "on",
-           "GOOS": "linux", "GOARCH": "amd64", "GOAMD64": "v1", "CGO_ENABLED": "1"}
+           "GOOS": goos, "GOARCH": goarch, "GOAMD64": "v1", "CGO_ENABLED": "1"}
+    if goos == "windows" and goarch == "386":
+        env.update({"CXX": "i686-w64-mingw32-g++", "CC": "i686-w64-mingw32-gcc"})
+    elif goos == "windows" and goarch == "amd64":
+        env.update({"CXX": "x86_64-w64-mingw32-g++", "CC": "x86_64-w64-mingw32-gcc"})
     # -trimpath is Go 1.13's, and changes file names, not code
     trim = ["-trimpath"] if minor >= (1, 13) else []
     source = go_probe(names)
@@ -363,65 +370,164 @@ def build_go_set(goroot: Path, title: str, out: Path, tmp: Path, names) -> int:
         raise ValueError("the probe does not build")
     if not (link / "go.o").is_file():
         raise ValueError("the linker left no go.o")
+
     return pats.write_set(title, [link / "go.o"], out, local=True)
 
 
 def go_hook_names(path: Path = GO_HOOKS) -> list:
     return [line.split(",")[1] for line in path.read_text().splitlines() if line.startswith("go,")]
 
+GO_TARGETS =  [("linux", "amd64"), ("linux", "386"), ("windows", "amd64"), ("windows", "386")]
 
-def fetch_go(wanted: str, out: Path, listing: bool, goroot: Path | None = None) -> tuple:
+
+def fetch_go(
+    wanted: str,
+    out: Path,
+    listing: bool,
+    goroot: Path | None = None,
+) -> tuple:
     names = go_hook_names()
+    made = failed = 0
+
     if goroot is not None:
         with tempfile.TemporaryDirectory(prefix="flirt-go-") as tmp:
-            version = go_version(goroot, Path(tmp))
-            title = f"go-{version.removeprefix('go')}-amd64"
-            count = build_go_set(goroot, title, out, Path(tmp), names)
-        print(f"{title}: {count} functions (from {goroot})")
-        return (1, 0) if count else (0, 1)
-    index = json.load(get(GO_INDEX))
-    made = failed = 0
-    for version in go_releases(index, wanted):
-        title = f"go-{version.removeprefix('go')}-amd64"
+            versions = [go_version(goroot, Path(tmp))]
+        index = None
+    else:
+        index = json.load(get(GO_INDEX))
+        versions = go_releases(index, wanted)
+
+    for version in versions:
         found = GO_RELEASE.match(version)
+        if not found:
+            raise ValueError(f"invalid Go version: {version}")
+
         if (int(found[1]), int(found[2])) < GO_OLDEST:
-            print(f"{title}: older than Go {GO_OLDEST[0]}.{GO_OLDEST[1]}, which the probe needs; passed over")
+            print(f"{version}: too old; skipped")
             continue
-        if (out / f"{title}.pat.gz").exists():
-            print(f"{title}: already there")
+
+        pending = []
+
+        for goos, goarch in GO_TARGETS:
+            title = (
+                f"go-{version.removeprefix('go')}"
+                f"-{goos}-{goarch}"
+            )
+
+            if (out / f"{title}.pat.gz").exists():
+                print(f"{title}: already there")
+            else:
+                pending.append((goos, goarch, title))
+
+        if not pending:
             continue
-        archive = go_archive(index, version)
-        if listing:
-            print(f"{title}  <-  {GO_DL}/{archive['filename']}")
-            continue
-        with tempfile.TemporaryDirectory(prefix="flirt-go-") as tmp:
+
+        # The Go compiler runs on Linux, even when the
+        # target executable is Windows.
+        archive = None
+        if goroot is None:
             try:
-                digest = hashlib.sha256()
-                tarball = Path(tmp) / archive["filename"]
-                with get(f"{GO_DL}/{archive['filename']}", timeout=600) as response, tarball.open("wb") as fh:
-                    for chunk in iter(lambda: response.read(1 << 20), b""):
-                        digest.update(chunk)
-                        fh.write(chunk)
-                if digest.hexdigest() != archive["sha256"]:
-                    raise ValueError("sha256 differs from go.dev's index")
-                with tarfile.open(tarball) as tar:
-                    tar.extractall(Path(tmp) / "root", filter="data")
-                tarball.unlink()
-                work = Path(tmp) / "work"
-                work.mkdir()
-                count = build_go_set(Path(tmp) / "root" / "go", title, out, work, names)
-            except (OSError, ValueError, KeyError, StopIteration, tarfile.TarError,
-                    subprocess.SubprocessError) as exc:
-                print(f"{title}: {type(exc).__name__}: {exc}", file=sys.stderr)
-                failed += 1
+                archive = go_archive(
+                    index, version, "linux", "amd64"
+                )
+            except (KeyError, StopIteration) as exc:
+                print(f"{version}: {exc}", file=sys.stderr)
+                failed += len(pending)
                 continue
-        if count:
-            made += 1
-            print(f"{title}: {count} functions")
-        else:
-            print(f"{title}: no function in its go.o", file=sys.stderr)
-            failed += 1
+
+        if listing:
+            source = (
+                str(goroot) if goroot is not None
+                else f"{GO_DL}/{archive['filename']}"
+            )
+            for goos, goarch, title in pending:
+                print(
+                    f"{title}  <-  {source}"
+                    f" (target {goos}/{goarch})"
+                )
+            continue
+
+        with tempfile.TemporaryDirectory(
+            prefix="flirt-go-"
+        ) as tmp:
+            base = Path(tmp)
+            root = goroot
+
+            if root is None:
+                try:
+                    tarball = base / archive["filename"]
+                    digest = hashlib.sha256()
+
+                    with get(
+                        f"{GO_DL}/{archive['filename']}",
+                        timeout=600,
+                    ) as response, tarball.open("wb") as fh:
+                        for chunk in iter(
+                            lambda: response.read(1 << 20),
+                            b"",
+                        ):
+                            digest.update(chunk)
+                            fh.write(chunk)
+
+                    if digest.hexdigest() != archive["sha256"]:
+                        raise ValueError("Go archive SHA256 mismatch")
+
+                    with tarfile.open(tarball) as tar:
+                        tar.extractall(base / "root", filter="data")
+
+                    tarball.unlink()
+                    root = base / "root" / "go"
+
+                except (
+                    OSError,
+                    ValueError,
+                    tarfile.TarError,
+                ) as exc:
+                    print(
+                        f"{version}: download failed: {exc}",
+                        file=sys.stderr,
+                    )
+                    failed += len(pending)
+                    continue
+
+            for goos, goarch, title in pending:
+                work = base / f"work-{goos}-{goarch}"
+                work.mkdir()
+
+                try:
+                    count = build_go_set(
+                        root,
+                        title,
+                        out,
+                        work,
+                        names,
+                        goos=goos,
+                        goarch=goarch,
+                    )
+
+                    if not count:
+                        raise ValueError(
+                            "no functions extracted from go.o"
+                        )
+
+                except (
+                    OSError,
+                    ValueError,
+                    subprocess.SubprocessError,
+                ) as exc:
+                    print(
+                        f"{title}: {type(exc).__name__}: {exc}",
+                        file=sys.stderr,
+                    )
+                    failed += 1
+                    continue
+
+                made += 1
+                print(f"{title}: {count} functions")
+
+    print(made)
     return made, failed
+
 
 
 def expected_sha256(arch: str, stem: str) -> str:

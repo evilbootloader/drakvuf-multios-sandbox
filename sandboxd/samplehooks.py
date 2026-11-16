@@ -54,6 +54,8 @@ import json
 import os
 import re
 import resource
+import shutil
+import subprocess
 import struct
 import sys
 from dataclasses import dataclass, field
@@ -65,6 +67,8 @@ FLIRT_DIR = DATA / "flirt"
 CODE_SIGNATURES_DIR = DATA / "code-signatures"
 #: The Go functions worth a hook, and where their arguments are
 GO_HOOKS = DATA / "go-hooks.txt"
+#: Entry-only Rust-native hook templates (demangled function paths).
+RUST_HOOKS = DATA / "rust_hooks.txt"
 
 #: Candidate function starts offered to FLIRT, and bytes of each: a set's
 #: longest pattern is its 32 leading bytes, a CRC over at most 255 more, and
@@ -370,7 +374,7 @@ def call_targets(image: Image) -> list:
 
 
 #: Sets loaded for one sample at most, of those whose rule recognised it.
-MAX_SETS = 6
+MAX_SETS = 10
 
 
 def recognised_sets(directory: Path, data: bytes) -> Optional[dict]:
@@ -403,10 +407,34 @@ def recognised_sets(directory: Path, data: bytes) -> Optional[dict]:
 
 #: The sets of Go's standard library (scripts/fetch-flirt-sets.py --go), by
 #: name: tried on Go programs only (go_sets), never with the others
-GO_SET = re.compile(r"^go-(\d+\.\d+(?:\.\d+)?)-amd64$")
+GO_SET = re.compile(r"^go-(\d+\.\d+(?:\.\d+)?)-(?:(linux|windows)-)?(amd64|386)$")
+#: Rust's standard library uses different ELF and Windows COFF objects for
+#: every target, although all targets built by one compiler share its commit.
+RUST_SET = re.compile(r"^rust-\d+\.\d+\.\d+-(x86_64|i686)-(unknown-linux-(?:gnu|musl)|pc-windows-(?:msvc|gnu|gnullvm))$")
 
 
-def load_signatures(directory: Path, data: Optional[bytes] = None, go: bool = False) -> list:
+def signature_target(name: str, image: Optional[Image]) -> bool:
+    """Don't apply Go or Rust patterns to another OS/architecture.
+
+    The old `go-X.Y.Z-amd64` sets were built on Linux, before the target
+    was recorded in the name. Other libraries keep their current rules.
+    """
+    if image is None:
+        return True
+    os_name = "windows" if image.kind == "pe" else "linux" if image.kind == "elf" else ""
+    arch_name = ("amd64" if image.bits == 64 else "386")
+    go = GO_SET.fullmatch(name)
+    if go:
+        return (go.group(2) or "linux") == os_name and go.group(3) == arch_name
+    rust = RUST_SET.fullmatch(name)
+    if rust:
+        rust_os = "windows" if rust.group(2).startswith("pc-windows-") else "linux"
+        return rust_os == os_name and rust.group(1) == ("x86_64" if image.bits == 64 else "i686")
+    return True
+
+
+def load_signatures(directory: Path, data: Optional[bytes] = None, go: bool = False,
+                    image: Optional[Image] = None) -> list:
     """[(set name, matcher)] of the `.sig` and `.pat` sets under `directory`
     (gzipped or not) worth trying on a sample: a set with a rule beside it
     only if the rule recognised the sample -- the MAX_SETS that matched most
@@ -416,7 +444,10 @@ def load_signatures(directory: Path, data: Optional[bytes] = None, go: bool = Fa
     import flirt
 
     recognised = recognised_sets(directory, data) if data is not None and not go else None
-    best = set(sorted(recognised, key=lambda n: (-recognised[n], n))[:MAX_SETS]) if recognised else set()
+    # Select among compatible targets BEFORE the MAX_SETS cap. Rust sets
+    # for different platforms share the same compiler-commit YARA rule.
+    best = (set(sorted((n for n in recognised if signature_target(n, image)),
+                       key=lambda n: (-recognised[n], n))[:MAX_SETS]) if recognised else set())
     sets = []
     for path in sorted(directory.rglob("*")) if directory.is_dir() else ():
         name = path.name
@@ -424,7 +455,7 @@ def load_signatures(directory: Path, data: Optional[bytes] = None, go: bool = Fa
         if not path.is_file() or not plain.endswith((".sig", ".pat")):
             continue
         stem = plain.rsplit(".", 1)[0]
-        if bool(GO_SET.match(stem)) != go:
+        if bool(GO_SET.fullmatch(stem)) != go or not signature_target(stem, image):
             continue
         if recognised is not None and path.with_name(stem + ".yar").is_file() and stem not in best:
             continue
@@ -576,7 +607,7 @@ def go_sets(image: Image, directory: Path) -> list:
     releases' names mixed would be two guesses. Sets the program is not
     built with name little, because a function's bytes change from one
     release to the next."""
-    sets = load_signatures(directory, go=True)
+    sets = load_signatures(directory, go=True, image=image)
     if not sets:
         return []
     candidates = sorted(set(call_targets(image)) | set(go_starts(image)))
@@ -656,7 +687,7 @@ def locate_in(image: Image, data: bytes, flirt_dir: Path = FLIRT_DIR,
             located += [f for f in go_sets(image, flirt_dir) if f.offset not in seen]
             go_tried = image.sets
     known = {found.offset for found in located}
-    sets = load_signatures(flirt_dir, data)
+    sets = load_signatures(flirt_dir, data, image=image)
     image.sets = [name for name, _ in sets] + go_tried
     located += [f for f in from_flirt(image, sets) if f.offset not in known]
     located += from_yara(image, data, yara_dir)
@@ -714,12 +745,84 @@ def go_hooks(text: str) -> dict:
     return known
 
 
+def rust_hooks(text: str) -> dict:
+    """Demangled Rust path -> safe hook action, never a Rust ABI guess.
+
+    The `rust` pseudo-module in the template is replaced with the sample's
+    actual module and the located function's address at emission time.
+    """
+    hooks = {}
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        parts = line.split(",")
+        if (len(parts) != 4 or parts[0] != "rust"
+                or parts[2:] != ["no-retval", "log"]
+                or not parts[1].startswith("std::")
+                or not _MODULE_OK.match(parts[1])):
+            raise ValueError(f"invalid rust_hooks.txt entry: {line!r}")
+        if parts[1] in hooks:
+            raise ValueError(f"duplicate rust_hooks.txt entry: {parts[1]}")
+        hooks[parts[1]] = "no-retval,log"
+    return hooks
+
+
+def _rust_paths(located: list, hooks: dict) -> dict:
+    """Raw Rust symbol -> allowlisted demangled path (or none).
+
+    Rust v0 mangling isn't equivalent to removing an `_ZN` prefix. Binutils'
+    Rust demangler handles both v0 and legacy symbols. If it isn't installed,
+    accept already-demangled paths only; never guess a mangled symbol's name.
+    """
+    raw = sorted({f.name for f in located
+                  if f.name.startswith(("__R", "__ZN", "_R", "R", "_ZN", "ZN", "std::"))
+                  and "\n" not in f.name and "\r" not in f.name
+                  and len(f.name) < 4096})
+    if not raw:
+        return {}
+    demangled = raw
+    filt = shutil.which("c++filt")
+    if filt is not None:
+        try:
+            result = subprocess.run([filt, "--format=rust"],
+                                    input="\n".join(n[1:] if n.startswith(("__R", "__ZN"))
+                                                    else n for n in raw) + "\n",
+                                    capture_output=True, text=True, timeout=15,
+                                    check=True)
+            rows = result.stdout.splitlines()
+            if len(rows) == len(raw):
+                demangled = rows
+        except (OSError, ValueError, subprocess.SubprocessError):
+            pass
+    result = {}
+    for symbol, decoded in zip(raw, demangled):
+        # Rust v0 demanglers render crate disambiguators as `std[hash]`.
+        decoded = re.sub(r"\[0-9a-fA-F]{8,}\]", "", decoded)
+        # Legacy mangling ends with `::h<16 hex digits>`.
+        decoded = re.sub(r"::h[0-9a-fA-F]{16,}$", "", decoded)
+        # Generic monomorphizations may be `std::fs::read::<&str>`; do not
+        # mistake `read_dir` for `read` or match a different method by prefix.
+        if decoded in hooks:
+            result[symbol] = decoded
+        else:
+            for path in hooks:
+                if decoded.startswith(path + "::<") or decoded.startswith(path + "<"):
+                    result[symbol] = path
+                    break
+    return result
+
+
 def sample_lines(located: list, known: dict, module: str, base: Optional[int] = 0,
-                 go: Optional[dict] = None, abi: str = "", when=None) -> list:
+                 go: Optional[dict] = None, abi: str = "", when=None,
+                 rust: Optional[dict] = None) -> list:
     """The hook-list lines for what was located and the list knows, one per
     address. [] for a module name the list cannot spell, and for an image
     with no base to count from. A Go function's line says where its arguments
     are (`abi`, per go_abi()); with no saying, the call is logged bare.
+
+    `rust`: Rust hook templates, selected only when the caller established
+    this is a Rust sample. Rust arguments and return values are not decoded.
 
     `when`: for code that is not in the file (stagehints). Called with a
     function's address, it gives the line's `when:<hex>` marker -- the bytes
@@ -728,6 +831,7 @@ def sample_lines(located: list, known: dict, module: str, base: Optional[int] = 
     if base is None or not _MODULE_OK.match(module) or module != module.strip():
         return []
     lines, seen = [], set()
+    rust_names = _rust_paths(located, rust) if rust else {}
     for found in sorted(located, key=lambda f: (f.offset, f.name)):
         offset = found.offset - base
         # Code a program unpacks may lie below where it was loaded (UPX puts
@@ -745,6 +849,9 @@ def sample_lines(located: list, known: dict, module: str, base: Optional[int] = 
             marker = marker if marker == "goabi0" else abi
             rest = f"{marker},{rest}" if marker else "no-retval,log"
             name = found.name
+        elif found.name in rust_names:
+            name = rust_names[found.name]
+            rest = rust[name]
         else:
             name = found.name if found.name in known else plain_name(found.name)
             if name not in known:
@@ -851,6 +958,7 @@ def main(argv: Optional[list] = None) -> int:
     p.add_argument("--flirt", type=Path, default=FLIRT_DIR)
     p.add_argument("--code-signatures", type=Path, default=CODE_SIGNATURES_DIR)
     p.add_argument("--go-hooks", type=Path, default=GO_HOOKS)
+    p.add_argument("--rust-hooks", type=Path, default=RUST_HOOKS)
     p.add_argument("--also", type=Path, action="append", default=[],
                    help="a list made for this deployment, added to the job's when it exists "
                         "(profiles/hooks-dotnet.txt, from scripts/dotnet-index.py)")
@@ -873,8 +981,11 @@ def main(argv: Optional[list] = None) -> int:
         if image is not None:
             go = (go_hooks(args.go_hooks.read_text())
                   if (image.go_table or image.go_set) and args.go_hooks.is_file() else {})
+            rust = (rust_hooks(args.rust_hooks.read_text())
+                    if image.toolchain == "rust" and args.rust_hooks.is_file() else {})
             lines = sample_lines(located, static_hooks(static_text),
-                                 module_name(image, args.guest_path), image.base, go, go_abi(image))
+                                 module_name(image, args.guest_path), image.base, go, go_abi(image),
+                                 rust=rust)
     except Exception as exc:  # noqa: BLE001 - a program no parser reads gets the static list
         print(f"samplehooks: {args.sample.name}: {type(exc).__name__}: {exc}", file=sys.stderr)
         image, located, lines = None, [], []
