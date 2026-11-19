@@ -53,6 +53,8 @@ go,net/http.(*Client).Post,goabi,log,Client:lpvoid,Url:buffer[UrlLen],UrlLen:ulo
 go,net/http.(*Client).Do,goabi,log,Client:lpvoid,Request:lpvoid
 go,net/http.ListenAndServe,goabi,log,Addr:buffer[AddrLen],AddrLen:ulong,HandlerType:lpvoid,Handler:lpvoid
 go,net/url.Parse,goabi,log,RawUrl:buffer[RawUrlLen],RawUrlLen:ulong
+go,net.(*Request).BasicAuth,goabi,log,Request:lpvoid,Username:buffer[UsernameLen],UsernameLen:ulong,Password:buffer[PasswordLen],PasswordLen:ulong
+go,net.(*Request).SetBasicAuth,goabi,log,Request:lpvoid,Username:buffer[UsernameLen],UsernameLen:ulong,Password:buffer[PasswordLen],PasswordLen:ulong
 
 # --- files --------------------------------------------------------------------
 go,os.OpenFile,goabi,log,Name:buffer[NameLen],NameLen:ulong,Flag:ulong,Perm:dword
@@ -115,4 +117,11 @@ go,crypto/cipher.NewCBCEncrypter,goabi,log,BlockType:lpvoid,Block:lpvoid,Iv:buff
 go,crypto/cipher.NewCTR,goabi,log,BlockType:lpvoid,Block:lpvoid,Iv:buffer[IvLen],IvLen:ulong,IvCap:ulong
 go,golang.org/x/crypto/chacha20poly1305.New,goabi,log,Key:buffer[KeyLen],KeyLen:ulong,KeyCap:ulong
 go,encoding/base64.(*Encoding).DecodeString,goabi,log,Encoding:lpvoid,S:buffer[SLen],SLen:ulong
+go,encoding/base64.(*Encoding).Decode,goabi,log,Encoding:lpvoid,Dst:buffer[DstLen],DstLen:ulong,DstCap:ulong,Src:buffer[SrcLen],SrcLen:ulong,SrcCap:ulong
+go,encoding/base64.(*Encoding).AppendDecode,goabi,log,Encoding:lpvoid,Dst:buffer[DstLen],DstLen:ulong,DstCap:ulong,Src:buffer[SrcLen],SrcLen:ulong,SrcCap:ulong
+go,encoding/base32.(*Encoding).DecodeString,goabi,log,Encoding:lpvoid,S:buffer[SLen],SLen:ulong
+go,encoding/base32.(*Encoding).Decode,goabi,log,Encoding:lpvoid,Dst:buffer[DstLen],DstLen:ulong,DstCap:ulong,Src:buffer[SrcLen],SrcLen:ulong,SrcCap:ulong
+go,encoding/base32.(*Encoding).AppendDecode,goabi,log,Encoding:lpvoid,Dst:buffer[DstLen],DstLen:ulong,DstCap:ulong,Src:buffer[SrcLen],SrcLen:ulong,SrcCap:ulong
 go,encoding/hex.DecodeString,goabi,log,S:buffer[SLen],SLen:ulong
+go,encoding/hex.Decode,goabi,log,Dst:buffer[DstLen],DstLen:ulong,DstCap:ulong,Src:buffer[SrcLen],SrcLen:ulong,SrcCap:ulong
+

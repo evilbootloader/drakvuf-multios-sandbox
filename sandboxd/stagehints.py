@@ -563,17 +563,23 @@ def hints(how: str, procdumps: Path, trace_log: Path, sample: Path, guest_path: 
             report.append({**entry, "skipped": "no code of the program in the dump"})
             continue
         located = locate(image, data, flirt_dir, yara_dir)
+        print(located)
+        # The minidump can omit Rust identifier strings present in the
+        # original executable, which we already matched to this dump.
+        is_rust = image.toolchain == "rust" or bool(own and own.toolchain == "rust")
+        rust_matched = sh._rust_paths(located, rust) if is_rust and rust else {}
         offsets = have.setdefault(module, listed(list_text, module))
         new = [line for line in sh.sample_lines(located, known, module, image.base, go, sh.go_abi(image),
                                                 when(image, data),
-                                                rust=rust if image.toolchain == "rust" else None)
+                                                rust=rust if is_rust else None)
                if int(line.split(",")[2], 16) not in offsets]
         offsets.update(int(line.split(",")[2], 16) for line in new)
         lines += new
         by_how: dict = {}
         for found in located:
             by_how[found.how.split(":", 1)[0]] = by_how.get(found.how.split(":", 1)[0], 0) + 1
-        report.append({**entry, "toolchain": image.toolchain or None, "signature_sets": image.sets,
+        report.append({**entry, "toolchain": image.toolchain or (own.toolchain if own else None),
+                       "signature_sets": image.sets, "rust_allowlisted": len(rust_matched),
                        "found": by_how, "hooked": len(new),
                        "functions": [{"name": line.split(",")[1], "offset": int(line.split(",")[2], 16)}
                                      for line in new]})

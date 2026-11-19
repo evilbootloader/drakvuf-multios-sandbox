@@ -768,6 +768,35 @@ def rust_hooks(text: str) -> dict:
     return hooks
 
 
+# Keep these reexport aliases explicit; a suffix-only lookup could confuse
+# different Rust types or trait methods sharing a method name.
+_RUST_PUBLIC_TYPES = {
+    "std::net::tcp::TcpStream": "std::net::TcpStream",
+    "std::net::tcp::TcpListener": "std::net::TcpListener",
+    "std::net::udp::UdpSocket": "std::net::UdpSocket",
+}
+
+
+def _rust_hook_path(decoded: str) -> str:
+    """Normalize Rust demangler output for allowlist comparison."""
+    decoded = re.sub(r"\[[0-9a-fA-F]{8,}\]", "", decoded)
+    decoded = re.sub(r"::h[0-9a-fA-F]{16,}$", "", decoded)
+
+    # Rust v0 inherent methods are demangled as `<Type>::method`, not
+    # `Type::method`. Trait impls (`<Type as Trait>::method`) must NOT be
+    # treated as inherent methods.
+    if decoded.startswith("<") and ">::" in decoded:
+        ty, sep, method = decoded[1:].partition(">::")
+        if (sep and ty.startswith("std::") and " as " not in ty
+                and not any(c in ty for c in "<>") and method):
+            decoded = ty + "::" + method
+
+    for internal, public in _RUST_PUBLIC_TYPES.items():
+        if decoded.startswith(internal + "::"):
+            return public + decoded[len(internal):]
+    return decoded
+
+
 def _rust_paths(located: list, hooks: dict) -> dict:
     """Raw Rust symbol -> allowlisted demangled path (or none).
 
@@ -797,10 +826,7 @@ def _rust_paths(located: list, hooks: dict) -> dict:
             pass
     result = {}
     for symbol, decoded in zip(raw, demangled):
-        # Rust v0 demanglers render crate disambiguators as `std[hash]`.
-        decoded = re.sub(r"\[0-9a-fA-F]{8,}\]", "", decoded)
-        # Legacy mangling ends with `::h<16 hex digits>`.
-        decoded = re.sub(r"::h[0-9a-fA-F]{16,}$", "", decoded)
+        decoded = _rust_hook_path(decoded)
         # Generic monomorphizations may be `std::fs::read::<&str>`; do not
         # mistake `read_dir` for `read` or match a different method by prefix.
         if decoded in hooks:
