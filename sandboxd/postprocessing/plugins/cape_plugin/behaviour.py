@@ -612,10 +612,10 @@ class ParseProcessLog(list):
                 break
         self.lastcall = None
 
-        if self.use_mmap:
-            self.mm_pos = 0
-        elif self.fd:
-            self.fd.seek(0)
+        # The process header is all Processes.run() needs at construction.
+        # Do not hold one descriptor per process for the lifetime of the
+        # behaviour report: calls are reopened lazily when they are iterated.
+        self.close()
 
     def read(self, length):
         """Read data from log file
@@ -669,11 +669,8 @@ class ParseProcessLog(list):
         return self.wait_for_lastcall()
 
     def reset(self):
-        """Reset fd"""
-        if self.use_mmap:
-            self.mm_pos = 0
-        elif self.fd:
-            self.fd.seek(0)
+        """Reset call iteration without retaining the process log descriptor."""
+        self.close()
         self.api_count = 0
         self.lastcall = None
         self.queued.clear()
@@ -717,8 +714,11 @@ class ParseProcessLog(list):
         return True
 
     def cacheless_next(self):
-        if not self.fd:
-            raise StopIteration()
+        if self.fd is None:
+            if self.process_id is None:
+                raise StopIteration()
+            # Only the process being iterated needs an open descriptor.
+            self.fd = open(self._log_path, "rb")
 
         if not self.wait_for_lastcall():
             self.reset()
@@ -1915,6 +1915,7 @@ class Processes:
             # Invoke parsing of current log file (if ram_boost is enabled, otherwise parsing is done on-demand)
             current_log = ParseProcessLog(os.path.join(self._logs_path, file_name), self.options, self.platform)
             if current_log.process_id is None:
+                current_log.close()
                 continue
 
             # If the current log actually contains any data, add its data to the results list.

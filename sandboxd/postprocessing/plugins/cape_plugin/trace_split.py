@@ -28,6 +28,7 @@ import json
 import logging
 import posixpath
 import re
+import resource
 import shlex
 from collections import Counter, OrderedDict, deque
 from dataclasses import dataclass, field
@@ -1300,17 +1301,24 @@ class _Writers:
         self.os_ = os_
         self.open: "OrderedDict[int, object]" = OrderedDict()
         self.started: Set[int] = set()
+        # Retain headroom for trace, aux logs, compression, and plugin fds.
+        # RLIM_INFINITY is -1 on Linux; do not treat it as a tiny limit.
+        nofile = resource.getrlimit(resource.RLIMIT_NOFILE)[0]
+        self.max_open = (MAX_OPEN_FILES if nofile == resource.RLIM_INFINITY
+                         else min(MAX_OPEN_FILES, max(1, nofile - 64)))
 
     def write(self, proc: Process, rec: dict) -> None:
         f = self.open.get(proc.seqid)
         if f is None:
+            # Evict before opening: even a transient extra fd can exceed
+            # RLIMIT_NOFILE when other postprocessing files are in use.
+            if len(self.open) >= self.max_open:
+                self.open.popitem(last=False)[1].close()
             f = (self.out_dir / f"{proc.seqid}.log").open("ab")
             if proc.seqid not in self.started:
                 self.started.add(proc.seqid)
                 f.write(_compact(_header(proc, self.os_)) + b"\n")
             self.open[proc.seqid] = f
-            if len(self.open) > MAX_OPEN_FILES:
-                self.open.popitem(last=False)[1].close()
         else:
             self.open.move_to_end(proc.seqid)
         f.write(_compact(rec) + b"\n")
