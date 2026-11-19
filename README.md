@@ -105,6 +105,8 @@ make web_sandbox                       # Postgres, migrations, Garage, TLS, the 
                                        # It checks out THIS checkout's HEAD on the DomU from GitHub, so that commit must be pushed
 make sandboxd                          # libvmi + DRAKVUF, tor + FakeNet-NG, Dom0's certificates, the daemon's venv and env file. Re-runnable
 
+make gen_firmware_vms
+
 make windows_analysis_vm               # win_installers first: 8 installers fetched once -- from the lab's mirror, or from the vendor when
                                        # the mirror has none -- and verified against automation/win-installers.list; a mismatch refuses the build.
                                        # Then the modified ISO and the installer booted. VNC: wait for the desktop, shut down from inside
