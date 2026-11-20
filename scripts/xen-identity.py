@@ -217,10 +217,10 @@ def draw_drive_details(identity):
     added = []
     for key, value in (("disk_firmware", lambda: pick(revisions[identity["disk_model"]])),
                        ("cdrom_firmware", lambda: pick(cdrom_revisions)),
-                       ("cdrom_serial", lambda: fill(serial)),
+                       ("cdrom_serial", lambda: fill(serial))):
                        # A new device to an installed guest, as a new model would be: the
                        # guests' configs take it at their install targets and nowhere else
-                       ("gpu", draw_gpu)):
+                       #("gpu", draw_gpu)):
         if key not in identity:
             identity[key] = value()
             added.append(key)
@@ -526,10 +526,10 @@ def xl_cfg(identity, out_dir):
               "ide-cd.serial=" + identity["cdrom_serial"], "ide-cd.ver=" + identity["cdrom_firmware"]]
     # The display adapter's IDs, which QEMU has only with automation/qemu-xen-vga-ids.patch:
     # one built without it does not start a guest given them
-    gpu = identity["gpu"]
-    drives += ["VGA.%s=0x%04x" % (prop, gpu[key]) for prop, key in (
-        ("vendor-id", "vendor"), ("device-id", "device"), ("subsystem-vendor-id", "subsystem_vendor"),
-        ("subsystem-id", "subsystem"), ("revision", "revision"))]
+    #gpu = identity["gpu"]
+    #drives += ["VGA.%s=0x%04x" % (prop, gpu[key]) for prop, key in (
+    #    ("vendor-id", "vendor"), ("device-id", "device"), ("subsystem-vendor-id", "subsystem_vendor"),
+    #    ("subsystem-id", "subsystem"), ("revision", "revision"))]
     print("device_model_args_hvm = [ %s ]" % ", ".join("'-global', '%s'" % d for d in drives))
 
 

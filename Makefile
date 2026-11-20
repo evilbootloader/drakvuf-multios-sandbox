@@ -698,11 +698,10 @@ ubuntu_analysis_vm:
 	"    - curtin in-target --target=/target -- apt-get install -y ubuntu-dbgsym-keyring" \
 	"    - curtin in-target --target=/target -- sh -c 'printf \"Types\072 deb\nURIs\072 http://ddebs.ubuntu.com/\nSuites\072 \$$(lsb_release -cs) \$$(lsb_release -cs)-updates \$$(lsb_release -cs)-proposed\nComponents\072 main restricted universe multiverse\nSigned-By\072 /usr/share/keyrings/ubuntu-dbgsym-keyring.gpg\n\" | tee /etc/apt/sources.list.d/ddebs.sources'" \
 	"    - curtin in-target --target=/target -- apt-get update" \
-	"    - curtin in-target --target=/target -- bash -c 'KVER=\$$(ls /boot/vmlinuz-* | sed \"s|/boot/vmlinuz-||\" | sort -V | tail -1); apt-get install -y linux-image-\$${KVER}-dbgsym'" \
+        "    - curtin in-target --target=/target -- bash -c 'KVER=\$$(ls /boot/vmlinuz-* | sed \"s|/boot/vmlinuz-||\" | sort -V | tail -1); apt-get install -y linux-image-\$${KVER}-dbgsym'" \
 	"    - curtin in-target --target=/target -- mkdir -p /etc/gdm3" \
 	"    - curtin in-target --target=/target -- sh -c 'printf \"[daemon]\nAutomaticLoginEnable=true\nAutomaticLogin=$(ANALYSIS_VM_USER)\n\" > /etc/gdm3/custom.conf'" \
 	"    - curtin in-target --target=/target -- sed -i 's/^GRUB_CMDLINE_LINUX=\"/&net.ifnames=0 nopv /' /etc/default/grub" \
-	"    - curtin in-target --target=/target -- sh -c 'echo GRUB_GFXMODE=1280x800 >> /etc/default/grub'" \
 	"    - curtin in-target --target=/target -- update-grub" \
 	"    - curtin in-target --target=/target -- sh -c 'printf \"network\072\n    version\072 2\n    renderer\072 networkd\n    ethernets\072\n        eth0\072\n            dhcp4\072 false\n\" > /etc/cloud/cloud.cfg.d/99-no-dhcp.cfg'" \
 	"    - curtin in-target --target=/target -- sh -c 'rm -f /etc/netplan/*.yaml'" \
