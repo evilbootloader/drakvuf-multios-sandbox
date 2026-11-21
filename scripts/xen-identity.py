@@ -331,9 +331,9 @@ def patch_xen(identity, tree):
          'strcpy((char *)start, %s);\n\\g<1>start += strlen(%s) + 1;'
          % (c_string(identity["oem_strings"][0]), c_string(identity["oem_strings"][0])), 1),
         # BIOS release: Xen's major and minor version, the build date
-        (hvmloader / "smbios.c", r'p->major_release = \(uint8_t\) xen_major_version;',
+        (hvmloader / "smbios.c", r'p->major_release = xen_major_version;',
          "p->major_release = %d;" % identity["bios_release"][0], 1),
-        (hvmloader / "smbios.c", r'p->minor_release = \(uint8_t\) xen_minor_version;',
+        (hvmloader / "smbios.c", r'p->minor_release = xen_minor_version;',
          "p->minor_release = %d;" % identity["bios_release"][1], 1),
         (hvmloader / "Makefile", r'SMBIOS_REL_DATE \?= \$\(call date,"\+%m/%d/%Y"\)',
          "SMBIOS_REL_DATE ?= %s" % identity["bios_date"], 1),

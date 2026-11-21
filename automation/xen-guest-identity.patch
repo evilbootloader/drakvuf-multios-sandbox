@@ -1,62 +1,9 @@
-From: =?UTF-8?q?Llu=C3=ADs=20Bessa?= <evilbootloader@proton.me>
-Subject: [PATCH] hvmloader, x86/cpuid: let a guest look like the machine it is given
-
-Xen 4.20.1 with automation/xen-altp2m-pause-vcpu.patch and
-automation/xen-rdtsc-poc.patch applied first; drakvuf-dev/xen branch
-rdtsc-poc 81c0eadb6e. docs/architecture/guest-identity.md has the
-design; scripts/xen-identity.py then writes this deployment's identity
-into hvmloader and libacpi.
-
-hvmloader copies in the SMBIOS structures of smbios_firmware whose type
-it does not write itself (caches, port connectors, slots, probes,
-cooling devices), as it did only for vendor types.
-
-A guest whose CPUID policy clears the hypervisor bit
-(cpuid = "host,hypervisor=0") finds no Xen or Viridian leaves from user
-mode; its kernel and hvmloader still do.
-
-libacpi copies its OEM and table IDs as fixed-width fields, so a real
-vendor's, which fills the field, builds under GCC's stringop-truncation.
-
-The FADT says the guest is a desktop (preferred PM profile 1), not
-unspecified (0): QEMU's tables say 0 and real firmware does not.
-
-hvmloader writes no WAET (2026-11-14): only a hypervisor's firmware has
-that table, and its presence is read as one (al-khaser's ACPI check).
-The WSMT real firmware has comes in through acpi_firmware.
-
----
- docs/man/xl.cfg.5.pod.in          |  6 ++++--
- tools/firmware/hvmloader/smbios.c | 20 +++++++++++++++++++-
- tools/firmware/hvmloader/util.c   |  7 ++++++-
- tools/libacpi/build.c             | 11 ++++++++++-
- tools/libacpi/static_tables.c     |  6 ++++++
- xen/arch/x86/cpuid.c              | 18 +++++++++++++++++-
- 6 files changed, 62 insertions(+), 6 deletions(-)
-
-diff --git a/docs/man/xl.cfg.5.pod.in b/docs/man/xl.cfg.5.pod.in
-index 8e1422104e..a68d52b3f3 100644
---- a/docs/man/xl.cfg.5.pod.in
-+++ b/docs/man/xl.cfg.5.pod.in
-@@ -2146,8 +2146,10 @@ Specifies a path to a file that contains extra SMBIOS firmware structures to
- pass into a guest. The file can contain a set of DMTF predefined structures
- which will override the internal defaults. Not all predefined structures can be
- overridden,
--only the following types: 0, 1, 2, 3, 11, 22, 39. The file can also contain any
--number of vendor defined SMBIOS structures (type 128 - 255). Since SMBIOS
-+only the following types: 0, 1, 2, 3, 11, 22, 39. Predefined types hvmloader
-+does not write itself (caches, port connectors, slots, probes, cooling devices
-+and the like) are added as given, as are any number of vendor defined SMBIOS
-+structures (type 128 - 255); their handles are kept as given. Since SMBIOS
- structures do not present their overall size, each entry in the file must be
- preceded by a 32b integer indicating the size of the following structure.
- 
 diff --git a/tools/firmware/hvmloader/smbios.c b/tools/firmware/hvmloader/smbios.c
-index 97a054e9e3..68d6243f61 100644
+index 76c7090d16..76181cbe90 100644
 --- a/tools/firmware/hvmloader/smbios.c
 +++ b/tools/firmware/hvmloader/smbios.c
-@@ -962,6 +962,19 @@ smbios_type_39_init(void *start)
-     return start;
+@@ -1109,6 +1109,19 @@ smbios_type_39_init(void *start)
+                           endof_field(struct smbios_type_39, characteristics));
  }
  
 +/* Types written above, from a passed in structure where one may replace them */
@@ -75,7 +22,7 @@ index 97a054e9e3..68d6243f61 100644
  static void *
  smbios_type_vendor_oem_init(void *start)
  {
-@@ -975,7 +988,12 @@ smbios_type_vendor_oem_init(void *start)
+@@ -1122,7 +1135,12 @@ smbios_type_vendor_oem_init(void *start)
      while ( total < smbios_pt_length )
      {
          ptr = (uint8_t*)(sep + 1);
@@ -90,9 +37,10 @@ index 97a054e9e3..68d6243f61 100644
              /* Vendor/OEM table, copy it in. Note the handle values cannot
               * be changed since it is unknown what is in each of these tables
 diff --git a/tools/firmware/hvmloader/util.c b/tools/firmware/hvmloader/util.c
+index e651342681..a5ebbe73d2 100644
 --- a/tools/firmware/hvmloader/util.c
 +++ b/tools/firmware/hvmloader/util.c
-@@ -909,7 +909,12 @@ void hvmloader_acpi_build_tables(struct acpi_config *config,
+@@ -900,7 +900,12 @@ void hvmloader_acpi_build_tables(struct acpi_config *config,
      if ( !strncmp(xenstore_read("platform/acpi_laptop_slate", "0"), "1", 1)  )
          config->table_flags |= ACPI_HAS_SSDT_LAPTOP_SLATE;
  
@@ -107,7 +55,7 @@ diff --git a/tools/firmware/hvmloader/util.c b/tools/firmware/hvmloader/util.c
                              ACPI_HAS_VGA | ACPI_HAS_8042 |
                              ACPI_HAS_CMOS_RTC);
 diff --git a/tools/libacpi/build.c b/tools/libacpi/build.c
-index 2f29863db1..0c06bb2fcc 100644
+index 95188e217e..15b27c4bbb 100644
 --- a/tools/libacpi/build.c
 +++ b/tools/libacpi/build.c
 @@ -21,7 +21,16 @@
@@ -146,19 +94,19 @@ index 715f46fee0..78c54eb0fa 100644
  
      .pm1a_evt_blk = ACPI_PM1A_EVT_BLK_ADDRESS_V1,
 diff --git a/xen/arch/x86/cpuid.c b/xen/arch/x86/cpuid.c
-index 2a777436ee..bdea913db2 100644
+index 6e9b15c9c3..e49b420750 100644
 --- a/xen/arch/x86/cpuid.c
 +++ b/xen/arch/x86/cpuid.c
-@@ -5,6 +5,7 @@
- 
+@@ -8,6 +8,7 @@
  #include <asm/cpu-policy.h>
  #include <asm/cpuid.h>
+ #include <asm/guest-msr.h>
 +#include <asm/hvm/hvm.h>
  #include <asm/hvm/viridian.h>
  #include <asm/xstate.h>
  
-@@ -32,6 +33,19 @@ bool recheck_cpu_features(unsigned int cpu)
-     return okay;
+@@ -169,6 +170,19 @@ static void cpuid_hypervisor_leaves(const struct vcpu *v, uint32_t leaf,
+     }
  }
  
 +/*
@@ -177,7 +125,7 @@ index 2a777436ee..bdea913db2 100644
  void guest_cpuid(const struct vcpu *v, uint32_t leaf,
                   uint32_t subleaf, struct cpuid_leaf *res)
  {
-@@ -94,7 +108,7 @@ void guest_cpuid(const struct vcpu *v, uint32_t leaf,
+@@ -231,7 +245,7 @@ void guest_cpuid(const struct vcpu *v, uint32_t leaf,
          break;
  
      case 0x40000000U ... 0x400000ffU:
@@ -186,7 +134,7 @@ index 2a777436ee..bdea913db2 100644
              return cpuid_viridian_leaves(v, leaf, subleaf, res);
  
          fallthrough;
-@@ -103,6 +117,8 @@ void guest_cpuid(const struct vcpu *v, uint32_t leaf,
+@@ -240,6 +254,8 @@ void guest_cpuid(const struct vcpu *v, uint32_t leaf,
           * only until 0x400000ff, but we already use double that.
           */
      case 0x40000100U ... 0x400001ffU:

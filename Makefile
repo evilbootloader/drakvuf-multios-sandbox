@@ -53,7 +53,7 @@ XEN_IDENTITY := $(REPO_ROOT)/scripts/xen-identity.py
 GUEST_FIRMWARE := $(REPO_ROOT)/state/firmware
 # OVMF is built from tianocore's edk2 instead of the xenbits mirror Config.mk names
 OVMF_URL := https://github.com/tianocore/edk2.git
-OVMF_REVISION := 4dfdca63a93497203f197ec98ba20e2327e4afe4
+OVMF_REVISION := 2970e5699ba6267f3384ffab20f96647578aebc8
 # volatility3 PR #650 (pdbconv with C++ types) is unmerged and its head is a
 # personal fork's branch, so it is fetched by commit: a push there installs nothing
 VOLATILITY3_PR650 := 7fe200e5f4611a676299dd67fd435a8dd9bec6e7
@@ -745,7 +745,7 @@ ubuntu_analysis_vm:
 	"usb = 1" \
 	"usbdevice = 'tablet'" \
 	"audio = 1" \
-	"viridian = 0" \
+	"viridian = 1" \
 	"cpuid = 'host,hypervisor=0'" \
 	"altp2m = 2" \
 	"shadow_memory = 128" \
@@ -881,7 +881,7 @@ windows_analysis_vm: win_installers
 	"usb = 1" \
 	"usbdevice = 'tablet'" \
 	"audio = 1" \
-	"viridian = 0" \
+	"viridian = 1" \
 	"cpuid = 'host,hypervisor=0'" \
 	"altp2m = 2" \
 	"shadow_memory = 128" \
@@ -948,7 +948,7 @@ setup_hooks_windows:
 	"usb = 1" \
 	"usbdevice = 'tablet'" \
 	"audio = 1" \
-	"viridian = 0" \
+	"viridian = 1" \
 	"cpuid = 'host,hypervisor=0'" \
 	"altp2m = 2" \
 	"shadow_memory = 128" \
@@ -1027,7 +1027,7 @@ setup_hooks_ubuntu:
 	"usb = 1" \
 	"usbdevice = 'tablet'" \
 	"audio = 1" \
-	"viridian = 0" \
+	"viridian = 1" \
 	"cpuid = 'host,hypervisor=0'" \
 	"altp2m = 2" \
 	"shadow_memory = 128" \
