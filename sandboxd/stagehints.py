@@ -462,12 +462,12 @@ def when(image: sh.Image, data: bytes) -> Callable[[int], str]:
     return marker
 
 
-def locate(image: sh.Image, data: bytes, flirt_dir: Path, yara_dir: Path) -> list:
+def locate(image: sh.Image, data: bytes, flirt_dir: Path, yara_dir: Path, listing: Path = sh.FLIRT_SETS) -> list:
     """`samplehooks.locate_in`, and Go's table read where the program was
     linked: its addresses are the linker's, and the memory is elsewhere when
     the program was moved (a PIE; a PE under ASLR)."""
     image.toolchain = sh.toolchain(data)
-    located = sh.locate_in(image, data, flirt_dir, yara_dir)
+    located = sh.locate_in(image, data, flirt_dir, yara_dir, listing)
     moved = image.moved
     if image.toolchain == "go" and moved and not image.go_table:
         linked = sh.Image(image.kind, image.bits, base=image.base - moved)
@@ -475,7 +475,7 @@ def locate(image: sh.Image, data: bytes, flirt_dir: Path, yara_dir: Path) -> lis
         seen = {found.offset for found in located}
         located += [sh.Located(found.name, found.offset + moved, found.how)
                     for found in sh.from_gopclntab(linked, data) if found.offset + moved not in seen]
-        # Only a table that was read says the release: else what a Go set
+        # Only a table that was read says the release: else what go_sets
         # said stands (job a900801c, 2026-11-15: garble, UPX, its lines
         # written without Go's convention)
         if linked.go_table:
@@ -509,7 +509,7 @@ def is_module(path: str, guest_path: str) -> Optional[str]:
 
 def hints(how: str, procdumps: Path, trace_log: Path, sample: Path, guest_path: str,
           list_text: str, known: dict, go: dict, flirt_dir: Path, yara_dir: Path,
-          rust: Optional[dict] = None) -> tuple:
+          rust: Optional[dict] = None, listing: Path = sh.FLIRT_SETS) -> tuple:
     """(lines, report) from every dump that is a process of the sample."""
     try:
         own = sh.read_image(sample)
@@ -562,7 +562,7 @@ def hints(how: str, procdumps: Path, trace_log: Path, sample: Path, guest_path: 
         if image is None:
             report.append({**entry, "skipped": "no code of the program in the dump"})
             continue
-        located = locate(image, data, flirt_dir, yara_dir)
+        located = locate(image, data, flirt_dir, yara_dir, listing)
         print(located)
         # The minidump can omit Rust identifier strings present in the
         # original executable, which we already matched to this dump.
@@ -598,6 +598,8 @@ def main(argv: Optional[list] = None) -> int:
     p.add_argument("--out", type=Path, required=True, help="the lines; not written when there are none")
     p.add_argument("--json", type=Path, help="what was found, for the report")
     p.add_argument("--flirt", type=Path, default=sh.FLIRT_DIR)
+    p.add_argument("--flirt-sets", type=Path, default=sh.FLIRT_SETS,
+                   help="which sets under --flirt a program is matched against")
     p.add_argument("--code-signatures", type=Path, default=sh.CODE_SIGNATURES_DIR)
     p.add_argument("--go-hooks", type=Path, default=sh.GO_HOOKS)
     p.add_argument("--rust-hooks", type=Path, default=sh.RUST_HOOKS)
@@ -614,7 +616,7 @@ def main(argv: Optional[list] = None) -> int:
     try:
         lines, report = hints(args.how, args.procdumps, args.trace_log, args.sample, args.guest_path,
                               list_text, sh.static_hooks(list_text), go, args.flirt, args.code_signatures,
-                              rust=rust)
+                              rust=rust, listing=args.flirt_sets)
     except Exception as exc:  # noqa: BLE001 - no hints is one run, as every job was
         print(f"stagehints: {type(exc).__name__}: {exc}", file=sys.stderr)
         lines = []

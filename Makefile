@@ -31,7 +31,7 @@ ANALYSIS_VM_PASS ?= malware
 ANALYSIS_VM_USER ?= user
 REPO_ROOT := $(shell pwd)
 # Xen boot line, see docs/CURRENT-STATE.md §1.2
-XEN_CMDLINE := dom0_mem=8192M,max:8192M dom0_max_vcpus=6 dom0_vcpus_pin=1 force-ept=1 ept=ad=0 hap_1gb=0 hap_2mb=0 altp2m=1 hpet=legacy-replacement smt=0 sched=credit rdtsc-poc=1
+XEN_CMDLINE := dom0_mem=8192M,max:8192M dom0_max_vcpus=8 dom0_vcpus_pin=1 force-ept=1 ept=ad=0 hap_1gb=0 hap_2mb=0 altp2m=1 hpet=legacy-replacement smt=0 sched=credit rdtsc-poc=1
 # Parallel vm_event processing deadlocks dom0 without it:
 # https://lists.xenproject.org/archives/html/xen-devel/2026-10/msg01125.html
 XEN_PATCH := $(REPO_ROOT)/automation/xen-altp2m-pause-vcpu.patch
@@ -590,27 +590,32 @@ sandboxd:
 
 
 # The FLIRT sets sandboxd/samplehooks.py names a statically linked sample's
-# library functions with (sandboxd/data/flirt/, not tracked): every stable
-# glibc, musl and uClibc-ng toolchain Bootlin publishes, x86-64 and i686, and
-# with RUST="1.75.0,1.80.1" those Rust releases' standard libraries (a job's
-# report says which release a sample was built with). And Go's standard
-# library for the GO_SETS releases (default the newest patch of the 8 newest
-# minor versions): what names a Go program garble built, whose own function
-# table names nothing; each release is a 70 MB download and a build that
-# needs gcc. Its own target, after `make sandboxd` for the venv: each
-# toolchain is a 150 MB download read off the wire, an hour or more in all.
-# Run again, it fetches only what is new. Without sets a stripped static
+# library functions with: Hex-Rays' signature bundle, the
+# signatures-bundles-<version>.zip published beside IDA Free, downloaded from
+# Hex-Rays' portal (an account; not fetched here) and named by IDA_SIGNATURES,
+# zipped or unpacked. scripts/install-ida-flirt.py unpacks what
+# sandboxd/data/flirt-sets.txt names -- glibc and musl as Debian and Ubuntu
+# built them, Visual C++'s static runtime, Go's standard library, Rust's of
+# every release -- into sandboxd/data/flirt/ida/flirt/ (not tracked), about
+# 400 MB of the bundle's 1.8 GB, in seconds; and asks GitHub for each Rust
+# release's commit (git ls-remote), which names the set of a Rust program
+# whose .comment is gone. Run again after adding a line to the list. Its own
+# target, after `make sandboxd` for the venv. Without sets a stripped static
 # sample is hooked by its Go table or not at all.
-GO_SETS ?= newest:50
-RUST ?= 1.100.0,1.99.1,1.99.0,1.98.1,1.98.0,1.97.1,1.97.0,1.96.1,1.96.0,1.95.0,1.94.1,1.94.0,1.93.1,1.93.0,1.92.0,1.91.1,1.91.0,1.90.0,1.89.0,1.88.0,1.87.0,1.86.0,1.85.1,1.85.0,1.84.1,1.84.0,1.83.0,1.82.0,1.81.0,1.80.1,1.80.0,1.79.0,1.78.0,1.77.2,1.77.1,1.77.0,1.76.0,1.75.0,1.74.1,1.74.0,1.73.0,1.72.1,1.72.0,1.71.1,1.71.0,1.70.0,1.69.0,1.68.2,1.68.1,1.68.0,1.67.1,1.67.0
+#
+# Until 2026-11-23 this target built sets from Bootlin's toolchains and
+# from Go and Rust releases (scripts/fetch-flirt-sets.py, an hour or more);
+# samplehooks loads those only where the list names them, which is how a
+# uClibc set -- the bundle has none -- is still had.
+IDA_SIGNATURES ?=
 signature_sets:
 	set -e; \
-	apt install -y gcc-mingw-w64-x86-64 gcc-mingw-w64-i686 gcc-multilib g++-multilib; \
+	if [ -z "$(IDA_SIGNATURES)" ]; then \
+		echo "make signature_sets IDA_SIGNATURES=<signatures-bundles-<version>.zip, or the directory it unpacks to>"; \
+		exit 2; \
+	fi; \
 	cd $(REPO_ROOT); \
-	.venv-sandboxd/bin/python scripts/fetch-flirt-sets.py; \
-	if [ -n "$(GO_SETS)" ]; then .venv-sandboxd/bin/python scripts/fetch-flirt-sets.py --go "$(GO_SETS)"; fi; \
-	if [ -n "$(RUST)" ]; then .venv-sandboxd/bin/python scripts/fetch-flirt-sets.py --rust "$(RUST)"; fi; \
-	ls sandboxd/data/flirt | wc -l
+	.venv-sandboxd/bin/python scripts/install-ida-flirt.py "$(IDA_SIGNATURES)"
 
 
 ubuntu_analysis_vm:

@@ -16,7 +16,8 @@ every object in an `ar` archive (or of an object file), with each byte a
 relocation covers wildcarded -- which is exactly the set a linker rewrites.
 One `<name>.pat.gz` per run, which python-flirt reads as it is, and beside it
 `<name>.yar`: a YARA rule that recognises the library in a program
-(identity_rule), by which samplehooks chooses the sets worth loading.
+(identity_rule), by which samplehooks narrows the sets its list names to
+those worth loading.
 
 `scripts/fetch-flirt-sets.py` runs this over the C libraries and compiler
 runtimes of published toolchains, version by version.
@@ -26,6 +27,8 @@ compiled by another compiler version, or with other flags, has other bytes.
 A sample built against uClibc or musl needs their sets; which archives to
 feed this is the operator's knowledge of what samples are built with, and
 `sandboxd/data/flirt/` (not tracked, like the YARA sets) is where sets go.
+samplehooks loads one only where sandboxd/data/flirt-sets.txt names it:
+`make signature_sets` installs Hex-Rays' instead (scripts/install-ida-flirt.py).
 
 Functions shorter than MIN_BYTES are left out: four bytes name nothing.
 x86 and x86-64 ELF and Windows COFF objects only.
@@ -529,9 +532,9 @@ IDENTITY_STRINGS = 40
 def identity_rule(name: str, lines) -> str:
     """A YARA rule that says "this program was linked against this set's
     library": the leading bytes of the set's COMMON functions, three of them
-    in one file. samplehooks scans a sample with every set's rule first and
-    loads only the sets that match, so a hundred sets cost one scan and not
-    a hundred signature matchers. Sets of neighbouring versions share
+    in one file. samplehooks scans a sample with the rule of every set its
+    list names and loads only those that match, so a hundred sets cost one
+    scan and not a hundred signature matchers. Sets of neighbouring versions share
     functions byte for byte and then both match, and both are loaded.
     '' when the set has too few such functions to say anything."""
     strings = {}

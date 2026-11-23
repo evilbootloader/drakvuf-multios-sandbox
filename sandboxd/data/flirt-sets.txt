@@ -1,0 +1,74 @@
+# The FLIRT signature sets sandboxd/samplehooks.py matches a program
+# against, and the only ones it loads. Hand-edited.
+#
+#     <os> <bits> <toolchains> <set> [<convention>]
+#
+# os          linux or windows (an ELF is linux, a PE windows), or *
+# bits        32 or 64, or *
+# toolchains  comma-separated, of c, go, rust, nim, zig -- c being any
+#             program no other was recognised in (samplehooks.toolchain) --
+#             or *
+# set         a glob under sandboxd/data/flirt/, without the extension: a
+#             `.sig` (Hex-Rays'), `.pat.gz` or `.pat` (scripts/gen-flirt-pats.py)
+#             of that name is the set. `{rust}` is the Rust release that
+#             built the program, from its .comment or its compiler's commit;
+#             a line with it is passed over when neither says.
+# convention  only, and always, on a line for Go alone: a set of Go's
+#             standard library, tried when the program's own function table
+#             names nothing (garble). Where what the set names takes its
+#             arguments: goabi (registers), goabi0 (the stack), go (the
+#             program's release decides).
+#
+# Order is precedence: a function start is offered to the sets in this
+# order, and the first that names it names it.
+#
+# The sets under ida/flirt/ are Hex-Rays' signature bundle (the
+# signatures-bundles-<version>.zip published beside IDA Free), unpacked by
+# `make signature_sets IDA_SIGNATURES=<the zip>` (scripts/install-ida-flirt.py),
+# which unpacks only what a line here names: after adding one, run it again.
+# The bundle has no uClibc: a set for it is scripts/fetch-flirt-sets.py's,
+# named here by its own name.
+
+# --- Linux, x86-64: the C library, then the libraries whose functions the
+# static hook list has (sandboxd/data/so-hooks-linux.txt)
+linux    64  c,rust,nim,zig  ida/flirt/linux/ubuntu/ubuntu-libc6-dev-amd64
+linux    64  c,rust,nim,zig  ida/flirt/linux/debian/debian-libc6-dev-amd64
+linux    64  c,rust,nim,zig  ida/flirt/linux/ubuntu/ubuntu-musl-dev-amd64
+linux    64  c,rust,nim,zig  ida/flirt/linux/debian/debian-musl-dev-amd64
+linux    64  c,nim,zig       ida/flirt/linux/*/*-libssl-dev-amd64
+linux    64  c,nim,zig       ida/flirt/linux/*/*-libcurl-bundle-amd64
+linux    64  c,nim,zig       ida/flirt/linux/*/*-libgnutls28-dev-amd64
+
+# --- Linux, i386
+linux    32  c,rust,nim,zig  ida/flirt/linux/ubuntu/ubuntu-libc6-dev-i386
+linux    32  c,rust,nim,zig  ida/flirt/linux/debian/debian-libc6-dev-i386
+linux    32  c,rust,nim,zig  ida/flirt/linux/ubuntu/ubuntu-musl-dev-i386
+linux    32  c,rust,nim,zig  ida/flirt/linux/debian/debian-musl-dev-i386
+linux    32  c,nim,zig       ida/flirt/linux/*/*-libssl-dev-i386
+linux    32  c,nim,zig       ida/flirt/linux/*/*-libcurl-bundle-i386
+linux    32  c,nim,zig       ida/flirt/linux/*/*-libgnutls28-dev-i386
+
+# --- Windows: Visual C++'s static runtime (/MT), and the SDKs' static UCRT
+windows  64  c,rust,nim,zig  ida/flirt/windows/vs-channels/CRT-Desktop/Microsoft.CRT-Desktop_x64
+windows  64  c,rust,nim,zig  ida/flirt/windows/vs-channels/Win11SDK/Microsoft.Win11SDK_x64
+windows  64  c,rust,nim,zig  ida/flirt/windows/vs-channels/Win10SDK/Microsoft.Win10SDK_x64
+windows  32  c,rust,nim,zig  ida/flirt/windows/vs-channels/CRT-Desktop/Microsoft.CRT-Desktop_x86
+windows  32  c,rust,nim,zig  ida/flirt/windows/vs-channels/Win11SDK/Microsoft.Win11SDK_x86
+windows  32  c,rust,nim,zig  ida/flirt/windows/vs-channels/Win10SDK/Microsoft.Win10SDK_x86
+
+# --- Go's standard library, every release from 1.10 in one set per
+# --- convention: registers on amd64 from 1.17, the stack before and on 386
+*        64  go              ida/flirt/golang/stdlibs/golang_std_pc_ABI0Internal  goabi
+*        *   go              ida/flirt/golang/stdlibs/golang_std_pc_ABI0          goabi0
+
+# --- Rust's standard library, of the release that built the program
+linux    64  rust            ida/flirt/rust/x86_64-unknown-linux-gnu/rust_{rust}_x86_64-unknown-linux-gnu
+linux    64  rust            ida/flirt/rust/x86_64-unknown-linux-musl/rust_{rust}_x86_64-unknown-linux-musl
+linux    32  rust            ida/flirt/rust/i686-unknown-linux-gnu/rust_{rust}_i686-unknown-linux-gnu
+linux    32  rust            ida/flirt/rust/i686-unknown-linux-musl/rust_{rust}_i686-unknown-linux-musl
+windows  64  rust            ida/flirt/rust/x86_64-pc-windows-msvc/rust_{rust}_x86_64-pc-windows-msvc
+windows  64  rust            ida/flirt/rust/x86_64-pc-windows-gnu/rust_{rust}_x86_64-pc-windows-gnu
+windows  64  rust            ida/flirt/rust/x86_64-pc-windows-gnullvm/rust_{rust}_x86_64-pc-windows-gnullvm
+windows  32  rust            ida/flirt/rust/i686-pc-windows-msvc/rust_{rust}_i686-pc-windows-msvc
+windows  32  rust            ida/flirt/rust/i686-pc-windows-gnu/rust_{rust}_i686-pc-windows-gnu
+windows  32  rust            ida/flirt/rust/i686-pc-windows-gnullvm/rust_{rust}_i686-pc-windows-gnullvm

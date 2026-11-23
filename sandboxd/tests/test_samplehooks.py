@@ -16,6 +16,7 @@ import shutil
 import struct
 import subprocess
 import sys
+import zipfile
 from pathlib import Path
 
 import pytest
@@ -110,14 +111,59 @@ def test_two_signatures_for_one_address_name_nothing():
     assert sh.from_flirt(image, [("two", matcher("connect", "bind"))], [0x1000]) == []
 
 
+def _matcher(body: bytes, name: str):
+    import flirt
+    lead = "".join("%02X" % b for b in body[:32])
+    return flirt.compile(flirt.parse_pat("%s 00 0000 %04X :0000 %s\n---\n" % (lead, len(body), name)))
+
+
+def test_a_name_given_to_two_functions_is_neither_ones():
+    """A library function is in a program once. Hex-Rays' sets carry every
+    release's shapes and no record of whom a function calls: os.Getenv's
+    bytes were os.Stat's and os.Lstat's too, and a glibc stub's were 55
+    places of a Rust program with no glibc in it."""
+    body = bytes.fromhex("554889e54883ec10897dfc8b45fc89c7") * 2
+    image = sh.Image("elf", 64, code=[(0x1000, 0, body + b"\x90" * 32 + body + b"\x90" * 32)])
+    one = sh.SignatureSet("one", _matcher(body, "os.Getenv"))
+    assert sh.from_flirt(image, [one], [0x1000, 0x1040]) == []
+    assert sh.from_flirt(image, [one], [0x1040]) == [sh.Located("os.Getenv", 0x1040, "flirt:one")]
+    # spelled two ways, by two sets at two functions, it is still one name
+    other = body[:-1] + b"\x00"
+    image = sh.Image("elf", 64, code=[(0x1000, 0, body + b"\x90" * 32 + other + b"\x90" * 32)])
+    a, b = sh.SignatureSet("a", _matcher(body, "__libc_send")), sh.SignatureSet("b", _matcher(other, "send"))
+    assert [f.name for f in sh.from_flirt(image, [a, b], [0x1000])] == ["__libc_send"]
+    assert [f.name for f in sh.from_flirt(image, [a, b], [0x1040])] == ["send"]
+    assert sh.from_flirt(image, [a, b], [0x1000, 0x1040]) == []
+
+
+def test_a_functions_cold_part_is_not_named():
+    """GCC's `f.cold` is jumped to from `f`, never called; in Hex-Rays' sets
+    its bytes are a call to abort() and every library's are alike."""
+    body = bytes.fromhex("e800000000") + bytes.fromhex("0fb6831802000003c5374164") * 3
+    image = sh.Image("elf", 64, code=[(0x1000, 0, body + b"\x90" * 32)])
+    for name in ("_IO_fflush.cold", "f.cold.3"):
+        assert sh.from_flirt(image, [("glibc", _matcher(body, name))], [0x1000]) == []
+    assert [f.name for f in sh.from_flirt(image, [("glibc", _matcher(body, "f.coldest"))], [0x1000])] == ["f.coldest"]
+
+
 def test_flairs_checksum():
     # FLAIR's crc16 of "123456789" and of nothing, as its own tools print them
     assert pats.crc16(b"") == 0 and pats.crc16(b"123456789") == 0x6E90
 
 
+#: The set list the tests' pattern directories carry: the one set built
+#: from the host's libc.a, for a 64-bit Linux program of any toolchain
+HOST_SETS = "linux 64 * libc-host\n"
+
+
+def sets_list(flirt_dir: Path) -> Path:
+    return flirt_dir / "flirt-sets.txt"
+
+
 @pytest.fixture(scope="module")
 def built(tmp_path_factory):
-    """(static program with symbols, the same stripped, a pattern directory)."""
+    """(static program with symbols, the same stripped, a pattern directory
+    with its set list in it, sets_list())."""
     libc = Path("/usr/lib/x86_64-linux-gnu/libc.a")
     if not (shutil.which("gcc") and shutil.which("strip") and libc.is_file()):
         pytest.skip("no gcc, strip or static libc: the end-to-end locator test was not run")
@@ -131,20 +177,26 @@ def built(tmp_path_factory):
     shutil.copy(tmp / "with", tmp / "stripped")
     subprocess.run(["strip", str(tmp / "stripped")], check=True)
     assert pats.main(["--name", "libc-host", "--out", str(tmp / "flirt"), str(libc)]) == 0
+    sets_list(tmp / "flirt").write_text(HOST_SETS)
     return tmp / "with", tmp / "stripped", tmp / "flirt"
+
+
+def symbols_by_address(with_symbols: Path) -> dict:
+    """address -> the plain names the symbol table has there."""
+    image, truth = sh.locate(with_symbols, Path("/nonexistent"), Path("/nonexistent"))
+    assert image.static and not image.stripped and {"symtab"} == {f.how for f in truth}
+    by_address: dict = {}
+    for f in truth:
+        by_address.setdefault(f.offset, set()).add(sh.plain_name(f.name))
+    return by_address
 
 
 def test_a_stripped_static_program_gets_its_library_calls_back(built, tmp_path):
     with_symbols, stripped, flirt_dir = built
     nothing = tmp_path / "none"
+    by_address = symbols_by_address(with_symbols)
 
-    image, truth = sh.locate(with_symbols, nothing, nothing)
-    assert image.static and not image.stripped and {"symtab"} == {f.how for f in truth}
-    by_address: dict = {}
-    for f in truth:
-        by_address.setdefault(f.offset, set()).add(sh.plain_name(f.name))
-
-    image, located = sh.locate(stripped, flirt_dir, nothing)
+    image, located = sh.locate(stripped, flirt_dir, nothing, sets_list(flirt_dir))
     assert image.static and image.stripped and len(located) > 100
     # every name the patterns gave is the function's own
     wrong = [(hex(f.offset), f.name) for f in located if sh.plain_name(f.name) not in by_address.get(f.offset, ())]
@@ -155,8 +207,32 @@ def test_a_stripped_static_program_gets_its_library_calls_back(built, tmp_path):
               for line in sh.sample_lines(located, known, "/home/u/Desktop/s.elf")}
     assert {"connect", "send"} <= set(hooked)
     assert all(name in by_address[address] for name, address in hooked.items())
-    # and with no pattern set, a stripped program has nothing to offer
+    # with no pattern set, a stripped program has nothing to offer; nor with
+    # a set the list does not name
     assert sh.locate(stripped, nothing, nothing)[1] == []
+    assert sh.locate(stripped, flirt_dir, nothing, nothing)[1] == []
+
+
+def test_hex_rays_sets_name_a_stripped_static_program(built, tmp_path):
+    """The sets the deployment has (make signature_sets), on a program the
+    host's compiler linked: what they give a hook is the function's own,
+    and hardly anything they name is not. Skipped where they are not
+    installed, or where the host's glibc is no build of theirs."""
+    with_symbols, stripped, _ = built
+    if not any((sh.FLIRT_DIR / "ida" / "flirt").rglob("*.sig")):
+        pytest.skip(f"no Hex-Rays set under {sh.FLIRT_DIR / 'ida' / 'flirt'}: make signature_sets")
+    by_address = symbols_by_address(with_symbols)
+    image, located = sh.locate(stripped, sh.FLIRT_DIR, tmp_path / "none")
+    if len(located) < 100:
+        pytest.skip(f"the Hex-Rays sets name {len(located)} functions of the host's glibc: not a build of theirs")
+    assert any(name.startswith("ubuntu-") or name.startswith("debian-") for name in image.sets)
+    wrong = [f for f in located if sh.plain_name(f.name) not in by_address.get(f.offset, ())]
+    assert len(wrong) <= len(located) // 20, wrong[:20]
+    known = sh.static_hooks(G.STATIC_HOOKS[TargetOs.UBUNTU].read_text())
+    hooked = {line.split(",")[1]: int(line.split(",")[2], 16)
+              for line in sh.sample_lines(located, known, "/home/u/Desktop/s.elf")}
+    assert {"connect", "send"} <= set(hooked)
+    assert all(name in by_address[address] for name, address in hooked.items())
 
 
 def test_the_child_writes_the_list_and_the_report(built, tmp_path):
@@ -164,7 +240,8 @@ def test_the_child_writes_the_list_and_the_report(built, tmp_path):
     out, found = tmp_path / "hooks.txt", tmp_path / "located.json"
     static = G.STATIC_HOOKS[TargetOs.UBUNTU]
     assert sh.main([str(stripped), "--guest-path", "/home/u/Desktop/s.elf", "--static", str(static),
-                    "--out", str(out), "--json", str(found), "--flirt", str(flirt_dir), "--max-mib", "0"]) == 0
+                    "--out", str(out), "--json", str(found), "--flirt", str(flirt_dir),
+                    "--flirt-sets", str(sets_list(flirt_dir)), "--max-mib", "0"]) == 0
     assert out.read_text().startswith(static.read_text())
     assert "/home/u/Desktop/s.elf,connect," in out.read_text()
     report = json.loads(found.read_text())
@@ -254,10 +331,11 @@ def test_only_the_static_libraries_are_taken_from_a_toolchain(member, wanted):
     assert bool(fetch.WANTED.search(member)) is wanted
 
 
-def test_a_sample_is_matched_against_the_sets_that_recognise_it(built, tmp_path):
-    """A hundred sets are a hundred matchers to build for every sample. Each
-    set's YARA rule says whether the sample was linked against its library;
-    only those are loaded, and a set without a rule always is."""
+def test_of_the_sets_the_list_names_those_with_a_rule_are_loaded_if_it_recognises_the_sample(built, tmp_path):
+    """A hundred versions of a library are a hundred matchers to build for
+    every sample. A set made with a YARA rule beside it is loaded only if
+    the rule says the sample was linked against its library; one without a
+    rule -- every one of Hex-Rays' -- whenever the list names it."""
     _, stripped, flirt_dir = built
     sets = tmp_path / "sets"
     sets.mkdir()
@@ -272,17 +350,140 @@ def test_a_sample_is_matched_against_the_sets_that_recognise_it(built, tmp_path)
     rule = pats.identity_rule("other-1.0", other.splitlines())
     assert 'flirt_set = "other-1.0"' in rule and "3 of them" in rule
     (sets / "other-1.0.yar").write_text(rule)
+    listing = sets_list(sets)
+    listing.write_text(HOST_SETS + "linux 64 * other-*\n")
 
     data = stripped.read_bytes()
-    assert set(sh.recognised_sets(sets, data)) == {"libc-host"}
-    assert [name for name, _ in sh.load_signatures(sets, data)] == ["libc-host"]
-    # without a rule a set is always tried
+    image = sh.read_image(stripped)
+    rules = sorted(sets.glob("*.yar"))
+    assert set(sh.recognised_sets(rules, data)) == {"libc-host"}
+    assert [s.name for s in sh.load_signatures(sets, image, data, listing=listing)] == ["libc-host"]
+    # without a rule a set is always tried, after the sets of the lines before it
     (sets / "other-1.0.yar").unlink()
-    assert [name for name, _ in sh.load_signatures(sets, data)] == ["libc-host", "other-1.0"]
-    # and the report names the sets and what the compiler wrote of itself
-    image, located = sh.locate(stripped, sets, tmp_path / "none")
+    assert [s.name for s in sh.load_signatures(sets, image, data, listing=listing)] == ["libc-host", "other-1.0"]
+    # and one the list does not name never is
+    listing.write_text("linux 64 * other-*\n")
+    assert [s.name for s in sh.load_signatures(sets, image, data, listing=listing)] == ["other-1.0"]
+    # the report names the sets and what the compiler wrote of itself
+    listing.write_text(HOST_SETS)
+    image, located = sh.locate(stripped, sets, tmp_path / "none", listing)
     summary = sh.report(image, located, [])
-    assert "libc-host" in summary["signature_sets"] and summary["compiler"].startswith("GCC: (")
+    assert summary["signature_sets"] == ["libc-host"] and summary["compiler"].startswith("GCC: (")
+
+
+# --- the set list (sandboxd/data/flirt-sets.txt) ---------------------------------------------
+
+def test_the_set_list_says_for_which_programs_each_set_is():
+    lines = sh.flirt_sets("# a comment\n\nlinux 64 c,rust ida/flirt/linux/*/*-libc6-dev-amd64   # glibc\n"
+                          "* * go ida/flirt/golang/stdlibs/golang_std_pc_ABI0 goabi0\n"
+                          "windows 32 rust ida/flirt/rust/i686-pc-windows-msvc/rust_{rust}_i686-pc-windows-msvc\n")
+    assert [(l.number, l.systems, l.bits, l.toolchains, l.abi) for l in lines] == [
+        (3, {"linux"}, {64}, {"c", "rust"}, ""),
+        (4, {"linux", "windows"}, {32, 64}, {"go"}, "goabi0"),
+        (5, {"windows"}, {32}, {"rust"}, "")]
+    assert lines[0].pattern == "ida/flirt/linux/*/*-libc6-dev-amd64"
+
+
+@pytest.mark.parametrize("line", [
+    "linux 64 c",                                       # no set
+    "linux 64 c a b c",                                 # a field too many
+    "macos 64 c a",                                     # no such system
+    "linux 16 c a",
+    "linux 64 java a",
+    "linux 64 c,,go a",
+    "linux 64 c ../outside",                            # out of the FLIRT directory
+    "linux 64 c /etc/a",
+    "linux 64 c a//b",
+    "linux 64 c rust_{rust}_x",                         # the release, on a line not Rust's alone
+    "linux 64 c rust_{version}_x",
+    "linux 64 go golang_std",                           # Go's standard library: no convention
+    "linux 64 c libc goabi",                            # a convention on a line not Go's
+    "linux 64 go golang_std registers",
+])
+def test_a_line_that_is_not_one_is_said_not_passed_over(line):
+    with pytest.raises(ValueError, match="flirt-sets line 2"):
+        sh.flirt_sets("# the list\n" + line + "\n")
+
+
+def test_the_projects_set_list_is_one():
+    """Every line reads, names Hex-Rays' sets, and the programs each is for
+    are the programs its sets are of."""
+    lines = sh.flirt_sets(sh.FLIRT_SETS.read_text())
+    assert len(lines) > 20 and all(l.pattern.startswith("ida/flirt/") for l in lines)
+    for l in lines:
+        word = l.pattern.rsplit("/", 1)[1]
+        if any(said in word for said in ("amd64", "x64", "x86_64", "ABI0Internal")):
+            assert l.bits == {64}, l
+        elif any(said in word for said in ("i386", "x86", "i686")):
+            assert l.bits == {32}, l
+        if l.pattern.startswith("ida/flirt/linux/") or "-linux-" in word:
+            assert l.systems == {"linux"}, l
+        elif l.pattern.startswith("ida/flirt/windows/") or "-windows-" in word:
+            assert l.systems == {"windows"}, l
+    # Go's standard library: one line per convention, registers tried first
+    assert [l.abi for l in lines if l.abi] == ["goabi", "goabi0"]
+
+
+def _set(directory: Path, path: str) -> Path:
+    target = directory / path
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text("%s 00 0000 0040 :0000 f\n---\n" % ("55" * 32))
+    return target
+
+
+def test_a_program_gets_the_sets_of_its_os_size_and_toolchain_in_the_lists_order(tmp_path):
+    for path in ("ida/flirt/linux/ubuntu/ubuntu-libc6-dev-amd64.sig", "ida/flirt/linux/debian/debian-libc6-dev-amd64.sig",
+                 "ida/flirt/linux/ubuntu/ubuntu-libc6-dev-i386.sig", "ida/flirt/windows/CRT_x64.sig",
+                 "ida/flirt/golang/std_ABI0.sig", "mine/uclibc-1.0.45-x86-64.pat.gz", "mine/uclibc-1.0.45-x86-64.pat",
+                 # what macOS leaves in a zip is no set
+                 "ida/flirt/linux/ubuntu/._ubuntu-libc6-dev-amd64.sig",
+                 "__MACOSX/ida/flirt/linux/ubuntu/ubuntu-libc6-dev-amd64.sig"):
+        _set(tmp_path, path)
+    lines = sh.flirt_sets("linux 64 c mine/uclibc-*\n"
+                          "linux 64 c,rust ida/flirt/linux/*/*-libc6-dev-amd64\n"
+                          "linux 32 c ida/flirt/linux/*/*-libc6-dev-i386\n"
+                          "windows 64 * ida/flirt/windows/CRT_x64\n"
+                          "* * go ida/flirt/golang/std_ABI0 goabi0\n"
+                          "linux 64 c,rust ida/flirt/linux/ubuntu/ubuntu-libc6-dev-amd64\n")
+
+    def chosen(image, go=False):
+        return [(line.number, [p.relative_to(tmp_path).as_posix() for p in files])
+                for line, files in sh.selected_sets(tmp_path, image, lines, go)]
+
+    # a set two lines name is the first's; of `.pat.gz` and `.pat`, one is read
+    assert chosen(sh.Image("elf", 64)) == [
+        (1, ["mine/uclibc-1.0.45-x86-64.pat.gz"]),
+        (2, ["ida/flirt/linux/debian/debian-libc6-dev-amd64.sig", "ida/flirt/linux/ubuntu/ubuntu-libc6-dev-amd64.sig"])]
+    assert chosen(sh.Image("elf", 64, toolchain="rust")) == [
+        (2, ["ida/flirt/linux/debian/debian-libc6-dev-amd64.sig", "ida/flirt/linux/ubuntu/ubuntu-libc6-dev-amd64.sig"])]
+    assert chosen(sh.Image("elf", 32)) == [(3, ["ida/flirt/linux/ubuntu/ubuntu-libc6-dev-i386.sig"])]
+    assert chosen(sh.Image("pe", 64, toolchain="go")) == [(4, ["ida/flirt/windows/CRT_x64.sig"])]
+    # Go's standard library apart from the rest
+    assert chosen(sh.Image("pe", 64, toolchain="go"), go=True) == [(5, ["ida/flirt/golang/std_ABI0.sig"])]
+    assert chosen(sh.Image("elf", 64), go=True) == []
+
+
+def test_a_rust_programs_set_is_of_the_release_that_built_it(tmp_path):
+    commit = "82e1608dfa6e0b5569232559e3d385fea5a93112"
+    _set(tmp_path, "ida/flirt/rust/x86_64-unknown-linux-gnu/rust_1.75.0_x86_64-unknown-linux-gnu.sig")
+    _set(tmp_path, "ida/flirt/rust/x86_64-unknown-linux-gnu/rust_1.76.0_x86_64-unknown-linux-gnu.sig")
+    lines = sh.flirt_sets("linux 64 rust ida/flirt/rust/x86_64-unknown-linux-gnu/rust_{rust}_x86_64-unknown-linux-gnu\n")
+
+    def chosen(rust):
+        image = sh.Image("elf", 64, toolchain="rust", rust=dict(rust))
+        names = [sh.name_of_set(p) for _, files in sh.selected_sets(tmp_path, image, lines) for p in files]
+        return names, image.rust
+
+    # what its .comment says
+    assert chosen({"commit": None, "version": "1.76.0"})[0] == ["rust_1.76.0_x86_64-unknown-linux-gnu"]
+    # its commit, unknown: no set rather than another release's
+    assert chosen({"commit": commit, "version": None}) == ([], {"commit": commit, "version": None})
+    # its commit, looked up in what install-ida-flirt.py wrote, said in the report too
+    (tmp_path / sh.RUST_RELEASES).write_text(f"{'0' * 40} 1.76.0\n{commit} 1.75.0\n")
+    assert chosen({"commit": commit, "version": None}) == (["rust_1.75.0_x86_64-unknown-linux-gnu"],
+                                                           {"commit": commit, "version": "1.75.0"})
+    # a release the bundle has no set of
+    assert chosen({"commit": None, "version": "1.99.0"})[0] == []
 
 
 # --- Go -----------------------------------------------------------------------
@@ -465,7 +666,8 @@ def test_a_dropped_programs_functions_are_added_to_the_running_jobs_list(built, 
 
     def run(argv, **kw):
         # the daemon's locator with the test's pattern set and no memory limit of its own
-        return Runner().run(argv + ["--flirt", str(flirt_dir), "--max-mib", "0"], **kw)
+        return Runner().run(argv + ["--flirt", str(flirt_dir), "--flirt-sets", str(sets_list(flirt_dir)),
+                                    "--max-mib", "0"], **kw)
 
     found = [(extracted / "00000001_tmp_stage2", "/tmp/stage2"), (extracted / "00000002_notes", "/tmp/notes"),
              (extracted / "00000009_gone", "/tmp/gone")]
@@ -499,7 +701,8 @@ def test_a_rust_program_says_which_compiler_built_it(tmp_path, built):
     assert image.toolchain == "rust" and image.rust == {"commit": commit, "version": "1.75.0"}
     assert sh.report(image, [], [])["rust"] == image.rust
 
-    # its set is recognised by that commit, and ranked above any libc set's count
+    # a set fetch-flirt-sets.py built is recognised by that commit, and
+    # ranked above any libc set's count
     spec = importlib.util.spec_from_file_location("fetch_flirt_sets", ROOT / "scripts" / "fetch-flirt-sets.py")
     fetch = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(fetch)
@@ -509,8 +712,82 @@ def test_a_rust_program_says_which_compiler_built_it(tmp_path, built):
         fetch.rust_rule("rust-1.75.0-x86_64-unknown-linux-musl", commit))
     (sets / "rust-1.76.0-x86_64-unknown-linux-musl.yar").write_text(
         fetch.rust_rule("rust-1.76.0-x86_64-unknown-linux-musl", "0" * 40))
-    found = sh.recognised_sets(sets, sample.read_bytes())
+    found = sh.recognised_sets(sorted(sets.glob("*.yar")), sample.read_bytes())
     assert list(found) == ["rust-1.75.0-x86_64-unknown-linux-musl"] and found.popitem()[1] > 1000
+
+
+# --- Hex-Rays' signature bundle (scripts/install-ida-flirt.py) -------------------------------
+
+_ispec = importlib.util.spec_from_file_location("install_ida_flirt", ROOT / "scripts" / "install-ida-flirt.py")
+install = importlib.util.module_from_spec(_ispec)
+_ispec.loader.exec_module(install)
+
+
+def test_only_what_the_list_names_is_unpacked_from_the_bundle(tmp_path, capsys):
+    bundle = tmp_path / "signatures-bundles-9.5.zip"
+    with zipfile.ZipFile(bundle, "w") as archive:
+        for name in ("signatures-bundles-9.5/linux/ubuntu/ubuntu-libc6-dev-amd64.sig",
+                     "signatures-bundles-9.5/linux/ubuntu/ubuntu-libc6-dev-amd64.metadata",
+                     "signatures-bundles-9.5/linux/ubuntu/ubuntu-libc6-dev-arm64.sig",
+                     "signatures-bundles-9.5/rust/x86_64-unknown-linux-gnu/rust_1.75.0_x86_64-unknown-linux-gnu.sig",
+                     "signatures-bundles-9.5/rust/aarch64-unknown-linux-gnu/rust_1.75.0_aarch64-unknown-linux-gnu.sig",
+                     "__MACOSX/signatures-bundles-9.5/linux/ubuntu/._ubuntu-libc6-dev-amd64.sig",
+                     "signatures-bundles-9.5/linux/ubuntu/._ubuntu-libc6-dev-amd64.sig",
+                     "signatures-bundles-9.5/linux/ubuntu/../../../../escape-libc6-dev-amd64.sig",
+                     "signatures-bundles-9.5/.DS_Store"):
+            archive.writestr(name, name)
+    sets = tmp_path / "flirt-sets.txt"
+    sets.write_text("linux 64 c ida/flirt/linux/*/*-libc6-dev-amd64\n"
+                    "linux 64 rust ida/flirt/rust/x86_64-unknown-linux-gnu/rust_{rust}_x86_64-unknown-linux-gnu\n"
+                    "windows 64 c ida/flirt/windows/CRT_x64\n"
+                    "linux 64 c mine/uclibc-*\n")
+    out = tmp_path / "flirt" / "ida" / "flirt"
+    assert install.main([str(bundle), "--sets", str(sets), "--out", str(out), "--no-rust-releases"]) == 0
+    installed = sorted(p.relative_to(tmp_path).as_posix() for p in tmp_path.rglob("*") if p.is_file())
+    assert installed == [
+        "flirt-sets.txt",
+        "flirt/ida/flirt/linux/ubuntu/ubuntu-libc6-dev-amd64.metadata",
+        "flirt/ida/flirt/linux/ubuntu/ubuntu-libc6-dev-amd64.sig",
+        "flirt/ida/flirt/rust/x86_64-unknown-linux-gnu/rust_1.75.0_x86_64-unknown-linux-gnu.sig",
+        "signatures-bundles-9.5.zip"]
+    said = capsys.readouterr()
+    assert "2 sets written" in said.out and "flirt-sets.txt:3: ida/flirt/windows/CRT_x64: no set" in said.err
+    # what samplehooks reads of them, through the same list
+    image = sh.Image("elf", 64, toolchain="rust", rust={"commit": None, "version": "1.75.0"})
+    chosen = sh.selected_sets(tmp_path / "flirt", image, sh.flirt_sets(sets.read_text()))
+    assert [sh.name_of_set(p) for _, files in chosen for p in files] == ["rust_1.75.0_x86_64-unknown-linux-gnu"]
+
+    # unpacked, the bundle is the same bundle, and what is there is not written again
+    unpacked = tmp_path / "unpacked"
+    with zipfile.ZipFile(bundle) as archive:
+        for info in archive.infolist():
+            if ".." not in info.filename:
+                archive.extract(info, unpacked)
+    assert install.main([str(unpacked), "--sets", str(sets), "--out", str(out), "--no-rust-releases"]) == 0
+    assert "0 sets written to" in capsys.readouterr().out
+    # and a bundle with none of the list's sets is a failure
+    assert install.main([str(unpacked / "__MACOSX"), "--sets", str(sets), "--out", str(out), "--no-rust-releases"]) == 1
+
+
+def test_each_rust_release_is_its_tags_commit(tmp_path):
+    tags = ("d5678055c2bca22696e870f9103dc10aa6c35f41\trefs/tags/1.10.0\n"
+            "cfcb716cf0961a7e3a4eceac828d94805cf8140b\trefs/tags/1.10.0^{}\n"
+            # the commit an annotated tag points at, whichever line comes first
+            "82e1608dfa6e0b5569232559e3d385fea5a93112\trefs/tags/1.75.0^{}\n"
+            "2010168acb2062cf7705ccbf82e7fa84628a38f8\trefs/tags/1.75.0\n"
+            # a tag that is no annotated one names the commit itself
+            "1111111111111111111111111111111111111111\trefs/tags/1.2.0\n"
+            "2222222222222222222222222222222222222222\trefs/tags/1.80.0-beta.1\n"
+            "3333333333333333333333333333333333333333\trefs/tags/release-0.1\n")
+    releases = install.rust_releases(tags)
+    assert releases == {"1.10.0": "cfcb716cf0961a7e3a4eceac828d94805cf8140b",
+                        "1.75.0": "82e1608dfa6e0b5569232559e3d385fea5a93112",
+                        "1.2.0": "1" * 40}
+    install.write_rust_releases(tmp_path / sh.RUST_RELEASES, releases)
+    assert (tmp_path / sh.RUST_RELEASES).read_text().splitlines()[0] == "1111111111111111111111111111111111111111 1.2.0"
+    image = sh.Image("elf", 64, toolchain="rust", rust={"commit": "82e1608dfa6e0b5569232559e3d385fea5a93112",
+                                                         "version": None})
+    assert sh.rust_release(image, tmp_path) == "1.75.0"
 
 
 # --- Go's standard library by its bytes (fetch-flirt-sets.py --go) ----------------------
@@ -567,24 +844,43 @@ def test_a_go_set_is_made_from_local_functions_with_their_callees(go_like, tmp_p
 
 
 def test_a_go_programs_functions_are_named_by_the_set_that_names_most(go_like, tmp_path):
+    """A line naming a set per release is one choice: the release that names
+    most, alone."""
     obj, program = go_like
     directory = tmp_path / "flirt"
     pats.write_set("go-1.0.0-amd64", [obj], directory, local=True)
     # another release's set, which names nothing here
     (directory / "go-1.1.0-amd64.pat").write_text("%s 00 0000 0040 :0000 other\n---\n" % ("CC" * 32))
+    sets_list(directory).write_text("* 64 go go-*-amd64 go\n")
     image = sh.read_image(program)
     image.toolchain = "go"
     sh.GO_MIN_NAMED, saved = 1, sh.GO_MIN_NAMED
     try:
-        found = {f.name: f for f in sh.go_sets(image, directory)}
+        found = {f.name: f for f in sh.go_sets(image, directory, program.read_bytes(), sets_list(directory))}
     finally:
         sh.GO_MIN_NAMED = saved
-    assert image.go_set == "go-1.0.0-amd64" and image.go_version == "go1.0.0"
+    # no release said by the set: the program's strings say none
+    assert image.go_set == "go-1.0.0-amd64" and image.go_version == ""
     assert image.sets == ["go-1.0.0-amd64", "go-1.1.0-amd64"]
     # told apart by whom they call
     assert {"os_stat", "os_getenv", "statnolog", "getenvsys"} <= set(found)
     assert found["os_stat"].offset != found["os_getenv"].offset
-    assert found["os_stat"].how == "flirt:go-1.0.0-amd64"
+    assert found["os_stat"].how == "flirt:go-1.0.0-amd64" and found["os_stat"].abi == "go"
+
+
+def test_each_line_of_go_sets_is_a_choice_of_its_own(go_like, tmp_path):
+    """Hex-Rays' Go sets are one per convention, each with every release:
+    each line's set is used, and one that names nothing is no choice."""
+    obj, program = go_like
+    directory = tmp_path / "flirt"
+    pats.write_set("std_ABI0Internal", [obj], directory, local=True)
+    (directory / "std_ABI0.pat").write_text("%s 00 0000 0040 :0000 other\n---\n" % ("CC" * 32))
+    sets_list(directory).write_text("* 64 go std_ABI0Internal goabi\n* * go std_ABI0 goabi0\n")
+    image = sh.read_image(program)
+    image.toolchain = "go"
+    found = sh.go_sets(image, directory, program.read_bytes(), sets_list(directory))
+    assert image.go_set == "std_ABI0Internal" and image.sets == ["std_ABI0Internal", "std_ABI0"]
+    assert found and {f.abi for f in found} == {"goabi"}
 
 
 def test_without_its_callees_two_functions_alike_are_named_neither(go_like, tmp_path):
@@ -592,29 +888,57 @@ def test_without_its_callees_two_functions_alike_are_named_neither(go_like, tmp_
     directory = tmp_path / "flirt"
     pats.write_set("go-1.0.0-amd64", [obj], directory, local=True)
     (directory / "go-1.0.0-amd64.calls.json.gz").unlink()
+    sets_list(directory).write_text("* 64 go go-*-amd64 go\n")
     image = sh.read_image(program)
+    image.toolchain = "go"
     sh.GO_MIN_NAMED, saved = 1, sh.GO_MIN_NAMED
     try:
-        names = {f.name for f in sh.go_sets(image, directory)}
+        names = {f.name for f in sh.go_sets(image, directory, listing=sets_list(directory))}
     finally:
         sh.GO_MIN_NAMED = saved
     assert "statnolog" in names and not {"os_stat", "os_getenv"} & names
 
 
-def test_go_sets_are_kept_from_other_programs_and_go_lines_use_their_release(tmp_path):
+def test_go_sets_are_kept_from_other_programs_and_go_lines_take_the_sets_convention(tmp_path):
     directory = tmp_path / "flirt"
     directory.mkdir()
     pattern = "%s 00 0000 0040 :0000 f\n---\n" % ("55" * 32)
     for name in ("go-1.22.2-amd64", "musl-1.2.5-gcc-13.3.0-x86-64"):
         (directory / f"{name}.pat").write_text(pattern)
-    assert [n for n, _ in sh.load_signatures(directory)] == ["musl-1.2.5-gcc-13.3.0-x86-64"]
-    assert [n for n, _ in sh.load_signatures(directory, go=True)] == ["go-1.22.2-amd64"]
+    listing = sets_list(directory)
+    listing.write_text("linux 64 c,go musl-*\n* 64 go go-* go\n")
+    elf = sh.Image("elf", 64, toolchain="go")
+    assert [s.name for s in sh.load_signatures(directory, elf, listing=listing)] == ["musl-1.2.5-gcc-13.3.0-x86-64"]
+    assert [(s.name, s.abi) for s in sh.load_signatures(directory, elf, go=True, listing=listing)] == \
+        [("go-1.22.2-amd64", "go")]
+
     image = sh.Image("elf", 64, base=0x400000, go_version="go1.22.2", go_set="go-1.22.2-amd64")
-    go = {"net.Dial": "goabi,log,Network:buffer[NetworkLen],NetworkLen:ulong"}
-    located = [sh.Located("net.Dial", 0x401000, "flirt:go-1.22.2-amd64"), sh.Located("net.dial", 0x402000, "flirt:go-1.22.2-amd64")]
-    assert sh.sample_lines(located, {}, "/s", image.base, go, sh.go_abi(image)) == \
-        ["/s,net.Dial,1000,goabi,log,Network:buffer[NetworkLen],NetworkLen:ulong"]
+    go = {"net.Dial": "goabi,log,Network:buffer[NetworkLen],NetworkLen:ulong",
+          "net/http.(*Client).Do": "goabi,log,Client:lpvoid,Request:lpvoid",
+          "syscall.Syscall": "goabi0,log,Trap:ulong"}
+    located = [sh.Located("net.Dial", 0x401000, "flirt:go-1.22.2-amd64", "go"),
+               sh.Located("net.dial", 0x402000, "flirt:go-1.22.2-amd64", "go"),
+               # Hex-Rays' spelling, and its set's convention
+               sh.Located("net_http._ptr_Client.Do", 0x403000, "flirt:golang_std_pc_ABI0", "goabi0"),
+               sh.Located("syscall.Syscall", 0x404000, "flirt:golang_std_pc_ABI0Internal", "goabi"),
+               # a Go name some other set gave is no Go function's
+               sh.Located("net.Dial", 0x405000, "flirt:musl-1.2.5-gcc-13.3.0-x86-64")]
+    assert sh.sample_lines(located, {}, "/s", image.base, go, sh.go_abi(image)) == [
+        "/s,net.Dial,1000,goabi,log,Network:buffer[NetworkLen],NetworkLen:ulong",
+        "/s,net/http.(*Client).Do,3000,goabi0,log,Client:lpvoid,Request:lpvoid",
+        # what is written in assembly is on the stack whatever a set says
+        "/s,syscall.Syscall,4000,goabi0,log,Trap:ulong"]
     assert sh.report(image, located, [])["go"]["signature_set"] == "go-1.22.2-amd64"
+
+
+def test_go_names_are_spelled_as_hex_rays_sets_spell_them():
+    assert sh.ida_go_name("net/http.(*Client).Do") == "net_http._ptr_Client.Do"
+    assert sh.ida_go_name("net.(*Dialer).DialContext") == "net._ptr_Dialer.DialContext"
+    assert sh.ida_go_name("os.Getenv") == "os.Getenv"
+    # every name of the Go list is one of theirs, and no two are the same one
+    names = sh.go_hooks(sh.GO_HOOKS.read_text())
+    spelled = {sh.ida_go_name(n) for n in names}
+    assert len(spelled) == len(names) and not any(c in n for n in spelled for c in "/(*)")
 
 
 def test_go_releases_are_chosen_from_the_index():

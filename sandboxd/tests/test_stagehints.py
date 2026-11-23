@@ -36,7 +36,13 @@ def signatures(tmp_path: Path) -> Path:
     directory.mkdir(exist_ok=True)
     (directory / "libc-test.pat").write_text(
         "%s 00 0000 %04X :0000 connect\n---\n" % ("".join("%02X" % b for b in BODY), len(BODY)))
+    listed(tmp_path).write_text("* * * libc-test\n")
     return directory
+
+
+def listed(tmp_path: Path) -> Path:
+    """The set list naming signatures()'s set."""
+    return tmp_path / "flirt" / "flirt-sets.txt"
 
 
 def sidecar(directory: Path, pid: int, data: bytes, n: int = 0, **extra) -> None:
@@ -91,7 +97,7 @@ def linux_job(tmp_path: Path, base: int, path: str = "/root/sample", pid: int = 
 def test_unpacked_code_in_a_core_becomes_lines_that_wait_for_it(tmp_path):
     dumps, trace, sample = linux_job(tmp_path, 0x400000)
     lines, report = hints.hints("core", dumps, trace, sample, "/root/sample", LIST, sh.static_hooks(LIST), {},
-                                signatures(tmp_path), tmp_path / "none")
+                                signatures(tmp_path), tmp_path / "none", listing=listed(tmp_path))
     # by offset from the executable's base as libmon said it, with the bytes to wait for
     assert lines == ["/root/sample,connect,1040,when:" + BODY[:16].hex() + ",log,Fd:int,SockAddr:lpsockaddr,AddrLen:int"]
     assert report[0]["pid"] == 77 and report[0]["hooked"] == 1 and report[0]["found"] == {"flirt": 1}
@@ -114,7 +120,7 @@ def test_code_unpacked_below_the_packed_file_is_found_and_counted_backwards(tmp_
     sample = tmp_path / "sample"
     sample.write_bytes(b"packed")
     lines, report = hints.hints("core", dumps, trace, sample, "/root/sample", LIST, sh.static_hooks(LIST), {},
-                                signatures(tmp_path), tmp_path / "none")
+                                signatures(tmp_path), tmp_path / "none", listing=listed(tmp_path))
     offset = (0x400040 - base) & ((1 << 64) - 1)
     assert lines == [f"/root/sample,connect,{offset:x},when:{BODY[:16].hex()},log,Fd:int,SockAddr:lpsockaddr,AddrLen:int"]
     assert (base + offset) & ((1 << 64) - 1) == 0x400040
@@ -130,7 +136,7 @@ def test_the_samples_dumps_are_read_however_many_others_are_newer(tmp_path):
     for n in range(1, hints.MAX_DUMPS + 5):
         sidecar(dumps, 1000 + n, b"not read", n=n)
     lines, report = hints.hints("core", dumps, trace, sample, "/root/sample", LIST, sh.static_hooks(LIST), {},
-                                signatures(tmp_path), tmp_path / "none")
+                                signatures(tmp_path), tmp_path / "none", listing=listed(tmp_path))
     assert len(lines) == 1 and [entry["pid"] for entry in report] == [77]
 
 
@@ -139,17 +145,17 @@ def test_a_function_the_list_has_already_is_no_hint(tmp_path):
     dumps, trace, sample = linux_job(tmp_path, 0x400000)
     have = LIST + "/root/sample,connect,1040,log,Fd:int\n"
     lines, report = hints.hints("core", dumps, trace, sample, "/root/sample", have, sh.static_hooks(have), {},
-                                signatures(tmp_path), tmp_path / "none")
+                                signatures(tmp_path), tmp_path / "none", listing=listed(tmp_path))
     assert lines == [] and report[0]["hooked"] == 0
 
 
 def test_only_the_samples_processes_are_read_and_a_memfd_program_is_one(tmp_path):
     dumps, trace, sample = linux_job(tmp_path, 0x400000, path="/usr/bin/curl")
     args = (LIST, sh.static_hooks(LIST), {}, signatures(tmp_path), tmp_path / "none")
-    assert hints.hints("core", dumps, trace, sample, "/root/sample", *args) == ([], [])
+    assert hints.hints("core", dumps, trace, sample, "/root/sample", *args, listing=listed(tmp_path)) == ([], [])
 
     dumps, trace, sample = linux_job(tmp_path, 0x7F1200000000, path="/memfd:x (deleted)", kind=3)
-    lines, _ = hints.hints("core", dumps, trace, sample, "/root/sample", *args)
+    lines, _ = hints.hints("core", dumps, trace, sample, "/root/sample", *args, listing=listed(tmp_path))
     # named as libmon names it, which is what the second run's process is matched by
     assert [line.split(",")[:3] for line in lines] == [["/memfd:x (deleted)", "connect", "1040"]]
     assert hints.is_module("/tmp/root/sample", "/root/sample") == "/root/sample"
@@ -161,14 +167,14 @@ def test_a_dump_that_is_not_finished_or_not_a_core_gives_nothing(tmp_path):
     args = (trace, sample, "/root/sample", LIST, sh.static_hooks(LIST), {}, signatures(tmp_path), tmp_path / "none")
     meta = dumps / "procdump.0.metadata"
     meta.write_text(meta.read_text().replace("Success", "Fail"))
-    assert hints.hints("core", dumps, *args) == ([], [])
+    assert hints.hints("core", dumps, *args, listing=listed(tmp_path)) == ([], [])
     sidecar(dumps, 77, b"MDMP" + bytes(200))
-    assert hints.hints("core", dumps, *args)[0] == []
+    assert hints.hints("core", dumps, *args, listing=listed(tmp_path))[0] == []
     sidecar(dumps, 77, b"")
-    assert hints.hints("core", dumps, *args)[0] == []
+    assert hints.hints("core", dumps, *args, listing=listed(tmp_path))[0] == []
     # a compression that is not read is said, not guessed at
     sidecar(dumps, 77, b"x", Compression="zstd")
-    assert hints.hints("core", dumps, *args)[1][0]["skipped"] == "zstd is not read"
+    assert hints.hints("core", dumps, *args, listing=listed(tmp_path))[1][0]["skipped"] == "zstd is not read"
 
 
 def test_go_functions_are_found_where_a_moved_program_was_linked(tmp_path, monkeypatch):
@@ -192,9 +198,9 @@ def test_go_functions_are_found_where_a_moved_program_was_linked(tmp_path, monke
 def test_a_go_set_says_the_release_when_the_table_is_not_found_where_linked(tmp_path, monkeypatch):
     """A moved Go program whose table is unreadable either way -- garble --
     keeps the release its signature set said, which decides the convention."""
-    def named_by_set(image, data, flirt_dir, yara_dir):
+    def named_by_set(image, data, flirt_dir, yara_dir, listing):
         image.go_set, image.go_version = "go-1.26.11-amd64", "go1.26.11"
-        return [sh.Located("os.Rename", 0x400040, "flirt:go-1.26.11-amd64")]
+        return [sh.Located("os.Rename", 0x400040, "flirt:go-1.26.11-amd64", "go")]
     monkeypatch.setattr(sh, "locate_in", named_by_set)
     monkeypatch.setattr(sh, "toolchain", lambda data: "go")
     image = sh.Image("elf", 64, base=0x3D92000, code=[(0x400000, 0, CODE)], moved=0x3992000)
@@ -260,7 +266,8 @@ def windows_job(tmp_path: Path, base: int = 0x7FF600000000):
 def test_the_image_with_the_samples_header_is_read_out_of_a_minidump(tmp_path):
     dumps, sample = windows_job(tmp_path)
     lines, report = hints.hints("minidump", dumps, tmp_path / "trace.log", sample, "C:\\Users\\u\\Desktop\\s.exe",
-                                LIST, sh.static_hooks(LIST), {}, signatures(tmp_path), tmp_path / "none")
+                                LIST, sh.static_hooks(LIST), {}, signatures(tmp_path), tmp_path / "none",
+                                listing=listed(tmp_path))
     # the VAD's name for the file, an RVA, and `??` where the loader wrote
     waits = BODY[:4].hex() + "??" * 8 + BODY[12:16].hex()
     assert lines == [f"Users\\u\\Desktop\\s.exe,connect,1040,when:{waits},log,Fd:int,SockAddr:lpsockaddr,AddrLen:int"]
@@ -297,14 +304,15 @@ def test_the_samples_image_is_found_by_where_apimon_saw_it(tmp_path):
     at = raw.index(pe_page(base))
     (dumps / "procdump.0").write_bytes(gzip.compress(raw[:at] + bytes(0x1000) + raw[at + 0x1000:]))
     lines, report = hints.hints("minidump", dumps, trace, sample, "C:\\Users\\u\\Desktop\\s.exe",
-                                LIST, sh.static_hooks(LIST), {}, signatures(tmp_path), tmp_path / "none")
+                                LIST, sh.static_hooks(LIST), {}, signatures(tmp_path), tmp_path / "none",
+                                listing=listed(tmp_path))
     assert [line.split(",")[:3] for line in lines] == [["Users\\u\\Desktop\\s.exe", "connect", "1040"]]
     assert report[0]["base"] == base
 
     # a dump of another process, or one without that range, is said and not guessed at
     lines, report = hints.hints("minidump", dumps, windows_trace(tmp_path, 0x7FF700000000), sample,
                                 "C:\\Users\\u\\Desktop\\s.exe", LIST, sh.static_hooks(LIST), {},
-                                signatures(tmp_path), tmp_path / "none")
+                                signatures(tmp_path), tmp_path / "none", listing=listed(tmp_path))
     assert lines == [] and report[0]["skipped"] == "the image is not in the dump"
 
 
@@ -313,10 +321,12 @@ def test_a_dump_without_the_samples_image_and_a_sample_that_is_no_program(tmp_pa
     args = (LIST, sh.static_hooks(LIST), {}, signatures(tmp_path), tmp_path / "none")
     other = tmp_path / "other.exe"
     other.write_bytes(pe_page(0x140000000, stamp=0x5555))
-    assert hints.hints("minidump", dumps, tmp_path / "t", other, "C:\\other.exe", *args) == ([], [])
+    assert hints.hints("minidump", dumps, tmp_path / "t", other, "C:\\other.exe", *args,
+                       listing=listed(tmp_path)) == ([], [])
     script = tmp_path / "s.ps1"
     script.write_text("Write-Host hi")
-    assert hints.hints("minidump", dumps, tmp_path / "t", script, "C:\\s.ps1", *args) == ([], [])
+    assert hints.hints("minidump", dumps, tmp_path / "t", script, "C:\\s.ps1", *args,
+                       listing=listed(tmp_path)) == ([], [])
 
 
 def test_an_address_of_the_image_in_its_code_is_left_out_of_the_marker():
@@ -353,7 +363,8 @@ def test_the_main_program_writes_hints_only_when_there_are_some(tmp_path):
     argv = ["--procdumps", str(dumps), "--trace-log", str(trace), "--sample", str(sample),
             "--guest-path", "/root/sample", "--list", str(job_list), "--how", "core",
             "--out", str(tmp_path / "hints.txt"), "--json", str(tmp_path / "hints.json"),
-            "--flirt", str(signatures(tmp_path)), "--code-signatures", str(tmp_path / "none"), "--max-mib", "0"]
+            "--flirt", str(signatures(tmp_path)), "--flirt-sets", str(listed(tmp_path)),
+            "--code-signatures", str(tmp_path / "none"), "--max-mib", "0"]
     assert hints.main(argv) == 0
     line = (tmp_path / "hints.txt").read_text().strip()
     assert json.loads((tmp_path / "hints.json").read_text())["hooked"] == 1

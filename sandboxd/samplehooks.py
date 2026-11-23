@@ -17,14 +17,18 @@ offset in place of an export --
 1. **the symbol table**, when the program still has one;
 2. **FLIRT signatures** (python-flirt, the matcher capa ships): each function
    start the code itself points at (the target of a `call rel32`) is offered to
-   the signature sets under `sandboxd/data/flirt/`, which name library
-   functions by their first bytes whatever the program was stripped of;
+   the signature sets `sandboxd/data/flirt-sets.txt` names for a program of
+   its OS, word size, toolchain and Rust release, and to no other
+   (load_signatures). They are Hex-Rays' -- the signature bundle published
+   beside IDA Free, unpacked under `sandboxd/data/flirt/ida/flirt/` by
+   scripts/install-ida-flirt.py -- and name library functions by their first
+   bytes whatever the program was stripped of;
 3. **YARA code signatures** under `sandboxd/data/code-signatures/`: a rule
    with `meta: hook = "<name>"` names the function its match starts at.
 
 A Go program is read through its own function table, and when that names
-nothing -- garble hashes every name in it -- through the signature sets of
-Go's standard library, one per release, the one that names most (go_sets).
+nothing -- garble hashes every name in it -- through the sets of Go's
+standard library the list names, one per calling convention (go_sets).
 
 Of what is found, a function the static hook list already has a line for is
 hooked, with that line's arguments: the list is where argument types are
@@ -60,10 +64,12 @@ import struct
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Iterable, Optional
+from typing import Iterable, NamedTuple, Optional
 
 DATA = Path(__file__).resolve().parent / "data"
 FLIRT_DIR = DATA / "flirt"
+#: Which of the sets under FLIRT_DIR a program is matched against
+FLIRT_SETS = DATA / "flirt-sets.txt"
 CODE_SIGNATURES_DIR = DATA / "code-signatures"
 #: The Go functions worth a hook, and where their arguments are
 GO_HOOKS = DATA / "go-hooks.txt"
@@ -87,6 +93,9 @@ class Located:
     name: str       # as the source spelled it
     offset: int     # virtual address (ELF) or RVA (PE)
     how: str        # "symtab", "flirt:<set>", "yara:<rule>"
+    #: Named by a set of Go's standard library: where the function takes its
+    #: arguments, as the set says ("goabi", "goabi0"), "go" when it does not
+    abi: str = ""
 
 
 @dataclass
@@ -217,7 +226,7 @@ def read_image(path: Path) -> Optional[Image]:
         if image.toolchain == "rust":
             # The compiler's commit, in every panic path; its release, in
             # .comment when that was left in. Either names the signature set
-            # (scripts/fetch-flirt-sets.py --rust <version>).
+            # (`{rust}` in flirt-sets.txt; the commit through rust_release).
             commit = re.search(rb"/rustc/([0-9a-f]{40})/", data)
             version = re.search(rb"rustc version (\d+\.\d+\.\d+)", data)
             image.rust = {"commit": commit.group(1).decode() if commit else None,
@@ -373,16 +382,153 @@ def call_targets(image: Image) -> list:
     return sorted(found)
 
 
+# --- which signature sets ----------------------------------------------------
+#
+# Hex-Rays' bundle is 4,500 sets, 1.8 GB, most of them for processors and
+# systems no sample here is; and a set for another build of a library names
+# nothing, or wrongly. So a program is matched against what flirt-sets.txt
+# names for its kind and no more: each line says for which programs, and
+# which sets (its header has the grammar).
+
+#: The list's word for each kind of program
+SYSTEMS = {"elf": "linux", "pe": "windows"}
+#: image.toolchain's values, "" spelled "c": C, C++, anything not recognised
+TOOLCHAINS = frozenset(("c", "go", "rust", "nim", "zig"))
+#: A set of Go's standard library: where what it names takes its arguments
+GO_ABIS = frozenset(("goabi", "goabi0", "go"))
+#: What a set is read from, in the order one is taken
+SET_FILES = (".sig", ".pat.gz", ".pat")
+#: In a line's set: the Rust release that built the sample (rust_release)
+RUST_RELEASE = "{rust}"
+#: Commit and release of every Rust release, beside the sets
+#: (scripts/install-ida-flirt.py)
+RUST_RELEASES = "rust-releases.txt"
+_RUST_VERSION = re.compile(r"^\d+\.\d+\.\d+$")
+
+
+@dataclass(frozen=True)
+class SetLine:
+    """A line of flirt-sets.txt."""
+    number: int
+    systems: frozenset
+    bits: frozenset
+    toolchains: frozenset
+    pattern: str            # a glob under the FLIRT directory, no extension
+    abi: str = ""           # Go's standard library's sets only (GO_ABIS)
+
+
+class SignatureSet(NamedTuple):
+    name: str               # its file's name, without the extension
+    matcher: object         # flirt.FlirtMatcher
+    abi: str = ""           # its line's
+    path: Optional[Path] = None
+    line: int = 0           # the line that chose it
+
+
+def _choice(field: str, allowed: frozenset, number: int) -> frozenset:
+    chosen = frozenset(allowed if field == "*" else field.split(","))
+    if not chosen or not chosen <= allowed:
+        raise ValueError(f"flirt-sets line {number}: {field!r} is not one of {', '.join(sorted(map(str, allowed)))}")
+    return chosen
+
+
+def flirt_sets(text: str) -> list:
+    """The lines of a set list. A line that is not one raises ValueError,
+    naming it: the list is the project's, and a mistake in it is to be seen
+    at the first sample rather than load nothing, silently, for ever."""
+    lines = []
+    for number, raw in enumerate(text.splitlines(), 1):
+        fields = raw.split("#", 1)[0].split()
+        if not fields:
+            continue
+        if len(fields) not in (4, 5):
+            raise ValueError(f"flirt-sets line {number}: {raw.strip()!r} is not `os bits toolchains set [convention]`")
+        systems = _choice(fields[0], frozenset(SYSTEMS.values()), number)
+        bits = frozenset(int(b) for b in _choice(fields[1], frozenset(("32", "64")), number))
+        toolchains = _choice(fields[2], TOOLCHAINS, number)
+        pattern, abi = fields[3], fields[4] if len(fields) == 5 else ""
+        parts = pattern.split("/")
+        if (pattern.startswith("/") or ".." in parts or "" in parts
+                or "{" in pattern.replace(RUST_RELEASE, "") or "}" in pattern.replace(RUST_RELEASE, "")):
+            raise ValueError(f"flirt-sets line {number}: {pattern!r} is not a glob under the FLIRT directory")
+        if RUST_RELEASE in pattern and toolchains != {"rust"}:
+            raise ValueError(f"flirt-sets line {number}: {RUST_RELEASE} is for Rust's lines alone")
+        # Go's sets are tried only where Go's table names nothing (go_sets):
+        # a line for Go programs alone is one of them, and says where what it
+        # names takes its arguments
+        if (toolchains == {"go"}) != bool(abi) or (abi and abi not in GO_ABIS):
+            raise ValueError(f"flirt-sets line {number}: a line for Go alone, and only one, ends in one of "
+                             f"{', '.join(sorted(GO_ABIS))}")
+        lines.append(SetLine(number, systems, bits, toolchains, pattern, abi))
+    return lines
+
+
+def name_of_set(path: Path) -> str:
+    for suffix in SET_FILES:
+        if path.name.endswith(suffix):
+            return path.name[:-len(suffix)]
+    return path.name
+
+
+def rust_release(image: Image, directory: Path) -> Optional[str]:
+    """The Rust release that built the program: what its .comment says, or
+    its compiler's commit looked up in `rust-releases.txt`. A commit is one
+    release's, so what is looked up is put beside it, for the report."""
+    said = image.rust or {}
+    if said.get("version"):
+        return said["version"]
+    table = directory / RUST_RELEASES
+    if not said.get("commit") or not table.is_file():
+        return None
+    for line in table.read_text(errors="replace").splitlines():
+        fields = line.split()
+        if len(fields) == 2 and fields[0] == said["commit"] and _RUST_VERSION.match(fields[1]):
+            image.rust["version"] = fields[1]
+            return fields[1]
+    return None
+
+
+def selected_sets(directory: Path, image: Image, lines: list, go: bool = False) -> list:
+    """[(line, [set files])] the list names for `image`, in its order; a set
+    two lines name is the first one's, and of a set in two files the first
+    of SET_FILES is read. `go`: the sets of Go's standard library instead of
+    the others. A line with the Rust release in it is passed over when that
+    is not known."""
+    system, toolchain = SYSTEMS.get(image.kind), image.toolchain or "c"
+    release: Optional[str] = None
+    chosen, seen = [], set()        # (directory, set name)
+    for line in lines:
+        if (bool(line.abi) != go or system not in line.systems or image.bits not in line.bits
+                or toolchain not in line.toolchains):
+            continue
+        pattern = line.pattern
+        if RUST_RELEASE in pattern:
+            release = release or rust_release(image, directory)
+            if not release:
+                continue
+            pattern = pattern.replace(RUST_RELEASE, release)
+        files = []
+        for suffix in SET_FILES:
+            for path in sorted(directory.glob(pattern + suffix)) if directory.is_dir() else ():
+                # what macOS leaves in a zip beside each file is no set
+                if ((path.parent, name_of_set(path)) in seen or not path.is_file() or path.name.startswith("._")
+                        or "__MACOSX" in path.parts):
+                    continue
+                seen.add((path.parent, name_of_set(path)))
+                files.append(path)
+        if files:
+            chosen.append((line, files))
+    return chosen
+
+
 #: Sets loaded for one sample at most, of those whose rule recognised it.
 MAX_SETS = 10
 
 
-def recognised_sets(directory: Path, data: bytes) -> Optional[dict]:
-    """set name -> how many of its rule's strings are in the sample, for the
-    sets that have a rule (`<set>.yar`, scripts/gen-flirt-pats.py) and match.
-    None when no set has a rule: then every set is loaded, as before there
-    were a hundred of them."""
-    rules = sorted(directory.rglob("*.yar")) if directory.is_dir() else []
+def recognised_sets(rules: list, data: bytes) -> Optional[dict]:
+    """set name -> how many of its rule's strings are in the sample, of the
+    `rules` (`<set>.yar`, scripts/gen-flirt-pats.py) that match. None when
+    there is no rule. Hex-Rays' sets have none."""
     if not rules:
         return None
     import yara_x
@@ -405,72 +551,42 @@ def recognised_sets(directory: Path, data: bytes) -> Optional[dict]:
     return found
 
 
-#: The sets of Go's standard library (scripts/fetch-flirt-sets.py --go), by
-#: name: tried on Go programs only (go_sets), never with the others
-GO_SET = re.compile(r"^go-(\d+\.\d+(?:\.\d+)?)-(?:(linux|windows)-)?(amd64|386)$")
-#: Rust's standard library uses different ELF and Windows COFF objects for
-#: every target, although all targets built by one compiler share its commit.
-RUST_SET = re.compile(r"^rust-\d+\.\d+\.\d+-(x86_64|i686)-(unknown-linux-(?:gnu|musl)|pc-windows-(?:msvc|gnu|gnullvm))$")
-
-
-def signature_target(name: str, image: Optional[Image]) -> bool:
-    """Don't apply Go or Rust patterns to another OS/architecture.
-
-    The old `go-X.Y.Z-amd64` sets were built on Linux, before the target
-    was recorded in the name. Other libraries keep their current rules.
-    """
-    if image is None:
-        return True
-    os_name = "windows" if image.kind == "pe" else "linux" if image.kind == "elf" else ""
-    arch_name = ("amd64" if image.bits == 64 else "386")
-    go = GO_SET.fullmatch(name)
-    if go:
-        return (go.group(2) or "linux") == os_name and go.group(3) == arch_name
-    rust = RUST_SET.fullmatch(name)
-    if rust:
-        rust_os = "windows" if rust.group(2).startswith("pc-windows-") else "linux"
-        return rust_os == os_name and rust.group(1) == ("x86_64" if image.bits == 64 else "i686")
-    return True
-
-
-def load_signatures(directory: Path, data: Optional[bytes] = None, go: bool = False,
-                    image: Optional[Image] = None) -> list:
-    """[(set name, matcher)] of the `.sig` and `.pat` sets under `directory`
-    (gzipped or not) worth trying on a sample: a set with a rule beside it
-    only if the rule recognised the sample -- the MAX_SETS that matched most
-    of their strings, a library's neighbouring versions sharing many -- and a
-    set with no rule always. A set that does not parse is skipped and said.
-    `go`: Go's sets instead, every one of them."""
+def load_signatures(directory: Path, image: Image, data: Optional[bytes] = None, go: bool = False,
+                    listing: Path = FLIRT_SETS) -> list:
+    """[SignatureSet] of what the list at `listing` names for `image` under
+    `directory` (selected_sets), parsed, in the list's order. A set that has
+    a YARA rule beside it -- one scripts/fetch-flirt-sets.py built -- is
+    loaded only if the rule recognised `data`, as one of the MAX_SETS that
+    matched most of their strings: a library's neighbouring versions share
+    many. A set that does not parse is skipped and said.
+    `go`: the sets of Go's standard library instead (go_sets)."""
     import flirt
 
-    recognised = recognised_sets(directory, data) if data is not None and not go else None
-    # Select among compatible targets BEFORE the MAX_SETS cap. Rust sets
-    # for different platforms share the same compiler-commit YARA rule.
-    best = (set(sorted((n for n in recognised if signature_target(n, image)),
-                       key=lambda n: (-recognised[n], n))[:MAX_SETS]) if recognised else set())
+    chosen = selected_sets(directory, image, flirt_sets(listing.read_text()) if listing.is_file() else [], go)
+    rules = [r for _, files in chosen for p in files if (r := p.with_name(name_of_set(p) + ".yar")).is_file()]
+    recognised = recognised_sets(rules, data) if data is not None else None
+    best = set(sorted(recognised, key=lambda n: (-recognised[n], n))[:MAX_SETS]) if recognised else set()
     sets = []
-    for path in sorted(directory.rglob("*")) if directory.is_dir() else ():
-        name = path.name
-        plain = name[:-3] if name.endswith(".gz") else name
-        if not path.is_file() or not plain.endswith((".sig", ".pat")):
-            continue
-        stem = plain.rsplit(".", 1)[0]
-        if bool(GO_SET.fullmatch(stem)) != go or not signature_target(stem, image):
-            continue
-        if recognised is not None and path.with_name(stem + ".yar").is_file() and stem not in best:
-            continue
-        try:
-            raw = gzip.decompress(path.read_bytes()) if name.endswith(".gz") else path.read_bytes()
-            parsed = flirt.parse_sig(raw) if plain.endswith(".sig") else flirt.parse_pat(raw.decode("utf-8", "replace"))
-            sets.append((plain.rsplit(".", 1)[0], flirt.compile(parsed)))
-        except Exception as exc:  # noqa: BLE001 - one bad set is not the others'
-            print(f"samplehooks: {path}: not a signature set ({exc})", file=sys.stderr)
+    for line, files in chosen:
+        for path in files:
+            name = name_of_set(path)
+            if recognised is not None and path.with_name(name + ".yar").is_file() and name not in best:
+                continue
+            try:
+                raw = gzip.decompress(path.read_bytes()) if path.name.endswith(".gz") else path.read_bytes()
+                parsed = (flirt.parse_sig(raw) if path.name.endswith(".sig")
+                          else flirt.parse_pat(raw.decode("utf-8", "replace")))
+                sets.append(SignatureSet(name, flirt.compile(parsed), line.abi, path, line.number))
+            except Exception as exc:  # noqa: BLE001 - one bad set is not the others'
+                print(f"samplehooks: {path}: not a signature set ({exc})", file=sys.stderr)
     return sets
 
 
 def from_flirt(image: Image, sets: list, candidates: Optional[Iterable[int]] = None,
                calls: Optional[dict] = None) -> list:
-    """Functions named by the signature sets, at the candidate starts.
+    """Functions named by the signature sets (SignatureSet, or a bare
+    (name, matcher)), at the candidate starts: by the first set, in their
+    order, that names one.
 
     `calls` (a Go set's, name -> where it calls whom): two functions whose
     bytes are the same but for whom they call are told apart by whom the
@@ -480,7 +596,7 @@ def from_flirt(image: Image, sets: list, candidates: Optional[Iterable[int]] = N
         return []
     found = []
     named: dict = {}            # address -> names, of what one signature named
-    undecided = []              # (address, its bytes, set name, [names of each signature])
+    undecided = []              # (address, its bytes, set name, [names of each signature], abi)
     for target in call_targets(image) if candidates is None else candidates:
         for va, _, code in image.code:
             if va <= target < va + len(code):
@@ -488,21 +604,24 @@ def from_flirt(image: Image, sets: list, candidates: Optional[Iterable[int]] = N
                 break
         else:
             continue
-        for set_name, matcher in sets:
+        for one in sets:
+            set_name, matcher, abi = one[0], one[1], one[2] if len(one) > 2 else ""
             # One signature's names are aliases of one function. Two
             # signatures matching the same bytes are two functions nothing
             # here tells apart: naming it either way is a guess, so neither.
             matched = [sorted({name for name, kind, offset in signature.names
-                               if offset == 0 and kind in ("public", "local")})
+                               if offset == 0 and kind in ("public", "local") and not _COLD.search(name)})
                        for signature in matcher.match(window)]
+            if matched:
+                print(matched)
             matched = [names for names in matched if names]
             if len({tuple(sorted({plain_name(n) for n in names})) for names in matched}) == 1:
-                found += [Located(name, target, f"flirt:{set_name}") for name in matched[0]]
+                found += [Located(name, target, f"flirt:{set_name}", abi) for name in matched[0]]
                 named[target] = set(matched[0])
                 break
             if matched:
                 if calls:
-                    undecided.append((target, window, set_name, matched))
+                    undecided.append((target, window, set_name, matched, abi))
                 break       # ambiguous in this set: another set does not settle it
 
     def verdict(target: int, window: bytes, names) -> tuple:
@@ -535,16 +654,37 @@ def from_flirt(image: Image, sets: list, candidates: Optional[Iterable[int]] = N
     for _ in range(4):
         settled = []
         for item in undecided:
-            target, window, set_name, matched = item
+            target, window, set_name, matched, abi = item
             fits = [names for names in matched if calls_check(target, window, names)]
             if len(fits) == 1:
-                found += [Located(name, target, f"flirt:{set_name}") for name in fits[0]]
+                found += [Located(name, target, f"flirt:{set_name}", abi) for name in fits[0]]
                 named[target] = set(fits[0])
                 settled.append(item)
         if not settled:
             break
         undecided = [item for item in undecided if item not in settled]
-    return _backed_by_calls(image, found, named, verdict) if calls else found
+    return _one_place(_backed_by_calls(image, found, named, verdict) if calls else found)
+
+
+#: GCC's cold partition of a function (`fflush.cold`, `f.cold.3`): reached
+#: by a jump from the function, never by a call, and in Hex-Rays' sets mostly
+#: a call to abort() and a few moves, every library's alike
+_COLD = re.compile(r"\.cold(?:\.\d+)?$")
+
+
+def _one_place(found: list) -> list:
+    """Of what the sets named, what has its name at one address only. A
+    library function is in a program once: a name given to several
+    functions is a shape they share, and which of them, if any, is the
+    function nothing here says. Hex-Rays' sets have no record of whom a
+    function calls to tell them apart (go_calls), and every release's
+    shapes in one set: os.Getenv's was found at os.Stat, os.Lstat and
+    os.openDir too, and a stub of glibc's set, _ZGVeN16vv___powf_finite, at
+    55 places of a Rust program with no glibc in it (2026-11-23)."""
+    places: dict = {}
+    for f in found:
+        places.setdefault(plain_name(f.name), set()).add(f.offset)
+    return [f for f in found if len(places[plain_name(f.name)]) == 1]
 
 
 def _window(image: Image, target: int) -> bytes:
@@ -598,40 +738,55 @@ def go_starts(image: Image) -> list:
     return found
 
 
-def go_sets(image: Image, directory: Path) -> list:
+def go_sets(image: Image, directory: Path, data: bytes = b"", listing: Path = FLIRT_SETS) -> list:
     """The functions of a Go program whose table names nothing it lists --
     garble's: its names are hashes and its table's magic random -- named by
-    their bytes with the set of the Go release that built it. Which release
-    the program does not say, so each set is tried on a spread of its
-    function starts and the one that names most is used, alone: two
-    releases' names mixed would be two guesses. Sets the program is not
-    built with name little, because a function's bytes change from one
-    release to the next."""
-    sets = load_signatures(directory, go=True, image=image)
+    their bytes with the sets of Go's standard library the list names.
+
+    Each line of the list is one choice, tried on a spread of the program's
+    function starts; one that names too little is no choice, the program
+    being built with none of what it names. Hex-Rays' sets are one per
+    calling convention, every release in each, and a line names one. A line
+    that names a set per release (scripts/fetch-flirt-sets.py --go) is the
+    one of them that names most, alone: two releases' names mixed would be
+    two guesses, and a function's bytes change from one release to the next."""
+    sets = load_signatures(directory, image, go=True, listing=listing)
+    image.sets = [one.name for one in sets]
     if not sets:
         return []
     candidates = sorted(set(call_targets(image)) | set(go_starts(image)))
     trial = candidates[::max(1, len(candidates) // GO_TRIAL)]
-    scored = sorted(((len(from_flirt(image, [one], trial)), one[0], one) for one in sets),
-                    key=lambda s: (-s[0], s[1]))
-    named, name, best = scored[0]
-    image.sets = [n for _, n, _ in scored]
-    if named < GO_MIN_NAMED * len(trial) // max(1, GO_TRIAL):
+    used = []
+    for line in dict.fromkeys(one.line for one in sets):
+        scored = sorted(((len(from_flirt(image, [one], trial)), one.name, one) for one in sets if one.line == line),
+                        key=lambda s: (-s[0], s[1]))
+        named, _, best = scored[0]
+        if named and named >= GO_MIN_NAMED * len(trial) // max(1, GO_TRIAL):
+            used.append(best)
+    if not used:
         return []
-    image.go_set = name
-    image.go_version = "go" + GO_SET.match(name).group(1)
-    return from_flirt(image, [best], candidates, go_calls(directory, name))
+    image.go_set = ", ".join(one.name for one in used)
+    # No table, so what the strings say (go_version): where Go's functions
+    # take their arguments is the set's to say, and this the report's
+    image.go_version = image.go_version or go_version(data)
+    calls: dict = {}
+    for one in used:
+        calls.update(go_calls(one))
+    return from_flirt(image, used, candidates, calls)
 
 
-def go_calls(directory: Path, name: str) -> dict:
-    """A Go set's record of whom each of its functions calls
-    (`<set>.calls.json.gz`, gen-flirt-pats.outbound_calls); {} without."""
-    for path in directory.rglob(f"{name}.calls.json.gz") if directory.is_dir() else ():
-        try:
-            return json.loads(gzip.decompress(path.read_bytes()))
-        except (OSError, ValueError, EOFError) as exc:
-            print(f"samplehooks: {path}: {exc}", file=sys.stderr)
-    return {}
+def go_calls(found: SignatureSet) -> dict:
+    """A Go set's record of whom each of its functions calls, beside it
+    (`<set>.calls.json.gz`, gen-flirt-pats.outbound_calls); {} without, as
+    Hex-Rays' sets are."""
+    path = found.path.with_name(found.name + ".calls.json.gz") if found.path else None
+    if path is None or not path.is_file():
+        return {}
+    try:
+        return json.loads(gzip.decompress(path.read_bytes()))
+    except (OSError, ValueError, EOFError) as exc:
+        print(f"samplehooks: {path}: {exc}", file=sys.stderr)
+        return {}
 
 
 def from_yara(image: Image, data: bytes, directory: Path) -> list:
@@ -662,19 +817,20 @@ def from_yara(image: Image, data: bytes, directory: Path) -> list:
 
 
 def locate(path: Path, flirt_dir: Path = FLIRT_DIR,
-           yara_dir: Path = CODE_SIGNATURES_DIR) -> tuple:
+           yara_dir: Path = CODE_SIGNATURES_DIR, listing: Path = FLIRT_SETS) -> tuple:
     """(image, located) of a program; (None, []) for what is not one."""
     image = read_image(path)
     if image is None:
         return None, []
-    return image, locate_in(image, path.read_bytes(), flirt_dir, yara_dir)
+    return image, locate_in(image, path.read_bytes(), flirt_dir, yara_dir, listing)
 
 
 def locate_in(image: Image, data: bytes, flirt_dir: Path = FLIRT_DIR,
-              yara_dir: Path = CODE_SIGNATURES_DIR) -> list:
+              yara_dir: Path = CODE_SIGNATURES_DIR, listing: Path = FLIRT_SETS) -> list:
     """What every locator finds in an image that is read already: a file's,
     or a running program's memory (sandboxd/stagehints.py). `data` is the
-    bytes `image.code`'s offsets count in."""
+    bytes `image.code`'s offsets count in; `listing`, which signature sets
+    under `flirt_dir` it is matched against."""
     located = from_symbols(image)
     go_tried: list = []
     if image.toolchain == "go":
@@ -684,11 +840,11 @@ def locate_in(image: Image, data: bytes, flirt_dir: Path = FLIRT_DIR,
         located += [f for f in from_gopclntab(image, data) if f.offset not in seen]
         if not image.go_table:
             # No table read: garble's, or one torn by a packer
-            located += [f for f in go_sets(image, flirt_dir) if f.offset not in seen]
+            located += [f for f in go_sets(image, flirt_dir, data, listing) if f.offset not in seen]
             go_tried = image.sets
     known = {found.offset for found in located}
-    sets = load_signatures(flirt_dir, data, image=image)
-    image.sets = [name for name, _ in sets] + go_tried
+    sets = load_signatures(flirt_dir, image, data, listing=listing)
+    image.sets = [one.name for one in sets] + go_tried
     located += [f for f in from_flirt(image, sets) if f.offset not in known]
     located += from_yara(image, data, yara_dir)
     return located
@@ -743,6 +899,12 @@ def go_hooks(text: str) -> dict:
         if len(fields) >= 4 and fields[0] == "go" and fields[2] in ("goabi", "goabi0"):
             known.setdefault(fields[1], ",".join(fields[2:]))
     return known
+
+
+def ida_go_name(name: str) -> str:
+    """A Go function's name as Hex-Rays' sets spell it, an IDA name having
+    no `/`, `(` or `*`: `net/http.(*Client).Do` is `net_http._ptr_Client.Do`."""
+    return re.sub(r"\(\*([^)]*)\)", r"_ptr_\1", name).replace("/", "_")
 
 
 def rust_hooks(text: str) -> dict:
@@ -845,7 +1007,8 @@ def sample_lines(located: list, known: dict, module: str, base: Optional[int] = 
     """The hook-list lines for what was located and the list knows, one per
     address. [] for a module name the list cannot spell, and for an image
     with no base to count from. A Go function's line says where its arguments
-    are (`abi`, per go_abi()); with no saying, the call is logged bare.
+    are: as the set that named it says (Located.abi), else `abi` (go_abi());
+    with no saying, the call is logged bare.
 
     `rust`: Rust hook templates, selected only when the caller established
     this is a Rust sample. Rust arguments and return values are not decoded.
@@ -858,6 +1021,8 @@ def sample_lines(located: list, known: dict, module: str, base: Optional[int] = 
         return []
     lines, seen = [], set()
     rust_names = _rust_paths(located, rust) if rust else {}
+    go = go or {}
+    go_spelled = {ida_go_name(name): name for name in go}
     for found in sorted(located, key=lambda f: (f.offset, f.name)):
         offset = found.offset - base
         # Code a program unpacks may lie below where it was loaded (UPX puts
@@ -867,14 +1032,18 @@ def sample_lines(located: list, known: dict, module: str, base: Optional[int] = 
             offset &= (1 << 64) - 1
         if offset in seen or offset <= 0:
             continue
-        if found.how == "gopclntab" or GO_SET.match(found.how.removeprefix("flirt:")):
-            if not go or found.name not in go:
+        if found.how == "gopclntab" or found.abi:
+            name = found.name if found.name in go else ""
+            if not name and found.abi:
+                # Hex-Rays' spelling of it: the line has Go's own
+                name = go_spelled.get(found.name, "")
+            if not name:
                 continue
-            marker, rest = go[found.name].split(",", 1)
+            marker, rest = go[name].split(",", 1)
             # a function written in assembly is on the stack in every version
-            marker = marker if marker == "goabi0" else abi
+            if marker != "goabi0":
+                marker = found.abi if found.abi in ("goabi", "goabi0") else abi
             rest = f"{marker},{rest}" if marker else "no-retval,log"
-            name = found.name
         elif found.name in rust_names:
             name = rust_names[found.name]
             rest = rust[name]
@@ -982,6 +1151,8 @@ def main(argv: Optional[list] = None) -> int:
                         "(what the sample dropped, sandboxd/stagehooks.py)")
     p.add_argument("--json", type=Path, help="what was found, for the report")
     p.add_argument("--flirt", type=Path, default=FLIRT_DIR)
+    p.add_argument("--flirt-sets", type=Path, default=FLIRT_SETS,
+                   help="which sets under --flirt a program is matched against")
     p.add_argument("--code-signatures", type=Path, default=CODE_SIGNATURES_DIR)
     p.add_argument("--go-hooks", type=Path, default=GO_HOOKS)
     p.add_argument("--rust-hooks", type=Path, default=RUST_HOOKS)
@@ -1003,7 +1174,7 @@ def main(argv: Optional[list] = None) -> int:
             static_text = static_text.rstrip("\n") + f"\n\n# {also.name}\n" + also.read_text()
     image, located, lines = None, [], []
     try:
-        image, located = locate(args.sample, args.flirt, args.code_signatures)
+        image, located = locate(args.sample, args.flirt, args.code_signatures, args.flirt_sets)
         if image is not None:
             go = (go_hooks(args.go_hooks.read_text())
                   if (image.go_table or image.go_set) and args.go_hooks.is_file() else {})

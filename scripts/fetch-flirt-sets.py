@@ -50,6 +50,13 @@ patches: for those, `gen-flirt-pats.py` on that distribution's `libc.a`).
 
 Sets go to `sandboxd/data/flirt/`, which is not tracked: they are data made
 from other people's binaries, rebuilt by running this.
+
+**Not what `make signature_sets` runs since 2026-11-23**: that installs
+Hex-Rays' signatures (scripts/install-ida-flirt.py), which have every glibc
+and musl Debian and Ubuntu built, Go's standard library and Rust's, and no
+uClibc. samplehooks loads a set this builds only where
+sandboxd/data/flirt-sets.txt names it -- `linux 64 c,nim,zig uclibc-*-x86-64`
+-- and of those, only the ones whose rule recognises the sample.
 """
 from __future__ import annotations
 
